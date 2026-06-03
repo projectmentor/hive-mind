@@ -1,0 +1,20 @@
+# Runtime data (per-machine, not versioned)
+store.db
+journal/*.jsonl
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Laravel dashboard has its own .gitignore
+# vendor/ is already ignored there

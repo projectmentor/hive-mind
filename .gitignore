@@ -2,6 +2,10 @@
 store.db
 journal/*.jsonl
 
+# Migration / pre-Phase-1 backups (per-machine, not versioned)
+journal.bak.*/
+store.db.bak.*
+
 # IDE
 .vscode/
 .idea/

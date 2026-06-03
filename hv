@@ -3,26 +3,57 @@
 hv - Hive Mind CLI
 
 Institutional memory for multiple AI agents.
+
+Architecture (see docs/P2P_DESIGN.md):
+  The journal (journal/*.jsonl) is the SOURCE OF TRUTH. Every write goes
+  through the append API (append_journal / ingest_journal). SQLite (store.db)
+  is a DERIVED index/cache that can be rebuilt from the journal at any time
+  via `hv rebuild`.
 """
 
 import argparse
+import hashlib
 import json
+import os
+import socket
 import sqlite3
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-import os
+
+# Make sibling modules (merkle.py) importable when run as ./hv
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import merkle  # noqa: E402
 
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
 JOURNAL_DIR = HIVE_HOME / "journal"
+NODE_ID = socket.gethostname()
+
+
+# --------------------------------------------------------------------------
+# Database
+# --------------------------------------------------------------------------
+
+def get_conn():
+    """Open a tuned SQLite connection. WAL persists on the file; the rest are
+    per-connection, so we apply them on every open."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-64000")      # 64MB page cache
+    conn.execute("PRAGMA mmap_size=268435456")    # 256MB mmap
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
 
 def init_db():
-    """Initialize database schema"""
+    """Initialize database schema (idempotent)."""
     HIVE_HOME.mkdir(parents=True, exist_ok=True)
     JOURNAL_DIR.mkdir(exist_ok=True)
-    
-    conn = sqlite3.connect(DB_PATH)
+
+    conn = get_conn()
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS facts (
         id INTEGER PRIMARY KEY,
@@ -36,7 +67,7 @@ def init_db():
         last_accessed TIMESTAMP,
         access_count INTEGER DEFAULT 0
     );
-    
+
     CREATE TABLE IF NOT EXISTS decisions (
         id INTEGER PRIMARY KEY,
         content TEXT NOT NULL,
@@ -45,7 +76,7 @@ def init_db():
         source_agent TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
-    
+
     CREATE INDEX IF NOT EXISTS idx_facts_tags ON facts(tags);
     CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_agent, created_at);
     CREATE INDEX IF NOT EXISTS idx_facts_trust ON facts(trust_score);
@@ -71,133 +102,452 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
     """)
     conn.commit()
+
+    _init_fts(conn)
+
+    conn.commit()
     conn.close()
 
-def write_journal(operation, data):
-    """Append to today's journal"""
-    today = datetime.now().strftime("%Y-%m-%d")
-    journal_path = JOURNAL_DIR / f"{today}.jsonl"
-    
+
+def _init_fts(conn):
+    """Create the FTS5 full-text index over facts (external-content) plus the
+    triggers that keep it in sync. Falls back silently if FTS5 is unavailable
+    (search() then uses LIKE)."""
+    try:
+        # Note: for an external-content FTS5 table, `SELECT count(*) FROM
+        # facts_fts` reflects the CONTENT table's row count, not the indexed
+        # token count — so it can't tell us whether the index is populated.
+        # Instead we backfill exactly once, when the table is first created.
+        existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_fts'"
+        ).fetchone()
+        conn.executescript("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+            content, tags, content='facts', content_rowid='id'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+            INSERT INTO facts_fts(rowid, content, tags)
+            VALUES (new.id, new.content, new.tags);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+            INSERT INTO facts_fts(facts_fts, rowid, content, tags)
+            VALUES ('delete', old.id, old.content, old.tags);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+            INSERT INTO facts_fts(facts_fts, rowid, content, tags)
+            VALUES ('delete', old.id, old.content, old.tags);
+            INSERT INTO facts_fts(rowid, content, tags)
+            VALUES (new.id, new.content, new.tags);
+        END;
+        """)
+        if not existed:
+            # Freshly created: backfill the index from existing facts rows
+            # (first upgrade, or after a rebuild dropped+recreated it).
+            conn.execute(
+                "INSERT INTO facts_fts(rowid, content, tags) SELECT id, content, tags FROM facts"
+            )
+    except sqlite3.OperationalError:
+        pass  # FTS5 not compiled in — search() falls back to LIKE
+
+
+# --------------------------------------------------------------------------
+# Journal — the append-only source of truth (G-Set CRDT)
+# --------------------------------------------------------------------------
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _canonical(obj):
+    """Stable bytes for hashing — must match merkle._canonical."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+
+
+def compute_hash(entry):
+    return "sha256:" + hashlib.sha256(_canonical(entry)).hexdigest()
+
+
+def _next_seq_and_prev(node_id):
+    """Next per-node monotonic seq and the hash of this node's latest entry.
+    Derived from the journal itself (stateless, correct after a fresh start)."""
+    mine = [e for e in merkle.read_all_entries(JOURNAL_DIR) if e.get("node_id") == node_id]
+    if not mine:
+        return 1, "sha256:genesis"
+    last = max(mine, key=lambda e: e["seq"])
+    return last["seq"] + 1, compute_hash(last)
+
+
+def _journal_path_for(timestamp):
+    return JOURNAL_DIR / f"{timestamp[:10]}.jsonl"
+
+
+def append_journal(entry_type, payload, timestamp=None):
+    """Mint and append a LOCAL journal entry. This is the core append API —
+    every local write goes through here. Returns the full entry dict."""
+    timestamp = timestamp or _now_iso()
+    seq, prev_hash = _next_seq_and_prev(NODE_ID)
     entry = {
-        "ts": datetime.now().isoformat(),
-        "agent": os.environ.get("HERMES_AGENT", "manual"),
-        "op": operation,
-        "data": data
+        "node_id": NODE_ID,
+        "seq": seq,
+        "type": entry_type,          # fact | decision | entity | entity_fact
+        "timestamp": timestamp,
+        "payload": payload,
+        "prev_hash": prev_hash,
     }
-    
-    with open(journal_path, "a") as f:
+    with open(_journal_path_for(timestamp), "a") as f:
         f.write(json.dumps(entry) + "\n")
+    return entry
+
+
+def _journal_has(node_id, seq):
+    for e in merkle.read_all_entries(JOURNAL_DIR):
+        if e.get("node_id") == node_id and e.get("seq") == seq:
+            return True
+    return False
+
+
+def ingest_journal(entry):
+    """Ingest a FOREIGN entry verbatim (preserving its node_id/seq) with G-Set
+    dedup. Used by sync. Returns True if newly accepted."""
+    node_id, seq = entry.get("node_id"), entry.get("seq")
+    if node_id is None or seq is None:
+        return False
+    if _journal_has(node_id, seq):
+        return False
+    with open(_journal_path_for(entry.get("timestamp", _now_iso())), "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    conn = get_conn()
+    persist_entry(conn, entry)
+    conn.commit()
+    conn.close()
+    return True
+
+
+# --------------------------------------------------------------------------
+# Persistence — derive SQLite state from journal entries.
+# These functions are the SINGLE place where journal payloads become rows, so
+# live writes and `hv rebuild` stay perfectly consistent.
+# --------------------------------------------------------------------------
+
+def persist_fact(conn, payload, ts):
+    cur = conn.cursor()
+    content = payload["content"]
+    cur.execute("SELECT id, trust_score FROM facts WHERE content = ?", (content,))
+    row = cur.fetchone()
+    if row and "trust_score" not in payload:
+        # Dedup: boost trust instead of duplicating (live remember of known content)
+        new_trust = min(row["trust_score"] + 0.1, 2.0)
+        cur.execute(
+            "UPDATE facts SET trust_score = ?, access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+            (new_trust, ts, row["id"]),
+        )
+        return {"id": row["id"], "trust": new_trust, "inserted": False}
+    if row:
+        # Migration re-applying an already-present content: leave as-is.
+        return {"id": row["id"], "trust": row["trust_score"], "inserted": False}
+    cur.execute("""
+        INSERT INTO facts (content, tags, importance, source_agent, source_session,
+                           created_at, trust_score, access_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        content,
+        json.dumps(payload.get("tags", [])),
+        payload.get("importance", 0.5),
+        payload.get("source", "manual"),
+        payload.get("source_session"),
+        payload.get("created_at", ts),
+        payload.get("trust_score", 1.0),
+        payload.get("access_count", 0),
+    ))
+    return {"id": cur.lastrowid, "trust": payload.get("trust_score", 1.0), "inserted": True}
+
+
+def persist_decision(conn, payload, ts):
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO decisions (content, rationale, source_agent, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        payload["content"],
+        payload.get("rationale"),
+        payload.get("source", "manual"),
+        payload.get("created_at", ts),
+    ))
+    new_id = cur.lastrowid
+    if payload.get("supersedes"):
+        cur.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?",
+                    (new_id, payload["supersedes"]))
+    return {"id": new_id}
+
+
+def persist_entity(conn, payload, ts):
+    cur = conn.cursor()
+    attrs = payload.get("attributes", {})
+    attrs_json = attrs if isinstance(attrs, str) else json.dumps(attrs)
+    cur.execute("""
+        INSERT INTO entities (name, type, attributes, first_seen, last_updated)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            type = excluded.type,
+            attributes = excluded.attributes,
+            last_updated = excluded.last_updated
+    """, (
+        payload["name"],
+        payload.get("type", "unknown"),
+        attrs_json,
+        payload.get("created_at", ts),
+        ts,
+    ))
+    eid = cur.execute("SELECT id FROM entities WHERE name = ?", (payload["name"],)).fetchone()[0]
+    return {"id": eid, "name": payload["name"], "type": payload.get("type", "unknown")}
+
+
+def persist_entity_fact(conn, payload, ts):
+    conn.execute("""
+        INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence)
+        VALUES (?, ?, ?)
+    """, (payload["entity_id"], payload["fact_id"], payload.get("confidence", 1.0)))
+    return {"entity_id": payload["entity_id"], "fact_id": payload["fact_id"]}
+
+
+_PERSISTERS = {
+    "fact": persist_fact,
+    "decision": persist_decision,
+    "entity": persist_entity,
+    "entity_fact": persist_entity_fact,
+}
+
+
+def persist_entry(conn, entry):
+    """Apply one journal entry to SQLite based on its type."""
+    fn = _PERSISTERS.get(entry["type"])
+    if fn is None:
+        return None
+    return fn(conn, entry["payload"], entry.get("timestamp", _now_iso()))
+
+
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
 
 def remember(args):
-    """Store a fact (with dedup — boosts trust if identical content exists)"""
-    data = {
+    """Store a fact (with dedup — boosts trust if identical content exists)."""
+    payload = {
         "content": args.content,
         "tags": args.tags.split(",") if args.tags else [],
         "importance": args.importance,
-        "source": args.source or os.environ.get("HERMES_AGENT", "manual")
+        "source": args.source or os.environ.get("HERMES_AGENT", "manual"),
     }
+    entry = append_journal("fact", payload)
 
-    write_journal("remember", data)
+    conn = get_conn()
+    res = persist_fact(conn, entry["payload"], entry["timestamp"])
+    conn.commit()
+    conn.close()
 
-    # Immediately write to DB (in real system, this would be async)
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # Dedup: check for existing fact with identical content
-    cursor.execute("SELECT id, trust_score, access_count FROM facts WHERE content = ?",
-                   (data["content"],))
-    existing = cursor.fetchone()
-
-    if existing:
-        # Boost trust instead of duplicating
-        new_trust = min(existing[1] + 0.1, 2.0)
-        cursor.execute(
-            "UPDATE facts SET trust_score = ?, access_count = access_count + 1, last_accessed = ? WHERE id = ?",
-            (new_trust, datetime.now().isoformat(), existing[0])
-        )
-        conn.commit()
-        conn.close()
-        print(f"Already known (fact #{existing[0]}), trust boosted to {new_trust:.2f}")
+    if res["inserted"]:
+        print(f"Remembered as fact #{res['id']}")
     else:
-        cursor.execute("""
-            INSERT INTO facts (content, tags, importance, source_agent)
-            VALUES (?, ?, ?, ?)
-        """, (data["content"], json.dumps(data["tags"]), data["importance"], data["source"]))
-        conn.commit()
-        fact_id = cursor.lastrowid
-        conn.close()
-        print(f"Remembered as fact #{fact_id}")
+        print(f"Already known (fact #{res['id']}), trust boosted to {res['trust']:.2f}")
+
+
+def _fts_query(raw):
+    """Turn arbitrary user input into a safe FTS5 MATCH expression: each term
+    becomes a quoted token (implicit AND), so punctuation can't be parsed as an
+    operator. Returns None if there are no terms."""
+    terms = raw.split()
+    if not terms:
+        return None
+    return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+
 
 def search(args):
-    """Search facts"""
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    
-    # Simple substring search for MVP
-    query = f"%{args.query}%"
-    results = conn.execute("""
-        SELECT id, content, tags, trust_score, source_agent, created_at
-        FROM facts
-        WHERE content LIKE ?
-        ORDER BY trust_score DESC, created_at DESC
-        LIMIT 10
-    """, (query,)).fetchall()
-    
+    """Search facts (FTS5, falling back to LIKE)."""
+    conn = get_conn()
+    results = None
+
+    fts_expr = _fts_query(args.query)
+    if fts_expr is not None:
+        try:
+            results = conn.execute("""
+                SELECT f.id, f.content, f.tags, f.trust_score, f.source_agent, f.created_at
+                FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid
+                WHERE facts_fts MATCH ?
+                ORDER BY f.trust_score DESC, f.created_at DESC
+                LIMIT 10
+            """, (fts_expr,)).fetchall()
+        except sqlite3.OperationalError:
+            results = None  # FTS unavailable — fall back
+
+    if results is None:
+        like = f"%{args.query}%"
+        results = conn.execute("""
+            SELECT id, content, tags, trust_score, source_agent, created_at
+            FROM facts
+            WHERE content LIKE ?
+            ORDER BY trust_score DESC, created_at DESC
+            LIMIT 10
+        """, (like,)).fetchall()
+
     if args.format == "json":
-        data = [dict(r) for r in results]
-        print(json.dumps(data, indent=2))
+        print(json.dumps([dict(r) for r in results], indent=2))
     else:
         for r in results:
             tags = json.loads(r["tags"]) if r["tags"] else []
             print(f"[{r['id']}] {r['content']}")
             print(f"     Tags: {', '.join(tags)}  Trust: {r['trust_score']:.2f}  From: {r['source_agent']}")
             print()
-    
+
     conn.close()
 
+
 def decide(args):
-    """Record a decision"""
-    data = {
+    """Record a decision."""
+    payload = {
         "content": args.content,
         "rationale": args.rationale,
         "supersedes": args.supersedes,
-        "source": os.environ.get("HERMES_AGENT", "manual")
+        "source": os.environ.get("HERMES_AGENT", "manual"),
     }
-    
-    write_journal("decide", data)
+    entry = append_journal("decision", payload)
 
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    # Mark old decision as superseded
-    if args.supersedes:
-        cursor.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?",
-                    (args.supersedes, args.supersedes))
-
-    cursor.execute("""
-        INSERT INTO decisions (content, rationale, source_agent)
-        VALUES (?, ?, ?)
-    """, (data["content"], data["rationale"], data["source"]))
+    conn = get_conn()
+    res = persist_decision(conn, entry["payload"], entry["timestamp"])
     conn.commit()
-    decision_id = cursor.lastrowid
     conn.close()
-    
-    print(f"Decided as decision #{decision_id}")
+
+    print(f"Decided as decision #{res['id']}")
+
+
+def entity(args):
+    """Register or query an entity."""
+    if args.action == "add":
+        attrs = json.loads(args.attr) if args.attr else {}
+        payload = {"name": args.name, "type": args.type or "unknown", "attributes": attrs}
+        entry = append_journal("entity", payload)
+        conn = get_conn()
+        res = persist_entity(conn, entry["payload"], entry["timestamp"])
+        conn.commit()
+        conn.close()
+        print(f"Entity #{res['id']}: {res['name']} ({res['type']})")
+        return
+
+    if args.action == "link":
+        # Link a fact to this entity: hv entity link --name X --fact-id N
+        conn = get_conn()
+        erow = conn.execute("SELECT id FROM entities WHERE name = ?", (args.name,)).fetchone()
+        if not erow:
+            print(f"No entity named '{args.name}'")
+            conn.close()
+            return
+        payload = {
+            "entity_id": erow["id"],
+            "fact_id": args.fact_id,
+            "confidence": args.confidence if args.confidence is not None else 1.0,
+        }
+        entry = append_journal("entity_fact", payload)
+        persist_entity_fact(conn, entry["payload"], entry["timestamp"])
+        conn.commit()
+        conn.close()
+        print(f"Linked fact #{args.fact_id} → entity '{args.name}'")
+        return
+
+    # Read-only actions
+    conn = get_conn()
+    if args.action == "list":
+        rows = conn.execute(
+            "SELECT id, name, type, attributes, first_seen FROM entities ORDER BY name"
+        ).fetchall()
+        if not rows:
+            print("No entities registered.")
+        for r in rows:
+            print(f"  [{r['id']}] {r['name']} ({r['type']})  since {r['first_seen']}")
+        conn.close()
+
+    elif args.action == "show":
+        row = conn.execute(
+            "SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?",
+            (args.name,),
+        ).fetchone()
+        if not row:
+            print(f"No entity named '{args.name}'")
+            conn.close()
+            return
+        print(f"Entity #{row['id']}: {row['name']} ({row['type']})")
+        print(f"  Attributes: {row['attributes']}")
+        print(f"  First seen: {row['first_seen']}  Last updated: {row['last_updated']}")
+        linked = conn.execute("""
+            SELECT f.id, f.content, ef.confidence
+            FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
+            WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
+        """, (row["id"],)).fetchall()
+        if linked:
+            print(f"  Linked facts ({len(linked)}):")
+            for lf in linked:
+                print(f"    [{lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+        conn.close()
+
+
+def rebuild(args):
+    """Rebuild the SQLite derived state entirely from the journal."""
+    init_db()
+    conn = get_conn()
+    # Drop the FTS index + triggers first: deleting every content row through
+    # the external-content delete triggers can desync FTS5 ("disk image is
+    # malformed"). We recreate and backfill the index after replay instead.
+    conn.executescript("""
+        DROP TRIGGER IF EXISTS facts_ai;
+        DROP TRIGGER IF EXISTS facts_ad;
+        DROP TRIGGER IF EXISTS facts_au;
+        DROP TABLE IF EXISTS facts_fts;
+        DELETE FROM entity_facts;
+        DELETE FROM facts;
+        DELETE FROM decisions;
+        DELETE FROM entities;
+    """)
+    conn.commit()
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    for entry in entries:
+        persist_entry(conn, entry)
+    conn.commit()
+    _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
+    conn.commit()
+    facts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+    decisions = conn.execute("SELECT count(*) FROM decisions").fetchone()[0]
+    entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
+    links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+    conn.close()
+    print(f"Rebuilt from {len(entries)} journal entries:")
+    print(f"  Facts: {facts}  Decisions: {decisions}  Entities: {entities}  Links: {links}")
+
+
+def merkle_cmd(args):
+    """Show the Merkle index over the journal (root + per-chunk hashes)."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    chunks = merkle.chunk_hashes(entries)
+    root = merkle.merkle_root(chunks)
+    print(f"Entries: {len(entries)}")
+    print(f"Chunks:  {len(chunks)} (size {merkle.CHUNK_SIZE})")
+    print(f"Root:    {root}")
+    for i, h in enumerate(chunks):
+        print(f"  chunk {i}: {h}")
+
 
 def sync_push(args):
-    """Push local changes to remote hive"""
+    """Push local changes to remote hive."""
     import requests
-    
-    # Get recent entries from journal
+
     journal_path = JOURNAL_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
     if not journal_path.exists():
         print("No entries to sync today")
         return
-    
-    with open(journal_path, 'r') as f:
-        entries = [json.loads(line) for line in f]
-    
-    # Send to remote
+
+    with open(journal_path, "r") as f:
+        entries = [json.loads(line) for line in f if line.strip()]
+
     try:
         response = requests.post(f"{args.remote}/api/sync/receive", json={"entries": entries})
         if response.status_code == 200:
@@ -207,135 +557,56 @@ def sync_push(args):
     except Exception as e:
         print(f"Sync error: {e}")
 
+
 def sync_pull(args):
-    """Pull remote changes to local hive"""
+    """Pull remote changes to local hive (journal-first, G-Set merge)."""
     import requests
-    
+
     try:
         response = requests.get(f"{args.remote}/api/sync/entries")
-        if response.status_code == 200:
-            remote_entries = response.json().get("entries", [])
-            
-            # Process each entry
-            for entry in remote_entries:
-                if entry["op"] == "remember":
-                    data = entry["data"]
-                    # Store in local DB if newer
-                    conn = sqlite3.connect(DB_PATH)
-                    conn.execute("""
-                        INSERT OR REPLACE INTO facts (content, tags, importance, source_agent, created_at)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (data["content"], json.dumps(data["tags"]), data["importance"], 
-                          data["source"], entry["ts"]))
-                    conn.commit()
-                    conn.close()
-            
-            print(f"Pulled {len(remote_entries)} entries from {args.remote}")
-        else:
+        if response.status_code != 200:
             print(f"Pull failed: {response.status_code}")
+            return
+        remote_entries = response.json().get("entries", [])
     except Exception as e:
         print(f"Pull error: {e}")
+        return
 
-def entity(args):
-    """Register or query an entity"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    if args.action == "add":
-        attrs = json.dumps(json.loads(args.attr)) if args.attr else "{}"
-        cursor.execute("""
-            INSERT INTO entities (name, type, attributes)
-            VALUES (?, ?, ?)
-            ON CONFLICT(name) DO UPDATE SET type=excluded.type, attributes=excluded.attributes, last_updated=CURRENT_TIMESTAMP
-        """, (args.name, args.type or "unknown", attrs))
-        conn.commit()
-        eid = cursor.lastrowid or cursor.execute(
-            "SELECT id FROM entities WHERE name = ?", (args.name,)).fetchone()[0]
-        conn.close()
-        print(f"Entity #{eid}: {args.name} ({args.type or 'unknown'})")
-
-    elif args.action == "list":
-        rows = conn.execute("SELECT id, name, type, attributes, first_seen FROM entities ORDER BY name").fetchall()
-        if not rows:
-            print("No entities registered.")
-        for r in rows:
-            print(f"  [{r[0]}] {r[1]} ({r[2]})  since {r[4]}")
-        conn.close()
-
-    elif args.action == "show":
-        cursor.execute("SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?", (args.name,))
-        row = cursor.fetchone()
-        if not row:
-            print(f"No entity named '{args.name}'")
-            conn.close()
-            return
-        print(f"Entity #{row[0]}: {row[1]} ({row[2]})")
-        print(f"  Attributes: {row[3]}")
-        print(f"  First seen: {row[4]}  Last updated: {row[5]}")
-        # Show linked facts
-        cursor.execute("""
-            SELECT f.id, f.content, ef.confidence
-            FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
-            WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
-        """, (row[0],))
-        linked = cursor.fetchall()
-        if linked:
-            print(f"  Linked facts ({len(linked)}):")
-            for lf in linked:
-                print(f"    [{lf[0]}] {lf[1][:60]} (conf={lf[2]:.2f})")
-        conn.close()
-
-    elif args.action == "link":
-        # Link a fact to this entity: hv entity link --name X --fact-id N
-        cursor.execute("SELECT id FROM entities WHERE name = ?", (args.name,))
-        erow = cursor.fetchone()
-        if not erow:
-            print(f"No entity named '{args.name}'")
-            conn.close()
-            return
-        cursor.execute("""
-            INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence)
-            VALUES (?, ?, ?)
-        """, (erow[0], args.fact_id, args.confidence or 1.0))
-        conn.commit()
-        conn.close()
-        print(f"Linked fact #{args.fact_id} → entity '{args.name}'")
+    accepted = 0
+    skipped = 0
+    for entry in remote_entries:
+        if "node_id" in entry and "seq" in entry:
+            if ingest_journal(entry):
+                accepted += 1
+        else:
+            skipped += 1  # legacy/old-format entry — ignored in Phase 1
+    print(f"Pulled from {args.remote}: {accepted} new, {len(remote_entries) - accepted - skipped} duplicate, {skipped} skipped")
 
 
 def stats(args):
-    """Show memory usage stats"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    facts = cursor.execute("SELECT count(*) FROM facts").fetchone()[0]
-    decisions = cursor.execute("SELECT count(*) FROM decisions").fetchone()[0]
-    active_decisions = cursor.execute("SELECT count(*) FROM decisions WHERE superseded_by IS NULL").fetchone()[0]
-
-    # entities table may not exist yet (pre-migration)
-    try:
-        entities = cursor.execute("SELECT count(*) FROM entities").fetchone()[0]
-    except sqlite3.OperationalError:
-        entities = 0
-
-    try:
-        links = cursor.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
-    except sqlite3.OperationalError:
-        links = 0
-
-    avg_trust = cursor.execute("SELECT round(avg(trust_score), 2) FROM facts").fetchone()[0] or 0
-    top_tags = cursor.execute("""
-        SELECT tags, count(*) as cnt FROM facts WHERE tags IS NOT NULL GROUP BY tags ORDER BY cnt DESC LIMIT 5
+    """Show memory usage stats."""
+    conn = get_conn()
+    facts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+    decisions = conn.execute("SELECT count(*) FROM decisions").fetchone()[0]
+    active_decisions = conn.execute(
+        "SELECT count(*) FROM decisions WHERE superseded_by IS NULL"
+    ).fetchone()[0]
+    entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
+    links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+    avg_trust = conn.execute("SELECT round(avg(trust_score), 2) FROM facts").fetchone()[0] or 0
+    top_tags = conn.execute("""
+        SELECT tags, count(*) as cnt FROM facts WHERE tags IS NOT NULL
+        GROUP BY tags ORDER BY cnt DESC LIMIT 5
     """).fetchall()
+    conn.close()
 
-    # Journal stats
     journal_files = sorted(JOURNAL_DIR.glob("*.jsonl")) if JOURNAL_DIR.exists() else []
     total_entries = 0
     for jf in journal_files:
-        total_entries += sum(1 for _ in open(jf))
-
-    conn.close()
+        total_entries += sum(1 for line in open(jf) if line.strip())
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
+    print(f"  Node:               {NODE_ID}")
     print(f"  Facts:              {facts}  (avg trust: {avg_trust})")
     print(f"  Decisions:          {decisions}  ({active_decisions} active)")
     print(f"  Entities:           {entities}  ({links} fact-links)")
@@ -343,32 +614,32 @@ def stats(args):
     if top_tags:
         print(f"  Top tag groups:")
         for t in top_tags:
-            print(f"    ({t[0]}) x {t[1]}")
+            print(f"    ({t['tags']}) x {t['cnt']}")
 
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
 
 def main():
     parser = argparse.ArgumentParser(description="Hive Mind CLI")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
-    # remember command
     remember_parser = subparsers.add_parser("remember", help="Store a fact")
     remember_parser.add_argument("content", help="Fact content")
     remember_parser.add_argument("--tags", help="Comma-separated tags")
     remember_parser.add_argument("--importance", type=float, default=0.5)
     remember_parser.add_argument("--source", help="Source agent")
 
-    # search command
     search_parser = subparsers.add_parser("search", help="Search facts")
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("--format", choices=["text", "json"], default="text")
 
-    # decide command
     decide_parser = subparsers.add_parser("decide", help="Record a decision")
     decide_parser.add_argument("content", help="Decision content")
     decide_parser.add_argument("--rationale", help="Why this decision")
     decide_parser.add_argument("--supersedes", type=int, help="ID of decision this replaces")
 
-    # entity command
     entity_parser = subparsers.add_parser("entity", help="Manage entities")
     entity_parser.add_argument("action", choices=["add", "list", "show", "link"], help="Sub-command")
     entity_parser.add_argument("--name", help="Entity name")
@@ -377,26 +648,22 @@ def main():
     entity_parser.add_argument("--fact-id", type=int, help="Fact ID to link")
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
 
-    # stats command
     subparsers.add_parser("stats", help="Show memory usage stats")
+    subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
+    subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
-    # sync commands
     sync_parser = subparsers.add_parser("sync", help="Sync with remote hive")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_action")
-
     push_parser = sync_subparsers.add_parser("push", help="Push to remote")
     push_parser.add_argument("remote", help="Remote hive URL (e.g., http://100.64.1.2:8000)")
-
     pull_parser = sync_subparsers.add_parser("pull", help="Pull from remote")
     pull_parser.add_argument("remote", help="Remote hive URL (e.g., http://100.64.1.2:8000)")
 
     args = parser.parse_args()
 
-    # Always run init_db — CREATE TABLE IF NOT EXISTS is idempotent,
-    # and it auto-migrates older DBs that are missing entities/entity_facts.
+    # Idempotent; also auto-migrates older DBs missing tables/indexes.
     init_db()
 
-    # Dispatch command
     if args.command == "remember":
         remember(args)
     elif args.command == "search":
@@ -407,6 +674,10 @@ def main():
         entity(args)
     elif args.command == "stats":
         stats(args)
+    elif args.command == "rebuild":
+        rebuild(args)
+    elif args.command == "merkle":
+        merkle_cmd(args)
     elif args.command == "sync":
         if args.sync_action == "push":
             sync_push(args)
@@ -416,6 +687,7 @@ def main():
             sync_parser.print_help()
     else:
         parser.print_help()
+
 
 if __name__ == "__main__":
     main()

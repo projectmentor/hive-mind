@@ -43,9 +43,10 @@
             </div>
         </div>
 
-        <input type="text" class="search" placeholder="Search facts..." 
-               hx-get="/api/sync/facts" 
-               hx-trigger="keyup changed delay:300ms" 
+        <input type="text" class="search" placeholder="Search facts..." name="q"
+               hx-get="/api/sync/facts"
+               hx-include="this"
+               hx-trigger="keyup changed delay:300ms"
                hx-target="#facts-container">
 
         <div id="facts-container" hx-get="/api/sync/facts" hx-trigger="load">

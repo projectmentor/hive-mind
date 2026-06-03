@@ -93,20 +93,22 @@ class SyncController extends Controller
     }
 
     /**
-     * Get all facts for dashboard
+     * Get all facts for dashboard (supports ?q= search)
      */
-    public function facts(): JsonResponse
+    public function facts(Request $request): JsonResponse
     {
         try {
-            $cmd = $this->hivePath . '/hv search "" --format json';
+            $q = $request->query('q', '');
+            $safe_q = escapeshellarg($q);
+            $cmd = $this->hivePath . '/hv search ' . $safe_q . ' --format json 2>/dev/null';
             $result = shell_exec($cmd);
             $facts = json_decode($result, true) ?: [];
-            
+
             return response()->json([
                 'success' => true,
                 'facts' => $facts
             ]);
-            
+
         } catch (\Exception $e) {
             Log::error("Get facts error: " . $e->getMessage());
             return response()->json([

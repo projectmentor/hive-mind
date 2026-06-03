@@ -18,12 +18,22 @@ memory corpus via a Python CLI (`hv`) that any agent can shell out to.
 **docs/P2P_DESIGN.md** is the full architectural design doc written
 for the next phase of work. READ IT COMPLETELY before writing code.
 
-Key principles from it:
+It covers:
+- **§1-6**: P2P sync architecture (Journal G-Set + Merkle + LWW)
+- **§7**: Migration path from current MVP (Phases 1-4, ~28 hrs)
+- **§8**: Performance optimization tiers (WAL, FTS5, connection pooling)
+- **§11-16**: FUTURE design-level capabilities (modularity, hot-swap DB/sync,
+  dashboard terminal). **DO NOT BUILD THESE YET.** They exist to shape
+  current decisions, not to be implemented. They are Phases 5-11.
+
+Key principles from the design:
 1. "The Journal IS the database. SQLite is a cache/index."
 2. G-Set CRDT for the journal (append-only union merge)
 3. Merkle tree for efficient delta sync
 4. LWW with node_id tiebreaker for mutable fields
 5. Any single node's journal/ = full corpus that can be restored to a fresh machine
+6. The journal is the contract between future modules (keep writes going
+   through core's append API so modular extraction later is clean)
 
 ## Phase 1 Tasks (the current build)
 See docs/P2P_DESIGN.md §7 for the full Phase 1 checklist (~6 hours):

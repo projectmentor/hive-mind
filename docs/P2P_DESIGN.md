@@ -310,23 +310,411 @@ root = leaves[0]
 
 ---
 
+## 11. Modular Architecture (Design)
+
+The system is evolving from a monolith (core Python script + Laravel UI)
+into a **plugin-based framework** where every capability is a module.
+This is the meta-architecture that enables all the hot-swap features
+below.
+
+### 11.1 Core vs Modules
+
+The core's ONLY job is to load modules and route messages. Everything
+else is a module:
+
+```
+CORE (never changes without a core release):
+  ├── Journal format (G-Set, append-only — immutable contract)
+  ├── Module loader + registry
+  ├── Module manifest schema
+  ├── CLI dispatcher (routes commands to declaring module)
+  ├── Dashboard shell (Laravel + HTMX — hosts module views)
+  └── HTTP/WebSocket transport (Tailscale, module-agnostic)
+
+MODULE TYPES (each a plugin):
+  ├── db-driver        → SQLite, Postgres, MySQL, etc.
+  ├── sync-algorithm   → Merkle+LWW, CRDT, gossip, enterprise variants
+  ├── cli-command      → remember, search, decide, entity, sync, ...
+  ├── dashboard-view   → stats, search UI, terminal, module manager
+  ├── api-endpoint     → /sync/*, /modules/*, /terminal/*, ...
+  └── integration      → Hermes memory provider, Claude Code hooks, etc.
+```
+
+### 11.2 Module Manifest
+
+Each module declares its identity, capabilities, and lifecycle hooks:
+
+```yaml
+# modules/db-sqlite/module.yaml
+name: db-sqlite
+version: 1.0.0
+type: db-driver
+description: "SQLite backend with WAL + FTS5"
+requires:
+  core: ">=1.0"
+provides:
+  db-backend: sqlite
+exposes:
+  cli: []                    # this type doesn't add CLI commands
+  dashboard_views: []        # maybe a config screen later
+  api_endpoints: []
+hooks:
+  on_activate: migrate_from_journal   # rebuild state from journal
+  on_deactivate: export_state         # dump to portable format
+  on_ingest: persist_journal_entry    # called after journal append
+  on_rebuild: from_journal
+```
+
+### 11.3 Module Lifecycle
+
+```
+  AVAILABLE  ──install──▶  INSTALLED  ──activate──▶  ACTIVE   ─┐
+        ▲                        ▲                       │       │
+        │                        │                       │       │
+    uninstall              update               deactivate       │
+        │                        │                       │       │
+        └────────────────────────┴───────────────────────┘       │
+                                                                 │
+  Per-type exclusivity: only one `db-driver` can be ACTIVE    ───┘
+  Per-type multiplicity: many `cli-command` can be ACTIVE simultaneously
+```
+
+**Activation rules:**
+- `db-driver`: exclusive (one active at a time; switching triggers migration)
+- `sync-algorithm`: exclusive
+- `cli-command`: non-exclusive (stacking)
+- `dashboard-view`: non-exclusive (each gets a menu entry)
+- `api-endpoint`: non-exclusive
+- `integration`: non-exclusive
+
+### 11.4 Dashboard Module Manager
+
+A menu item "Modules" in the dashboard exposes:
+- **Installed**: list with activate/deactivate/uninstall/update buttons
+- **Available**: registry feed (URL configured in settings, default: official)
+- **Logs**: module install/uninstall/activate events
+- **Conflicts**: warnings when activating a module that conflicts with active ones
+- **Dependencies**: auto-resolve missing deps on install
+
+The CLI exposes equivalent commands for SSH/automation contexts:
+```bash
+hv module list
+hv module install <name>[@version]
+hv module activate <name>
+hv module deactivate <name>
+hv module update <name>
+hv module repo add <url>
+```
+
+---
+
+## 12. Hot-Swappable Database Layer (Design)
+
+**Why:** SQLite is right for 1-10 node deployments. Enterprise users may
+want Postgres for multi-TB corpora, shared infrastructure, or existing
+DBA teams. The layer between CLI and storage must be driver-agnostic.
+
+### 12.1 Driver Interface
+
+Every `db-driver` module implements this contract:
+
+```python
+class HivemindDBDriver(Protocol):
+    # Lifecycle
+    def initialize(self) -> None: ...
+    def teardown(self) -> None: ...
+    def health_check(self) -> dict: ...   # {"status": "ok", "latency_ms": 3, ...}
+
+    # Write path (called after journal append)
+    def persist_fact(self, entry: JournalEntry) -> int: ...
+    def persist_decision(self, entry: JournalEntry) -> int: ...
+    def persist_entity(self, entry: JournalEntry) -> int: ...
+
+    # Read path
+    def search_facts(self, query: str, limit: int) -> list[dict]: ...
+    def get_fact(self, fact_id: int) -> dict | None: ...
+    def list_decisions(self, active_only: bool) -> list[dict]: ...
+    def get_entity(self, name: str) -> dict | None: ...
+    def stats(self) -> dict: ...   # fact_count, decision_count, etc.
+
+    # Hot-swap support
+    def import_from_journal(self, journal_path: Path) -> None: ...
+    def export_full(self, output_path: Path) -> None: ...
+
+    # Driver-specific config
+    @classmethod
+    def config_schema(cls) -> dict: ...   # JSON schema for .env / UI form
+```
+
+### 12.2 Hot-Swap Flow
+
+```
+  [db-sqlite ACTIVE]
+           │
+           ▼  user clicks "Activate db-postgres"
+  [core runs activation sequence]:
+      1. install+load db-postgres module
+      2. db-postgres.initialize()   → connect, run migrations
+      3. db-postgres.import_from_journal(journal/)
+         (reads every journal line, calls persist_* for each)
+         progress bar in dashboard: "Migrating 2,847 entries..."
+      4. db-sqlite.deactivate()    → export_state + release connection
+      5. registry marks db-postgres ACTIVE
+      6. all future reads go to Postgres
+           │
+           ▼
+  [db-postgres ACTIVE, db-sqlite INSTALLED]
+```
+
+### 12.3 Rollback Safety
+
+If migration fails mid-way (e.g., Postgres OOM), the system:
+- Keeps the old driver ACTIVE
+- Logs partial state under `modules/db-postgres/migrations/failed/<ts>/`
+- Dashboard shows "activation failed" with the error
+- No data loss: journal is unchanged, old driver still works
+
+### 12.4 Default Bundled Drivers
+
+- `db-sqlite` (shipped with core, always available)
+- `db-postgres` (official module, installable)
+- `db-memory` (dev/testing, in-memory only, no persistence)
+
+Third-party drivers can provide MySQL, ClickHouse, etc.
+
+---
+
+## 13. Hot-Swappable Sync/Reconstruction Algorithm (Design)
+
+**Why:** The Merkle+LWW recipe in §3-6 is tuned for small teams. An
+enterprise deployment with 5,000 nodes needs a different sync algorithm
+(gossip + vector clocks). A regulated deployment might want
+operational-transform merges with audit trails.
+
+### 13.1 Sync Algorithm Interface
+
+```python
+class HivemindSyncAlgorithm(Protocol):
+    name: str
+    version: str
+
+    # Peer handshake (replaces §5 protocol)
+    def handshake_request(self, local_state: dict) -> dict: ...
+    def handshake_response(self, remote_request: dict, local_state: dict) -> dict: ...
+
+    # Delta detection (what to exchange)
+    def compute_needed_entries(self, handshake, local_state) -> list[EntryKey]: ...
+
+    # Merge policy (conflict resolution)
+    def merge_entries(self, local, remote) -> tuple[list[JournalEntry], list[ConflictRecord]]: ...
+
+    # Rebuild derived state (called after merge)
+    def rebuild_derived(self, journal_path: Path, db: HivemindDBDriver) -> None: ...
+
+    # Optional: streaming sync for large corpora
+    def sync_stream(self, peer: PeerInfo, chunk_size: int) -> Iterator[JournalEntry]: ...
+```
+
+### 13.2 Default Algorithm
+
+`sync-merkle-lww` ships with core. It implements §3-6 of this document.
+Suitable for 2-10 nodes, < 500MB corpus, low-latency networks.
+
+### 13.3 Negotiation
+
+On `/sync/hello`, peers exchange algorithm metadata:
+```json
+{"algorithms": ["sync-merkle-lww/1.0", "sync-gossip-v2/1.0"]}
+```
+Both sides fall back to the highest common protocol. If no overlap,
+sync is refused with an error suggesting which module to install.
+
+### 13.4 Available Algorithms (Future)
+
+| Module               | Use case                                    |
+|----------------------|---------------------------------------------|
+| `sync-merkle-lww`    | Small teams (2-10 nodes) — default          |
+| `sync-merkle-crdt`   | Offline-heavy nodes, need strict CRDT merge |
+| `sync-gossip`        | Many nodes (50+), eventual consistency      |
+| `sync-raft-lite`     | Strong consistency for small cluster        |
+| `sync-audit`         | Regulated: every conflict logged, human-resolved |
+| `sync-enterprise-*`  | Vendor-published for specific deployments   |
+
+### 13.5 Hot-Swap Flow
+
+Activating a new sync algorithm takes effect on the **next sync
+session** (no migration needed — the algorithm is stateless; the
+journal is unchanged). Peers negotiate protocol version at each
+handshake, so different algorithms can coexist across peers during
+a gradual rollout.
+
+---
+
+## 14. Dashboard Terminal (Design)
+
+**Why:** Every `hv` CLI command should be invocable from the dashboard
+with real-time output, for testing, debugging, and ad-hoc operations on
+headless nodes where SSH isn't convenient.
+
+### 14.1 UX
+
+A new dashboard view: "Terminal" (or "Console").
+
+```
+  ┌─────────────────────────────────────────────────────────┐
+  │  $ hv search "parallel delegation"           [Run ▶]   │
+  ├─────────────────────────────────────────────────────────┤
+  │  [2] David prefers parallel delegation over sequential │
+  │       Tags: workflow, preference  Trust: 1.10           │
+  │       Source: manual                                    │
+  │                                                         │
+  │  [1] David prefers parallel delegation over sequential │
+  │       Tags: workflow, preference  Trust: 1.10           │
+  │       Source: manual                                    │
+  └─────────────────────────────────────────────────────────┘
+  
+  [Command history]  [Saved snippets]  [Export log]
+```
+
+### 14.2 Security Model
+
+Terminal access is NOT unrestricted shell. It's scoped:
+
+- **ONLY `hv` commands**: input is validated as `hv <subcommand> <args>`
+  and dispatched via the CLI dispatcher (same path as real CLI).
+- **No raw shell**: `hv shell`, `!`, `|`, `;`, `` ` `` ` are all rejected.
+- **Audit log**: every command + output stored to `logs/terminal.csvl`
+  (command, user, timestamp, exit code, full output).
+- **Permission per module**: each `cli-command` module declares a
+  required permission level (`read`, `write`, `admin`). Dashboard users
+  are assigned roles.
+- **No secrets leakage**: terminal output is filtered against a denylist
+  of patterns (`API_KEY=`, `password=`, etc.) before being rendered.
+
+### 14.3 Implementation Shape
+
+- **Backend**: Laravel controller + SSE (Server-Sent Events) stream
+  OR WebSocket via Laravel Reverb — choice depends on what's already
+  in the stack when this is built.
+- **Frontend**: xterm.js (proven terminal emulator component) rendered
+  in a dashboard view.
+- **Execution**: the controller invokes `hv` via `proc_open()` with
+  stdout/stderr piped to the stream, then closes the process.
+
+### 14.4 Long-running Commands
+
+Some commands take time (`hv sync now`, `hv rebuild`). The terminal
+must stream partial output incrementally:
+- Progress bars render live (ANSI escape codes passed through xterm.js)
+- Ctrl+C sent from the dashboard sends SIGINT to the child process
+- Timeout: each command has a configurable max duration (default 5m)
+
+---
+
+## 15. Updated Phase Plan
+
+The original Phases 1-4 (P2P sync) proceed **unblocked** by these
+new capabilities. The modular system is a separate stream.
+
+### Stream A — P2P Sync (original §7, ~28 hrs)
+
+- **Phase 1** Foundation: WAL, journal format, Merkle index, FTS5
+- **Phase 2** Sync Daemon: FastAPI daemon, delta detection, merge
+- **Phase 3** Journal-First: SQLite derived, `hv rebuild`
+- **Phase 4** Hardening: status, integrity, docs
+
+### Stream B — Modularity (new, ~40 hrs)
+
+- **Phase 5** Plugin foundation (~12 hrs): manifest schema, loader,
+                registry, activation hooks, CLI `hv module` commands
+- **Phase 6** Extract to modules (~14 hrs): break current code into
+                `db-sqlite`, `sync-merkle-lww`, `cli-remember`,
+                `cli-search`, `cli-decide`, `cli-entity`, `cli-sync`,
+                `db-dashboard`, `api-sync`, `integration-hermes` modules.
+                **Migration guide required.**
+- **Phase 7** Dashboard module manager (~8 hrs): list/install/activate UI
+- **Phase 8** Dashboard terminal (~6 hrs): xterm.js view + SSE/WS backend
+
+### Stream C — Hot-Swap Capabilities (after Phase 6, ~20 hrs)
+
+- **Phase 9** DB driver interface (~8 hrs): refactor init_db, abstract
+                read/write, ship `db-postgres` reference implementation
+- **Phase 10** Sync algo interface (~8 hrs): refactor sync daemon, ship
+                `sync-merkle-crdt` reference alternative
+- **Phase 11** Dashboard integration polish (~4 hrs): settings per module,
+                health checks, module logs viewer
+
+### Recommended Execution Order
+
+1. Build Phase 1-4 (P2P sync) on the monolith first
+2. THEN implement Phase 5 (plugin foundation)
+3. THEN Phase 6 (extraction) — this is the breaking change
+4. THEN Phase 7-8 (UI) and Phase 9-10 (hot-swap) in parallel
+
+Doing modularity BEFORE P2P sync would slow both streams. Building
+sync first on the monolith, then extracting it into a module, gives a
+clean test suite for the extraction.
+
+---
+
+## 16. Design Principles (Revised)
+
+In addition to §3-6 and §9, these hold for modules and hot-swap:
+
+1. **The journal is the contract between modules.** Every module reads
+   from or writes to the journal. This is what makes hot-swap safe.
+2. **Modules are isolated processes or in-process plugins.** Default
+   in-process; enterprise may want out-of-process for sandboxing.
+3. **Default modules always ship with core.** Users should never need
+   internet to get a working system on first install.
+4. **No module can corrupt the journal.** Journal writes go through
+   core's append-only API; modules never touch the raw file.
+5. **Activation is atomic.** If a module fails to activate, the system
+   rolls back to the previously-active module of that type.
+6. **Dashboard terminal is a VIEW of the CLI, not a shell.** It invokes
+   the same code path as the real CLI and has the same security model.
+
+---
+
 ## Summary
 
-### ARCHITECTURE: Journal (G-Set) + Merkle Sync + LWW Resolution
+### ORIGINAL ARCHITECTURE: Journal (G-Set) + Merkle Sync + LWW
 
-- **Journal/ directory IS the full backup** (copy it = restore everything)
-- **SQLite and Merkle index are derivable** (rebuilt with `hv rebuild`)
-- **Sync** = compare hash trees, exchange missing entries, merge
-- **No server, no leader, no consensus** — any node works alone
-- **~28 hours implementation**, FastAPI daemon + existing Python stack
+- Journal/ = full backup; SQLite = derived
+- Any node reconstructs alone; ~28 hrs in Phases 1-4
 
-### PERFORMANCE (do immediately):
+### NEW DESIGN-LEVEL CAPABILITIES (Phases 5-11, ~60 hrs after Phase 4)
 
-1. **SQLite WAL mode** (5 min, 5-10x reads)
-2. **FTS5 search index** (3 hrs, 100x search)
-3. **Connection reuse** (30 min, eliminates per-query overhead)
+| Capability                         | Enabler                          |
+|------------------------------------|----------------------------------|
+| Hot-swap DB (SQLite → Postgres)    | Driver interface + journal rebuild |
+| Hot-swap sync algorithm            | Sync protocol interface + negotiation |
+| Modular install/activate via UI    | Plugin loader + manifest + registry |
+| Every CLI command runnable in UI   | xterm.js + streamed proc_open    |
 
-### FIRST COMMAND TO RUN ON BOTH NODES TODAY:
+### KEY DEPENDENCIES
+
+- Modularity (§11) must be done BEFORE the hot-swap features make sense
+- P2P sync (§3-6) is UNBLOCKED by modularity — build first, extract later
+- Dashboard terminal (§14) is independent — can ship any time after Phase 7
+
+### ANTI-PATTERNS (expanded list)
+
+Original 1-10 from §9 remain. Additional ones for this design:
+
+11. **Putting module registry inside the journal** — registry is local
+    state; journal is replicated state. Keep them separate.
+12. **Allowing modules to write to journal directly** — core's append
+    API only; modules call `core.append_journal(entry)`.
+13. **Dashboard terminal as a raw shell** — huge security surface.
+    Scope to `hv` commands only.
+14. **Bundling every database driver by default** — ship `db-sqlite`
+    only; users install Postgres when they need it (avoids binary size
+    / dependency bloat).
+15. **Hot-swapping mid-sync** — require current sync session to
+    complete before switching sync algorithms.
+
+### FIRST COMMAND TO RUN TODAY (unchanged):
 
 ```bash
 sudo apt install sqlite3  # if not already installed

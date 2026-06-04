@@ -15,9 +15,16 @@ if errorlevel 1 (
     echo [OK] OpenSSH Server already installed
 )
 
-:: ---- 2. Set DefaultShell to bash.exe ----
-echo Setting OpenSSH DefaultShell to bash.exe...
-reg add "HKEY_LOCAL_MACHINE\SOFTWARE\OpenSSH" /v DefaultShell /t REG_SZ /d "C:\Users\Admin\AppData\Local\Microsoft\WindowsApps\bash.exe" /f
+:: ---- 2. Set DefaultShell to a WSL wrapper that accepts -c ----
+:: OpenSSH invokes the shell as `shell -c "<cmd>"`. wsl.exe rejects -c, and the
+:: per-user bash.exe is a 0-byte stub on some installs (e.g. gregorius). A tiny
+:: wrapper calling `wsl.exe bash %*` works on EVERY node — no hardcoded username,
+:: no stub problem. (corpus facts #15, #21)
+echo Writing C:\ssh-wsl.bat wrapper...
+> C:\ssh-wsl.bat echo @echo off
+>> C:\ssh-wsl.bat echo C:\Windows\System32\wsl.exe bash %%*
+echo Setting OpenSSH DefaultShell to C:\ssh-wsl.bat...
+reg add "HKEY_LOCAL_MACHINE\SOFTWARE\OpenSSH" /v DefaultShell /t REG_SZ /d "C:\ssh-wsl.bat" /f
 echo [OK] DefaultShell set
 
 :: ---- 3. Enable and start sshd ----
@@ -44,6 +51,17 @@ echo [OK] Firewall rule for port 9876
 echo.
 echo Current portproxy rules:
 netsh interface portproxy show v4tov4
+
+:: ---- 7. Auto-start WSL at logon (Windows-reboot persistence) ----
+:: The systemd hive-sync.service (installed by 03-daemon-service.sh) starts the
+:: daemon when WSL boots, but WSL only boots on demand. This logon task boots the
+:: default distro (with systemd=true it then stays up and starts the enabled
+:: service automatically). Verify on the box: after a reboot+login, from WSL run
+:: `systemctl is-active hive-sync.service`. Remove with:
+::   schtasks /delete /tn "HiveMind WSL Autostart" /f
+echo Creating WSL autostart logon task...
+schtasks /create /tn "HiveMind WSL Autostart" /tr "C:\Windows\System32\wsl.exe -e true" /sc onlogon /f
+echo [OK] WSL autostart task created
 
 echo.
 echo === Windows host setup complete ===

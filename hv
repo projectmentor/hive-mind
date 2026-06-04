@@ -72,7 +72,8 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         trust_score REAL DEFAULT 1.0,
         last_accessed TIMESTAMP,
-        access_count INTEGER DEFAULT 0
+        access_count INTEGER DEFAULT 0,
+        confidence REAL DEFAULT 0.0
     );
 
     CREATE TABLE IF NOT EXISTS decisions (
@@ -86,7 +87,6 @@ def init_db():
 
     CREATE INDEX IF NOT EXISTS idx_facts_tags ON facts(tags);
     CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_agent, created_at);
-    CREATE INDEX IF NOT EXISTS idx_facts_trust ON facts(trust_score);
     CREATE INDEX IF NOT EXISTS idx_decisions_active ON decisions(id) WHERE superseded_by IS NULL;
 
     CREATE TABLE IF NOT EXISTS entities (
@@ -120,6 +120,16 @@ def init_db():
     );
     CREATE INDEX IF NOT EXISTS idx_jidx_local ON journal_index(kind, local_id);
     """)
+    conn.commit()
+
+    # Migration: add the derived-confidence column to pre-existing facts tables
+    # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
+    if "confidence" not in {r[1] for r in conn.execute("PRAGMA table_info(facts)")}:
+        conn.execute("ALTER TABLE facts ADD COLUMN confidence REAL DEFAULT 0.0")
+        conn.commit()
+    # Index created here (not in the schema script above) so it works on both
+    # fresh and migrated DBs — the column is guaranteed to exist by this point.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_confidence ON facts(confidence)")
     conn.commit()
 
     _init_fts(conn)
@@ -275,26 +285,25 @@ def persist_fact(conn, entry):
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     content = payload["content"]
-    cur.execute("SELECT id, trust_score FROM facts WHERE content = ?", (content,))
+    cur.execute("SELECT id FROM facts WHERE content = ?", (content,))
     row = cur.fetchone()
-    if row and "trust_score" not in payload:
-        # Dedup: boost trust instead of duplicating (live remember of known content)
-        new_trust = min(row["trust_score"] + 0.1, 2.0)
+    if row:
+        # Known content: this entry is CORROBORATION, not a new fact. Map its
+        # journal identity onto the existing row (so distinct sources stay
+        # countable) and bump access_count as telemetry only. Confidence is NOT
+        # mutated here — it is a pure projection recomputed by
+        # _recompute_confidence() over the set of distinct sources, so repetition
+        # can never launder confidence upward.
         cur.execute(
-            "UPDATE facts SET trust_score = ?, access_count = access_count + 1, last_accessed = ? WHERE id = ?",
-            (new_trust, ts, row["id"]),
+            "UPDATE facts SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+            (ts, row["id"]),
         )
         _record_index(conn, entry, "fact", row["id"])
-        return {"id": row["id"], "trust": new_trust, "inserted": False}
-    if row:
-        # Already-present content (migration / cross-node duplicate): map this
-        # entry's identity onto the existing row and leave the row as-is.
-        _record_index(conn, entry, "fact", row["id"])
-        return {"id": row["id"], "trust": row["trust_score"], "inserted": False}
+        return {"id": row["id"], "inserted": False}
     cur.execute("""
         INSERT INTO facts (content, tags, importance, source_agent, source_session,
-                           created_at, trust_score, access_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                           created_at, trust_score, access_count, confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         content,
         json.dumps(payload.get("tags", [])),
@@ -302,12 +311,52 @@ def persist_fact(conn, entry):
         payload.get("source", "manual"),
         payload.get("source_session"),
         payload.get("created_at", ts),
-        payload.get("trust_score", 1.0),
+        payload.get("trust_score", 1.0),   # legacy column, retained but unused for ranking
         payload.get("access_count", 0),
+        0.0,                                # confidence placeholder — set by _recompute_confidence()
     ))
     fid = cur.lastrowid
     _record_index(conn, entry, "fact", fid)
-    return {"id": fid, "trust": payload.get("trust_score", 1.0), "inserted": True}
+    return {"id": fid, "inserted": True}
+
+
+# --- Confidence projection (Phase A) -------------------------------------------
+# Confidence is a PURE, DETERMINISTIC projection over the immutable journal,
+# recomputed on every rebuild — never a mutable counter. It is a function of the
+# number of DISTINCT sources that asserted the exact content, with diminishing
+# returns and a hard cap below "certain". Repetition from one source is
+# idempotent (set membership), so it cannot launder confidence upward. Because
+# the G-Set journal converges across nodes, this yields identical values on
+# every node. (Phase B refines "source" to admitted node_id / source-class.)
+CONF_BASE = 0.5    # each new independent source halves the remaining gap to CAP
+CONF_CAP = 0.90    # never "certain" without external/human verification
+
+
+def _confidence_for(n_sources):
+    """confidence(n) = CAP * (1 - BASE**n): 0->0, 1->0.45, 2->0.675, 3->0.788, cap 0.90."""
+    if n_sources <= 0:
+        return 0.0
+    return round(CONF_CAP * (1 - CONF_BASE ** n_sources), 6)
+
+
+def _recompute_confidence(conn, entries):
+    """The ONLY writer of facts.confidence. Recompute every fact's confidence from
+    the set of distinct sources that asserted its exact content in the journal.
+    Pure projection over `entries` (the converged journal)."""
+    content_sources = {}
+    for e in entries:
+        if e.get("type") != "fact":
+            continue
+        p = e.get("payload", {})
+        content = p.get("content")
+        if content is None:
+            continue
+        content_sources.setdefault(content, set()).add(p.get("source", "manual"))
+    for content, sources in content_sources.items():
+        conn.execute(
+            "UPDATE facts SET confidence = ? WHERE content = ?",
+            (_confidence_for(len(sources)), content),
+        )
 
 
 def persist_decision(conn, entry):
@@ -424,7 +473,8 @@ def _index_lookup(conn, kind, local_id):
 # --------------------------------------------------------------------------
 
 def remember(args):
-    """Store a fact (with dedup — boosts trust if identical content exists)."""
+    """Store a fact. Confidence is DERIVED from the number of distinct sources that
+    asserted identical content (not from repetition) — see _recompute_confidence."""
     payload = {
         "content": args.content,
         "tags": args.tags.split(",") if args.tags else [],
@@ -435,13 +485,24 @@ def remember(args):
 
     conn = get_conn()
     res = persist_fact(conn, entry)
+    # Derive this content's confidence from its distinct sources in the journal
+    # (keeps the live path consistent with rebuild without a full rebuild).
+    srcs = {
+        e["payload"].get("source", "manual")
+        for e in merkle.read_all_entries(JOURNAL_DIR)
+        if e.get("type") == "fact" and e["payload"].get("content") == args.content
+    }
+    conf = _confidence_for(len(srcs))
+    conn.execute("UPDATE facts SET confidence = ? WHERE id = ?", (conf, res["id"]))
     conn.commit()
     conn.close()
 
+    n = len(srcs)
+    src_word = "source" if n == 1 else "sources"
     if res["inserted"]:
-        print(f"Remembered as fact #{res['id']}")
+        print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
     else:
-        print(f"Already known (fact #{res['id']}), trust boosted to {res['trust']:.2f}")
+        print(f"Corroborated fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
 
 
 def _fts_query(raw):
@@ -463,24 +524,24 @@ def search(args):
     if fts_expr is not None:
         try:
             results = conn.execute("""
-                SELECT f.id, f.content, f.tags, f.trust_score, f.source_agent, f.created_at
+                SELECT f.id, f.content, f.tags, f.confidence, f.source_agent, f.created_at
                 FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid
-                WHERE facts_fts MATCH ?
-                ORDER BY f.trust_score DESC, f.created_at DESC
+                WHERE facts_fts MATCH ? AND f.confidence >= ?
+                ORDER BY f.confidence DESC, f.created_at DESC
                 LIMIT 10
-            """, (fts_expr,)).fetchall()
+            """, (fts_expr, args.min_confidence)).fetchall()
         except sqlite3.OperationalError:
             results = None  # FTS unavailable — fall back
 
     if results is None:
         like = f"%{args.query}%"
         results = conn.execute("""
-            SELECT id, content, tags, trust_score, source_agent, created_at
+            SELECT id, content, tags, confidence, source_agent, created_at
             FROM facts
-            WHERE content LIKE ?
-            ORDER BY trust_score DESC, created_at DESC
+            WHERE content LIKE ? AND confidence >= ?
+            ORDER BY confidence DESC, created_at DESC
             LIMIT 10
-        """, (like,)).fetchall()
+        """, (like, args.min_confidence)).fetchall()
 
     if args.format == "json":
         print(json.dumps([dict(r) for r in results], indent=2))
@@ -488,7 +549,7 @@ def search(args):
         for r in results:
             tags = json.loads(r["tags"]) if r["tags"] else []
             print(f"[{r['id']}] {r['content']}")
-            print(f"     Tags: {', '.join(tags)}  Trust: {r['trust_score']:.2f}  From: {r['source_agent']}")
+            print(f"     Tags: {', '.join(tags)}  Conf: {r['confidence']:.2f}  From: {r['source_agent']}")
             print()
 
     conn.close()
@@ -634,6 +695,11 @@ def rebuild_db():
             resolve_supersedes(conn, entry)
     conn.commit()
 
+    # Phase A: confidence is a derived projection over the journal — recompute it
+    # here so every node converges to identical values over the same journal.
+    _recompute_confidence(conn, entries)
+    conn.commit()
+
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
     conn.commit()
 
@@ -677,7 +743,7 @@ def stats(args):
     ).fetchone()[0]
     entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
     links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
-    avg_trust = conn.execute("SELECT round(avg(trust_score), 2) FROM facts").fetchone()[0] or 0
+    avg_conf = conn.execute("SELECT round(avg(confidence), 2) FROM facts").fetchone()[0] or 0
     top_tags = conn.execute("""
         SELECT tags, count(*) as cnt FROM facts WHERE tags IS NOT NULL
         GROUP BY tags ORDER BY cnt DESC LIMIT 5
@@ -691,7 +757,7 @@ def stats(args):
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
     print(f"  Node:               {NODE_ID}")
-    print(f"  Facts:              {facts}  (avg trust: {avg_trust})")
+    print(f"  Facts:              {facts}  (avg confidence: {avg_conf})")
     print(f"  Decisions:          {decisions}  ({active_decisions} active)")
     print(f"  Entities:           {entities}  ({links} fact-links)")
     print(f"  Journal entries:    {len(entries)}  ({', '.join(f'{k}={v}' for k, v in sorted(by_node.items())) or 'empty'})")
@@ -730,6 +796,8 @@ def main():
     search_parser = subparsers.add_parser("search", help="Search facts")
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("--format", choices=["text", "json"], default="text")
+    search_parser.add_argument("--min-confidence", type=float, default=0.0,
+                               help="Hide facts below this confidence (default 0.0 = show all)")
 
     decide_parser = subparsers.add_parser("decide", help="Record a decision")
     decide_parser.add_argument("content", help="Decision content")

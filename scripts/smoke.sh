@@ -45,7 +45,7 @@ printf '%sHive Mind CLI smoke%s  (sandbox: %s)\n' "$B" "$N" "$SANDBOX"
 sect "remember + dedup"
 "$HV" remember "David prefers parallel delegation" --tags workflow,preference >/dev/null
 DUP="$("$HV" remember "David prefers parallel delegation" --tags workflow,preference)"
-assert_contains "dedup boosts trust instead of duplicating" "$DUP" "boosted"
+assert_contains "repeat content corroborates (not duplicated, not inflated)" "$DUP" "Corroborated"
 "$HV" remember "TBHH is a real estate team at Dalton Wade" --tags business,real-estate >/dev/null
 ROWS="$(py <<'PY'
 import os,sqlite3

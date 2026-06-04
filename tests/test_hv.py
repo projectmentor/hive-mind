@@ -44,16 +44,47 @@ def test_search_punctuation_does_not_crash(hive):
     assert r.returncode == 0  # sanitized into a safe FTS expression
 
 
-def test_dedup_boosts_trust(hive):
-    hive.run("remember", "exact same content")
-    r = hive.run("remember", "exact same content")
-    assert "boosted" in r.stdout
+def test_repetition_does_not_inflate_confidence(hive):
+    # Same content from the SAME source, twice → content-dedups to one row and
+    # confidence must NOT rise (repetition is not evidence).
+    hive.run("remember", "exact same content", "--source", "alice")
+    r = hive.run("remember", "exact same content", "--source", "alice")
+    assert "Corroborated" in r.stdout and "boosted" not in r.stdout
     rows = hive.query(
-        "SELECT count(*) c, max(trust_score) t FROM facts WHERE content=?",
+        "SELECT count(*) c, max(confidence) conf FROM facts WHERE content=?",
         ("exact same content",),
     )
-    assert rows[0]["c"] == 1
-    assert rows[0]["t"] > 1.0
+    assert rows[0]["c"] == 1                      # still one row
+    assert abs(rows[0]["conf"] - 0.45) < 1e-6     # 1 distinct source → 0.45, unchanged
+
+
+def test_distinct_sources_raise_confidence_with_cap(hive):
+    for src in ("alice", "bob", "carol"):
+        hive.run("remember", "corroborated claim", "--source", src)
+    conf = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("corroborated claim",)
+    )[0]["confidence"]
+    assert abs(conf - 0.7875) < 1e-6              # 3 distinct sources, diminishing returns
+    # Seven more distinct sources still stay strictly below the cap.
+    for src in ("d", "e", "f", "g", "h", "i", "j"):
+        hive.run("remember", "corroborated claim", "--source", src)
+    capped = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("corroborated claim",)
+    )[0]["confidence"]
+    assert capped < 0.90
+
+
+def test_confidence_is_pure_projection_across_rebuild(hive):
+    for src in ("alice", "bob"):
+        hive.run("remember", "stable claim", "--source", src)
+    before = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
+    )[0]["confidence"]
+    hive.run("rebuild")
+    after = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
+    )[0]["confidence"]
+    assert abs(before - after) < 1e-9 and abs(before - 0.675) < 1e-6
 
 
 def test_decide_supersede(hive):

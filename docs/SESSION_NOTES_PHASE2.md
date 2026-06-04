@@ -1,7 +1,13 @@
 # Session Notes — Phase 2 (P2P Sync Daemon)
 
-**Status:** code complete + locally validated; **pending real two-node Tailnet acceptance.**
-Commits: `4af8b71` (M1+M2), `49521b7` (M3–M5). Tests: pytest 10/10, smoke 13/13, sync_smoke 11/11.
+**Status: ACCEPTED 2026-06-04 — two-node sync confirmed over Tailscale** between
+DESKTOP-EGMBL5A (100.95.128.118) and gregorius (100.114.200.119); 30 journal
+entries converged on both. M0 resolved exactly as diagnosed (Tailscale-on-host →
+`netsh portproxy` on each node). Infra state is documented IN the corpus (facts
+13–22; `./hv search "portproxy"|"openssh"|"gregorius"`). Two hardening TODOs remain
+(daemon persistence, install-script portability) — see end of file.
+Commits: `4af8b71` (M1+M2), `49521b7` (M3–M5), `6b606ad` (install scripts).
+Tests: pytest 10/10, smoke 13/13, sync_smoke 11/11.
 
 Builds on Phase 1. Read alongside `CLAUDE.md` and `docs/P2P_DESIGN.md` §3–7.
 
@@ -60,15 +66,26 @@ Builds on Phase 1. Read alongside `CLAUDE.md` and `docs/P2P_DESIGN.md` §3–7.
     shares the host's `100.x`. Mirrored is cleaner but the shutdown kills live
     sessions. NAT portproxy is brittle (WSL eth0 IP changes across restarts).
 
-## Remaining (needs gregorius / SSH — can't be done from one box)
-1. **M0 — finalize transport** per the approach above; then probe:
-   `curl http://<this-node-100.x>:9876/sync/hello` from gregorius.
-2. **Deploy to gregorius:** run `./scripts/deploy_node.sh` (git pull + idempotent
-   `migrate_journal_v2.py` + `./hv rebuild` + tests + prints node_id/merkle root).
-3. **Create `.peers.json`** on both nodes (see `.peers.json.example`); each points
-   at the OTHER node's Tailscale URL. desktop's is already written.
-4. **Real acceptance:** `hv sync daemon` on both; `hv sync now`; assert identical
-   `hv merkle` roots; kill one node (other still serves); restart → re-converge.
+## M0 RESOLVED (2026-06-04) — Tailscale-on-host confirmed, fixed with portproxy
+On EACH node, a Windows `netsh portproxy` forwards host `0.0.0.0:9876` → that
+node's WSL eth0:9876 (desktop WSL 172.17.105.236; gregorius WSL 172.26.224.236),
+plus a firewall rule for 9876. SSH between nodes also brought up (see corpus facts
+15–18 for the OpenSSH DefaultShell / authorized_keys gotchas). `hv sync now`
+converges; 30 entries on both. Mirrored networking was NOT used.
+
+## Hardening TODOs (post-acceptance; corpus facts #19, #21)
+1. **Daemon startup persistence.** Daemon currently launched manually
+   (`setsid python3 sync_daemon.py </dev/null >/tmp/hive.log 2>&1 & disown`); dies
+   on WSL restart. **This WSL has systemd (PID 1) → install a systemd service.**
+2. **`01-windows-setup.bat` hardcodes the `Admin` username** (line 20, DefaultShell
+   path). Needs dynamic detection — AND must handle gregorius's case where
+   `bash.exe` is a 0-byte stub (use the `C:\ssh-wsl.bat` → `wsl.exe bash %*` wrapper
+   when bash.exe is missing/empty).
+3. **(found this session) `02-wsl-setup.sh` writes the wrong authorized_keys path.**
+   Step 4 writes `C:\Users\<user>\.ssh\authorized_keys`, but per fact #16 admin-group
+   users read `C:\ProgramData\ssh\administrators_authorized_keys` (needs the
+   `icacls` SYSTEM+Administrators / inheritance-removed perms). The manual setup had
+   to override this; the script should target the right file.
 
 ## Also this session (non-acceptance)
 - **Session telemetry hook (dogfooding).** Global `~/.claude/settings.json` now has

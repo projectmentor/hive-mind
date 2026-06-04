@@ -37,17 +37,48 @@ Builds on Phase 1. Read alongside `CLAUDE.md` and `docs/P2P_DESIGN.md` §3–7.
 - Ingest is serialized by a lock in the daemon; concurrent CLI writes during a
   sync are still a theoretical race (low risk at this scale) — noted hardening.
 
+## M0 findings (probed 2026-06-04 on desktop-egmbl5a)
+- **Tailscale runs on the Windows HOST, not inside WSL.** No `tailscale` CLI and
+  no `100.x` interface in the WSL shell; `powershell.exe tailscale status` lists
+  both nodes. WSL is in **default NAT mode** (no `~/.wslconfig`; eth0 is
+  `172.17.x` behind host gateway `172.17.96.1`). So gregorius hitting
+  `100.95.128.118:9876` lands on the **host**, which does NOT forward into WSL by
+  default. **This is the Tailscale-on-host case.**
+- **Daemon side is healthy regardless of transport:** binds `0.0.0.0:9876`
+  (all interfaces), `/sync/hello` + `/sync/merkle-root` serve correctly,
+  `requests` 2.34.2 is installed so the client (`hv sync now`) won't crash.
+- **`cfg["self"]` in `.peers.json` is dead config** — sync identity is purely
+  `hv.NODE_ID` (= `gethostname()`), and the diff is keyed by the `node_id`
+  strings inside journal entries. This node's real id is **`DESKTOP-EGMBL5A`**
+  (uppercase); `.peers.json` self was corrected to match (cosmetic only).
+- **M0 resolution still open — depends on the VPN approach in progress:**
+  - *Tailscale-in-WSL* (installing tailscaled inside WSL on both nodes): daemon's
+    `0.0.0.0` bind is reachable on the WSL `100.x` directly — nothing more needed.
+  - *Tailscale-on-host (current)*: add a Windows `netsh interface portproxy`
+    from host `:9876` → WSL eth0 `:9876`, OR switch WSL to **mirrored** networking
+    (`~/.wslconfig` `[wsl2] networkingMode=mirrored` + `wsl --shutdown`) so WSL
+    shares the host's `100.x`. Mirrored is cleaner but the shutdown kills live
+    sessions. NAT portproxy is brittle (WSL eth0 IP changes across restarts).
+
 ## Remaining (needs gregorius / SSH — can't be done from one box)
-1. **M0 — tailnet bind verification.** Tailscale isn't visible inside this WSL
-   shell. Determine whether the daemon binds the node's `100.x` directly
-   (Tailscale-in-WSL) or needs a Windows `netsh portproxy` (Tailscale-on-host).
-   Probe: run the daemon here, `curl http://<this-node-100.x>:9876/sync/hello`
-   from gregorius.
-2. **Deploy to gregorius:** `git pull`, then run `migrate_journal_v2.py` on its
-   own journal (one-time), `./hv rebuild`.
-3. **Create `.peers.json`** on both nodes (see `.peers.json.example`).
+1. **M0 — finalize transport** per the approach above; then probe:
+   `curl http://<this-node-100.x>:9876/sync/hello` from gregorius.
+2. **Deploy to gregorius:** run `./scripts/deploy_node.sh` (git pull + idempotent
+   `migrate_journal_v2.py` + `./hv rebuild` + tests + prints node_id/merkle root).
+3. **Create `.peers.json`** on both nodes (see `.peers.json.example`); each points
+   at the OTHER node's Tailscale URL. desktop's is already written.
 4. **Real acceptance:** `hv sync daemon` on both; `hv sync now`; assert identical
    `hv merkle` roots; kill one node (other still serves); restart → re-converge.
+
+## Also this session (non-acceptance)
+- **Session telemetry hook (dogfooding).** Global `~/.claude/settings.json` now has
+  `SessionStart`/`SessionEnd` hooks calling `scripts/session_hook.sh`, which records
+  each Claude Code session into the corpus via `hv remember` (tags `session,telemetry`,
+  source `claude-code`). Best-effort/non-blocking (exits 0, `timeout` guarded). hv's
+  absolute `HIVE_HOME` means every project's sessions land in the one corpus.
+  Caveat: lands as `type=fact` (shows in `hv search`); clean follow-up is a
+  first-class `session` event type — deferred until after acceptance (touches core
+  append/rebuild). `SessionEnd` is best-effort (abrupt WSL kill won't fire it).
 
 ## Verify (local)
 ```bash

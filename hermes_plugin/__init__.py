@@ -51,15 +51,43 @@ logger = logging.getLogger(__name__)
 
 HV_PATH = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind")) / "hv"
 
-# Source-class namespaces (Phase B2)
-# These feed into hv --source so the confidence projection can weight by class.
-SOURCE_CLASS_OBSERVATION = "observation"   # weight 1.0 — first-hand tool results, outcomes
-SOURCE_CLASS_ASSERTION   = "assertion"     # weight 0.5 — model reasoning, restatements
+# ---------------------------------------------------------------------------
+# Source namespace convention (shared contract with CC's confidence model)
+# ---------------------------------------------------------------------------
+# Format: hermes:<context_class>/<agent_identity>/<session_id[:8]>
+#
+# context_class — the classification the confidence projection keys on:
+#   primary    = interactive Hermes session, full agent loop
+#   subagent   = delegate_task child (isolated, no memory provider)
+#   cron       = scheduled job (skip_memory=True by default)
+#
+# agent_identity — profile name from Hermes config (e.g. "default", "coder")
+#   Used for per-profile identity scoping in multi-profile setups.
+#
+# session_id[:8] — first 8 chars of the session UUID
+#   Stable within a session, distinct across sessions of the same agent.
+#
+# Phase B2 source-class weighting keys on context_class:
+#   primary   → source-class weight 1.0 (direct human-adjacent observation)
+#   subagent  → source-class weight 0.5 (model assertion, less direct)
+#   cron      → source-class weight 0.3 (automated, no human in loop)
+#
+# Phase B3 self-content quarantine keys on whether ALL corroborating sources
+# share the same agent_identity prefix — if so, CAP_self applies.
+#
+# DO NOT change the format without coordinating with hv's _recompute_confidence.
+# The source string is parsed by the confidence model, not just stored.
 
-# Epistemic status tags written alongside content
-EPISTEMIC_CONFIRMED    = "confirmed"
-EPISTEMIC_OBSERVATION  = "observation"
-EPISTEMIC_SPECULATION  = "speculation"
+CONTEXT_PRIMARY  = "primary"
+CONTEXT_SUBAGENT = "subagent"
+CONTEXT_CRON     = "cron"
+
+# Epistemic status tags (written as hv tags, NEVER as a self-declared trust score)
+# These feed Phase B2 source-class weighting via the tag field, not the source field.
+# The confidence number stays a pure derived projection — writers cannot set it.
+EPISTEMIC_CONFIRMED    = "confirmed"     # externally verified / human-confirmed
+EPISTEMIC_OBSERVATION  = "observation"   # first-hand tool result / outcome
+EPISTEMIC_SPECULATION  = "speculation"   # model reasoning / restatement / inference
 
 # Trigger patterns for prefetch (event-driven, not every turn)
 _ERROR_PATTERNS = re.compile(
@@ -103,15 +131,19 @@ def _hv_search_json(query: str) -> list[dict]:
         return []
 
 
-def _build_source_id(agent_identity: str, session_id: str) -> str:
+def _build_source_id(agent_identity: str, session_id: str, context_class: str = CONTEXT_PRIMARY) -> str:
     """Build a granular source identity for Phase B2/B3 weighting.
 
-    Format: hermes/<agent_identity>/<session_id[:8]>
-    Stable within a session, distinct across agents and sessions.
+    Format: hermes:<context_class>/<agent_identity>/<session_id[:8]>
+
+    context_class is the primary classification signal for the confidence
+    model — do not change the format without coordinating with hv's
+    _recompute_confidence (see source namespace convention above).
     """
     sid = (session_id or "unknown")[:8]
     identity = agent_identity or "default"
-    return f"hermes/{identity}/{sid}"
+    ctx = context_class or CONTEXT_PRIMARY
+    return f"hermes:{ctx}/{identity}/{sid}"
 
 
 def _format_facts_with_provenance(facts: list[dict], self_session_id: str) -> str:
@@ -187,12 +219,18 @@ class HiveMindMemoryProvider(MemoryProvider):
         self._agent_context = kwargs.get("agent_context", "primary")
         self._agent_identity = kwargs.get("agent_identity", "default")
         self._platform = kwargs.get("platform", "cli")
-        self._source_id = _build_source_id(self._agent_identity, session_id)
 
-        # Track content recalled from hive this session (anti-re-ingest gate)
+        # Map agent_context to source namespace context_class
+        # agent_context values from Hermes: "primary", "subagent", "cron", "flush"
+        ctx_map = {"primary": CONTEXT_PRIMARY, "subagent": CONTEXT_SUBAGENT, "cron": CONTEXT_CRON}
+        self._context_class = ctx_map.get(self._agent_context, CONTEXT_PRIMARY)
+
+        self._source_id = _build_source_id(self._agent_identity, session_id, self._context_class)
+
+        # Track content recalled from hive this session (anti-re-ingest gate, Salience Layer 3)
         self._recall_set: Set[str] = set()
 
-        # Track content written this session (anti-self-amplification on read)
+        # Track content written this session (anti-self-amplification on read side)
         self._written_this_session: Set[str] = set()
 
         if not self.is_available():
@@ -402,12 +440,19 @@ class HiveMindMemoryProvider(MemoryProvider):
     ) -> None:
         """Mirror built-in memory writes to hive-mind with full source identity.
 
-        Write-side governor:
+        Write-side governor (current state):
         - Skip removes (append-only corpus)
         - Skip non-primary contexts (cron/subagent noise)
         - Novelty gate: suppress re-ingestion of content recalled from hive this session
-        - Source identity: hermes/<agent>/<session> for Phase B2/B3 weighting
-        - Epistemic status: derived from tags, not self-declared trust number
+        - Source identity: hermes:<context>/<agent>/<session> for Phase B2/B3 weighting
+        - Epistemic status tag: speculation|observation (not a self-declared trust score)
+
+        DEFERRED (Salience Layers 2-5 from async-inventing-shore.md):
+        - Structural auto-capture: classify by form (decision/correction/outcome/constraint)
+          not topic — only write high-reuse shapes. Stub: _salience_gate() below.
+        - Surprise + consequence weighting
+        - Provisional tier + earn-your-keep promotion
+        MVP stays: mirror every explicit memory() call + novelty gate.
         """
         if self._agent_context not in ("primary", ""):
             return
@@ -427,14 +472,15 @@ class HiveMindMemoryProvider(MemoryProvider):
         # metadata may carry write_origin hints
         write_origin = (metadata or {}).get("write_origin", "")
         if target == "user" or "observation" in write_origin:
-            source_class = SOURCE_CLASS_OBSERVATION
             epistemic = EPISTEMIC_OBSERVATION
         else:
-            source_class = SOURCE_CLASS_ASSERTION
             epistemic = EPISTEMIC_SPECULATION  # conservative default for agent assertions
 
-        # Build tags: hermes base + target + epistemic status + source class
-        tags = f"hermes,{target},{epistemic},{source_class}"
+        # Build tags: hermes base + target + epistemic status
+        # NOTE: source_class (observation/assertion) is encoded in the source
+        # identity string (context_class field), NOT here. Tags carry epistemic
+        # status only. Do not add a numeric trust — confidence is derived.
+        tags = f"hermes,{target},{epistemic}"
 
         # Source identity: granular for Phase B2/B3
         source = self._source_id
@@ -449,10 +495,28 @@ class HiveMindMemoryProvider(MemoryProvider):
     def on_session_switch(self, new_session_id: str, *, reset: bool = False, **kwargs) -> None:
         """Reset per-session state on session switch."""
         self._session_id = new_session_id
-        self._source_id = _build_source_id(self._agent_identity, new_session_id)
+        self._source_id = _build_source_id(self._agent_identity, new_session_id, self._context_class)
         if reset:
             self._recall_set = set()
             self._written_this_session = set()
+
+    def _salience_gate(self, content: str, metadata: Optional[Dict[str, Any]]) -> bool:
+        """Structural salience filter — stub for Salience Layers 2-5.
+
+        STUB — always returns True (pass) until implemented.
+
+        When implemented (S-A phase per async-inventing-shore.md), this will:
+        - Return True for high-reuse structural forms: decisions+rationale,
+          corrections (esp. owner corrections), outcomes/results, constraints/
+          preferences/commitments, new entities/relationships, first-hand tool results.
+        - Return False for: intermediate reasoning, restatements of known facts,
+          speculation/opinion, pleasantries, anything already in the corpus.
+        - Classification is by STRUCTURE, never by content/topic (content-neutral).
+
+        Do NOT implement a learned importance classifier here — that reintroduces
+        the capturable authority the confidence model is designed to prevent.
+        """
+        return True  # MVP: pass everything (explicit memory() calls are already intentional)
 
     def shutdown(self) -> None:
         pass

@@ -1,0 +1,8 @@
+{
+  "self": "desktop-egmbl5a",
+  "bind": "0.0.0.0",
+  "port": 9876,
+  "peers": [
+    { "id": "gregorius", "url": "http://100.114.200.119:9876" }
+  ]
+}

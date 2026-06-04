@@ -35,7 +35,7 @@ import merkle  # noqa: E402
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
 JOURNAL_DIR = HIVE_HOME / "journal"
-NODE_ID = socket.gethostname()
+NODE_ID = os.environ.get("HIVE_NODE_ID", socket.gethostname())
 
 
 # --------------------------------------------------------------------------

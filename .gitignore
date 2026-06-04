@@ -6,6 +6,9 @@ journal/*.jsonl
 journal.bak.*/
 store.db.bak.*
 
+# Peer registry is per-node, not versioned (use .peers.json.example as a template)
+.peers.json
+
 # IDE
 .vscode/
 .idea/

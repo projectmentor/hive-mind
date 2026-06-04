@@ -5,10 +5,17 @@ hv - Hive Mind CLI
 Institutional memory for multiple AI agents.
 
 Architecture (see docs/P2P_DESIGN.md):
-  The journal (journal/*.jsonl) is the SOURCE OF TRUTH. Every write goes
-  through the append API (append_journal / ingest_journal). SQLite (store.db)
-  is a DERIVED index/cache that can be rebuilt from the journal at any time
-  via `hv rebuild`.
+  The journal (journal/*.jsonl) is the SOURCE OF TRUTH. Every local write goes
+  through append_journal(); foreign entries arrive via append_foreign_entries().
+  SQLite (store.db) is a DERIVED index/cache rebuilt from the journal by
+  `hv rebuild`.
+
+Cross-node identity (Phase 2):
+  Rows reference each other by JOURNAL identity (node_id, seq), not by local
+  autoincrement id — local ids are reassigned on every rebuild and differ
+  between nodes. `journal_index` maps (node_id, seq) -> (kind, local_id) so
+  entity_fact / decision-supersedes links resolve correctly on any node after
+  a merge, even when content-identical facts from two nodes collapse to one row.
 """
 
 import argparse
@@ -100,6 +107,18 @@ def init_db():
 
     CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
     CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+
+    -- Maps a journal entry's identity to the row it produced. Lets cross-row
+    -- links (entity_fact, decision supersedes) reference (node_id, seq) and
+    -- resolve to whatever local id THIS node assigned on its last rebuild.
+    CREATE TABLE IF NOT EXISTS journal_index (
+        node_id  TEXT NOT NULL,
+        seq      INTEGER NOT NULL,
+        kind     TEXT NOT NULL,        -- fact | decision | entity
+        local_id INTEGER NOT NULL,
+        PRIMARY KEY (node_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_jidx_local ON journal_index(kind, local_id);
     """)
     conn.commit()
 
@@ -202,37 +221,58 @@ def append_journal(entry_type, payload, timestamp=None):
     return entry
 
 
-def _journal_has(node_id, seq):
-    for e in merkle.read_all_entries(JOURNAL_DIR):
-        if e.get("node_id") == node_id and e.get("seq") == seq:
-            return True
-    return False
+def journal_keys():
+    """Set of (node_id, seq) present in the journal — the G-Set membership."""
+    return {
+        (e["node_id"], e["seq"])
+        for e in merkle.read_all_entries(JOURNAL_DIR)
+        if e.get("node_id") is not None and e.get("seq") is not None
+    }
 
 
-def ingest_journal(entry):
-    """Ingest a FOREIGN entry verbatim (preserving its node_id/seq) with G-Set
-    dedup. Used by sync. Returns True if newly accepted."""
-    node_id, seq = entry.get("node_id"), entry.get("seq")
-    if node_id is None or seq is None:
-        return False
-    if _journal_has(node_id, seq):
-        return False
-    with open(_journal_path_for(entry.get("timestamp", _now_iso())), "a") as f:
-        f.write(json.dumps(entry) + "\n")
-    conn = get_conn()
-    persist_entry(conn, entry)
-    conn.commit()
-    conn.close()
-    return True
+def append_foreign_entries(entries):
+    """Append FOREIGN journal entries verbatim (preserving node_id/seq) with
+    G-Set dedup by (node_id, seq). Builds the dedup index once. Does NOT persist
+    to SQLite — the caller runs rebuild() once afterwards if accepted > 0.
+    Returns (accepted, duplicates)."""
+    existing = journal_keys()
+    accepted = duplicates = 0
+    for e in entries:
+        nid, seq = e.get("node_id"), e.get("seq")
+        if nid is None or seq is None:
+            continue
+        if (nid, seq) in existing:
+            duplicates += 1
+            continue
+        existing.add((nid, seq))
+        with open(_journal_path_for(e.get("timestamp", _now_iso())), "a") as f:
+            f.write(json.dumps(e) + "\n")
+        accepted += 1
+    return accepted, duplicates
 
 
 # --------------------------------------------------------------------------
 # Persistence — derive SQLite state from journal entries.
-# These functions are the SINGLE place where journal payloads become rows, so
-# live writes and `hv rebuild` stay perfectly consistent.
+#
+# Two phases (used by rebuild and, inline, by the live commands):
+#   pass 1: persist_* insert/upsert rows for fact|decision|entity and record
+#           (node_id, seq) -> local_id in journal_index.
+#   pass 2: resolve_* wire up cross-row links (entity_fact, decision supersedes)
+#           by mapping their (node_id, seq) references through journal_index.
+# Splitting the passes means a link can reference a row created later in the
+# journal (or on another node) without ordering/FK surprises.
 # --------------------------------------------------------------------------
 
-def persist_fact(conn, payload, ts):
+def _record_index(conn, entry, kind, local_id):
+    conn.execute(
+        "INSERT OR REPLACE INTO journal_index(node_id, seq, kind, local_id) VALUES (?,?,?,?)",
+        (entry.get("node_id"), entry.get("seq"), kind, local_id),
+    )
+
+
+def persist_fact(conn, entry):
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     content = payload["content"]
     cur.execute("SELECT id, trust_score FROM facts WHERE content = ?", (content,))
@@ -244,9 +284,12 @@ def persist_fact(conn, payload, ts):
             "UPDATE facts SET trust_score = ?, access_count = access_count + 1, last_accessed = ? WHERE id = ?",
             (new_trust, ts, row["id"]),
         )
+        _record_index(conn, entry, "fact", row["id"])
         return {"id": row["id"], "trust": new_trust, "inserted": False}
     if row:
-        # Migration re-applying an already-present content: leave as-is.
+        # Already-present content (migration / cross-node duplicate): map this
+        # entry's identity onto the existing row and leave the row as-is.
+        _record_index(conn, entry, "fact", row["id"])
         return {"id": row["id"], "trust": row["trust_score"], "inserted": False}
     cur.execute("""
         INSERT INTO facts (content, tags, importance, source_agent, source_session,
@@ -262,10 +305,14 @@ def persist_fact(conn, payload, ts):
         payload.get("trust_score", 1.0),
         payload.get("access_count", 0),
     ))
-    return {"id": cur.lastrowid, "trust": payload.get("trust_score", 1.0), "inserted": True}
+    fid = cur.lastrowid
+    _record_index(conn, entry, "fact", fid)
+    return {"id": fid, "trust": payload.get("trust_score", 1.0), "inserted": True}
 
 
-def persist_decision(conn, payload, ts):
+def persist_decision(conn, entry):
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO decisions (content, rationale, source_agent, created_at)
@@ -276,14 +323,14 @@ def persist_decision(conn, payload, ts):
         payload.get("source", "manual"),
         payload.get("created_at", ts),
     ))
-    new_id = cur.lastrowid
-    if payload.get("supersedes"):
-        cur.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?",
-                    (new_id, payload["supersedes"]))
-    return {"id": new_id}
+    did = cur.lastrowid
+    _record_index(conn, entry, "decision", did)
+    return {"id": did}
 
 
-def persist_entity(conn, payload, ts):
+def persist_entity(conn, entry):
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     attrs = payload.get("attributes", {})
     attrs_json = attrs if isinstance(attrs, str) else json.dumps(attrs)
@@ -302,31 +349,74 @@ def persist_entity(conn, payload, ts):
         ts,
     ))
     eid = cur.execute("SELECT id FROM entities WHERE name = ?", (payload["name"],)).fetchone()[0]
+    _record_index(conn, entry, "entity", eid)
     return {"id": eid, "name": payload["name"], "type": payload.get("type", "unknown")}
 
 
-def persist_entity_fact(conn, payload, ts):
-    conn.execute("""
-        INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence)
-        VALUES (?, ?, ?)
-    """, (payload["entity_id"], payload["fact_id"], payload.get("confidence", 1.0)))
-    return {"entity_id": payload["entity_id"], "fact_id": payload["fact_id"]}
-
-
-_PERSISTERS = {
+_PASS1 = {
     "fact": persist_fact,
     "decision": persist_decision,
     "entity": persist_entity,
-    "entity_fact": persist_entity_fact,
 }
 
 
 def persist_entry(conn, entry):
-    """Apply one journal entry to SQLite based on its type."""
-    fn = _PERSISTERS.get(entry["type"])
-    if fn is None:
+    """Pass 1: apply a row-producing journal entry (fact/decision/entity)."""
+    fn = _PASS1.get(entry["type"])
+    return fn(conn, entry) if fn else None
+
+
+def _resolve_ref(conn, ref):
+    """Map a journal-identity reference [node_id, seq] to a local row id."""
+    if not ref:
         return None
-    return fn(conn, entry["payload"], entry.get("timestamp", _now_iso()))
+    r = conn.execute(
+        "SELECT local_id FROM journal_index WHERE node_id = ? AND seq = ?",
+        (ref[0], ref[1]),
+    ).fetchone()
+    return r["local_id"] if r else None
+
+
+def resolve_entity_fact(conn, entry):
+    """Pass 2: wire an entity_fact link via journal-identity refs (falling back
+    to legacy local-id fields for pre-Phase-2 journals)."""
+    p = entry["payload"]
+    eid = _resolve_ref(conn, p.get("entity_ref"))
+    if eid is None:
+        eid = p.get("entity_id")        # legacy
+    fid = _resolve_ref(conn, p.get("fact_ref"))
+    if fid is None:
+        fid = p.get("fact_id")          # legacy
+    if eid is None or fid is None:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
+        (eid, fid, p.get("confidence", 1.0)),
+    )
+
+
+def resolve_supersedes(conn, entry):
+    """Pass 2: mark the decision this entry supersedes (by journal identity,
+    falling back to a legacy local-id field)."""
+    p = entry["payload"]
+    old = _resolve_ref(conn, p.get("supersedes_ref"))
+    if old is None:
+        old = p.get("supersedes")       # legacy
+    if not old:
+        return
+    new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
+    if new is None:
+        return
+    conn.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?", (new, old))
+
+
+def _index_lookup(conn, kind, local_id):
+    """Reverse map: local row id -> its journal identity [node_id, seq]."""
+    r = conn.execute(
+        "SELECT node_id, seq FROM journal_index WHERE kind = ? AND local_id = ? LIMIT 1",
+        (kind, local_id),
+    ).fetchone()
+    return [r["node_id"], r["seq"]] if r else None
 
 
 # --------------------------------------------------------------------------
@@ -344,7 +434,7 @@ def remember(args):
     entry = append_journal("fact", payload)
 
     conn = get_conn()
-    res = persist_fact(conn, entry["payload"], entry["timestamp"])
+    res = persist_fact(conn, entry)
     conn.commit()
     conn.close()
 
@@ -406,16 +496,26 @@ def search(args):
 
 def decide(args):
     """Record a decision."""
+    # Resolve --supersedes (a local id) to a journal-identity reference so the
+    # supersedes link survives rebuilds and cross-node merges.
+    supersedes_ref = None
+    if args.supersedes:
+        conn0 = get_conn()
+        supersedes_ref = _index_lookup(conn0, "decision", args.supersedes)
+        conn0.close()
+
     payload = {
         "content": args.content,
         "rationale": args.rationale,
-        "supersedes": args.supersedes,
+        "supersedes_ref": supersedes_ref,
         "source": os.environ.get("HERMES_AGENT", "manual"),
     }
     entry = append_journal("decision", payload)
 
     conn = get_conn()
-    res = persist_decision(conn, entry["payload"], entry["timestamp"])
+    res = persist_decision(conn, entry)
+    if supersedes_ref:
+        resolve_supersedes(conn, entry)
     conn.commit()
     conn.close()
 
@@ -429,7 +529,7 @@ def entity(args):
         payload = {"name": args.name, "type": args.type or "unknown", "attributes": attrs}
         entry = append_journal("entity", payload)
         conn = get_conn()
-        res = persist_entity(conn, entry["payload"], entry["timestamp"])
+        res = persist_entity(conn, entry)
         conn.commit()
         conn.close()
         print(f"Entity #{res['id']}: {res['name']} ({res['type']})")
@@ -443,13 +543,19 @@ def entity(args):
             print(f"No entity named '{args.name}'")
             conn.close()
             return
+        entity_ref = _index_lookup(conn, "entity", erow["id"])
+        fact_ref = _index_lookup(conn, "fact", args.fact_id)
+        if fact_ref is None:
+            print(f"No fact #{args.fact_id}")
+            conn.close()
+            return
         payload = {
-            "entity_id": erow["id"],
-            "fact_id": args.fact_id,
+            "entity_ref": entity_ref,
+            "fact_ref": fact_ref,
             "confidence": args.confidence if args.confidence is not None else 1.0,
         }
         entry = append_journal("entity_fact", payload)
-        persist_entity_fact(conn, entry["payload"], entry["timestamp"])
+        resolve_entity_fact(conn, entry)
         conn.commit()
         conn.close()
         print(f"Linked fact #{args.fact_id} → entity '{args.name}'")
@@ -491,8 +597,9 @@ def entity(args):
         conn.close()
 
 
-def rebuild(args):
-    """Rebuild the SQLite derived state entirely from the journal."""
+def rebuild_db():
+    """Rebuild SQLite entirely from the journal. Two-pass so cross-row links
+    resolve regardless of journal order. Returns a counts dict."""
     init_db()
     conn = get_conn()
     # Drop the FTS index + triggers first: deleting every content row through
@@ -507,21 +614,45 @@ def rebuild(args):
         DELETE FROM facts;
         DELETE FROM decisions;
         DELETE FROM entities;
+        DELETE FROM journal_index;
     """)
     conn.commit()
+
     entries = merkle.read_all_entries(JOURNAL_DIR)
+    # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
-        persist_entry(conn, entry)
+        if entry["type"] in _PASS1:
+            persist_entry(conn, entry)
     conn.commit()
+    # Pass 2: cross-row links.
+    for entry in entries:
+        if entry["type"] == "entity_fact":
+            resolve_entity_fact(conn, entry)
+        elif entry["type"] == "decision" and (
+            entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
+        ):
+            resolve_supersedes(conn, entry)
+    conn.commit()
+
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
     conn.commit()
-    facts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
-    decisions = conn.execute("SELECT count(*) FROM decisions").fetchone()[0]
-    entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
-    links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+
+    counts = {
+        "entries": len(entries),
+        "facts": conn.execute("SELECT count(*) FROM facts").fetchone()[0],
+        "decisions": conn.execute("SELECT count(*) FROM decisions").fetchone()[0],
+        "entities": conn.execute("SELECT count(*) FROM entities").fetchone()[0],
+        "links": conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0],
+    }
     conn.close()
-    print(f"Rebuilt from {len(entries)} journal entries:")
-    print(f"  Facts: {facts}  Decisions: {decisions}  Entities: {entities}  Links: {links}")
+    return counts
+
+
+def rebuild(args):
+    c = rebuild_db()
+    print(f"Rebuilt from {c['entries']} journal entries:")
+    print(f"  Facts: {c['facts']}  Decisions: {c['decisions']}  "
+          f"Entities: {c['entities']}  Links: {c['links']}")
 
 
 def merkle_cmd(args):
@@ -534,53 +665,6 @@ def merkle_cmd(args):
     print(f"Root:    {root}")
     for i, h in enumerate(chunks):
         print(f"  chunk {i}: {h}")
-
-
-def sync_push(args):
-    """Push local changes to remote hive."""
-    import requests
-
-    journal_path = JOURNAL_DIR / f"{datetime.now().strftime('%Y-%m-%d')}.jsonl"
-    if not journal_path.exists():
-        print("No entries to sync today")
-        return
-
-    with open(journal_path, "r") as f:
-        entries = [json.loads(line) for line in f if line.strip()]
-
-    try:
-        response = requests.post(f"{args.remote}/api/sync/receive", json={"entries": entries})
-        if response.status_code == 200:
-            print(f"Synced {len(entries)} entries to {args.remote}")
-        else:
-            print(f"Sync failed: {response.status_code}")
-    except Exception as e:
-        print(f"Sync error: {e}")
-
-
-def sync_pull(args):
-    """Pull remote changes to local hive (journal-first, G-Set merge)."""
-    import requests
-
-    try:
-        response = requests.get(f"{args.remote}/api/sync/entries")
-        if response.status_code != 200:
-            print(f"Pull failed: {response.status_code}")
-            return
-        remote_entries = response.json().get("entries", [])
-    except Exception as e:
-        print(f"Pull error: {e}")
-        return
-
-    accepted = 0
-    skipped = 0
-    for entry in remote_entries:
-        if "node_id" in entry and "seq" in entry:
-            if ingest_journal(entry):
-                accepted += 1
-        else:
-            skipped += 1  # legacy/old-format entry — ignored in Phase 1
-    print(f"Pulled from {args.remote}: {accepted} new, {len(remote_entries) - accepted - skipped} duplicate, {skipped} skipped")
 
 
 def stats(args):
@@ -600,21 +684,33 @@ def stats(args):
     """).fetchall()
     conn.close()
 
-    journal_files = sorted(JOURNAL_DIR.glob("*.jsonl")) if JOURNAL_DIR.exists() else []
-    total_entries = 0
-    for jf in journal_files:
-        total_entries += sum(1 for line in open(jf) if line.strip())
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    by_node = {}
+    for e in entries:
+        by_node[e["node_id"]] = by_node.get(e["node_id"], 0) + 1
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
     print(f"  Node:               {NODE_ID}")
     print(f"  Facts:              {facts}  (avg trust: {avg_trust})")
     print(f"  Decisions:          {decisions}  ({active_decisions} active)")
     print(f"  Entities:           {entities}  ({links} fact-links)")
-    print(f"  Journal entries:    {total_entries} across {len(journal_files)} days")
+    print(f"  Journal entries:    {len(entries)}  ({', '.join(f'{k}={v}' for k, v in sorted(by_node.items())) or 'empty'})")
     if top_tags:
         print(f"  Top tag groups:")
         for t in top_tags:
             print(f"    ({t['tags']}) x {t['cnt']}")
+
+
+def sync_cmd(args):
+    """Sync with peers (Phase 2 — implemented in sync_client / sync_daemon)."""
+    if args.sync_action == "now":
+        import sync_client
+        sync_client.sync_now()
+    elif args.sync_action == "daemon":
+        import sync_daemon
+        sync_daemon.run_daemon()
+    else:
+        print("usage: hv sync {now|daemon}")
 
 
 # --------------------------------------------------------------------------
@@ -652,12 +748,10 @@ def main():
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
-    sync_parser = subparsers.add_parser("sync", help="Sync with remote hive")
+    sync_parser = subparsers.add_parser("sync", help="Sync with peers (P2P)")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_action")
-    push_parser = sync_subparsers.add_parser("push", help="Push to remote")
-    push_parser.add_argument("remote", help="Remote hive URL (e.g., http://100.64.1.2:8000)")
-    pull_parser = sync_subparsers.add_parser("pull", help="Pull from remote")
-    pull_parser.add_argument("remote", help="Remote hive URL (e.g., http://100.64.1.2:8000)")
+    sync_subparsers.add_parser("now", help="One-shot bidirectional sync with all peers")
+    sync_subparsers.add_parser("daemon", help="Run the sync daemon (serve + periodic sync)")
 
     args = parser.parse_args()
 
@@ -679,12 +773,7 @@ def main():
     elif args.command == "merkle":
         merkle_cmd(args)
     elif args.command == "sync":
-        if args.sync_action == "push":
-            sync_push(args)
-        elif args.sync_action == "pull":
-            sync_pull(args)
-        else:
-            sync_parser.print_help()
+        sync_cmd(args)
     else:
         parser.print_help()
 

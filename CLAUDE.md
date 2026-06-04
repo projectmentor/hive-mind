@@ -5,14 +5,21 @@ Institutional memory as observable middleware for multi-agent AI systems
 (Hermes, Claude Code, Codex, etc.). Each agent contributes to a shared
 memory corpus via a Python CLI (`hv`) that any agent can shell out to.
 
-## Current State (MVP complete, working)
-- `~/projects/hive-mind/hv` — Python CLI: remember, search, decide, entity, stats, sync
-- `store.db` — SQLite with facts, decisions, entities, entity_facts tables
-- `journal/YYYY-MM-DD.jsonl` — append-only event log (the SOURCE OF TRUTH)
-- `hive-dashboard/` — Laravel 13 app with HTMX UI and sync API
+## Current State (P2P_DESIGN.md Phase 1 COMPLETE — commit 2cc1da0)
+- `~/projects/hive-mind/hv` — Python CLI: remember, search, decide, entity, stats, sync, **rebuild, merkle**
+- `store.db` — SQLite (WAL + PRAGMAs, FTS5 search), DERIVED from the journal
+- `journal/YYYY-MM-DD.jsonl` — append-only event log, the SOURCE OF TRUTH;
+  entries now carry node_id / per-node seq / type / timestamp / payload / prev_hash chain
+- `merkle.py` — Merkle index over the journal (for Phase 2 delta sync)
+- `migrate_journal.py` — one-time fresh-start migration to the new journal format (already run)
+- `tests/` — offline pytest suite (9 passing): `python3 -m pytest -q`
+- `hive-dashboard/` — Laravel 13 app with HTMX UI (only `/`, `/dashboard`, `/api/sync/facts` are wired)
 - `hermes_integration.py` — Hermes memory provider shells out to hv
 - Two Win11+WSL nodes: desktop-egmbl5a (100.95.128.118) and gregorius (100.114.200.119) on Tailscale
 - GitHub: projectmentor/hive-mind (public)
+
+**Handoff detail for the last build session: see `docs/SESSION_NOTES.md`.**
+**Next up: Phase 2 — FastAPI sync daemon (P2P_DESIGN.md §7).**
 
 ## READ THIS FIRST — The Architecture Design
 **docs/P2P_DESIGN.md** is the full architectural design doc written

@@ -42,21 +42,32 @@ fi
 PUBKEY=$(cat "$HOME/.ssh/id_ed25519.pub")
 echo "[OK] SSH public key: $PUBKEY"
 
-# ---- 4. Add pubkey to Windows Admin authorized_keys ----
-# Discover Windows username from /mnt/c/Users/
-WIN_USER=$(ls /mnt/c/Users/ | grep -v -E '^(Public|Default|All Users|Default User)$' | head -1)
-WIN_AUTH_KEYS="/mnt/c/Users/$WIN_USER/.ssh/authorized_keys"
-mkdir -p "/mnt/c/Users/$WIN_USER/.ssh"
-if [ -f "$WIN_AUTH_KEYS" ]; then
-    if ! grep -qF "$PUBKEY" "$WIN_AUTH_KEYS"; then
-        echo "$PUBKEY" >> "$WIN_AUTH_KEYS"
-        echo "[OK] Added pubkey to $WIN_AUTH_KEYS"
+# ---- 4. Install pubkey for Windows OpenSSH ----
+# Admin-group users do NOT use ~/.ssh/authorized_keys — Windows OpenSSH reads
+# C:\ProgramData\ssh\administrators_authorized_keys (corpus fact #16), and the
+# perms must be SYSTEM:(F)+Administrators:(F) with inheritance removed. Writing
+# there / running icacls usually needs an elevated shell, so this is best-effort
+# with a precise fallback command.
+WIN_SSH_DIR="/mnt/c/ProgramData/ssh"
+ADMIN_KEYS="$WIN_SSH_DIR/administrators_authorized_keys"
+WIN_KEYS_PATH='C:\ProgramData\ssh\administrators_authorized_keys'
+if [ -d "$WIN_SSH_DIR" ]; then
+    if grep -qsF "$PUBKEY" "$ADMIN_KEYS" 2>/dev/null; then
+        echo "[OK] Pubkey already in administrators_authorized_keys"
+    elif echo "$PUBKEY" >> "$ADMIN_KEYS" 2>/dev/null; then
+        echo "[OK] Appended pubkey to $ADMIN_KEYS"
     else
-        echo "[OK] Pubkey already in $WIN_AUTH_KEYS"
+        echo "[WARN] Could not write $ADMIN_KEYS (needs elevation). In an ELEVATED PowerShell:"
+        echo "       Add-Content $WIN_KEYS_PATH '$PUBKEY'"
+    fi
+    if icacls.exe "$WIN_KEYS_PATH" /inheritance:r /grant 'SYSTEM:(F)' /grant 'BUILTIN\Administrators:(F)' >/dev/null 2>&1; then
+        echo "[OK] Set perms on administrators_authorized_keys"
+    else
+        echo "[WARN] Could not set perms (needs elevation). In an ELEVATED shell:"
+        echo "       icacls $WIN_KEYS_PATH /inheritance:r /grant SYSTEM:(F) /grant BUILTIN\\Administrators:(F)"
     fi
 else
-    echo "$PUBKEY" > "$WIN_AUTH_KEYS"
-    echo "[OK] Created $WIN_AUTH_KEYS with pubkey"
+    echo "[WARN] $WIN_SSH_DIR not found — run scripts/install/01-windows-setup.bat (installs OpenSSH) first."
 fi
 
 # ---- 5. Initialize hive-mind DB ----
@@ -93,33 +104,22 @@ else
     echo "[SKIP] Hermes not installed — plugin not wired (run after installing Hermes)"
 fi
 
-# ---- 8. Test sync daemon starts ----
-
-echo
-echo "Testing sync daemon (5 second check)..."
-pkill -f sync_daemon.py 2>/dev/null || true
-sleep 1
-python3 "$HIVE_DIR/sync_daemon.py" &
-DAEMON_PID=$!
-sleep 2
-if kill -0 $DAEMON_PID 2>/dev/null; then
-    RESPONSE=$(curl -s --max-time 3 http://127.0.0.1:9876/sync/hello || echo "FAIL")
-    kill $DAEMON_PID 2>/dev/null
-    wait $DAEMON_PID 2>/dev/null || true
-    if echo "$RESPONSE" | grep -q node_id; then
-        echo "[OK] Sync daemon responds correctly"
-    else
-        echo "[WARN] Sync daemon started but /sync/hello failed: $RESPONSE"
-    fi
+# ---- 8. Install the sync daemon as a persistent systemd service ----
+# Survives WSL restarts (corpus fact #19). Requires systemd (WSL [boot]
+# systemd=true). 03-daemon-service.sh generates the unit, enables + starts it,
+# and verifies /sync/hello.
+if [ -d /run/systemd/system ]; then
+    HIVE_DIR="$HIVE_DIR" "$HIVE_DIR/scripts/install/03-daemon-service.sh"
 else
-    echo "[FAIL] Sync daemon did not start — check sync_daemon.py"
-    exit 1
+    echo "[WARN] systemd not running in this WSL — enable it (/etc/wsl.conf [boot] systemd=true,"
+    echo "       then 'wsl --shutdown' from Windows), then run scripts/install/03-daemon-service.sh."
+    echo "       Manual fallback: setsid python3 $HIVE_DIR/sync_daemon.py </dev/null >/tmp/hive.log 2>&1 & disown"
 fi
 
 echo
 echo "=== WSL node setup complete ==="
 echo
 echo "Next steps:"
-echo "  1. Edit $PEERS_FILE with peer Tailscale IPs"
-echo "  2. Start daemon: cd $HIVE_DIR && ./hv sync daemon"
+echo "  1. Edit $PEERS_FILE with peer Tailscale IPs (if not already done)"
+echo "  2. Daemon runs as systemd service 'hive-sync' (journalctl -u hive-sync -f)"
 echo "  3. Test from peer: curl http://<this-tailscale-ip>:9876/sync/hello"

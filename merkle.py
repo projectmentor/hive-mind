@@ -55,6 +55,11 @@ def chunk_hashes(entries, size=CHUNK_SIZE):
     return hashes
 
 
+def hash_entries(entries):
+    """SHA-256 over the canonical bytes of an ordered list of entries."""
+    return "sha256:" + hashlib.sha256(b"".join(_canonical(e) for e in entries)).hexdigest()
+
+
 def node_max_seq(entries):
     """{node_id: highest seq present} — the per-node high-water marks."""
     out = {}

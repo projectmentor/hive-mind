@@ -79,7 +79,22 @@ else
     echo "[OK] .peers.json exists"
 fi
 
-# ---- 7. Test sync daemon starts ----
+# ---- 7. Wire Hermes memory plugin ----
+# Symlink the hive-mind plugin into Hermes plugins dir and activate it
+if command -v hermes &>/dev/null; then
+    HERMES_PLUGINS="${HERMES_HOME:-$HOME/.hermes}/plugins"
+    mkdir -p "$HERMES_PLUGINS"
+    # Remove old copy if present, create symlink to repo
+    rm -rf "$HERMES_PLUGINS/hive-mind"
+    ln -s "$HIVE_DIR/hermes_plugin" "$HERMES_PLUGINS/hive-mind"
+    hermes config set memory.provider hive-mind 2>/dev/null || true
+    echo "[OK] Hermes hive-mind memory plugin linked and activated"
+else
+    echo "[SKIP] Hermes not installed — plugin not wired (run after installing Hermes)"
+fi
+
+# ---- 8. Test sync daemon starts ----
+
 echo
 echo "Testing sync daemon (5 second check)..."
 pkill -f sync_daemon.py 2>/dev/null || true

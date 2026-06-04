@@ -5,21 +5,27 @@ Institutional memory as observable middleware for multi-agent AI systems
 (Hermes, Claude Code, Codex, etc.). Each agent contributes to a shared
 memory corpus via a Python CLI (`hv`) that any agent can shell out to.
 
-## Current State (P2P_DESIGN.md Phase 1 COMPLETE — commit 2cc1da0)
-- `~/projects/hive-mind/hv` — Python CLI: remember, search, decide, entity, stats, sync, **rebuild, merkle**
+## Current State (P2P_DESIGN.md Phase 2 code COMPLETE — pending two-node Tailnet acceptance)
+- `~/projects/hive-mind/hv` — Python CLI: remember, search, decide, entity, stats, rebuild, merkle, **sync now|daemon**
 - `store.db` — SQLite (WAL + PRAGMAs, FTS5 search), DERIVED from the journal
 - `journal/YYYY-MM-DD.jsonl` — append-only event log, the SOURCE OF TRUTH;
-  entries now carry node_id / per-node seq / type / timestamp / payload / prev_hash chain
-- `merkle.py` — Merkle index over the journal (for Phase 2 delta sync)
-- `migrate_journal.py` — one-time fresh-start migration to the new journal format (already run)
-- `tests/` — offline pytest suite (9 passing): `python3 -m pytest -q`
-- `hive-dashboard/` — Laravel 13 app with HTMX UI (only `/`, `/dashboard`, `/api/sync/facts` are wired)
-- `hermes_integration.py` — Hermes memory provider shells out to hv
+  entries carry node_id / per-node seq / type / timestamp / payload / prev_hash chain
+- **Cross-row links use journal identity `(node_id, seq)`** (not local ids) via the
+  `journal_index` table, so entity_fact / decision-supersedes survive cross-node merge
+- `merkle.py` — global root + per-node chunk hashes (`node_chunk_hashes`) for delta sync
+- `sync_daemon.py` / `sync_client.py` / `sync_common.py` — **stdlib http.server** P2P sync on :9876
+  (NO FastAPI). Daemon is a SEPARATE process from Laravel (:8000). Reads `.peers.json` (gitignored;
+  see `.peers.json.example`). `HIVE_NODE_ID` env overrides the node id.
+- `migrate_journal.py` (Phase 1) + `migrate_journal_v2.py` (Phase 2 link refs) — both already run here
+- `tests/` — offline pytest suite (10 passing incl. two-node convergence): `python3 -m pytest -q`
+- `scripts/smoke.sh` (CLI) + `scripts/sync_smoke.sh` (two-node sync) — self-verifying
+- `hive-dashboard/` — Laravel 13 app, UI-only (only `/`, `/dashboard`, `/api/sync/facts` are wired)
+- `hermes_integration.py` — Hermes memory provider shells out to hv (unchanged; uses remember/search)
 - Two Win11+WSL nodes: desktop-egmbl5a (100.95.128.118) and gregorius (100.114.200.119) on Tailscale
 - GitHub: projectmentor/hive-mind (public)
 
-**Handoff detail for the last build session: see `docs/SESSION_NOTES.md`.**
-**Next up: Phase 2 — FastAPI sync daemon (P2P_DESIGN.md §7).**
+**Handoff detail: see `docs/SESSION_NOTES.md` (Phase 1) and `docs/SESSION_NOTES_PHASE2.md`.**
+**Remaining for Phase 2: M0 tailnet-bind verification + real two-node acceptance over Tailscale (needs gregorius/SSH).**
 
 ## READ THIS FIRST — The Architecture Design
 **docs/P2P_DESIGN.md** is the full architectural design doc written

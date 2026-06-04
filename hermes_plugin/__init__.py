@@ -162,7 +162,7 @@ def _format_facts_with_provenance(facts: list[dict], self_session_id: str) -> st
     session_prefix = f"hermes/"  # any hermes write from this session
     for f in facts:
         content = f.get("content", "")
-        trust = f.get("trust_score", f.get("confidence", 0.0))
+        trust = f.get("confidence", f.get("trust_score", 0.0))  # Phase A: confidence is primary
         source = f.get("source_agent", "unknown")
         tags = f.get("tags", "")
 
@@ -353,9 +353,9 @@ class HiveMindMemoryProvider(MemoryProvider):
                 lines.append(
                     f"  CONTESTED:\n"
                     f"    A: \"{a.get('content')}\" "
-                    f"(conf={a.get('trust_score', 0):.2f}, source={a.get('source_agent')})\n"
+                    f"(conf={a.get('confidence', a.get('trust_score', 0)):.2f}, source={a.get('source_agent')})\n"
                     f"    B: \"{b.get('content')}\" "
-                    f"(conf={b.get('trust_score', 0):.2f}, source={b.get('source_agent')})\n"
+                    f"(conf={b.get('confidence', b.get('trust_score', 0)):.2f}, source={b.get('source_agent')})\n"
                     f"  → Both sides injected. Do not collapse to consensus."
                 )
             lines.append("")
@@ -418,10 +418,10 @@ class HiveMindMemoryProvider(MemoryProvider):
             "conflicts": [
                 {
                     "fact_a": a.get("content"),
-                    "conf_a": a.get("trust_score", 0),
+                    "conf_a": a.get("confidence", a.get("trust_score", 0)),
                     "source_a": a.get("source_agent"),
                     "fact_b": b.get("content"),
-                    "conf_b": b.get("trust_score", 0),
+                    "conf_b": b.get("confidence", b.get("trust_score", 0)),
                     "source_b": b.get("source_agent"),
                     "note": "CONTESTED — hold tension, do not collapse to consensus",
                 }

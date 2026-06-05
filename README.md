@@ -111,6 +111,34 @@ hermes config set memory.provider hive-mind
 
 ---
 
+## License
+
+HiveMind is licensed under the **GNU Affero General Public License v3.0** (see
+[LICENSE](LICENSE)). In short: you're free to use, modify, and self-host it, and if you
+run a modified version as a network service, you must make your source available under
+the same terms. The copyright holder (Certified Project Management, LLC, d/b/a
+ProjectMentor) also reserves the right to offer a separate commercial license.
+
+## Contributing
+
+The source is open to read, audit, fork, and self-host. Contributions are welcome on a
+best-effort, solo-maintainer basis. Please read [CONTRIBUTING.md](CONTRIBUTING.md)
+first. Code contributions require a one-time [CLA](CLA.md), which is automated on your
+pull request.
+
+Want to get involved? Start a
+[Discussion](https://github.com/projectmentor/hive-mind/discussions) or open a focused
+pull request.
+
+## Support the project
+
+HiveMind is free and open source. If it helps you, you can help keep it alive:
+
+- ❤️ [GitHub Sponsors](https://github.com/sponsors/projectmentor)
+- ☕ [Ko-fi](https://ko-fi.com/projectmentor)
+- 🥤 [Buy Me a Coffee](https://www.buymeacoffee.com/projectmentor)
+
 ## Project
 
-Built by [ProjectMentor](https://github.com/projectmentor) — HiveMind by ProjectMentor.
+Built by [ProjectMentor](https://github.com/projectmentor). HiveMind by ProjectMentor,
+a project of Certified Project Management, LLC.

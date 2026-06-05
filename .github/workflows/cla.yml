@@ -1,0 +1,40 @@
+name: CLA Assistant
+# Automated Contributor License Agreement gate.
+# When someone opens a PR, the bot asks them to sign by commenting:
+#   "I have read the CLA Document and I hereby sign the CLA"
+# Signatures are recorded in the `cla-signatures` branch (signatures/version1/cla.json).
+# This lets HiveMind stay AGPL while preserving the right to dual-license / enforce,
+# because every contributor has granted the needed rights (see CLA.md).
+#
+# Setup notes:
+#  - No extra secret is required for same-repo signature storage (uses GITHUB_TOKEN).
+#  - To store signatures in a *separate* repo, add a PERSONAL_ACCESS_TOKEN secret.
+#  - Add maintainer/bot logins to `allowlist` so they aren't prompted.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        if: (github.event.comment.body == 'recreate-signatures' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: 'signatures/version1/cla.json'
+          path-to-document: 'https://github.com/projectmentor/hive-mind/blob/main/CLA.md'
+          branch: 'cla-signatures'
+          allowlist: david,projectmentor,dependabot[bot]
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-notsigned-prcomment: 'Thanks for your contribution. Before it can be merged, please read our [Contributor License Agreement](https://github.com/projectmentor/hive-mind/blob/main/CLA.md) and sign it by posting the comment below.'

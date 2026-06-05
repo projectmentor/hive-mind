@@ -289,9 +289,10 @@ All journal entries share this structure. The journal is the source of truth —
 `.peers.json` is gitignored (contains Tailscale IPs). Copy from
 `.peers.json.example` and edit per node.
 
-**WSL + Tailscale note:** On Windows/WSL2 nodes, Tailscale is on the Windows
-host (NAT). A `netsh portproxy` rule is required to forward the Tailscale IP
-to the WSL IP on port 9876. See `scripts/install/01-windows-setup.bat`.
+**WSL + Tailscale note:** Each WSL2 instance gets its own Tailscale IP (appears
+as a separate machine on the tailnet, e.g. `desktop-egmbl5a-1`). The sync daemon
+binds `0.0.0.0:9876` and is reachable directly at the WSL Tailscale IP. No
+portproxy or mirrored networking needed. Get the WSL IP with `tailscale ip`.
 
 ---
 

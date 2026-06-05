@@ -441,156 +441,146 @@
 
     <!-- Hero Section -->
     <section class="hero container fade-in">
-        <h1>Distributed AI Memory Without a Central Server</h1>
+        <h1>Shared memory for your AI agents</h1>
         <p class="hero-subhead">
-            Peer-to-peer institutional memory for multi-agent AI setups. 
-            Merkle-tree sync, append-only journals, and tamper-evident records.
+            HiveMind lets every agent on every machine remember what the others have learned — 
+            automatically, without a central server.
         </p>
         <div class="hero-ctas">
             <a href="https://github.com/projectmentor/hive-mind" target="_blank" class="btn btn-primary">View on GitHub</a>
-            <a href="#quickstart" class="btn btn-secondary">Read the Docs</a>
+            <a href="#quickstart" class="btn btn-secondary">Get Started</a>
         </div>
     </section>
 
     <!-- Features Section -->
     <section class="container fade-in">
-        <h2 style="text-align: center; margin-bottom: 3rem;">Core Features</h2>
+        <h2 style="text-align: center; margin-bottom: 3rem;">What you get</h2>
         <div class="features">
             <div class="feature-card">
                 <div class="feature-icon">◉</div>
-                <h3>P2P Sync</h3>
+                <h3>Syncs automatically</h3>
                 <p>
-                    G-Set CRDT append-only journal syncs via Merkle trees over Tailscale. 
-                    Any node's journal is the full corpus—no central authority.
+                    When one agent learns something, every other agent on every machine 
+                    gets it too. No manual updates. Works over Tailscale with no extra setup.
                 </p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">✓</div>
-                <h3>Capture-Resistant Confidence</h3>
+                <h3>Trust earned, not assumed</h3>
                 <p>
-                    Confidence derived from distinct corroborating sources. Formula: 
-                    <span class="accent-text">0.90 × (1 − 0.5^n)</span>. Never self-declared.
+                    Facts only gain confidence when multiple independent agents agree on them. 
+                    A single agent can't inflate its own credibility — agreement has to be earned.
                 </p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">⚙</div>
-                <h3>Multi-Agent Native</h3>
+                <h3>Works with your agents today</h3>
                 <p>
-                    Hermes plugin mirrors memory() calls automatically. Claude Code skill teaches 
-                    agents to read/write hive on every project.
+                    Drop-in support for Hermes and Claude Code. Any agent that can run a 
+                    shell command can read and write to the hive.
                 </p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">⚡</div>
-                <h3>Fast Local Search</h3>
+                <h3>Fast local search</h3>
                 <p>
-                    SQLite + FTS5 with WAL mode delivers sub-10ms queries. All search runs 
-                    locally without network latency.
+                    Search runs entirely on your machine — no round trips, no latency, 
+                    no data leaving your network. Results in milliseconds.
                 </p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">∅</div>
-                <h3>Zero Infrastructure</h3>
+                <h3>Nothing to operate</h3>
                 <p>
-                    No Raft consensus, no central broker, no Docker orchestration, no encryption 
-                    layer (Tailscale is WireGuard). P2P first.
+                    No servers to provision, no databases to manage, no cloud accounts. 
+                    Install it, run it, forget it. Your laptop is the infrastructure.
                 </p>
             </div>
 
             <div class="feature-card">
                 <div class="feature-icon">🔗</div>
-                <h3>Tamper-Evident Journal</h3>
+                <h3>Full history, always</h3>
                 <p>
-                    Append-only, hash-chained records with source identity namespace: 
-                    <span class="accent-text">hermes:primary/&lt;agent&gt;/&lt;session&gt;</span>.
+                    Every fact is recorded with who wrote it and when. Nothing is ever 
+                    silently overwritten. You can always trace where a belief came from.
                 </p>
             </div>
         </div>
     </section>
 
-    <!-- Architecture Section -->
+    <!-- How It Works Section -->
     <section class="architecture container fade-in">
         <div class="section-header">
-            <h2>Architecture</h2>
+            <h2>How it works</h2>
             <p class="section-description">
-                Each agent writes to its local journal. Merkle tree sync ensures all nodes 
-                converge on the same state without consensus.
+                Each agent writes to its local memory. HiveMind keeps all your nodes 
+                in sync so every agent sees the full picture.
             </p>
         </div>
 
         <div class="arch-diagram">
             <div class="arch-flow">Agent A                    Agent B                    Agent C
  │                          │                          │
- └──→ Local Journal    ──→ Local Journal    ──→ Local Journal
-      ├─ memory call   │    ├─ memory call  │    ├─ memory call
-      ├─ hash chain    │    ├─ hash chain   │    ├─ hash chain
-      └─ append-only   │    └─ append-only  │    └─ append-only
-      
+ └──→ Local memory     ──→ Local memory     ──→ Local memory
+      writes here      │    writes here     │    writes here
+      │                │    │               │    │
+      └────────────────┴────┴───────────────┴────┘
+                       sync over Tailscale
+                       (only differences transferred)
  │                          │                          │
- └──→ Merkle Tree Sync ←─────────────────────────────→
-      (over Tailscale)
-
- │                          │                          │
- └──→ Converged State ←───────────────────────────────→
-      All nodes identical</div>
+ └──→ All nodes see the same facts ───────────────────→</div>
         </div>
 
         <div class="arch-detail">
             <div class="arch-item">
-                <h4>Write Path</h4>
+                <h4>Write</h4>
                 <p>
-                    Agents append memory via CLI or SDK. Each entry is hash-chained and 
-                    tagged with source identity. No consensus needed.
+                    Agents store facts, decisions, and observations via a simple CLI. 
+                    Each write is tagged with who made it.
                 </p>
             </div>
 
             <div class="arch-item">
-                <h4>Sync Protocol</h4>
+                <h4>Sync</h4>
                 <p>
-                    Merkle tree fingerprints identify missing entries. Nodes exchange only 
-                    divergent records over Tailscale—bandwidth efficient.
+                    Nodes compare what they have and exchange only what's missing. 
+                    Efficient, peer-to-peer, no central broker.
                 </p>
             </div>
 
             <div class="arch-item">
-                <h4>Read & Search</h4>
+                <h4>Search</h4>
                 <p>
-                    SQLite full-text search via FTS5. Confidence computed from source 
-                    counts at query time. Sub-10ms response.
+                    Full-text search across everything your agents have ever learned, 
+                    ranked by how many independent sources agree.
                 </p>
             </div>
         </div>
     </section>
 
     <!-- Quickstart Section -->
-    <section class="quickstart container fade-in">
-        <h2 style="margin-bottom: 2rem;">Quickstart</h2>
+    <section class="quickstart container fade-in" id="quickstart">
+        <h2 style="margin-bottom: 2rem;">Get started in one command</h2>
         <div class="code-block">
             <code>
-                <span class="code-line"><span class="code-comment"># Clone the repository</span></span>
-                <span class="code-line"><span class="code-command">$</span> git clone https://github.com/projectmentor/hive-mind.git</span>
-                <span class="code-line"><span class="code-command">$</span> cd hive-mind</span>
+                <span class="code-line"><span class="code-comment"># Install</span></span>
+                <span class="code-line"><span class="code-command">$</span> curl -fsSL https://raw.githubusercontent.com/projectmentor/hive-mind/main/scripts/installer/install.sh | bash</span>
+                <span class="code-line"><span class="code-command">$</span> hive-mind install</span>
                 <span class="code-line"></span>
-                <span class="code-line"><span class="code-comment"># Run setup (Windows admin required for 01-windows-setup.bat)</span></span>
-                <span class="code-line"><span class="code-command">$</span> bash 02-wsl-setup.sh</span>
+                <span class="code-line"><span class="code-comment"># Store something</span></span>
+                <span class="code-line"><span class="code-command">$</span> hv remember <span class="code-string">"The payments API rate-limits at 100 req/s"</span> --tags api,payments</span>
                 <span class="code-line"></span>
-                <span class="code-line"><span class="code-comment"># Remember: append to the hive</span></span>
-                <span class="code-line"><span class="code-command">$</span> hv remember <span class="code-string">"Agent training session completed with 95% accuracy"</span></span>
+                <span class="code-line"><span class="code-comment"># Find it later</span></span>
+                <span class="code-line"><span class="code-command">$</span> hv search <span class="code-string">"payments"</span></span>
                 <span class="code-line"></span>
-                <span class="code-line"><span class="code-comment"># Search: query all nodes</span></span>
-                <span class="code-line"><span class="code-command">$</span> hv search <span class="code-string">"accuracy"</span></span>
-                <span class="code-line"></span>
-                <span class="code-line"><span class="code-comment"># Sync: pull/push Merkle tree changes</span></span>
+                <span class="code-line"><span class="code-comment"># Sync with your other machines</span></span>
                 <span class="code-line"><span class="code-command">$</span> hv sync now</span>
                 <span class="code-line"></span>
-                <span class="code-line"><span class="code-comment"># Or run daemon for continuous sync</span></span>
-                <span class="code-line"><span class="code-command">$</span> hv sync daemon</span>
-                <span class="code-line"></span>
-                <span class="code-line"><span class="code-comment"># Check stats and confidence</span></span>
+                <span class="code-line"><span class="code-comment"># See what's in memory</span></span>
                 <span class="code-line"><span class="code-command">$</span> hv stats</span>
             </code>
         </div>

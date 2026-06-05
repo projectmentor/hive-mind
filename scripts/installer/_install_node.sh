@@ -9,15 +9,20 @@
 #   2.  Tailscale in WSL (install, start, auth, enable SSH)
 #   3.  python3 + uv + requests
 #   4.  Clone / update repo
-#   5.  .wslconfig — networkingMode=mirrored
-#   6.  Node identity
-#   7.  Peer configuration
-#   8.  Init store.db
-#   9.  Install systemd service
-#   10. Start daemon + smoke-test
-#   11. Hermes memory plugin (best-effort)
-#   12. PATH
-#   13. Summary
+#   5.  Node identity
+#   6.  Peer configuration
+#   7.  Init store.db
+#   8.  Install systemd service
+#   9.  Start daemon + smoke-test
+#   10. Hermes memory plugin (best-effort)
+#   11. PATH
+#   12. Summary
+#
+# Architecture note:
+#   Tailscale in WSL gets its own 100.x IP (separate machine on the tailnet).
+#   No portproxy, no mirrored networking, no Win OpenSSH needed.
+#   Sync daemon binds 0.0.0.0:9876 — reachable at the WSL Tailscale IP.
+#   SSH between nodes: tailscale ssh user@<wsl-100.x>
 # =============================================================================
 
 set -euo pipefail
@@ -25,7 +30,7 @@ set -euo pipefail
 REPO_URL="https://github.com/projectmentor/hive-mind.git"
 HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE_NAME="hive-sync"
-TOTAL=13
+TOTAL=12
 
 # ── colours ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; CYN='\033[0;36m'; BLD='\033[1m'; RST='\033[0m'
@@ -89,19 +94,19 @@ TS_BACKEND=$(sudo tailscale status --json 2>/dev/null \
 if [[ "$TS_BACKEND" == "Running" ]]; then
   TS_IP=$(tailscale ip 2>/dev/null | grep '^100\.' | head -1 | tr -d '[:space:]')
   ok "Already authenticated: $TS_IP"
-  # Ensure SSH is enabled (idempotent when already connected)
+  # Ensure SSH is enabled (idempotent)
   sudo tailscale up --ssh --accept-routes 2>/dev/null || true
   ok "Tailscale SSH enabled"
 else
   echo ""
   warn "Tailscale needs authentication."
   warn "A URL will appear below — open it in a browser to authenticate this node."
-  warn "(Tailscale account login, takes ~30 seconds)"
+  warn "(Takes ~30 seconds)"
   echo ""
   sudo tailscale up --ssh --accept-routes
   echo ""
   TS_IP=$(tailscale ip 2>/dev/null | grep '^100\.' | head -1 | tr -d '[:space:]')
-  [[ -n "$TS_IP" ]] || die "Tailscale auth completed but no 100.x IP found. Run: tailscale ip"
+  [[ -n "$TS_IP" ]] || die "Auth completed but no 100.x IP found. Run: tailscale ip"
   ok "Authenticated: $TS_IP"
   ok "Tailscale SSH enabled"
 fi
@@ -152,74 +157,18 @@ chmod +x "$HIVE_DIR/hv"
 cd "$HIVE_DIR"
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 5 — .wslconfig  networkingMode=mirrored
+# STEP 5 — Node identity
 # ════════════════════════════════════════════════════════════════════════════
-step "5/$TOTAL  WSL mirrored networking"
-
-WIN_USER=$(powershell.exe -NoProfile -Command \
-  "[System.Environment]::UserName" 2>/dev/null | tr -d '\r')
-WSLCONFIG="/mnt/c/Users/${WIN_USER}/.wslconfig"
-
-NEEDS_SHUTDOWN=false
-
-if [ -f "$WSLCONFIG" ] && grep -q 'networkingMode=mirrored' "$WSLCONFIG" 2>/dev/null; then
-  ok ".wslconfig already has networkingMode=mirrored"
-else
-  info "Writing networkingMode=mirrored to $WSLCONFIG ..."
-  if grep -q '^\[wsl2\]' "$WSLCONFIG" 2>/dev/null; then
-    python3 - "$WSLCONFIG" <<'PYEOF'
-import sys, re
-path = sys.argv[1]
-txt = open(path).read()
-txt = re.sub(r'(\[wsl2\])', r'\1\nnetworkingMode=mirrored', txt, count=1)
-open(path, 'w').write(txt)
-PYEOF
-  else
-    printf '\n[wsl2]\nnetworkingMode=mirrored\n' >> "$WSLCONFIG"
-  fi
-  ok ".wslconfig updated"
-  NEEDS_SHUTDOWN=true
-fi
-
-# If WSL already sees the Tailscale IP, mirrored is already active
-if ip addr show 2>/dev/null | grep -q "$TS_IP"; then
-  ok "Tailscale IP $TS_IP already visible inside WSL (mirrored active)"
-  NEEDS_SHUTDOWN=false
-fi
-
-if $NEEDS_SHUTDOWN; then
-  echo ""
-  warn "═══════════════════════════════════════════════════════"
-  warn "  ACTION REQUIRED: WSL must be restarted to apply"
-  warn "  networkingMode=mirrored."
-  warn ""
-  warn "  1. Open a WINDOWS terminal (PowerShell or cmd) and run:"
-  warn "       wsl --shutdown"
-  warn "  2. Reopen WSL (open a new Ubuntu terminal)"
-  warn "  3. Run: hive-mind install   (resumes from here)"
-  warn "═══════════════════════════════════════════════════════"
-  echo ""
-  ask "Press Enter once WSL has been restarted and you're back..."
-  read -r
-
-  ip addr show 2>/dev/null | grep -q "$TS_IP" \
-    || die "Tailscale IP $TS_IP still not visible inside WSL.\nCheck $WSLCONFIG and run wsl --shutdown again."
-  ok "Tailscale IP $TS_IP now visible inside WSL"
-fi
-
-# ════════════════════════════════════════════════════════════════════════════
-# STEP 6 — Node identity
-# ════════════════════════════════════════════════════════════════════════════
-step "6/$TOTAL  Node identity"
+step "5/$TOTAL  Node identity"
 
 THIS_IP="$TS_IP"
 THIS_NODE=$(hostname)
 ok "This node: $THIS_NODE @ $THIS_IP"
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 7 — Peer configuration
+# STEP 6 — Peer configuration
 # ════════════════════════════════════════════════════════════════════════════
-step "7/$TOTAL  Peer configuration"
+step "6/$TOTAL  Peer configuration"
 
 PEERS_FILE="$HIVE_DIR/.peers.json"
 
@@ -229,10 +178,12 @@ if [ -f "$PEERS_FILE" ]; then
 else
   echo ""
   echo "  Enter the Tailscale IPs of your peer nodes."
+  echo "  Use the WSL Tailscale IP for each peer (not the Windows host IP)."
+  echo "  Check on each peer with: tailscale ip"
   echo "  Comma-separated, e.g.: 100.114.200.119"
   echo "  Leave blank if this is a single-node setup."
   echo ""
-  ask "Peer Tailscale IPs: "
+  ask "Peer WSL Tailscale IPs: "
   read -r PEER_INPUT
 
   PEERS_JSON="[]"
@@ -262,9 +213,9 @@ PYEOF
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 8 — Init store.db
+# STEP 7 — Init store.db
 # ════════════════════════════════════════════════════════════════════════════
-step "8/$TOTAL  Database initialisation"
+step "7/$TOTAL  Database initialisation"
 
 cd "$HIVE_DIR"
 if [ -f store.db ]; then
@@ -277,9 +228,9 @@ fi
 ./hv stats
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 9 — systemd service
+# STEP 8 — systemd service
 # ════════════════════════════════════════════════════════════════════════════
-step "9/$TOTAL  Systemd service"
+step "8/$TOTAL  Systemd service"
 
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT_FILE="$UNIT_DIR/$SERVICE_NAME.service"
@@ -309,9 +260,9 @@ systemctl --user enable "$SERVICE_NAME" --quiet
 ok "systemd unit installed: $UNIT_FILE"
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 10 — Start daemon + smoke-test
+# STEP 9 — Start daemon + smoke-test
 # ════════════════════════════════════════════════════════════════════════════
-step "10/$TOTAL  Start sync daemon"
+step "9/$TOTAL  Start sync daemon"
 
 systemctl --user restart "$SERVICE_NAME"
 sleep 2
@@ -323,9 +274,9 @@ HELLO=$(curl -sf "http://127.0.0.1:9876/sync/hello" 2>/dev/null) && {
 }
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 11 — Hermes memory plugin (best-effort)
+# STEP 10 — Hermes memory plugin (best-effort)
 # ════════════════════════════════════════════════════════════════════════════
-step "11/$TOTAL  Hermes integration"
+step "10/$TOTAL  Hermes integration"
 
 if command -v hermes &>/dev/null; then
   HERMES_PLUGINS="${HERMES_HOME:-$HOME/.hermes}/plugins"
@@ -341,9 +292,9 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 12 — PATH persistence
+# STEP 11 — PATH persistence
 # ════════════════════════════════════════════════════════════════════════════
-step "12/$TOTAL  PATH"
+step "11/$TOTAL  PATH"
 
 BIN_DIR="$HOME/.local/bin"
 if ! grep -q 'local/bin' "$HOME/.bashrc" 2>/dev/null; then
@@ -352,9 +303,9 @@ fi
 ok "~/.local/bin in PATH"
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 13 — Summary
+# STEP 12 — Summary
 # ════════════════════════════════════════════════════════════════════════════
-step "13/$TOTAL  Done"
+step "12/$TOTAL  Done"
 
 echo ""
 echo -e "${GRN}${BLD}╔══════════════════════════════════════╗${RST}"

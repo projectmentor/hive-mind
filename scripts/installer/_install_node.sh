@@ -55,8 +55,8 @@ step "1/$TOTAL  Pre-flight checks"
 grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null \
   || die "Must run inside WSL2 on Windows 11."
 
-[ -d /run/systemd/system ] \
-  || die "systemd not running. Enable it first:
+[ -d /run/systemd/system ] && systemctl --user status &>/dev/null \
+  || die "systemd not running as PID 1 in this WSL. Enable it first:
   sudo bash -c 'echo -e \"[boot]\nsystemd=true\" >> /etc/wsl.conf'
   Then from Windows: wsl --shutdown
   Reopen WSL and re-run hive-mind install"

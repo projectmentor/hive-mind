@@ -1,8 +1,11 @@
 # HiveMind CLI Reference
 
 `hv` is your command-line interface to HiveMind — a shared memory system for
-you and your AI agents. Use it to store knowledge, search it, record decisions,
-and keep all your nodes in sync.
+you and your AI agents. In practice you'll rarely need to type these commands
+yourself. Your agents (Hermes, Claude Code, and others) use `hv` automatically
+to store and retrieve knowledge as they work. This reference is here for when
+you want to look something up directly, correct a fact, or just see what's in
+your corpus.
 
 ---
 

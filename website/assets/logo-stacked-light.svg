@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 215" width="100%" height="100%">
+  <!-- Icon Block (centered) -->
+  <g transform="translate(60, 8)">
+    <polygon points="50,5 90,28 90,73 50,95 10,73 10,28" fill="none" stroke="#E07A00" stroke-width="6" stroke-linejoin="round" />
+    <circle cx="50" cy="35" r="5" fill="#E07A00" />
+    <path d="M 47,30 C 44,24 38,22 36,23 C 35,24 37,26 39,28" fill="none" stroke="#E07A00" stroke-width="2" stroke-linecap="round" />
+    <path d="M 53,30 C 56,24 62,22 64,23 C 65,24 63,26 61,28" fill="none" stroke="#E07A00" stroke-width="2" stroke-linecap="round" />
+    <path d="M 50,47 C 32,47 18,37 14,48 C 11,56 31,64 45,55 Z" fill="#E07A00" />
+    <path d="M 50,47 C 68,47 82,37 86,48 C 89,56 69,64 55,55 Z" fill="#E07A00" />
+    <path d="M 45,54 C 34,59 28,68 33,72 C 38,76 43,65 47,58 Z" fill="#E07A00" />
+    <path d="M 55,54 C 66,59 72,68 67,72 C 62,76 57,65 53,58 Z" fill="#E07A00" />
+    <path d="M 50,42 C 57,42 58,52 57,60 L 43,60 C 42,52 43,42 50,42 Z" fill="#E07A00" />
+    <path d="M 44,63 L 56,63 C 55,68 45,68 44,63 Z" fill="#E07A00" />
+    <path d="M 45,70 L 55,70 C 54,75 46,75 45,70 Z" fill="#E07A00" />
+    <path d="M 47,77 L 53,77 C 52,81 48,81 47,77 Z" fill="#E07A00" />
+  </g>
+  <!-- Text Block (centered under icon) -->
+  <text x="110" y="190" text-anchor="middle" font-family="system-ui, -apple-system, sans-serif" font-size="46" font-weight="700" fill="#0B0F19" letter-spacing="-1">HiveMind</text>
+</svg>

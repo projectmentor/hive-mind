@@ -81,6 +81,48 @@ esac
 
 ok "WSL2 + systemd confirmed"
 
+# ── check for stale portproxy on 9876 ───────────────────────────────────────
+PORTPROXY=$(powershell.exe -NoProfile -Command \
+  "netsh interface portproxy show all" 2>/dev/null | tr -d '\r' | grep 9876 || true)
+
+if [[ -n "$PORTPROXY" ]]; then
+  warn "Stale Windows portproxy rule found on port 9876 — this will block the sync daemon."
+  warn "Staging removal script to C:\\Users\\Public\\hive-remove-portproxy.bat ..."
+
+  WIN_USER=$(powershell.exe -NoProfile -Command \
+    "[System.Environment]::UserName" 2>/dev/null | tr -d '\r')
+  BAT="/mnt/c/Users/Public/hive-remove-portproxy.bat"
+
+  cat > "$BAT" << 'WBAT'
+@echo off
+echo Removing stale HiveMind portproxy rules...
+netsh interface portproxy delete v4tov4 listenport=9876 listenaddress=0.0.0.0 >nul 2>&1
+netsh advfirewall firewall delete rule name="HiveMind Sync 9876" >nul 2>&1
+echo Done. Verify:
+netsh interface portproxy show all
+pause
+WBAT
+
+  echo ""
+  warn "══════════════════════════════════════════════════════"
+  warn "  ACTION REQUIRED: run this as Administrator on Windows"
+  warn ""
+  warn "  Right-click Start -> Terminal (Admin), then run:"
+  warn "    C:\\Users\\Public\\hive-remove-portproxy.bat"
+  warn "══════════════════════════════════════════════════════"
+  echo ""
+  ask "Press Enter once the portproxy has been removed..."
+  read -r
+
+  # Verify it's gone
+  PORTPROXY_AFTER=$(powershell.exe -NoProfile -Command \
+    "netsh interface portproxy show all" 2>/dev/null | tr -d '\r' | grep 9876 || true)
+  if [[ -n "$PORTPROXY_AFTER" ]]; then
+    die "Portproxy rule still present on port 9876. Run the bat file as Administrator and try again."
+  fi
+  ok "Portproxy rule removed"
+fi
+
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 2 — Tailscale in WSL
 # ════════════════════════════════════════════════════════════════════════════

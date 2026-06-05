@@ -14,8 +14,9 @@
 #
 # Assumptions:
 #   - Running inside WSL2 (Ubuntu) on Windows 11
-#   - Tailscale is already installed and running on the Windows host
-#   - Internet access available for git clone
+#   - Tailscale is installed on the Windows host (for mirrored networking)
+#   - Tailscale will be installed inside WSL by the installer if missing
+#   - Internet access available for git clone + Tailscale install
 #   - systemd enabled in WSL (/etc/wsl.conf [boot] systemd=true)
 #
 # Subcommands installed:

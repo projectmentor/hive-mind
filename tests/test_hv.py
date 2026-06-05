@@ -118,6 +118,50 @@ def test_context_class_weighting(hive):
     assert abs(conf - 0.263604) < 1e-5            # _confidence_for(0.5) = 0.9*(1-0.5**0.5)
 
 
+def _fid(hive, content):
+    return hive.query("SELECT id FROM facts WHERE content=?", (content,))[0]["id"]
+
+
+def test_peer_retract_drives_negative(hive):
+    # 1 corroborator, 2 distinct peer retractors → net = 1 - 2 = -1 → -0.45 (rejected).
+    hive.run("remember", "claim to reject", "--source", "alice")
+    fid = _fid(hive, "claim to reject")
+    hive.run("retract", str(fid), "--source", "bob")
+    hive.run("retract", str(fid), "--source", "carol")
+    conf = hive.query("SELECT confidence FROM facts WHERE content=?", ("claim to reject",))[0]["confidence"]
+    assert abs(conf - (-0.45)) < 1e-6
+
+
+def test_owner_retract_forgets(hive):
+    # Owner retract is decisive — drives to the forget floor regardless of corroboration.
+    hive.run("remember", "owner forget me", "--source", "alice")
+    hive.run("remember", "owner forget me", "--source", "bob")     # corroborated → 0.675
+    fid = _fid(hive, "owner forget me")
+    hive.run("retract", str(fid), "--owner")
+    conf = hive.query("SELECT confidence FROM facts WHERE content=?", ("owner forget me",))[0]["confidence"]
+    assert abs(conf - (-1.0)) < 1e-9
+
+
+def test_rejected_hidden_from_default_search(hive):
+    hive.run("remember", "rejected thing zzz", "--source", "alice")
+    fid = _fid(hive, "rejected thing zzz")
+    hive.run("retract", str(fid), "--source", "bob")
+    hive.run("retract", str(fid), "--source", "carol")            # net -1 → -0.45
+    assert "rejected thing zzz" not in hive.run("search", "rejected thing zzz").stdout
+    assert "rejected thing zzz" in hive.run("search", "rejected thing zzz", "--min-confidence=-1").stdout
+
+
+def test_retract_is_pure_projection_across_rebuild(hive):
+    hive.run("remember", "rebuild retract", "--source", "alice")
+    fid = _fid(hive, "rebuild retract")
+    hive.run("retract", str(fid), "--source", "bob")
+    hive.run("retract", str(fid), "--source", "carol")
+    before = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
+    hive.run("rebuild")
+    after = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
+    assert abs(before - after) < 1e-9 and abs(before - (-0.45)) < 1e-6
+
+
 def test_decide_supersede(hive):
     hive.run("decide", "old decision")
     hive.run("decide", "new decision", "--supersedes", "1")

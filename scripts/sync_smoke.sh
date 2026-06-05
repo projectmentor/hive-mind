@@ -58,6 +58,11 @@ env $EB "$HV" remember "shared truth" --source obs-b >/dev/null
 # Same structured agent, TWO sessions (D0): one identity → must stay 0.45 and converge.
 env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess1aaa >/dev/null
 env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess2bbb >/dev/null
+# Peer retract (Slice 2): negative evidence drives confidence below 0; must converge.
+env $EA "$HV" remember "retractable claim" --source peerX >/dev/null
+RFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT id FROM facts WHERE content LIKE 'retractable%'\").fetchone()[0])")"
+env $EA "$HV" retract "$RFID" --source peerY >/dev/null
+env $EA "$HV" retract "$RFID" --source peerZ >/dev/null
 
 # Start both daemons (serve-only).
 env $EA python3 -c "import sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
@@ -71,8 +76,8 @@ printf '\n%s── one-shot sync from A ──%s\n' "$B_" "$N"
 env $EA "$HV" sync now | sed 's/^/  /'
 
 eq "Merkle roots converge"      "$(root "$A")" "$(root "$B")"
-eq "A has all facts"            "$(count "$A" facts)" "4"
-eq "B has all facts"            "$(count "$B" facts)" "4"
+eq "A has all facts"            "$(count "$A" facts)" "5"
+eq "B has all facts"            "$(count "$B" facts)" "5"
 eq "A has the decision"         "$(count "$A" decisions)" "1"
 eq "B has the decision"         "$(count "$B" decisions)" "1"
 eq "A has the entity"           "$(count "$A" entities)" "1"
@@ -81,6 +86,8 @@ eq "confidence converges"       "$(conf "$A" "shared truth")" "$(conf "$B" "shar
 eq "shared fact = 2-source conf" "$(conf "$A" "shared truth")" "0.675"
 eq "same-agent 2-sessions = 1 identity" "$(conf "$A" "agent self truth")" "0.45"
 eq "same-agent 2-sessions converges (B)" "$(conf "$B" "agent self truth")" "0.45"
+eq "peer-retract → rejected (A)"        "$(conf "$A" "retractable claim")" "-0.45"
+eq "peer-retract converges (B)"          "$(conf "$B" "retractable claim")" "-0.45"
 
 printf '\n%s── re-sync is a no-op ──%s\n' "$B_" "$N"
 OUT="$(env $EA "$HV" sync now)"

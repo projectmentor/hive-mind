@@ -362,17 +362,26 @@ def _identity_weight(node_id, source):
     return (node_id, app, instance), SRC_CLASS_WEIGHT.get(ctx, 1.0)
 
 
-def _confidence_for(n_eff):
-    """confidence(n) = CAP * (1 - BASE**n): 1->0.45, 2->0.675, 3->0.788, cap 0.90.
-    n_eff = summed weight of distinct identities (a float; 0->0)."""
-    if n_eff <= 0:
+OWNER_APPS = {"owner"}    # governance source-class → decisive forget (FORGET_FLOOR)
+FORGET_FLOOR = -1.0       # owner-forget sits below the epistemic range [-CAP, +CAP]
+
+
+def _confidence_for(net):
+    """Signed, saturating projection of NET evidence (n_pos - n_neg, weighted floats):
+    CAP*(1 - BASE**|net|) with net's sign. +1->0.45 +2->0.675 0->0 -1->-0.45 -2->-0.675;
+    bounded [-CAP, +CAP]."""
+    if net == 0:
         return 0.0
-    return round(CONF_CAP * (1 - CONF_BASE ** n_eff), 6)
+    mag = round(CONF_CAP * (1 - CONF_BASE ** abs(net)), 6)
+    return mag if net > 0 else -mag
 
 
-def _content_identities(entries):
-    """content -> {identity_key: best source-class weight} over all fact entries."""
+def _content_evidence(entries):
+    """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool}.
+    Facts add positive identity-evidence; `retract` entries add negative (peer) evidence
+    or set owner-forget (governance, decisive). Pure projection over the journal."""
     out = {}
+    seq_content = {}                       # (node_id, seq) of a fact entry -> its content
     for e in entries:
         if e.get("type") != "fact":
             continue
@@ -380,21 +389,46 @@ def _content_identities(entries):
         content = p.get("content")
         if content is None:
             continue
+        seq_content[(e.get("node_id"), e.get("seq"))] = content
+        ev = out.setdefault(content, {"pos": {}, "neg": {}, "forget": False})
         key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
-        ids = out.setdefault(content, {})
-        if w > ids.get(key, 0.0):
-            ids[key] = w
+        if w > ev["pos"].get(key, 0.0):
+            ev["pos"][key] = w
+    for e in entries:
+        if e.get("type") != "retract":
+            continue
+        p = e.get("payload", {})
+        ref = p.get("retracts_ref")
+        content = seq_content.get(tuple(ref)) if ref else None
+        if content is None or content not in out:
+            continue
+        app, ctx, instance, _sess = _parse_source(p.get("source", "manual"))
+        ev = out[content]
+        if app in OWNER_APPS or ctx == "owner":
+            ev["forget"] = True
+        else:
+            key = (e.get("node_id"), app, instance)
+            w = SRC_CLASS_WEIGHT.get(ctx, 1.0)
+            if w > ev["neg"].get(key, 0.0):
+                ev["neg"][key] = w
     return out
 
 
+def _content_confidence(ev):
+    """Confidence for one content's evidence (forget -> FORGET_FLOOR; else signed net)."""
+    if ev.get("forget"):
+        return FORGET_FLOOR
+    return _confidence_for(sum(ev["pos"].values()) - sum(ev["neg"].values()))
+
+
 def _recompute_confidence(conn, entries):
-    """The ONLY writer of facts.confidence. Recompute every fact's confidence from
-    the distinct (node_id, app, instance) identities that asserted its exact content,
-    weighted by context-class. Pure projection over `entries` (the converged journal)."""
-    for content, ids in _content_identities(entries).items():
+    """The ONLY writer of facts.confidence. Pure SIGNED projection over the journal:
+    distinct (node_id, app, instance) corroborators MINUS retractors (context-class
+    weighted); owner-retract forgets (FORGET_FLOOR). Identical on every node."""
+    for content, ev in _content_evidence(entries).items():
         conn.execute(
             "UPDATE facts SET confidence = ? WHERE content = ?",
-            (_confidence_for(sum(ids.values())), content),
+            (_content_confidence(ev), content),
         )
 
 
@@ -526,9 +560,10 @@ def remember(args):
     res = persist_fact(conn, entry)
     # Derive this content's confidence from its distinct IDENTITIES in the journal
     # (keeps the live path consistent with rebuild without a full rebuild).
-    ids = _content_identities(merkle.read_all_entries(JOURNAL_DIR)).get(args.content, {})
-    n = len(ids)
-    conf = _confidence_for(sum(ids.values()))
+    ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
+        args.content, {"pos": {}, "neg": {}, "forget": False})
+    n = len(ev["pos"])
+    conf = _content_confidence(ev)
     conn.execute("UPDATE facts SET confidence = ? WHERE id = ?", (conf, res["id"]))
     conn.commit()
     conn.close()
@@ -538,6 +573,34 @@ def remember(args):
         print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
     else:
         print(f"Corroborated fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+
+
+def retract(args):
+    """Record NEGATIVE evidence against a fact (soft-forget). Confidence stays a derived
+    projection: a peer retract counts negative (can drive 'rejected'); --owner forgets it
+    (governance — to the forget floor, regardless of corroboration). Never a self-set number.
+    The journal keeps the fact + the retract (auditable; reversible by re-corroboration)."""
+    conn = get_conn()
+    ref = _index_lookup(conn, "fact", args.fact_id)
+    row = conn.execute("SELECT content FROM facts WHERE id = ?", (args.fact_id,)).fetchone()
+    conn.close()
+    if ref is None or row is None:
+        print(f"No fact #{args.fact_id}")
+        return
+    content = row["content"]
+    source = "owner:owner/owner" if args.owner else (
+        args.source or os.environ.get("HERMES_AGENT", "manual"))
+    append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
+
+    conn = get_conn()
+    ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
+        content, {"pos": {}, "neg": {}, "forget": False})
+    conf = _content_confidence(ev)
+    conn.execute("UPDATE facts SET confidence = ? WHERE content = ?", (conf, content))
+    conn.commit()
+    conn.close()
+    kind = "FORGOTTEN (owner)" if args.owner else "retracted"
+    print(f"Fact #{args.fact_id} {kind} → confidence {conf:.2f}")
 
 
 def _fts_query(raw):
@@ -839,6 +902,13 @@ def main():
     decide_parser.add_argument("--rationale", help="Why this decision")
     decide_parser.add_argument("--supersedes", type=int, help="ID of decision this replaces")
 
+    retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")
+    retract_parser.add_argument("fact_id", type=int, help="Local fact id to retract")
+    retract_parser.add_argument("--reason", help="Why")
+    retract_parser.add_argument("--source", help="Retractor identity (default: env/manual)")
+    retract_parser.add_argument("--owner", action="store_true",
+                                help="Owner forget — governance, decisive (drives to the forget floor)")
+
     entity_parser = subparsers.add_parser("entity", help="Manage entities")
     entity_parser.add_argument("action", choices=["add", "list", "show", "link"], help="Sub-command")
     entity_parser.add_argument("--name", help="Entity name")
@@ -867,6 +937,8 @@ def main():
         search(args)
     elif args.command == "decide":
         decide(args)
+    elif args.command == "retract":
+        retract(args)
     elif args.command == "entity":
         entity(args)
     elif args.command == "stats":

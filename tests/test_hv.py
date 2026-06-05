@@ -87,6 +87,37 @@ def test_confidence_is_pure_projection_across_rebuild(hive):
     assert abs(before - after) < 1e-9 and abs(before - 0.675) < 1e-6
 
 
+def test_same_agent_across_sessions_is_idempotent(hive):
+    # D0: a structured source varies per session, but the IDENTITY (node, app,
+    # instance) does not — so one agent across two sessions must NOT inflate.
+    hive.run("remember", "structured claim", "--source", "hermes:primary/default/aaaa1111")
+    hive.run("remember", "structured claim", "--source", "hermes:primary/default/bbbb2222")
+    rows = hive.query(
+        "SELECT count(*) c, max(confidence) conf FROM facts WHERE content=?",
+        ("structured claim",),
+    )
+    assert rows[0]["c"] == 1
+    assert abs(rows[0]["conf"] - 0.45) < 1e-6     # one identity, two sessions → 0.45
+
+
+def test_distinct_structured_agents_corroborate(hive):
+    hive.run("remember", "joint claim", "--source", "hermes:primary/default/aaaa1111")
+    hive.run("remember", "joint claim", "--source", "claude-code")
+    conf = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("joint claim",)
+    )[0]["confidence"]
+    assert abs(conf - 0.675) < 1e-6               # two distinct identities
+
+
+def test_context_class_weighting(hive):
+    # A subagent assertion is worth less than a primary one (weight 0.5).
+    hive.run("remember", "sub claim", "--source", "hermes:subagent/default/aaaa1111")
+    conf = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("sub claim",)
+    )[0]["confidence"]
+    assert abs(conf - 0.263604) < 1e-5            # _confidence_for(0.5) = 0.9*(1-0.5**0.5)
+
+
 def test_decide_supersede(hive):
     hive.run("decide", "old decision")
     hive.run("decide", "new decision", "--supersedes", "1")

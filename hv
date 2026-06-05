@@ -320,30 +320,59 @@ def persist_fact(conn, entry):
     return {"id": fid, "inserted": True}
 
 
-# --- Confidence projection (Phase A) -------------------------------------------
+# --- Confidence projection (Phase A + D0 identity) ----------------------------
 # Confidence is a PURE, DETERMINISTIC projection over the immutable journal,
 # recomputed on every rebuild — never a mutable counter. It is a function of the
-# number of DISTINCT sources that asserted the exact content, with diminishing
-# returns and a hard cap below "certain". Repetition from one source is
-# idempotent (set membership), so it cannot launder confidence upward. Because
-# the G-Set journal converges across nodes, this yields identical values on
-# every node. (Phase B refines "source" to admitted node_id / source-class.)
-CONF_BASE = 0.5    # each new independent source halves the remaining gap to CAP
+# distinct INDEPENDENT IDENTITIES that asserted the exact content, with diminishing
+# returns and a hard cap below "certain". Repetition from one identity is
+# idempotent, so it cannot launder confidence upward. The G-Set journal converges
+# across nodes, so this yields identical values everywhere.
+#
+# D0: the corroborating identity is (node_id, app, instance) parsed from the source
+# string — NOT the raw source string. Structured agents (e.g. Hermes) vary their
+# source per session ("hermes:<ctx>/<agent>/<session8>"); counting the raw string
+# would treat one agent's two sessions as two corroborators. Session is excluded;
+# each identity is weighted by its context-class (primary/subagent/cron).
+# Deferred (D0-v2): same-node independence discount; principal + CAP_self.
+CONF_BASE = 0.5    # each new independent identity halves the remaining gap to CAP
 CONF_CAP = 0.90    # never "certain" without external/human verification
+SRC_CLASS_WEIGHT = {"primary": 1.0, "subagent": 0.5, "cron": 0.3}
 
 
-def _confidence_for(n_sources):
-    """confidence(n) = CAP * (1 - BASE**n): 0->0, 1->0.45, 2->0.675, 3->0.788, cap 0.90."""
-    if n_sources <= 0:
+def _parse_source(source):
+    """Parse a source identity into (app, context_class, instance, session).
+    Structured: '<app>:<context_class>/<instance>/<session8>'.
+    Flat/legacy/CLI (e.g. 'manual', 'claude-code'): app=instance=string,
+    context_class='primary', session=None."""
+    s = source or "manual"
+    if ":" in s:
+        app, _, rest = s.partition(":")
+        parts = rest.split("/")
+        ctx = parts[0] if parts and parts[0] else "primary"
+        instance = parts[1] if len(parts) > 1 and parts[1] else (app or "manual")
+        session = parts[2] if len(parts) > 2 and parts[2] else None
+        return (app or "manual", ctx, instance, session)
+    return (s, "primary", s, None)
+
+
+def _identity_weight(node_id, source):
+    """The corroborating-identity key (node_id, app, instance) and its source-class
+    weight. Session is deliberately excluded so one agent across sessions = one identity."""
+    app, ctx, instance, _sess = _parse_source(source)
+    return (node_id, app, instance), SRC_CLASS_WEIGHT.get(ctx, 1.0)
+
+
+def _confidence_for(n_eff):
+    """confidence(n) = CAP * (1 - BASE**n): 1->0.45, 2->0.675, 3->0.788, cap 0.90.
+    n_eff = summed weight of distinct identities (a float; 0->0)."""
+    if n_eff <= 0:
         return 0.0
-    return round(CONF_CAP * (1 - CONF_BASE ** n_sources), 6)
+    return round(CONF_CAP * (1 - CONF_BASE ** n_eff), 6)
 
 
-def _recompute_confidence(conn, entries):
-    """The ONLY writer of facts.confidence. Recompute every fact's confidence from
-    the set of distinct sources that asserted its exact content in the journal.
-    Pure projection over `entries` (the converged journal)."""
-    content_sources = {}
+def _content_identities(entries):
+    """content -> {identity_key: best source-class weight} over all fact entries."""
+    out = {}
     for e in entries:
         if e.get("type") != "fact":
             continue
@@ -351,11 +380,21 @@ def _recompute_confidence(conn, entries):
         content = p.get("content")
         if content is None:
             continue
-        content_sources.setdefault(content, set()).add(p.get("source", "manual"))
-    for content, sources in content_sources.items():
+        key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        ids = out.setdefault(content, {})
+        if w > ids.get(key, 0.0):
+            ids[key] = w
+    return out
+
+
+def _recompute_confidence(conn, entries):
+    """The ONLY writer of facts.confidence. Recompute every fact's confidence from
+    the distinct (node_id, app, instance) identities that asserted its exact content,
+    weighted by context-class. Pure projection over `entries` (the converged journal)."""
+    for content, ids in _content_identities(entries).items():
         conn.execute(
             "UPDATE facts SET confidence = ? WHERE content = ?",
-            (_confidence_for(len(sources)), content),
+            (_confidence_for(sum(ids.values())), content),
         )
 
 
@@ -485,20 +524,16 @@ def remember(args):
 
     conn = get_conn()
     res = persist_fact(conn, entry)
-    # Derive this content's confidence from its distinct sources in the journal
+    # Derive this content's confidence from its distinct IDENTITIES in the journal
     # (keeps the live path consistent with rebuild without a full rebuild).
-    srcs = {
-        e["payload"].get("source", "manual")
-        for e in merkle.read_all_entries(JOURNAL_DIR)
-        if e.get("type") == "fact" and e["payload"].get("content") == args.content
-    }
-    conf = _confidence_for(len(srcs))
+    ids = _content_identities(merkle.read_all_entries(JOURNAL_DIR)).get(args.content, {})
+    n = len(ids)
+    conf = _confidence_for(sum(ids.values()))
     conn.execute("UPDATE facts SET confidence = ? WHERE id = ?", (conf, res["id"]))
     conn.commit()
     conn.close()
 
-    n = len(srcs)
-    src_word = "source" if n == 1 else "sources"
+    src_word = "identity" if n == 1 else "identities"
     if res["inserted"]:
         print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
     else:

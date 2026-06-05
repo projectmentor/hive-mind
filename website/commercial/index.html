@@ -467,6 +467,9 @@
                 padding: 0.5rem 1rem;
             }
         }
+        a.card { color: inherit; text-decoration: none; }
+        .card-more { display: inline-block; margin-top: 0.75rem; font-size: 0.9rem; font-weight: 600; color: var(--accent); }
+        a.card:hover .card-more { color: var(--accent-hover); }
     </style>
 </head>
 <body>
@@ -477,8 +480,8 @@
                 <img src="../assets/logo-horizontal-light.svg" alt="HiveMind" style="height: 40px; width: auto;" />
             </div>
             <div class="nav-right">
-                <a href="#" class="nav-link">For Developers</a>
-                <button class="btn btn-primary">Get Early Access</button>
+                <a href="../dev/" class="nav-link">For Developers</a>
+                <a href="#early-access" class="btn btn-primary">Get Early Access</a>
             </div>
         </nav>
     </header>
@@ -490,87 +493,99 @@
             HiveMind gives you and your AI agents superpowers. They learn from each other, stay in tune everywhere, all the time automatically, and keep getting smarter.
         </p>
         <div class="hero-cta">
-            <button class="btn btn-primary">Get Early Access</button>
+            <a href="#early-access" class="btn btn-primary">Get Early Access</a>
             <button class="btn btn-ghost">See how it works</button>
         </div>
     </section>
 
     <!-- Benefits Section -->
-    <section class="section">
+    <section class="section" id="benefits">
         <h2 class="section-title">Your AI Agents. Collaborating.</h2>
         <div class="cards-grid">
-            <div class="card">
+            <a class="card" href="features/stop-micromanaging-ai-agents.html">
                 <div class="card-title">Say goodbye to micro-managing.</div>
                 <p class="card-text">
                     Your agents show up ready. Every session, every machine, every time. Painless one-click installation.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/ai-agents-on-the-same-page.html">
                 <div class="card-title">All your agents on the same page.</div>
                 <p class="card-text">
                     Facts only become trusted when independent agents agree. Your agents naturally cross-check each other, working out conflicts before they become your problem.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/observable-ai-agents.html">
                 <div class="card-title">Always know what's going on.</div>
                 <p class="card-text">
                     Every fact your agents discover is observable and traceable. No surprises, no black boxes. Full visibility into what your agents know and how they know it.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/compounding-agent-knowledge.html">
                 <div class="card-title">Your knowledge compounds.</div>
                 <p class="card-text">
                     Every discovery builds on the last. The longer your agents run, the smarter the whole team gets.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/local-first-private-ai-memory.html">
                 <div class="card-title">Your data stays with you.</div>
                 <p class="card-text">
                     No cloud, no third-party servers, no subscriptions. HiveMind runs entirely on hardware you own.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/ship-faster-with-ai-agents.html">
                 <div class="card-title">Ship faster.</div>
                 <p class="card-text">
                     Your agents aren't repeating each other's work. They pick up where each other left off and keep moving.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/scale-ai-agents.html">
                 <div class="card-title">Scales with your team.</div>
                 <p class="card-text">
                     One agent or ten, one Hive or twenty. HiveMind grows with you.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/always-on-ai-agents.html">
                 <div class="card-title">Works while you sleep.</div>
                 <p class="card-text">
                     Your agents sync, share, and collaborate around the clock. You come back to results.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/ai-agents-that-improve.html">
                 <div class="card-title">Your agents get better every day.</div>
                 <p class="card-text">
                     The more they Hive, the smarter they get. HiveMind turns routine tasks into a growing collective intelligence.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/signal-not-noise.html">
                 <div class="card-title">Only the good stuff.</div>
                 <p class="card-text">
-                    Your Hive filters out the noise so your agents focus on what actually counts — not everything that happened, just what's worth knowing.
+                    Your Hive filters out the noise so your agents focus on what actually counts. Not everything that happened, just what's worth knowing.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/shared-source-of-truth-for-ai-agents.html">
                 <div class="card-title">A shared sense of reality.</div>
                 <p class="card-text">
-                    Your agents work from the same facts. No one goes rogue, no one drifts. When they disagree, HiveMind flags it — so you catch it before it becomes a problem.
+                    Your agents work from the same facts. No one goes rogue, no one drifts. When they disagree, HiveMind flags it, so you catch it before it becomes a problem.
                 </p>
-            </div>
-            <div class="card">
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
+            <a class="card" href="features/earned-trust-ai-memory.html">
                 <div class="card-title">Trust that's earned, not assumed.</div>
                 <p class="card-text">
                     The more independently your agents arrive at the same conclusion, the more you can rely on it.
                 </p>
-            </div>
+                <span class="card-more">Learn more &rsaquo;</span>
+            </a>
         </div>
     </section>
 
@@ -582,7 +597,7 @@
                 <div class="step-number">1</div>
                 <div class="step-title">An agent learns something</div>
                 <p class="step-text">
-                    Any agent — Hermes, Claude Code, or your own — makes a discovery and Hives it.
+                    Any agent (Hermes, Claude Code, or your own) makes a discovery and Hives it.
                 </p>
             </div>
             <div class="step">
@@ -657,7 +672,7 @@
     </section>
 
     <!-- Early Access Section -->
-    <section class="section early-access">
+    <section class="section early-access" id="early-access">
         <h2>HiveMind is in active development.</h2>
         <p class="early-access-note">Join the early access list to get first look at shared memory for AI agents.</p>
         <form class="email-form" onsubmit="handleSubmit(event)">
@@ -673,7 +688,7 @@
         <div class="footer-content">
             <span>© 2026 Certified Project Management, LLC. All rights reserved.</span>
             <span>&nbsp;•&nbsp;</span>
-            <a href="#" class="footer-link">For Developers</a>
+            <a href="../dev/" class="footer-link">For Developers</a>
         </div>
     </footer>
 

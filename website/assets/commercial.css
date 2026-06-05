@@ -1,0 +1,240 @@
+/* =============================================================================
+   HiveMind — shared commercial stylesheet
+   Used by the secondary commercial pages (getting-started, faq, privacy, terms,
+   features/*). The landing page (commercial/index.html) keeps its own inline
+   styles for now; tokens here mirror it so the look stays consistent.
+   ========================================================================== */
+:root {
+    --bg: #ffffff;
+    --surface: #f8fafc;
+    --heading: #061b31;
+    --body: #64748b;
+    --label: #273951;
+    --accent: #d97706;
+    --accent-hover: #b45309;
+    --accent-light: #fef3c7;
+    --border: #e2e8f0;
+    --shadow: rgba(50, 50, 93, 0.12) 0px 20px 40px -15px, rgba(0, 0, 0, 0.08) 0px 10px 20px -10px;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
+    --maxw: 1200px;
+    --maxw-prose: 760px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background-color: var(--bg);
+    color: var(--body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+a { color: var(--accent); }
+a:hover { color: var(--accent-hover); }
+
+/* ── Header / nav ─────────────────────────────────────────────────────────── */
+header {
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(10px);
+    background-color: rgba(255, 255, 255, 0.95);
+}
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    max-width: var(--maxw);
+    margin: 0 auto;
+}
+.logo img { height: 40px; width: auto; display: block; }
+.nav-right { display: flex; align-items: center; gap: 2rem; }
+.nav-link {
+    color: var(--body);
+    text-decoration: none;
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: color 0.2s;
+}
+.nav-link:hover { color: var(--heading); }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.btn {
+    padding: 0.5rem 1.25rem;
+    border-radius: var(--radius-sm);
+    font-weight: 500;
+    font-size: 0.95rem;
+    border: none;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-block;
+}
+.btn-primary { background-color: var(--accent); color: #fff; }
+.btn-primary:hover { background-color: var(--accent-hover); color: #fff; box-shadow: var(--shadow); }
+.btn-ghost { background-color: transparent; color: var(--heading); border: 1px solid var(--border); }
+.btn-ghost:hover { background-color: var(--surface); border-color: var(--body); }
+
+/* ── Page shell ───────────────────────────────────────────────────────────── */
+.page {
+    max-width: var(--maxw-prose);
+    margin: 0 auto;
+    padding: 4rem 2rem 5rem;
+}
+.page-wide { max-width: var(--maxw); }
+
+.breadcrumb { font-size: 0.85rem; margin-bottom: 1.5rem; color: var(--body); }
+.breadcrumb a { text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
+
+.eyebrow {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-bottom: 0.75rem;
+}
+
+/* ── Prose / long-form ────────────────────────────────────────────────────── */
+.prose h1 {
+    font-size: clamp(2rem, 5vw, 3rem);
+    color: var(--heading);
+    font-weight: 600;
+    line-height: 1.15;
+    margin-bottom: 1rem;
+}
+.prose .lede {
+    font-size: 1.25rem;
+    color: var(--label);
+    margin-bottom: 2.5rem;
+    line-height: 1.6;
+}
+.prose h2 {
+    font-size: 1.6rem;
+    color: var(--heading);
+    font-weight: 600;
+    margin: 2.5rem 0 1rem;
+}
+.prose h3 {
+    font-size: 1.15rem;
+    color: var(--heading);
+    font-weight: 600;
+    margin: 1.75rem 0 0.5rem;
+}
+.prose p { margin-bottom: 1.1rem; font-size: 1.02rem; }
+.prose ul, .prose ol { margin: 0 0 1.1rem 1.25rem; }
+.prose li { margin-bottom: 0.5rem; }
+.prose strong { color: var(--label); font-weight: 600; }
+.prose code {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 0.1rem 0.4rem;
+    font-size: 0.9em;
+    color: var(--label);
+}
+.prose .muted { color: var(--body); font-size: 0.9rem; }
+
+/* Callout / code block */
+.codeblock {
+    background: #0b0f19;
+    color: #e2e8f0;
+    border-radius: var(--radius-md);
+    padding: 1.25rem 1.5rem;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 0.88rem;
+    line-height: 1.7;
+    margin: 1.5rem 0;
+}
+.codeblock .c { color: #64748b; }
+.codeblock .p { color: var(--accent); }
+
+/* FAQ accordion-ish (static, AEO-friendly) */
+.faq-item {
+    border-bottom: 1px solid var(--border);
+    padding: 1.25rem 0;
+}
+.faq-item h3 { margin: 0 0 0.5rem; }
+.faq-item p { margin: 0; color: var(--body); }
+
+/* Related links grid (feature cross-linking for SEO) */
+.related {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 1rem;
+    margin-top: 1.5rem;
+}
+.related a {
+    display: block;
+    padding: 1rem 1.25rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    text-decoration: none;
+    color: var(--heading);
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: box-shadow 0.2s, border-color 0.2s;
+}
+.related a:hover { box-shadow: var(--shadow); border-color: var(--accent); }
+
+/* Inline CTA band */
+.cta-band {
+    margin-top: 3rem;
+    padding: 2rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    text-align: center;
+}
+.cta-band h2 { margin-top: 0; }
+.cta-band .btn { margin-top: 1rem; }
+
+/* ── Footer ───────────────────────────────────────────────────────────────── */
+footer {
+    background-color: var(--surface);
+    border-top: 1px solid var(--border);
+    padding: 2.5rem 2rem;
+    text-align: center;
+    color: var(--body);
+    font-size: 0.9rem;
+}
+footer img { height: 72px; width: auto; display: block; margin: 0 auto 1.25rem; }
+.footer-content {
+    max-width: var(--maxw);
+    margin: 0 auto;
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    flex-wrap: wrap;
+    align-items: center;
+}
+.footer-link { color: var(--body); text-decoration: none; }
+.footer-link:hover { color: var(--heading); }
+
+/* ── Clickable feature cards on the landing page (a.card) ─────────────────── */
+a.card { color: inherit; text-decoration: none; }
+.card-more {
+    display: inline-block;
+    margin-top: 0.75rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    color: var(--accent);
+}
+a.card:hover .card-more { color: var(--accent-hover); }
+
+/* ── Responsive ───────────────────────────────────────────────────────────── */
+@media (max-width: 768px) {
+    nav { padding: 1rem 1.5rem; }
+    .page { padding: 2.5rem 1.5rem 3.5rem; }
+    .nav-right { gap: 1rem; }
+}

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HiveMind FAQ | Shared Memory for AI Agents</title>
+    <meta name="description" content="Answers to common questions about HiveMind: what it is, how shared agent memory works, privacy, supported agents and platforms, and pricing.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/commercial.css">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      "mainEntity": [
+        {"@type":"Question","name":"What is HiveMind?","acceptedAnswer":{"@type":"Answer","text":"HiveMind is a shared, append-only memory for AI agents. When one agent learns something, every other agent on every one of your machines can use it too. It runs entirely on hardware you own, with no central server."}},
+        {"@type":"Question","name":"How do AI agents share memory in HiveMind?","acceptedAnswer":{"@type":"Answer","text":"Each agent writes facts, decisions, and observations to a local memory through a simple command. Your machines sync peer to peer, exchanging only what is missing, so every agent ends up with the same knowledge without a central broker."}},
+        {"@type":"Question","name":"Does HiveMind send my data to the cloud?","acceptedAnswer":{"@type":"Answer","text":"No. HiveMind has no cloud, no third-party servers, and no subscriptions. Your memory lives on your own machines and syncs directly between them over your private network."}},
+        {"@type":"Question","name":"Which agents and platforms does HiveMind work with?","acceptedAnswer":{"@type":"Answer","text":"HiveMind works with Claude Code, Hermes, the MCP server for Claude Desktop, and any agent that can run a shell command. It currently runs on Windows 11 with WSL2; Mac and Android support are in progress."}},
+        {"@type":"Question","name":"How does HiveMind decide what is trustworthy?","acceptedAnswer":{"@type":"Answer","text":"Confidence is earned, not declared. A fact only gains trust when multiple independent agents arrive at it on their own. A single agent cannot inflate its own credibility, and conflicting facts are surfaced rather than silently overwritten."}},
+        {"@type":"Question","name":"How much does HiveMind cost?","acceptedAnswer":{"@type":"Answer","text":"HiveMind is in active development. Join the early-access list to be notified about availability and pricing."}}
+      ]
+    }
+    </script>
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo"><a href="../"><img src="../assets/logo-horizontal-light.svg" alt="HiveMind"></a></div>
+            <div class="nav-right">
+                <a href="getting-started.html" class="nav-link">Get Started</a>
+                <a href="../dev/" class="nav-link">For Developers</a>
+                <a href="../#early-access" class="btn btn-primary">Get Early Access</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="page prose">
+        <div class="breadcrumb"><a href="../">Home</a> &rsaquo; FAQ</div>
+        <div class="eyebrow">FAQ</div>
+        <h1>Questions, answered.</h1>
+        <p class="lede">Everything people ask about giving their AI agents one shared memory.</p>
+
+        <div class="faq-item">
+            <h3>What is HiveMind?</h3>
+            <p>HiveMind is a shared, append-only memory for AI agents. When one agent learns something, every other agent on every one of your machines can use it too. It runs entirely on hardware you own, with no central server.</p>
+        </div>
+        <div class="faq-item">
+            <h3>How do AI agents share memory in HiveMind?</h3>
+            <p>Each agent writes facts, decisions, and observations to a local memory through a simple command. Your machines sync peer to peer, exchanging only what is missing, so every agent ends up with the same knowledge without a central broker.</p>
+        </div>
+        <div class="faq-item">
+            <h3>Does HiveMind send my data to the cloud?</h3>
+            <p>No. HiveMind has no cloud, no third-party servers, and no subscriptions. Your memory lives on your own machines and syncs directly between them over your private network.</p>
+        </div>
+        <div class="faq-item">
+            <h3>Which agents and platforms does HiveMind work with?</h3>
+            <p>HiveMind works with Claude Code, Hermes, the MCP server for Claude Desktop, and any agent that can run a shell command. It currently runs on Windows 11 with WSL2; Mac and Android support are in progress.</p>
+        </div>
+        <div class="faq-item">
+            <h3>How does HiveMind decide what is trustworthy?</h3>
+            <p>Confidence is earned, not declared. A fact only gains trust when multiple independent agents arrive at it on their own. A single agent cannot inflate its own credibility, and conflicting facts are surfaced rather than silently overwritten.</p>
+        </div>
+        <div class="faq-item">
+            <h3>How much does HiveMind cost?</h3>
+            <p>HiveMind is in active development. <a href="../#early-access">Join the early-access list</a> to be notified about availability and pricing.</p>
+        </div>
+
+        <div class="cta-band">
+            <h2>Still curious?</h2>
+            <p>See how it works, or get the technical details on the developer site.</p>
+            <a href="getting-started.html" class="btn btn-primary">Get started</a>
+        </div>
+    </main>
+
+    <footer>
+        <img src="../assets/logo-stacked-light.svg" alt="HiveMind">
+        <div class="footer-content">
+            <span>&copy; 2026 Certified Project Management, LLC. All rights reserved.</span>
+            <a href="privacy.html" class="footer-link">Privacy</a>
+            <a href="terms.html" class="footer-link">Terms</a>
+            <a href="../dev/" class="footer-link">For Developers</a>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Get Started with HiveMind | Shared Memory for AI Agents</title>
+    <meta name="description" content="Set up HiveMind in two commands. Give your AI agents one shared memory across every machine — no servers, no cloud, no accounts.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../assets/commercial.css">
+</head>
+<body>
+    <header>
+        <nav>
+            <div class="logo"><a href="../"><img src="../assets/logo-horizontal-light.svg" alt="HiveMind"></a></div>
+            <div class="nav-right">
+                <a href="faq.html" class="nav-link">FAQ</a>
+                <a href="../dev/" class="nav-link">For Developers</a>
+                <a href="../#early-access" class="btn btn-primary">Get Early Access</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="page prose">
+        <div class="breadcrumb"><a href="../">Home</a> &rsaquo; Get Started</div>
+        <div class="eyebrow">Get Started</div>
+        <h1>Up and running in two commands.</h1>
+        <p class="lede">
+            HiveMind installs on your own machine. No servers to provision, no cloud account,
+            nothing to operate. Run the installer, and your agents start sharing one memory.
+        </p>
+
+        <h2>1. Install</h2>
+        <p>On each machine you want in the Hive, run:</p>
+        <div class="codeblock">
+<span class="c"># install the hive-mind command</span>
+<span class="p">$</span> curl -fsSL https://raw.githubusercontent.com/projectmentor/hive-mind/main/scripts/installer/install.sh | bash
+
+<span class="c"># set up this node (daemon, peers, identity)</span>
+<span class="p">$</span> hive-mind install
+        </div>
+        <p class="muted">
+            Currently supported on Windows 11 (WSL2). Mac and Android are on the way.
+        </p>
+
+        <h2>2. Use it</h2>
+        <p>Any agent can read and write the Hive with one command:</p>
+        <div class="codeblock">
+<span class="c"># remember something</span>
+<span class="p">$</span> hv remember "The payments API rate-limits at 100 req/s" --tags api,payments
+
+<span class="c"># find it later</span>
+<span class="p">$</span> hv search "payments"
+
+<span class="c"># sync with your other machines</span>
+<span class="p">$</span> hv sync now
+        </div>
+
+        <h2>3. Connect your agents</h2>
+        <p>
+            HiveMind already works with Claude Code, Hermes, the MCP server for Claude
+            Desktop, and any agent that can run a shell command. Most of the time your
+            agents handle <code>hv</code> for you, so you can step back and let them run.
+        </p>
+
+        <div class="cta-band">
+            <h2>Want the technical details?</h2>
+            <p>Architecture, sync model, and the full CLI reference live on the developer site.</p>
+            <a href="../dev/" class="btn btn-primary">Go to the developer site</a>
+        </div>
+    </main>
+
+    <footer>
+        <img src="../assets/logo-stacked-light.svg" alt="HiveMind">
+        <div class="footer-content">
+            <span>&copy; 2026 Certified Project Management, LLC. All rights reserved.</span>
+            <a href="privacy.html" class="footer-link">Privacy</a>
+            <a href="terms.html" class="footer-link">Terms</a>
+            <a href="../dev/" class="footer-link">For Developers</a>
+        </div>
+    </footer>
+</body>
+</html>

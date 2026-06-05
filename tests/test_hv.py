@@ -181,6 +181,34 @@ def test_no_gate_writes_anything(hive):
     assert hive.query("SELECT count(*) c FROM facts WHERE content='ok'")[0]["c"] == 1
 
 
+def _loadhv():
+    import importlib.machinery, importlib.util
+    loader = importlib.machinery.SourceFileLoader("hvmod", str(PROJECT / "hv"))
+    spec = importlib.util.spec_from_loader("hvmod", loader)
+    m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    return m
+
+
+def test_contested_flag_and_marker(hive):
+    # Same claim with BOTH a corroborator and a (distinct) retractor → contested + net 0.
+    hive.run("remember", "contested claim", "--source", "alice")
+    fid = _fid(hive, "contested claim")
+    hive.run("retract", str(fid), "--source", "bob")
+    row = hive.query("SELECT confidence, contested FROM facts WHERE content=?", ("contested claim",))[0]
+    assert row["contested"] == 1
+    assert abs(row["confidence"] - 0.0) < 1e-9                 # base net 1-1 = 0
+    assert "CONTESTED" in hive.run("search", "contested claim").stdout
+
+
+def test_decay_function():
+    m = _loadhv()
+    t0 = "2026-01-01T00:00:00+00:00"
+    assert abs(m._effective_confidence(0.45, t0, t0) - 0.45) < 1e-6            # no age → base
+    later = m._effective_confidence(0.45, t0, "2027-01-01T00:00:00+00:00")     # ~1yr → decayed
+    assert 0.0 < later < 0.45
+    assert m._effective_confidence(-1.0, t0, "2030-01-01T00:00:00+00:00") == -1.0  # forget never decays
+
+
 def test_decide_supersede(hive):
     hive.run("decide", "old decision")
     hive.run("decide", "new decision", "--supersedes", "1")

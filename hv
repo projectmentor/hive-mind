@@ -122,11 +122,16 @@ def init_db():
     """)
     conn.commit()
 
-    # Migration: add the derived-confidence column to pre-existing facts tables
+    # Migration: add derived columns to pre-existing facts tables
     # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
-    if "confidence" not in {r[1] for r in conn.execute("PRAGMA table_info(facts)")}:
+    fcols = {r[1] for r in conn.execute("PRAGMA table_info(facts)")}
+    if "confidence" not in fcols:
         conn.execute("ALTER TABLE facts ADD COLUMN confidence REAL DEFAULT 0.0")
-        conn.commit()
+    if "contested" not in fcols:               # Phase C: genuine disagreement (support AND dispute)
+        conn.execute("ALTER TABLE facts ADD COLUMN contested INTEGER DEFAULT 0")
+    if "last_evidence_at" not in fcols:        # Phase C: most-recent evidence ts (drives decay)
+        conn.execute("ALTER TABLE facts ADD COLUMN last_evidence_at TIMESTAMP")
+    conn.commit()
     # Index created here (not in the schema script above) so it works on both
     # fresh and migrated DBs — the column is guaranteed to exist by this point.
     conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_confidence ON facts(confidence)")
@@ -376,10 +381,14 @@ def _confidence_for(net):
     return mag if net > 0 else -mag
 
 
+HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence
+
+
 def _content_evidence(entries):
-    """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool}.
-    Facts add positive identity-evidence; `retract` entries add negative (peer) evidence
-    or set owner-forget (governance, decisive). Pure projection over the journal."""
+    """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str}.
+    Facts add positive identity-evidence; `retract` entries add negative (peer) evidence or set
+    owner-forget (governance, decisive). last_ts = most-recent fact/retract timestamp (drives
+    decay). Pure projection over the journal."""
     out = {}
     seq_content = {}                       # (node_id, seq) of a fact entry -> its content
     for e in entries:
@@ -390,10 +399,13 @@ def _content_evidence(entries):
         if content is None:
             continue
         seq_content[(e.get("node_id"), e.get("seq"))] = content
-        ev = out.setdefault(content, {"pos": {}, "neg": {}, "forget": False})
+        ev = out.setdefault(content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
         key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
         if w > ev["pos"].get(key, 0.0):
             ev["pos"][key] = w
+        ts = e.get("timestamp", "")
+        if ts > ev["last_ts"]:
+            ev["last_ts"] = ts
     for e in entries:
         if e.get("type") != "retract":
             continue
@@ -402,8 +414,8 @@ def _content_evidence(entries):
         content = seq_content.get(tuple(ref)) if ref else None
         if content is None or content not in out:
             continue
-        app, ctx, instance, _sess = _parse_source(p.get("source", "manual"))
         ev = out[content]
+        app, ctx, instance, _sess = _parse_source(p.get("source", "manual"))
         if app in OWNER_APPS or ctx == "owner":
             ev["forget"] = True
         else:
@@ -411,25 +423,56 @@ def _content_evidence(entries):
             w = SRC_CLASS_WEIGHT.get(ctx, 1.0)
             if w > ev["neg"].get(key, 0.0):
                 ev["neg"][key] = w
+        ts = e.get("timestamp", "")
+        if ts > ev["last_ts"]:
+            ev["last_ts"] = ts
     return out
 
 
 def _content_confidence(ev):
-    """Confidence for one content's evidence (forget -> FORGET_FLOOR; else signed net)."""
+    """Time-INVARIANT base confidence for one content (forget -> FORGET_FLOOR; else signed net).
+    Stored in the projection; decay is applied separately at query time."""
     if ev.get("forget"):
         return FORGET_FLOOR
     return _confidence_for(sum(ev["pos"].values()) - sum(ev["neg"].values()))
 
 
+def _apply_content_confidence(conn, content, ev):
+    """Write base confidence + contested flag + last-evidence ts for one content."""
+    contested = 1 if (not ev.get("forget") and ev.get("pos") and ev.get("neg")) else 0
+    conn.execute(
+        "UPDATE facts SET confidence = ?, contested = ?, last_evidence_at = ? WHERE content = ?",
+        (_content_confidence(ev), contested, ev.get("last_ts") or None, content),
+    )
+
+
 def _recompute_confidence(conn, entries):
-    """The ONLY writer of facts.confidence. Pure SIGNED projection over the journal:
-    distinct (node_id, app, instance) corroborators MINUS retractors (context-class
-    weighted); owner-retract forgets (FORGET_FLOOR). Identical on every node."""
+    """The ONLY writer of facts.confidence/contested/last_evidence_at. Pure SIGNED projection
+    over the journal (corroborators MINUS retractors, weighted; owner-retract forgets);
+    `contested` when a claim has BOTH support and dispute. Time-invariant — decay at query time."""
     for content, ev in _content_evidence(entries).items():
-        conn.execute(
-            "UPDATE facts SET confidence = ? WHERE content = ?",
-            (_content_confidence(ev), content),
-        )
+        _apply_content_confidence(conn, content, ev)
+
+
+def _to_dt(s):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(s.strip().replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _effective_confidence(base, last_evidence_at, now):
+    """Query-time confidence: base decayed by recency. Owner-forget (FORGET_FLOOR) does NOT
+    decay (stays gone). Deterministic given (base, last_evidence_at, now) — `now` is injectable
+    via $HIVE_NOW so every node computes identical effective confidence for the same instant."""
+    if base == FORGET_FLOOR or not last_evidence_at:
+        return base
+    a, b = _to_dt(last_evidence_at), _to_dt(now)
+    if a is None or b is None:
+        return base
+    age_days = max(0.0, (b - a).total_seconds() / 86400.0)
+    return round(base * (0.5 ** (age_days / HALFLIFE_DAYS)), 6)
 
 
 def persist_decision(conn, entry):
@@ -586,10 +629,10 @@ def remember(args):
     # Derive this content's confidence from its distinct IDENTITIES in the journal
     # (keeps the live path consistent with rebuild without a full rebuild).
     ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
-        args.content, {"pos": {}, "neg": {}, "forget": False})
+        args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     n = len(ev["pos"])
     conf = _content_confidence(ev)
-    conn.execute("UPDATE facts SET confidence = ? WHERE id = ?", (conf, res["id"]))
+    _apply_content_confidence(conn, args.content, ev)
     conn.commit()
     conn.close()
 
@@ -619,9 +662,9 @@ def retract(args):
 
     conn = get_conn()
     ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
-        content, {"pos": {}, "neg": {}, "forget": False})
+        content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     conf = _content_confidence(ev)
-    conn.execute("UPDATE facts SET confidence = ? WHERE content = ?", (conf, content))
+    _apply_content_confidence(conn, content, ev)
     conn.commit()
     conn.close()
     kind = "FORGOTTEN (owner)" if args.owner else "retracted"
@@ -639,43 +682,45 @@ def _fts_query(raw):
 
 
 def search(args):
-    """Search facts (FTS5, falling back to LIKE)."""
+    """Search facts. Ranks/filters by EFFECTIVE confidence (the time-invariant base projection
+    decayed by recency, computed at query time with $HIVE_NOW); surfaces contested claims."""
     conn = get_conn()
-    results = None
+    now = os.environ.get("HIVE_NOW") or _now_iso()
+    cols = "id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at"
+    rows = None
 
     fts_expr = _fts_query(args.query)
     if fts_expr is not None:
         try:
-            results = conn.execute("""
-                SELECT f.id, f.content, f.tags, f.confidence, f.source_agent, f.created_at
+            rows = conn.execute(f"""
+                SELECT {', '.join('f.' + c for c in cols.split(', '))}
                 FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid
-                WHERE facts_fts MATCH ? AND f.confidence >= ?
-                ORDER BY f.confidence DESC, f.created_at DESC
-                LIMIT 10
-            """, (fts_expr, args.min_confidence)).fetchall()
+                WHERE facts_fts MATCH ? LIMIT 200
+            """, (fts_expr,)).fetchall()
         except sqlite3.OperationalError:
-            results = None  # FTS unavailable — fall back
+            rows = None  # FTS unavailable — fall back
 
-    if results is None:
+    if rows is None:
         like = f"%{args.query}%"
-        results = conn.execute("""
-            SELECT id, content, tags, confidence, source_agent, created_at
-            FROM facts
-            WHERE content LIKE ? AND confidence >= ?
-            ORDER BY confidence DESC, created_at DESC
-            LIMIT 10
-        """, (like, args.min_confidence)).fetchall()
+        rows = conn.execute(f"SELECT {cols} FROM facts WHERE content LIKE ? LIMIT 200",
+                            (like,)).fetchall()
+    conn.close()
+
+    # Decay + threshold + rank in Python (effective confidence depends on `now`).
+    scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
+    scored = [(eff, r) for eff, r in scored if eff >= args.min_confidence]
+    scored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
+    scored = scored[:10]
 
     if args.format == "json":
-        print(json.dumps([dict(r) for r in results], indent=2))
+        print(json.dumps([{**dict(r), "effective_confidence": eff} for eff, r in scored], indent=2))
     else:
-        for r in results:
+        for eff, r in scored:
             tags = json.loads(r["tags"]) if r["tags"] else []
+            flag = "  ⚠ CONTESTED" if r["contested"] else ""
             print(f"[{r['id']}] {r['content']}")
-            print(f"     Tags: {', '.join(tags)}  Conf: {r['confidence']:.2f}  From: {r['source_agent']}")
+            print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  From: {r['source_agent']}{flag}")
             print()
-
-    conn.close()
 
 
 def decide(args):
@@ -907,7 +952,22 @@ def sync_cmd(args):
 # --------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Hive Mind CLI")
+    parser = argparse.ArgumentParser(
+        description="Hive Mind CLI — shared, confidence-weighted institutional memory.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            '  hv remember "X happened" --tags a,b --source claude-code   # store a fact\n'
+            '  hv remember "..." --gate                                  # skip low-salience writes\n'
+            '  hv search "X" [--min-confidence -1] [--format json]        # ranked by effective confidence\n'
+            '  hv decide "chose Y" --rationale "because"                  # record a decision\n'
+            "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
+            "  hv retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
+            "  hv stats | rebuild | merkle | sync now|daemon\n"
+            "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
+            "decays with age ($HIVE_NOW injectable); owner-forget = -1.0. See docs/OPERATING_MODEL.md."
+        ),
+    )
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
     remember_parser = subparsers.add_parser("remember", help="Store a fact")

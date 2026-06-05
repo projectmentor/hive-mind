@@ -70,13 +70,35 @@ source — self-repetition does nothing.
 
 **Examples:**
 ```bash
-# Store a simple fact
+# Minimal — just the fact
+./hv remember "Tailscale SSH replaces Win OpenSSH on both nodes"
+
+# With tags
 ./hv remember "Tailscale SSH replaces Win OpenSSH on both nodes" \
     --tags infrastructure,architecture
 
-# Store a fact from an AI agent
+# With tags and source
 ./hv remember "Payments must go through the billing service — no direct DB writes" \
-    --tags architecture,constraint --source "claude-code"
+    --tags architecture,constraint \
+    --source "claude-code"
+
+# With importance hint
+./hv remember "Sync daemon must be restarted after peers.json changes" \
+    --tags ops \
+    --importance 0.9
+
+# With salience gate — low-quality entries are silently dropped
+./hv remember "daemon binds on 9876" \
+    --tags infrastructure \
+    --source "hermes:primary/claude-sonnet/abc12345" \
+    --gate
+
+# All options together
+./hv remember "WSL Tailscale IP changes after re-install — update peers.json" \
+    --tags infrastructure,gotcha \
+    --source "hermes:primary/claude-sonnet/abc12345" \
+    --importance 0.8 \
+    --gate
 ```
 
 ---
@@ -97,21 +119,29 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--limit N]
 | `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. |
 | `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. |
 | `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. |
-| `--limit` | Maximum number of results to return. |
 
 **Examples:**
 ```bash
-# Find anything about tailscale
+# Minimal — keyword search
 ./hv search "tailscale"
 
-# Only show well-corroborated facts
-./hv search "billing" --min-confidence 0.6
+# Multiple keywords (all must match)
+./hv search "sync daemon"
 
-# Exact phrase search
+# Either/or
+./hv search "tailscale OR portproxy"
+
+# Exact phrase
 ./hv search '"address already in use"'
+
+# Filter by confidence
+./hv search "billing" --min-confidence 0.6
 
 # Machine-readable output
 ./hv search "sync" --format json
+
+# All options together
+./hv search "infrastructure" --format json --min-confidence 0.5
 ```
 
 ---
@@ -136,14 +166,22 @@ hv decide <content> [--rationale TEXT] [--supersedes ID]
 
 **Examples:**
 ```bash
-# Record a new decision
+# Minimal — just the decision
+./hv decide "Use Tailscale SSH for inter-node access"
+
+# With rationale
 ./hv decide "Use Tailscale SSH for inter-node access" \
     --rationale "Zero-config, auth handled by the tailnet, nothing to maintain"
 
-# Replace an old decision
+# Replacing a previous decision
 ./hv decide "Install Tailscale inside WSL — each node gets its own IP" \
     --rationale "Cleaner than portproxy, WSL appears as its own tailnet machine" \
     --supersedes 5
+
+# All options together
+./hv decide "peers.json must use WSL Tailscale IPs, not Windows host IPs" \
+    --rationale "WSL gets its own 100.x — Windows host IP is irrelevant to WSL daemon" \
+    --supersedes 3
 ```
 
 ---
@@ -170,11 +208,25 @@ hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
 
 **Examples:**
 ```bash
-# Retract a fact that was a test
+# Minimal — fact ID only
+./hv retract 4
+
+# With a reason
 ./hv retract 4 --reason "Was a test probe, not a real observation"
 
-# Authoritatively retract something that's definitively wrong
-./hv retract 12 --reason "Portproxy is no longer used — architecture changed" --owner
+# With reason and source
+./hv retract 7 \
+    --reason "Portproxy is no longer used — architecture changed" \
+    --source "hermes:primary/claude-sonnet/abc12345"
+
+# Owner retraction — authoritative, immediately floors confidence
+./hv retract 12 --reason "Definitively wrong" --owner
+
+# All options together
+./hv retract 15 \
+    --reason "Superseded by Tailscale-in-WSL architecture" \
+    --source "claude-code" \
+    --owner
 ```
 
 ---
@@ -200,18 +252,24 @@ hv entity {add,list,show,link} [options]
 
 **Examples:**
 ```bash
-# Create an entity
+# add — minimal
+./hv entity add --name "HiveMind" --type project
+
+# add — with attributes
 ./hv entity add --name "HiveMind" --type project \
     --attr '{"repo":"projectmentor/hive-mind","status":"active"}'
 
-# Link a fact to it
-./hv entity link --name "HiveMind" --fact-id 42
+# list — show all entities
+./hv entity list
 
-# See everything linked to it
+# show — everything linked to a named entity
 ./hv entity show --name "HiveMind"
 
-# List all entities
-./hv entity list
+# link — attach a fact to an entity (minimal)
+./hv entity link --name "HiveMind" --fact-id 42
+
+# link — with confidence score
+./hv entity link --name "HiveMind" --fact-id 42 --confidence 0.9
 ```
 
 ---
@@ -302,14 +360,20 @@ This file is not synced to git — it's specific to each machine.
 
 **Examples:**
 ```bash
-# Manual sync
+# Sync now — one-shot manual sync
 ./hv sync now
+
+# Run the daemon manually (the background service does this automatically)
+./hv sync daemon
 
 # Check background service status
 systemctl --user status hive-sync
 
 # Watch sync logs live
 journalctl --user -u hive-sync -f
+
+# Restart the background service (e.g. after editing peers.json)
+systemctl --user restart hive-sync
 ```
 
 ---

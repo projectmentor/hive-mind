@@ -55,14 +55,22 @@ step "1/$TOTAL  Pre-flight checks"
 grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null \
   || die "Must run inside WSL2 on Windows 11."
 
-[ -d /run/systemd/system ] && pidof systemd &>/dev/null \
-  || die "systemd not running as PID 1 in this WSL. Enable it first:
-  sudo bash -c 'echo -e \"[boot]\nsystemd=true\" >> /etc/wsl.conf'
-  Then from Windows: wsl --shutdown
-  Reopen WSL and re-run hive-mind install"
+# ── detect init system ──────────────────────────────────────────────────────
+INIT_SYSTEM="none"
+if command -v systemctl &>/dev/null; then
+  INIT_SYSTEM="systemd"
+  # Ensure user lingering is enabled so --user services survive without active session
+  loginctl enable-linger "$USER" 2>/dev/null || true
+elif command -v rc-service &>/dev/null; then
+  INIT_SYSTEM="openrc"
+fi
 
-# Ensure user lingering is enabled so --user services survive without an active login session
-loginctl enable-linger "$USER" 2>/dev/null || true
+if [[ "$INIT_SYSTEM" == "none" ]]; then
+  warn "No systemctl or openrc detected — daemon will run via @reboot cron as fallback."
+  warn "For proper persistence, enable systemd in WSL:"
+  warn "  sudo bash -c 'echo -e \"[boot]\nsystemd=true\" >> /etc/wsl.conf'"
+  warn "  Then from Windows: wsl --shutdown, reopen WSL and re-run hive-mind install"
+fi
 
 ok "WSL2 + systemd confirmed"
 
@@ -232,15 +240,16 @@ fi
 ./hv stats
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 8 — systemd service
+# STEP 8 — Service / daemon persistence
 # ════════════════════════════════════════════════════════════════════════════
 step "8/$TOTAL  Systemd service"
 
-UNIT_DIR="$HOME/.config/systemd/user"
-UNIT_FILE="$UNIT_DIR/$SERVICE_NAME.service"
-mkdir -p "$UNIT_DIR"
+if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+  UNIT_DIR="$HOME/.config/systemd/user"
+  UNIT_FILE="$UNIT_DIR/$SERVICE_NAME.service"
+  mkdir -p "$UNIT_DIR"
 
-cat > "$UNIT_FILE" << UNIT
+  cat > "$UNIT_FILE" << UNIT
 [Unit]
 Description=Hive Mind sync daemon
 After=network.target
@@ -259,16 +268,49 @@ Environment=HIVE_HOME=$HIVE_DIR
 WantedBy=default.target
 UNIT
 
-systemctl --user daemon-reload
-systemctl --user enable "$SERVICE_NAME" --quiet
-ok "systemd unit installed: $UNIT_FILE"
+  systemctl --user daemon-reload
+  systemctl --user enable "$SERVICE_NAME" --quiet
+  ok "systemd unit installed: $UNIT_FILE"
+
+elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
+  # OpenRC service
+  OPENRC_SCRIPT="/etc/init.d/$SERVICE_NAME"
+  sudo tee "$OPENRC_SCRIPT" > /dev/null << OPENRC
+#!/sbin/openrc-run
+name="$SERVICE_NAME"
+description="Hive Mind sync daemon"
+command="/usr/bin/python3"
+command_args="$HIVE_DIR/sync_daemon.py"
+directory="$HIVE_DIR"
+command_background=true
+pidfile="/run/${SERVICE_NAME}.pid"
+OPENRC
+  sudo chmod +x "$OPENRC_SCRIPT"
+  sudo rc-update add "$SERVICE_NAME" default
+  ok "OpenRC service installed: $OPENRC_SCRIPT"
+
+else
+  # Fallback: @reboot cron entry
+  CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/sync_daemon.py >> /tmp/hive-sync.log 2>&1"
+  ( crontab -l 2>/dev/null | grep -v "$SERVICE_NAME"; echo "$CRON_LINE" ) | crontab -
+  ok "No systemd/openrc — installed @reboot cron as fallback"
+  warn "For proper persistence, enable systemd in WSL (see step 1 warning above)"
+fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 9 — Start daemon + smoke-test
+# STEP 9 — Start sync daemon
 # ════════════════════════════════════════════════════════════════════════════
 step "9/$TOTAL  Start sync daemon"
 
-systemctl --user restart "$SERVICE_NAME"
+if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+  systemctl --user restart "$SERVICE_NAME"
+elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
+  sudo rc-service "$SERVICE_NAME" restart
+else
+  # cron fallback — start manually now, cron handles reboots
+  pkill -f sync_daemon.py 2>/dev/null || true
+  nohup python3 "$HIVE_DIR/sync_daemon.py" >> /tmp/hive-sync.log 2>&1 &
+fi
 sleep 2
 
 HELLO=$(curl -sf "http://127.0.0.1:9876/sync/hello" 2>/dev/null) && {

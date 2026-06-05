@@ -20,7 +20,8 @@ That's it. The installer will:
 1. Install Tailscale inside WSL (if not present) and authenticate it
 2. Install Python dependencies
 3. Clone this repo to `~/projects/hive-mind`
-4. Ask for one input: your peer node's Tailscale IP (run `tailscale ip` on the peer)
+4. Ask for one input: your peer node's Tailscale IP (run `tailscale ip` on the peer).
+   First node with no peers yet? Just press Enter — add peers later by editing `.peers.json`.
 5. Initialise the database
 6. Install and start the sync daemon as a systemd service
 7. Wire the Hermes memory plugin (if Hermes is installed)

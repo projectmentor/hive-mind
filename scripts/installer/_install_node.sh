@@ -178,12 +178,13 @@ if [ -f "$PEERS_FILE" ]; then
 else
   echo ""
   echo "  Enter the Tailscale IPs of your peer nodes."
-  echo "  Use the WSL Tailscale IP for each peer (not the Windows host IP)."
-  echo "  Check on each peer with: tailscale ip"
-  echo "  Comma-separated, e.g.: 100.114.200.119"
-  echo "  Leave blank if this is a single-node setup."
+  echo "  Use the WSL Tailscale IP for each peer (run: tailscale ip on the peer)."
+  echo "  Comma-separated for multiple peers, e.g.: 100.114.200.119"
   echo ""
-  ask "Peer WSL Tailscale IPs: "
+  echo "  First node / no peers yet? Just press Enter — you can add peers later"
+  echo "  by editing $HIVE_DIR/.peers.json and running: hive-mind install"
+  echo ""
+  ask "Peer WSL Tailscale IPs (or Enter to skip): "
   read -r PEER_INPUT
 
   PEERS_JSON="[]"

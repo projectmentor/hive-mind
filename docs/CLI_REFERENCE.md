@@ -1,11 +1,12 @@
 # HiveMind CLI Reference
 
-`hv` is your command-line interface to HiveMind — a shared memory system for
-you and your AI agents. In practice you'll rarely need to type these commands
-yourself. Your agents (Hermes, Claude Code, and others) use `hv` automatically
-to store and retrieve knowledge as they work. This reference is here for when
-you want to look something up directly, correct a fact, or just see what's in
-your corpus.
+`hv` is your command-line interface to HiveMind — a place where you and all
+kinds of AI agents can collaborate, share what they know, and build on each
+other's work. In practice you'll rarely need to type these commands yourself.
+Your agents (Hermes, Claude Code, and others) use `hv` automatically to store
+and retrieve knowledge as they work. This reference is here for when you want
+to look something up directly, correct a fact, or just see what's in your
+memory.
 
 ---
 
@@ -18,7 +19,7 @@ your corpus.
 | `hv decide` | Record a decision |
 | `hv retract` | Correct a fact you got wrong |
 | `hv entity` | Track named things (people, projects, concepts) |
-| `hv stats` | See a summary of your corpus |
+| `hv stats` | See a summary of your memory |
 | `hv rebuild` | Fix the local database if something looks wrong |
 | `hv merkle` | Diagnose sync state between nodes |
 | `hv sync` | Sync with peer nodes |
@@ -56,7 +57,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
 | `--tags` | Comma-separated labels to help you find it later, e.g. `--tags infrastructure,todo`. No spaces. |
 | `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
 | `--importance` | A numeric hint for how significant this fact is. Recorded for future use but not currently applied to search ranking. |
-| `--gate` | Filter this write through the **salience gate** — a quality check that silently drops low-value entries (too short, no meaningful content, likely noise). Useful when an agent is writing many facts at once and you want to keep the corpus clean. |
+| `--gate` | Filter this write through the **salience gate** — a quality check that silently drops low-value entries (too short, no meaningful content, likely noise). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
 
 **What you get back:**
 
@@ -112,7 +113,7 @@ Find facts by keyword. Results are ranked by confidence — the most corroborate
 facts come first.
 
 ```
-hv search <query> [--format {text,json}] [--min-confidence N] [--limit N]
+hv search <query> [--format {text,json}] [--min-confidence N]
 ```
 
 **Arguments:**
@@ -277,9 +278,9 @@ hv entity {add,list,show,link} [options]
 
 ---
 
-### `hv stats` — Corpus summary
+### `hv stats` — Memory summary
 
-Shows a snapshot of everything in your local corpus: how many facts, decisions,
+Shows a snapshot of everything in your local memory: how many facts, decisions,
 and entities you have, where the entries came from, and which tags are most used.
 
 ```
@@ -331,7 +332,7 @@ sets this up for you.
 
 ```
 hv sync now
-hv sync daemon [--interval SECONDS]
+hv sync daemon
 ```
 
 **Sub-commands:**
@@ -339,7 +340,7 @@ hv sync daemon [--interval SECONDS]
 | Sub-command | What it does |
 |---|---|
 | `now` | Sync with all peers right now and exit. Good for a manual check. |
-| `daemon` | Run continuously — sync automatically every N seconds (default: every 5 minutes). This is what the background service runs. |
+| `daemon` | Run continuously — sync automatically every 5 minutes. This is what the background service runs. |
 
 **`.peers.json` format:**
 ```json

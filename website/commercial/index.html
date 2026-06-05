@@ -287,6 +287,19 @@
             font-weight: 500;
             color: var(--heading);
             font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 2rem;
+            padding: 0.4rem 1rem;
+        }
+
+        .compat-item svg {
+            width: 18px;
+            height: 18px;
+            flex-shrink: 0;
         }
 
         /* Early Access Section */
@@ -543,6 +556,24 @@
                     The more they Hive, the smarter they get. HiveMind turns routine tasks into a growing collective intelligence.
                 </p>
             </div>
+            <div class="card">
+                <div class="card-title">Only the good stuff.</div>
+                <p class="card-text">
+                    Your Hive filters out the noise so your agents focus on what actually counts — not everything that happened, just what's worth knowing.
+                </p>
+            </div>
+            <div class="card">
+                <div class="card-title">A shared sense of reality.</div>
+                <p class="card-text">
+                    Your agents work from the same facts. No one goes rogue, no one drifts. When they disagree, HiveMind flags it — so you catch it before it becomes a problem.
+                </p>
+            </div>
+            <div class="card">
+                <div class="card-title">Trust that's earned, not assumed.</div>
+                <p class="card-text">
+                    Every fact your agents rely on has been independently verified. The more independently your agents arrive at the same conclusion, the more you can rely on it.
+                </p>
+            </div>
         </div>
     </section>
 
@@ -579,17 +610,46 @@
         <div class="compatibility-content">
             <div class="compatibility-label">Works with</div>
             <div class="compatibility-items">
-                <div class="compat-item">Claude Code</div>
-                <div class="compat-item">Hermes Agent</div>
-                <div class="compat-item">Any CLI Agent</div>
+                <div class="compat-item">
+                    <!-- Claude Code icon -->
+                    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#CC785C"/><text x="12" y="16" text-anchor="middle" font-size="11" font-weight="700" fill="white" font-family="sans-serif">CC</text></svg>
+                    Claude Code
+                </div>
+                <div class="compat-item">
+                    <!-- Hermes icon -->
+                    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#6366f1"/><text x="12" y="16" text-anchor="middle" font-size="11" font-weight="700" fill="white" font-family="sans-serif">H</text></svg>
+                    Hermes Agent
+                </div>
+                <div class="compat-item">
+                    <!-- MCP icon -->
+                    <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" fill="#0ea5e9"/><text x="12" y="16" text-anchor="middle" font-size="9" font-weight="700" fill="white" font-family="sans-serif">MCP</text></svg>
+                    MCP Server
+                </div>
+                <div class="compat-item">
+                    <!-- CLI icon -->
+                    <svg viewBox="0 0 24 24" fill="none"><rect x="2" y="4" width="20" height="16" rx="3" fill="#374151"/><text x="12" y="16" text-anchor="middle" font-size="9" font-weight="700" fill="#10b981" font-family="monospace">&gt;_</text></svg>
+                    Any CLI Agent
+                </div>
             </div>
         </div>
-        <div class="compatibility-content" style="margin-top: 1rem;">
+        <div class="compatibility-content" style="margin-top: 1.5rem;">
             <div class="compatibility-label">Works on</div>
             <div class="compatibility-items">
-                <div class="compat-item">Windows</div>
-                <div class="compat-item">Mac</div>
-                <div class="compat-item">Android</div>
+                <div class="compat-item">
+                    <!-- Windows 11 logo -->
+                    <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="8.5" height="8.5" rx="1" fill="#0078D4"/><rect x="12.5" y="3" width="8.5" height="8.5" rx="1" fill="#0078D4"/><rect x="3" y="12.5" width="8.5" height="8.5" rx="1" fill="#0078D4"/><rect x="12.5" y="12.5" width="8.5" height="8.5" rx="1" fill="#0078D4"/></svg>
+                    Windows 11
+                </div>
+                <div class="compat-item">
+                    <!-- Apple logo -->
+                    <svg viewBox="0 0 24 24" fill="#1d1d1f"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+                    Mac
+                </div>
+                <div class="compat-item">
+                    <!-- Android logo -->
+                    <svg viewBox="0 0 24 24" fill="#3DDC84"><path d="M17.6 9.48l1.84-3.18c.16-.31.04-.69-.26-.85-.29-.15-.65-.06-.83.22l-1.88 3.24A9.84 9.84 0 0012 8c-1.64 0-3.18.4-4.47 1.11L5.65 5.87c-.19-.28-.54-.37-.83-.22-.3.16-.42.54-.26.85L6.4 9.48A8.87 8.87 0 003 16.2h18a8.87 8.87 0 00-3.4-6.72zm-8.1 4.22a1 1 0 110-2 1 1 0 010 2zm5 0a1 1 0 110-2 1 1 0 010 2z"/></svg>
+                    Android
+                </div>
             </div>
         </div>
     </section>

@@ -545,9 +545,34 @@ def _index_lookup(conn, kind, local_id):
 # Commands
 # --------------------------------------------------------------------------
 
+# Salience Layer 2 (structural gate). CONSERVATIVE + CONTENT-NEUTRAL: it rejects clear
+# non-knowledge FORMS (trivially short, bare questions, short greetings) and passes
+# everything else — explicit writes are intentional. It is NOT a learned/importance
+# classifier (that would reintroduce a capturable authority); the rich judgment of "is
+# this a decision/outcome/correction worth keeping" stays with the AGENT (its rubric).
+# Opt-in via `remember --gate`; the shared core hosts it so every agent gates identically.
+_GREETINGS = ("hi ", "hi,", "hi!", "hello", "hey ", "thanks", "thank you",
+              "greetings", "good morning", "good afternoon", "good evening", "yo ")
+
+
+def _is_salient(content):
+    c = (content or "").strip()
+    if len(c) < 15:                                   # trivially short → noise
+        return False
+    if c.endswith("?") and "." not in c:              # a bare question is not a fact
+        return False
+    cl = c.lower()
+    if len(c) < 60 and any(cl.startswith(g) for g in _GREETINGS):  # short pleasantry
+        return False
+    return True
+
+
 def remember(args):
     """Store a fact. Confidence is DERIVED from the number of distinct sources that
     asserted identical content (not from repetition) — see _recompute_confidence."""
+    if getattr(args, "gate", False) and not _is_salient(args.content):
+        print(f"Skipped (low salience): {args.content[:60]}")
+        return
     payload = {
         "content": args.content,
         "tags": args.tags.split(",") if args.tags else [],
@@ -890,6 +915,8 @@ def main():
     remember_parser.add_argument("--tags", help="Comma-separated tags")
     remember_parser.add_argument("--importance", type=float, default=0.5)
     remember_parser.add_argument("--source", help="Source agent")
+    remember_parser.add_argument("--gate", action="store_true",
+                                 help="Apply the content-neutral salience gate; skip low-salience writes")
 
     search_parser = subparsers.add_parser("search", help="Search facts")
     search_parser.add_argument("query", help="Search query")

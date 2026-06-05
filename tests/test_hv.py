@@ -162,6 +162,25 @@ def test_retract_is_pure_projection_across_rebuild(hive):
     assert abs(before - after) < 1e-9 and abs(before - (-0.45)) < 1e-6
 
 
+def test_salience_gate_passes_substantive(hive):
+    r = hive.run("remember", "The gregorius deploy succeeded at commit abc123.", "--gate", "--source", "alice")
+    assert "Remembered" in r.stdout
+    assert hive.query("SELECT count(*) c FROM facts WHERE content LIKE 'The gregorius%'")[0]["c"] == 1
+
+
+def test_salience_gate_rejects_noise(hive):
+    for junk in ("hi there", "ok", "What now?"):
+        assert "Skipped" in hive.run("remember", junk, "--gate", "--source", "alice").stdout
+    assert hive.query(
+        "SELECT count(*) c FROM facts WHERE content IN ('hi there','ok','What now?')"
+    )[0]["c"] == 0
+
+
+def test_no_gate_writes_anything(hive):
+    hive.run("remember", "ok", "--source", "alice")     # no --gate → written verbatim
+    assert hive.query("SELECT count(*) c FROM facts WHERE content='ok'")[0]["c"] == 1
+
+
 def test_decide_supersede(hive):
     hive.run("decide", "old decision")
     hive.run("decide", "new decision", "--supersedes", "1")

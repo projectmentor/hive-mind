@@ -40,6 +40,9 @@ confidence is derived, not declared.
 confidence rises from *independent* corroboration, not from you repeating it. **Never write back
 something you just read from the hive this session** (that's an echo, not evidence).
 
+You are the salience judge — apply the rubric above. As a mechanical floor you may add `--gate` to
+`remember` (skips trivially short / bare-question / greeting writes); it never overrides your judgment.
+
 ## When to READ
 Search the hive — `hv search "<terms>"` — when:
 - you start work on a project/person/system (search its name),

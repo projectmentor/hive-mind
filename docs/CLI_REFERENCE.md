@@ -66,8 +66,8 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
 | `content` | The text of the fact you want to store. Put it in quotes. Required. |
 | `--tags` | Comma-separated labels to help you find it later, e.g. `--tags infrastructure,todo`. No spaces. |
 | `--source` | Who or what is asserting this fact. Used by the confidence model to detect independent corroboration. Defaults to `manual` if not set. See Source Identity below. |
-| `--importance` | A numeric hint (e.g. `0.8`). Stored as telemetry but not currently used in ranking. |
-| `--gate` | Run the salience gate before writing. Facts that don't pass the structural check are silently dropped. Useful for high-volume agent writes where you want to filter noise. |
+| `--importance` | A numeric hint indicating how significant this fact is. Stored as **telemetry** (metadata logged for future analysis) but not currently used in search ranking or confidence scoring. |
+| `--gate` | Run the **salience gate** before writing. The salience gate is a structural filter that checks whether the fact meets a minimum bar of usefulness — things like minimum length, presence of meaningful content, not being a duplicate of noise. Facts that don't pass are silently dropped. Useful for high-volume agent writes where you want to filter out low-quality entries automatically. |
 
 **What you get back:**
 
@@ -76,14 +76,13 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
 
 **How confidence works:**
 
-A brand-new fact from one source starts at **0.45**. If a second completely
-independent source (different node, different agent, different app) stores the
-exact same content, confidence rises to **0.675**. A third pushes it to **0.79**.
-The ceiling is **0.90**. Writing the same fact from the same source repeatedly
-doesn't move confidence — it's idempotent.
-
-The formula is: `confidence(n) = 0.90 × (1 − 0.5ⁿ)` where n = number of
-distinct sources.
+A new fact starts with low confidence — it's one source making one claim. When
+a second completely independent source (different node, different agent, different
+app) stores the exact same content, confidence rises. A third independent source
+pushes it higher still. Each additional independent voice adds weight, but with
+diminishing returns — there's a ceiling, and you can't just repeat the same fact
+from the same source to inflate it. Self-repetition is idempotent: same source,
+same content, confidence doesn't move.
 
 **Examples:**
 ```bash

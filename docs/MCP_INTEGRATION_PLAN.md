@@ -1,6 +1,10 @@
 # Hive Mind MCP server — Claude AI on-ramp (local stdio, both nodes)
 
-> **Status: approved design, build PAUSED.** Re-saved from the planning session so it survives.
+> **Status: BUILT — pending Claude Desktop verification.** Server + installer live under
+> `integrations/mcp/` (branch `feat/mcp-server`). All WSL-side checks pass (stdio handshake,
+> login-shell bridge command, installer dep-warm/smoke/Windows-user-detect/config-merge).
+> Remaining: the outer `wsl.exe` hop from Claude Desktop on Windows — restart Desktop, confirm
+> `hive-memory` under Settings → Developer, run `hive_stats`.
 > Companion to the CC integration (`integrations/claude-code/`, shipped) and `hermes_plugin`.
 
 ## Context / goal

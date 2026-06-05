@@ -1,13 +1,8 @@
 # HiveMind CLI Reference
 
-`hv` is the HiveMind command-line tool. It's how you (and AI agents) read and
-write the shared knowledge corpus — storing facts, recording decisions, searching
-memory, and syncing with peer nodes.
-
-Everything `hv` writes goes to the local **journal** first (a plain JSONL file),
-and the **SQLite store** is rebuilt from it. This means the journal is the real
-database — SQLite is just a fast index. You can always recover by running
-`hv rebuild`.
+`hv` is your command-line interface to HiveMind — a shared memory system for
+you and your AI agents. Use it to store knowledge, search it, record decisions,
+and keep all your nodes in sync.
 
 ---
 
@@ -18,12 +13,12 @@ database — SQLite is just a fast index. You can always recover by running
 | `hv remember` | Store a fact |
 | `hv search` | Search stored facts |
 | `hv decide` | Record a decision |
-| `hv retract` | Walk back a fact you got wrong |
+| `hv retract` | Correct a fact you got wrong |
 | `hv entity` | Track named things (people, projects, concepts) |
-| `hv stats` | See corpus health at a glance |
-| `hv rebuild` | Rebuild the database from the journal |
-| `hv merkle` | Check sync state between nodes |
-| `hv sync` | Sync facts with peer nodes |
+| `hv stats` | See a summary of your corpus |
+| `hv rebuild` | Fix the local database if something looks wrong |
+| `hv merkle` | Diagnose sync state between nodes |
+| `hv sync` | Sync with peer nodes |
 
 ---
 
@@ -34,15 +29,6 @@ cd ~/projects/hive-mind
 ./hv <command> [options]
 ```
 
-`hv` figures out where your data lives using the `HIVE_HOME` environment
-variable. If you don't set it, it defaults to the folder containing `hv` itself
-— so running it from `~/projects/hive-mind` just works.
-
-Your **node identity** is your hostname (`socket.gethostname()`). On a fresh
-machine this is set automatically. If you ever need to run two hive instances
-on the same machine with separate identities, set `HIVE_NODE_ID` to tell them
-apart.
-
 ---
 
 ## Commands
@@ -51,9 +37,9 @@ apart.
 
 ### `hv remember` — Store a fact
 
-Use this to save anything worth keeping: observations, decisions, constraints,
-gotchas, status updates. Facts are searchable, tagged, and given a confidence
-score that rises when multiple independent sources agree on the same content.
+Save anything worth keeping: observations, constraints, gotchas, status updates.
+Facts are searchable, tagged, and automatically gain credibility when multiple
+independent sources agree on the same thing.
 
 ```
 hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
@@ -63,49 +49,42 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
 
 | Argument | What it does |
 |---|---|
-| `content` | The text of the fact you want to store. Put it in quotes. Required. |
+| `content` | The text of the fact. Put it in quotes. Required. |
 | `--tags` | Comma-separated labels to help you find it later, e.g. `--tags infrastructure,todo`. No spaces. |
-| `--source` | Who or what is asserting this fact. Used by the confidence model to detect independent corroboration. Defaults to `manual` if not set. See Source Identity below. |
-| `--importance` | A numeric hint indicating how significant this fact is. Stored as **telemetry** (metadata logged for future analysis) but not currently used in search ranking or confidence scoring. |
-| `--gate` | Run the **salience gate** before writing. The salience gate is a structural filter that checks whether the fact meets a minimum bar of usefulness — things like minimum length, presence of meaningful content, not being a duplicate of noise. Facts that don't pass are silently dropped. Useful for high-volume agent writes where you want to filter out low-quality entries automatically. |
+| `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
+| `--importance` | A numeric hint for how significant this fact is. Recorded for future use but not currently applied to search ranking. |
+| `--gate` | Filter this write through the **salience gate** — a quality check that silently drops low-value entries (too short, no meaningful content, likely noise). Useful when an agent is writing many facts at once and you want to keep the corpus clean. |
 
 **What you get back:**
 
-- `Remembered as fact #N (confidence C, K identity)` — written successfully
-- `Already known (fact #N, confidence C)` — exact same content already exists; no duplicate created
+- `Remembered as fact #N` — stored successfully
+- `Already known (fact #N)` — identical content already exists; nothing written
 
 **How confidence works:**
 
 A new fact starts with low confidence — it's one source making one claim. When
-a second completely independent source (different node, different agent, different
-app) stores the exact same content, confidence rises. A third independent source
-pushes it higher still. Each additional independent voice adds weight, but with
-diminishing returns — there's a ceiling, and you can't just repeat the same fact
-from the same source to inflate it. Self-repetition is idempotent: same source,
-same content, confidence doesn't move.
+a second completely independent source stores the exact same content, confidence
+rises. Each additional independent voice adds more weight, but with diminishing
+returns. You can't inflate confidence by repeating the same fact from the same
+source — self-repetition does nothing.
 
 **Examples:**
 ```bash
-# Simple fact with tags
+# Store a simple fact
 ./hv remember "Tailscale SSH replaces Win OpenSSH on both nodes" \
     --tags infrastructure,architecture
 
-# Agent write with source identity
-./hv remember "EntitlementService is the single source of truth for plan resolution" \
+# Store a fact from an AI agent
+./hv remember "Payments must go through the billing service — no direct DB writes" \
     --tags architecture,constraint --source "claude-code"
-
-# Hermes agent write (structured source identity)
-./hv remember "Sync daemon binds 0.0.0.0:9876, no portproxy needed" \
-    --tags infrastructure,confirmed \
-    --source "hermes:primary/claude-sonnet/abc12345"
 ```
 
 ---
 
 ### `hv search` — Search stored facts
 
-Full-text search across everything in the corpus. Returns facts ranked by
-confidence (highest first). Supports the same boolean syntax as SQLite FTS5.
+Find facts by keyword. Results are ranked by confidence — the most corroborated
+facts come first.
 
 ```
 hv search <query> [--format {text,json}] [--min-confidence N] [--limit N]
@@ -115,37 +94,33 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--limit N]
 
 | Argument | What it does |
 |---|---|
-| `query` | What to search for. Multiple words default to AND (all must match). Use `OR` explicitly for either/or. Use `"quoted phrases"` for exact matches. |
-| `--format` | How to display results. `text` (default) is human-readable. `json` gives you machine-readable output for piping to other tools. |
-| `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Useful for filtering out low-confidence noise. Default: 0.0 (show everything). |
+| `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. |
+| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. |
+| `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. |
 | `--limit` | Maximum number of results to return. |
-
-**JSON output fields per fact:** `id`, `content`, `tags`, `confidence`,
-`source_agent`, `created_at`
 
 **Examples:**
 ```bash
 # Find anything about tailscale
 ./hv search "tailscale"
 
-# Find facts about sync that are well-corroborated
-./hv search "sync daemon" --min-confidence 0.5
+# Only show well-corroborated facts
+./hv search "billing" --min-confidence 0.6
 
-# Pipe to jq for scripting
-./hv search "portproxy" --format json | python3 -m json.tool
-
-# Exact phrase
+# Exact phrase search
 ./hv search '"address already in use"'
+
+# Machine-readable output
+./hv search "sync" --format json
 ```
 
 ---
 
 ### `hv decide` — Record a decision
 
-Decisions are different from facts — they represent a choice made, with a
-rationale. They show up in `hv stats` and can be linked to each other in a
-supersession chain so you have a clear history of "we used to do X, then we
-decided to do Y instead."
+Decisions are for choices you've made — not just facts, but the *why* behind
+them. You can link a new decision to an older one it replaces, so you always
+have a clear trail of what changed and why.
 
 ```
 hv decide <content> [--rationale TEXT] [--supersedes ID]
@@ -157,30 +132,28 @@ hv decide <content> [--rationale TEXT] [--supersedes ID]
 |---|---|
 | `content` | The decision, stated clearly. Required. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
-| `--supersedes` | The ID of a previous decision this replaces. Creates a linked chain in the journal so the history survives sync across nodes. |
+| `--supersedes` | The ID of a previous decision this replaces. The old decision stays on record; this one is linked to it. |
 
 **Examples:**
 ```bash
-# New decision
-./hv decide "Use Tailscale SSH instead of Win OpenSSH for inter-node access" \
-    --rationale "Win OpenSSH requires portproxy, authorized_keys setup, and breaks on reboot. Tailscale SSH is zero-config and auth is handled by the tailnet."
+# Record a new decision
+./hv decide "Use Tailscale SSH for inter-node access" \
+    --rationale "Zero-config, auth handled by the tailnet, nothing to maintain"
 
-# Decision that replaces a previous one
-./hv decide "Install Tailscale inside WSL — each WSL gets its own 100.x IP" \
-    --rationale "WSL Tailscale appears as its own tailnet machine, no portproxy needed" \
+# Replace an old decision
+./hv decide "Install Tailscale inside WSL — each node gets its own IP" \
+    --rationale "Cleaner than portproxy, WSL appears as its own tailnet machine" \
     --supersedes 5
 ```
 
 ---
 
-### `hv retract` — Walk back a fact
+### `hv retract` — Correct a fact you got wrong
 
-When you find out a stored fact was wrong, use `retract` to record that. It
-doesn't delete anything — the journal is append-only — but it appends a
-retraction event that the confidence model uses to lower or floor the fact's
-confidence, and excludes it from normal search results.
-
-Think of it as "I was wrong about this" rather than "this never existed."
+When a stored fact turns out to be wrong, use `retract` to say so. The fact
+isn't deleted — HiveMind keeps a record of everything — but it's marked as
+retracted and won't show up in normal search results. Think of it as
+"this was wrong" rather than "this never happened."
 
 ```
 hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
@@ -190,17 +163,17 @@ hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
 
 | Argument | What it does |
 |---|---|
-| `fact_id` | The numeric ID of the fact to retract. Get it from `hv search` output. Required. |
-| `--reason` | Why you're retracting it. Stored in the journal for future reference. |
+| `fact_id` | The ID of the fact to retract. Get it from `hv search` output. Required. |
+| `--reason` | Why you're retracting it. Saved for reference. |
 | `--source` | Who is doing the retracting. Defaults to `manual`. |
-| `--owner` | Flag this as a governance/owner retraction — carries higher authority and drives the confidence to the floor immediately. Use for facts that are definitively wrong, not just questionable. |
+| `--owner` | Mark this as an authoritative retraction. Use when the fact is definitively wrong, not just uncertain. Immediately drives confidence to the floor. |
 
 **Examples:**
 ```bash
-# Retract a test fact
+# Retract a fact that was a test
 ./hv retract 4 --reason "Was a test probe, not a real observation"
 
-# Owner retraction — authoritative, floors confidence immediately
+# Authoritatively retract something that's definitively wrong
 ./hv retract 12 --reason "Portproxy is no longer used — architecture changed" --owner
 ```
 
@@ -208,9 +181,9 @@ hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
 
 ### `hv entity` — Track named things
 
-Entities let you create named anchors (a person, a project, a concept) and link
-facts to them. Useful when you want to ask "what do we know about X?" without
-relying on text search alone.
+Entities are named anchors — a person, a project, a concept — that you can
+attach facts to. Instead of hunting through search results, you can ask
+"what do we know about X?" and get everything linked to it in one place.
 
 ```
 hv entity {add,list,show,link} [options]
@@ -220,21 +193,21 @@ hv entity {add,list,show,link} [options]
 
 | Sub-command | What it does |
 |---|---|
-| `add` | Create a new entity. Needs `--name` (required), `--type` (e.g. `person`, `project`, `concept`), and optionally `--attr` (a JSON object of extra metadata). |
-| `list` | Show all entities in the corpus. |
-| `show` | Show a specific entity and all facts linked to it. Needs `--name`. |
-| `link` | Connect a fact to an entity. Needs `--name`, `--fact-id`, and optionally `--confidence` (how strongly this fact relates to the entity). |
+| `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
+| `list` | List all entities. |
+| `show` | Show an entity and all facts linked to it. Needs `--name`. |
+| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id`. Optionally set `--confidence` to indicate how strongly the fact relates. |
 
 **Examples:**
 ```bash
-# Create an entity for a key service
+# Create an entity
 ./hv entity add --name "HiveMind" --type project \
     --attr '{"repo":"projectmentor/hive-mind","status":"active"}'
 
 # Link a fact to it
-./hv entity link --name "HiveMind" --fact-id 42 --confidence 0.9
+./hv entity link --name "HiveMind" --fact-id 42
 
-# See everything we know about it
+# See everything linked to it
 ./hv entity show --name "HiveMind"
 
 # List all entities
@@ -243,75 +216,57 @@ hv entity {add,list,show,link} [options]
 
 ---
 
-### `hv stats` — Corpus health at a glance
+### `hv stats` — Corpus summary
 
-Shows a summary of everything in the corpus on this node.
+Shows a snapshot of everything in your local corpus: how many facts, decisions,
+and entities you have, where the entries came from, and which tags are most used.
 
 ```
 hv stats
 ```
 
-**Output includes:**
-- Node ID and data directory
-- Total facts and average confidence
-- Number of active decisions
-- Number of entities and their fact-link counts
-- Total journal entries broken down by which node wrote them
-- Top tag groups by frequency
-
-Run this after a sync to confirm entries came across, or just to get oriented
-at the start of a session.
+Run this at the start of a session to get oriented, or after a sync to confirm
+entries came across from a peer.
 
 ---
 
-### `hv rebuild` — Rebuild the database from the journal
+### `hv rebuild` — Fix the local database
 
-Throws away `store.db` and rebuilds it from scratch using the journal files.
-Safe to run any time. Use it after:
+If your local database looks wrong or out of date, `rebuild` resets it from
+scratch. It's safe to run any time — your data won't be lost.
 
-- Pulling journal entries from a peer (sync does this automatically)
-- A crash or unexpected exit
-- A schema migration
-- Anything that makes you wonder if SQLite is out of sync with the journal
-
-Also recomputes all confidence scores from scratch, so facts that gained new
-corroborating sources since the last write will reflect updated confidence.
+Also useful after pulling in entries from a peer node, or if HiveMind exited
+unexpectedly.
 
 ```
 hv rebuild
 ```
 
-No arguments. Just run it.
-
 ---
 
-### `hv merkle` — Check sync state
+### `hv merkle` — Diagnose sync problems
 
-Shows the Merkle tree hash of your journal. Used to diagnose sync problems.
+Shows a fingerprint of your current data. If two nodes show the same
+fingerprint, they're in sync. If they differ, `hv sync now` will sort it out.
+
+You don't normally need to run this — `hv sync` handles it automatically. It's
+here for when you're troubleshooting and want to see exactly where two nodes
+diverge.
 
 ```
 hv merkle
 ```
 
-**Output:** global root hash + per-node chunk hashes (each chunk = 100 journal
-entries).
-
-If two nodes show the **same root hash**, their journals are identical. If the
-root hashes differ, `hv sync now` will figure out which chunks differ and pull
-only the missing entries.
-
-You don't need to run this manually in normal use — `hv sync now` calls it
-internally. It's here for debugging when sync isn't behaving.
-
 ---
 
 ### `hv sync` — Sync with peer nodes
 
-Pulls new journal entries from peers and pushes yours. Uses the Merkle tree to
-figure out exactly which entries are missing on each side — only the delta is
-transferred, not the whole corpus.
+Keeps your node up to date with peers — pulling in any facts they have that you
+don't, and pushing yours to them. Only the differences are transferred, not
+everything.
 
-Peer addresses are configured in `.peers.json` in your `HIVE_HOME` directory.
+Peers are configured in `.peers.json` in your hive-mind directory. The installer
+sets this up for you.
 
 ```
 hv sync now
@@ -322,8 +277,8 @@ hv sync daemon [--interval SECONDS]
 
 | Sub-command | What it does |
 |---|---|
-| `now` | Do one sync round with all configured peers right now, then exit. Prints status per peer. |
-| `daemon` | Start the sync server on `:9876` AND run a `sync now` automatically every N seconds (default: 300 = 5 minutes). Runs forever. The systemd service uses this. |
+| `now` | Sync with all peers right now and exit. Good for a manual check. |
+| `daemon` | Run continuously — sync automatically every N seconds (default: every 5 minutes). This is what the background service runs. |
 
 **`.peers.json` format:**
 ```json
@@ -339,26 +294,21 @@ hv sync daemon [--interval SECONDS]
 }
 ```
 
-- `bind` — which interface the daemon listens on. `0.0.0.0` means all interfaces.
-- `port` — which port. Default 9876.
-- `peers[].url` — the sync daemon URL of a peer node. Use the WSL Tailscale IP (get it with `tailscale ip` on the peer).
-- `peers[].node_id` — a human label for logs. Optional but helpful.
+- `peers[].url` — your peer's address. Use the WSL Tailscale IP (run `tailscale ip` on the peer to get it).
+- `peers[].node_id` — a label for logs. Optional but helpful.
+- `bind` and `port` — what address and port to listen on. Defaults are fine for most setups.
 
-`.peers.json` is gitignored — it contains your Tailscale IPs and is per-machine.
-Copy from `.peers.json.example` when setting up a new node.
+This file is not synced to git — it's specific to each machine.
 
 **Examples:**
 ```bash
-# One-shot sync (check if peers are up, pull any new entries)
+# Manual sync
 ./hv sync now
 
-# Run the daemon manually (normally managed by systemd)
-./hv sync daemon
-
-# Check daemon status
+# Check background service status
 systemctl --user status hive-sync
 
-# Watch daemon logs live
+# Watch sync logs live
 journalctl --user -u hive-sync -f
 ```
 
@@ -368,42 +318,39 @@ journalctl --user -u hive-sync -f
 
 | Variable | Default | Description |
 |---|---|---|
-| `HIVE_HOME` | Directory containing `hv` | Where to find `journal/` and `store.db`. Override to point `hv` at a different data directory. |
-| `HIVE_NODE_ID` | `socket.gethostname()` | Override your node identity. Only needed if you're running two hive instances on the same machine that need distinct identities. |
-| `HIVE_NOW` | System clock | Pin the clock to a fixed time. ISO8601 or Unix timestamp. Used in tests for deterministic confidence decay. Not needed in normal use. |
+| `HIVE_HOME` | The folder containing `hv` | Where your data lives. Override to point `hv` at a different location. |
+| `HIVE_NODE_ID` | Your machine's hostname | Your node's identity on the network. Only set this if you need to run two separate hive instances on the same machine. |
+| `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
 
 ---
 
-## Source identity convention
+## Source identity
 
-The `--source` argument tells the confidence model *who* is asserting a fact.
-The model counts **distinct sources** — not word count, not repetition — to
-determine how trustworthy a fact is. A fact that three independent agents all
-independently assert is much more reliable than one agent saying the same thing
-three times.
+When an AI agent calls `hv remember`, it passes a `--source` string that
+identifies who made the claim. HiveMind uses this to detect when multiple
+independent agents agree on the same fact — which raises that fact's confidence.
 
-**Format:**
+The format is:
+
 ```
 <app>:<context_class>/<instance>/<session8>
 ```
 
 | Field | What it is | Examples |
 |---|---|---|
-| `app` | The tool or agent writing the fact | `hermes`, `claude-code`, `manual` |
-| `context_class` | The authority level of this write | `primary` (full agent), `subagent` (delegated), `cron` (scheduled) |
-| `instance` | The specific agent profile or instance name | `claude-sonnet`, `default`, `opus` |
-| `session8` | First 8 chars of the session ID | `abc12345` — used to tell sessions apart in logs, NOT counted as a separate source |
+| `app` | The tool making the write | `hermes`, `claude-code`, `manual` |
+| `context_class` | The type of agent session | `primary` (main agent), `subagent` (delegated task), `cron` (scheduled job) |
+| `instance` | The specific agent profile | `claude-sonnet`, `default` |
+| `session8` | First 8 chars of the session ID | Tells sessions apart in logs — not counted as a separate source |
 
-**Important:** the confidence model counts distinct `(node_id, app, instance)`
-tuples — not full source strings. The same Hermes agent across two sessions is
-still one corroborating identity. Don't change this format without updating
-`_recompute_confidence` in `hv`.
+The same agent writing the same fact across multiple sessions still counts as
+one source. Two different agents independently writing the same fact counts as
+two.
 
 **Examples:**
 ```
-hermes:primary/claude-sonnet/abc12345    # Hermes on EGMBL5A, primary session
-hermes:subagent/claude-haiku/xyz99999    # Hermes spawning a subagent
-hermes:cron/default/cron0001             # Hermes scheduled job
-claude-code                              # Claude Code (flat format, still valid)
+hermes:primary/claude-sonnet/abc12345    # Hermes, main session
+hermes:subagent/claude-haiku/xyz99999    # Hermes running a subagent
+claude-code                              # Claude Code
 manual                                   # You, typing directly
 ```

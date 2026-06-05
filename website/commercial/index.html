@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HiveMind by ProjectMentor | Shared Memory for AI Agents</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg: #ffffff;
+            --surface: #f8fafc;
+            --heading: #061b31;
+            --body: #64748b;
+            --label: #273951;
+            --accent: #d97706;
+            --accent-hover: #b45309;
+            --accent-light: #fef3c7;
+            --border: #e2e8f0;
+            --shadow: rgba(50,50,93,0.12) 0px 20px 40px -15px, rgba(0,0,0,0.08) 0px 10px 20px -10px;
+            --radius-sm: 4px;
+            --radius-md: 6px;
+            --radius-lg: 8px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg);
+            color: var(--body);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+
+        /* Navigation */
+        header {
+            background-color: var(--bg);
+            border-bottom: 1px solid var(--border);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+            background-color: rgba(255, 255, 255, 0.95);
+        }
+
+        nav {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .logo-text {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--heading);
+        }
+
+        .logo-subtitle {
+            font-size: 0.65rem;
+            color: var(--body);
+            font-weight: 400;
+        }
+
+        .nav-right {
+            display: flex;
+            align-items: center;
+            gap: 2rem;
+        }
+
+        .nav-link {
+            color: var(--body);
+            text-decoration: none;
+            font-weight: 500;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        .nav-link:hover {
+            color: var(--heading);
+        }
+
+        .btn {
+            padding: 0.5rem 1.25rem;
+            border-radius: var(--radius-sm);
+            font-weight: 500;
+            font-size: 0.95rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn-primary {
+            background-color: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-hover);
+            box-shadow: var(--shadow);
+        }
+
+        .btn-ghost {
+            background-color: transparent;
+            color: var(--heading);
+            border: 1px solid var(--border);
+        }
+
+        .btn-ghost:hover {
+            background-color: var(--surface);
+            border-color: var(--body);
+        }
+
+        /* Hero Section */
+        .hero {
+            padding: 5rem 2rem;
+            max-width: 900px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 3rem;
+            color: var(--heading);
+            margin-bottom: 1rem;
+            font-weight: 600;
+            line-height: 1.2;
+        }
+
+        .hero-subhead {
+            font-size: 1.25rem;
+            color: var(--body);
+            margin-bottom: 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+            line-height: 1.6;
+        }
+
+        .hero-cta {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* Problem Section */
+        .section {
+            padding: 5rem 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .section-title {
+            font-size: 2rem;
+            color: var(--heading);
+            text-align: center;
+            margin-bottom: 3rem;
+            font-weight: 600;
+        }
+
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+        }
+
+        .card {
+            background-color: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 2rem;
+            transition: box-shadow 0.2s;
+        }
+
+        .card:hover {
+            box-shadow: var(--shadow);
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            color: var(--heading);
+            margin-bottom: 0.75rem;
+            font-weight: 600;
+        }
+
+        .card-text {
+            color: var(--body);
+            line-height: 1.6;
+            font-size: 0.95rem;
+        }
+
+        /* Solution Section */
+        .solution-section {
+            background-color: var(--surface);
+        }
+
+        /* How It Works */
+        .steps-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        .step {
+            text-align: center;
+        }
+
+        .step-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 3rem;
+            height: 3rem;
+            background-color: var(--accent-light);
+            color: var(--accent);
+            font-weight: 600;
+            font-size: 1.25rem;
+            border-radius: var(--radius-md);
+            margin-bottom: 1rem;
+        }
+
+        .step-title {
+            font-size: 1.1rem;
+            color: var(--heading);
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        .step-text {
+            color: var(--body);
+            font-size: 0.95rem;
+            line-height: 1.6;
+        }
+
+        /* Compatibility Strip */
+        .compatibility {
+            background-color: var(--bg);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
+            padding: 3rem 2rem;
+        }
+
+        .compatibility-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .compatibility-label {
+            font-size: 0.85rem;
+            color: var(--label);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 1.5rem;
+        }
+
+        .compatibility-items {
+            display: flex;
+            justify-content: center;
+            gap: 3rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .compat-item {
+            font-weight: 500;
+            color: var(--heading);
+            font-size: 0.95rem;
+        }
+
+        /* Early Access Section */
+        .early-access {
+            padding: 4rem 2rem;
+            max-width: 600px;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        .early-access h2 {
+            font-size: 1.75rem;
+            color: var(--heading);
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        .early-access-note {
+            font-size: 0.95rem;
+            color: var(--body);
+            margin-bottom: 2rem;
+            line-height: 1.6;
+        }
+
+        .email-form {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .email-input {
+            flex: 1;
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            font-family: 'Inter', sans-serif;
+            font-size: 0.95rem;
+            color: var(--label);
+            transition: border-color 0.2s;
+        }
+
+        .email-input:focus {
+            outline: none;
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1);
+        }
+
+        .email-input::placeholder {
+            color: var(--body);
+        }
+
+        .form-note {
+            font-size: 0.8rem;
+            color: var(--body);
+            margin-top: 0.75rem;
+        }
+
+        /* Footer */
+        footer {
+            background-color: var(--surface);
+            border-top: 1px solid var(--border);
+            padding: 2rem;
+            text-align: center;
+            color: var(--body);
+            font-size: 0.9rem;
+        }
+
+        .footer-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: center;
+            gap: 2rem;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .footer-link {
+            color: var(--body);
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .footer-link:hover {
+            color: var(--heading);
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2rem;
+            }
+
+            .hero-subhead {
+                font-size: 1rem;
+            }
+
+            nav {
+                padding: 1rem 1.5rem;
+                flex-wrap: wrap;
+                gap: 1rem;
+            }
+
+            .nav-right {
+                width: 100%;
+                gap: 1rem;
+            }
+
+            .nav-link {
+                font-size: 0.9rem;
+            }
+
+            .section {
+                padding: 3rem 1.5rem;
+            }
+
+            .section-title {
+                font-size: 1.5rem;
+            }
+
+            .hero {
+                padding: 3rem 1.5rem;
+            }
+
+            .email-form {
+                flex-direction: column;
+            }
+
+            .compatibility-items {
+                gap: 1.5rem;
+            }
+
+            .footer-content {
+                gap: 1rem;
+            }
+
+            .steps-container {
+                gap: 1.5rem;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .hero h1 {
+                font-size: 1.75rem;
+            }
+
+            .hero-subhead {
+                font-size: 0.95rem;
+            }
+
+            .section-title {
+                font-size: 1.25rem;
+            }
+
+            nav {
+                gap: 0.5rem;
+            }
+
+            .nav-link,
+            .btn {
+                font-size: 0.85rem;
+            }
+
+            .btn {
+                padding: 0.5rem 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <header>
+        <nav>
+            <div class="logo">
+                <div>
+                    <div class="logo-text">HiveMind</div>
+                    <div class="logo-subtitle">by ProjectMentor</div>
+                </div>
+            </div>
+            <div class="nav-right">
+                <a href="#" class="nav-link">For Developers</a>
+                <button class="btn btn-primary">Get Early Access</button>
+            </div>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <h1>Your AI agents. One shared memory.</h1>
+        <p class="hero-subhead">
+            Stop losing context between sessions. HiveMind gives your agents a shared memory that syncs automatically—so they remember what each other learned, and stay aligned across every machine.
+        </p>
+        <div class="hero-cta">
+            <button class="btn btn-primary">Get Early Access</button>
+            <button class="btn btn-ghost">See how it works</button>
+        </div>
+    </section>
+
+    <!-- Problem Section -->
+    <section class="section">
+        <h2 class="section-title">The Problem</h2>
+        <div class="cards-grid">
+            <div class="card">
+                <div class="card-title">Context Dies Between Sessions</div>
+                <p class="card-text">
+                    Every time you start a new session or run an agent on a different machine, you're starting from scratch. Critical context is lost. You end up copy-pasting the same information over and over.
+                </p>
+            </div>
+            <div class="card">
+                <div class="card-title">Agents Contradict Each Other</div>
+                <p class="card-text">
+                    When agents can't see what others have learned, they make conflicting decisions. One agent says X works, another says it doesn't. No way to know who's right.
+                </p>
+            </div>
+            <div class="card">
+                <div class="card-title">No Audit Trail</div>
+                <p class="card-text">
+                    When something goes wrong, you can't trace where a fact came from or why an agent made a decision. No accountability. No way to recover from bad data.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Solution Section -->
+    <section class="section solution-section">
+        <h2 class="section-title">The Solution</h2>
+        <div class="cards-grid">
+            <div class="card">
+                <div class="card-title">Shared Memory That Syncs</div>
+                <p class="card-text">
+                    When one agent makes a discovery, every agent on every machine learns about it. Automatically. No manual updates. No copy-paste. One source of truth.
+                </p>
+            </div>
+            <div class="card">
+                <div class="card-title">Confidence Earned by Consensus</div>
+                <p class="card-text">
+                    Facts only become trusted when multiple agents independently confirm them. Disagreements surface as information—helping you spot errors and blind spots before they cause problems.
+                </p>
+            </div>
+            <div class="card">
+                <div class="card-title">Full Traceability</div>
+                <p class="card-text">
+                    Every fact is append-only. You see where it came from, which agent discovered it, and when. Complete audit trail. Complete accountability. Complete transparency.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- How It Works -->
+    <section class="section">
+        <h2 class="section-title">How It Works</h2>
+        <div class="steps-container">
+            <div class="step">
+                <div class="step-number">1</div>
+                <div class="step-title">Agent Makes a Discovery</div>
+                <p class="step-text">
+                    Your agent learns something new—a solution, a pattern, a fact about your data or workflow.
+                </p>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div class="step-title">HiveMind Stores It</div>
+                <p class="step-text">
+                    The fact is written to HiveMind's shared memory with full context—who found it, when, and how confident they are.
+                </p>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div class="step-title">Every Agent Knows</div>
+                <p class="step-text">
+                    All your agents on all your machines automatically sync and see the new fact. Ready to use it immediately.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- Compatibility Strip -->
+    <section class="compatibility">
+        <div class="compatibility-content">
+            <div class="compatibility-label">Works with</div>
+            <div class="compatibility-items">
+                <div class="compat-item">Claude Code</div>
+                <div class="compat-item">Hermes Agent</div>
+                <div class="compat-item">Any CLI Agent</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Early Access Section -->
+    <section class="section early-access">
+        <h2>HiveMind is in active development.</h2>
+        <p class="early-access-note">Join the early access list to get first look at shared memory for AI agents.</p>
+        <form class="email-form" onsubmit="handleSubmit(event)">
+            <input type="email" class="email-input" placeholder="you@company.com" required>
+            <button type="submit" class="btn btn-primary">Notify Me</button>
+        </form>
+        <p class="form-note">We'll only contact you about HiveMind updates. No spam, ever.</p>
+    </section>
+
+    <!-- Footer -->
+    <footer>
+        <div class="footer-content">
+            <span>© 2026 Certified Project Management, LLC. All rights reserved.</span>
+            <span>&nbsp;•&nbsp;</span>
+            <a href="#" class="footer-link">For Developers</a>
+        </div>
+    </footer>
+
+    <script>
+        function handleSubmit(event) {
+            event.preventDefault();
+            const email = event.target.querySelector('.email-input').value;
+            const button = event.target.querySelector('button');
+            const originalText = button.textContent;
+            
+            button.textContent = 'Added to list ✓';
+            button.disabled = true;
+            event.target.querySelector('.email-input').disabled = true;
+            
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.disabled = false;
+                event.target.querySelector('.email-input').disabled = false;
+                event.target.reset();
+            }, 3000);
+        }
+
+        // Smooth scroll for "See how it works" button
+        document.querySelectorAll('.btn-ghost').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const target = document.querySelector('.steps-container');
+                if (target) {
+                    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

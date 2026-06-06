@@ -1,0 +1,31 @@
+name: Bug report
+description: Something is broken. Reports are handled best-effort by a solo maintainer.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. A clear, minimal reproduction is the single most helpful thing you can include.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `hv ...`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: OS, Python version, how you installed HiveMind, node count.
+    validations:
+      required: false

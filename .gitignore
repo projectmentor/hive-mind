@@ -1,0 +1,31 @@
+# Runtime data (per-machine, not versioned)
+store.db
+journal/*.jsonl
+
+# Migration / pre-Phase-1 backups (per-machine, not versioned)
+journal.bak.*/
+store.db.bak.*
+
+# Peer registry is per-node, not versioned (use .peers.json.example as a template)
+.peers.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+.pytest_cache/
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~
+.*.swp

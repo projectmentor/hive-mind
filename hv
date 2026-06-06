@@ -1,0 +1,1044 @@
+#!/usr/bin/env python3
+"""
+hv - Hive Mind CLI
+
+Institutional memory for multiple AI agents.
+
+Architecture (see docs/P2P_DESIGN.md):
+  The journal (journal/*.jsonl) is the SOURCE OF TRUTH. Every local write goes
+  through append_journal(); foreign entries arrive via append_foreign_entries().
+  SQLite (store.db) is a DERIVED index/cache rebuilt from the journal by
+  `hv rebuild`.
+
+Cross-node identity (Phase 2):
+  Rows reference each other by JOURNAL identity (node_id, seq), not by local
+  autoincrement id — local ids are reassigned on every rebuild and differ
+  between nodes. `journal_index` maps (node_id, seq) -> (kind, local_id) so
+  entity_fact / decision-supersedes links resolve correctly on any node after
+  a merge, even when content-identical facts from two nodes collapse to one row.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import socket
+import sqlite3
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+# Make sibling modules (merkle.py) importable when run as ./hv
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import merkle  # noqa: E402
+
+HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
+DB_PATH = HIVE_HOME / "store.db"
+JOURNAL_DIR = HIVE_HOME / "journal"
+NODE_ID = os.environ.get("HIVE_NODE_ID", socket.gethostname())
+
+
+# --------------------------------------------------------------------------
+# Database
+# --------------------------------------------------------------------------
+
+def get_conn():
+    """Open a tuned SQLite connection. WAL persists on the file; the rest are
+    per-connection, so we apply them on every open."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-64000")      # 64MB page cache
+    conn.execute("PRAGMA mmap_size=268435456")    # 256MB mmap
+    conn.execute("PRAGMA foreign_keys=ON")
+    return conn
+
+
+def init_db():
+    """Initialize database schema (idempotent)."""
+    HIVE_HOME.mkdir(parents=True, exist_ok=True)
+    JOURNAL_DIR.mkdir(exist_ok=True)
+
+    conn = get_conn()
+    conn.executescript("""
+    CREATE TABLE IF NOT EXISTS facts (
+        id INTEGER PRIMARY KEY,
+        content TEXT NOT NULL,
+        tags TEXT,
+        importance REAL DEFAULT 0.5,
+        source_agent TEXT NOT NULL,
+        source_session TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        trust_score REAL DEFAULT 1.0,
+        last_accessed TIMESTAMP,
+        access_count INTEGER DEFAULT 0,
+        confidence REAL DEFAULT 0.0
+    );
+
+    CREATE TABLE IF NOT EXISTS decisions (
+        id INTEGER PRIMARY KEY,
+        content TEXT NOT NULL,
+        rationale TEXT,
+        superseded_by INTEGER REFERENCES decisions(id),
+        source_agent TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_facts_tags ON facts(tags);
+    CREATE INDEX IF NOT EXISTS idx_facts_source ON facts(source_agent, created_at);
+    CREATE INDEX IF NOT EXISTS idx_decisions_active ON decisions(id) WHERE superseded_by IS NULL;
+
+    CREATE TABLE IF NOT EXISTS entities (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        type TEXT, -- person, project, concept
+        attributes TEXT, -- JSON
+        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_updated TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_facts (
+        entity_id INTEGER REFERENCES entities(id),
+        fact_id INTEGER REFERENCES facts(id),
+        confidence REAL DEFAULT 1.0,
+        PRIMARY KEY (entity_id, fact_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+    CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+
+    -- Maps a journal entry's identity to the row it produced. Lets cross-row
+    -- links (entity_fact, decision supersedes) reference (node_id, seq) and
+    -- resolve to whatever local id THIS node assigned on its last rebuild.
+    CREATE TABLE IF NOT EXISTS journal_index (
+        node_id  TEXT NOT NULL,
+        seq      INTEGER NOT NULL,
+        kind     TEXT NOT NULL,        -- fact | decision | entity
+        local_id INTEGER NOT NULL,
+        PRIMARY KEY (node_id, seq)
+    );
+    CREATE INDEX IF NOT EXISTS idx_jidx_local ON journal_index(kind, local_id);
+    """)
+    conn.commit()
+
+    # Migration: add derived columns to pre-existing facts tables
+    # (CREATE TABLE IF NOT EXISTS won't alter an existing table).
+    fcols = {r[1] for r in conn.execute("PRAGMA table_info(facts)")}
+    if "confidence" not in fcols:
+        conn.execute("ALTER TABLE facts ADD COLUMN confidence REAL DEFAULT 0.0")
+    if "contested" not in fcols:               # Phase C: genuine disagreement (support AND dispute)
+        conn.execute("ALTER TABLE facts ADD COLUMN contested INTEGER DEFAULT 0")
+    if "last_evidence_at" not in fcols:        # Phase C: most-recent evidence ts (drives decay)
+        conn.execute("ALTER TABLE facts ADD COLUMN last_evidence_at TIMESTAMP")
+    conn.commit()
+    # Index created here (not in the schema script above) so it works on both
+    # fresh and migrated DBs — the column is guaranteed to exist by this point.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_facts_confidence ON facts(confidence)")
+    conn.commit()
+
+    _init_fts(conn)
+
+    conn.commit()
+    conn.close()
+
+
+def _init_fts(conn):
+    """Create the FTS5 full-text index over facts (external-content) plus the
+    triggers that keep it in sync. Falls back silently if FTS5 is unavailable
+    (search() then uses LIKE)."""
+    try:
+        # Note: for an external-content FTS5 table, `SELECT count(*) FROM
+        # facts_fts` reflects the CONTENT table's row count, not the indexed
+        # token count — so it can't tell us whether the index is populated.
+        # Instead we backfill exactly once, when the table is first created.
+        existed = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_fts'"
+        ).fetchone()
+        conn.executescript("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+            content, tags, content='facts', content_rowid='id'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+            INSERT INTO facts_fts(rowid, content, tags)
+            VALUES (new.id, new.content, new.tags);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+            INSERT INTO facts_fts(facts_fts, rowid, content, tags)
+            VALUES ('delete', old.id, old.content, old.tags);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+            INSERT INTO facts_fts(facts_fts, rowid, content, tags)
+            VALUES ('delete', old.id, old.content, old.tags);
+            INSERT INTO facts_fts(rowid, content, tags)
+            VALUES (new.id, new.content, new.tags);
+        END;
+        """)
+        if not existed:
+            # Freshly created: backfill the index from existing facts rows
+            # (first upgrade, or after a rebuild dropped+recreated it).
+            conn.execute(
+                "INSERT INTO facts_fts(rowid, content, tags) SELECT id, content, tags FROM facts"
+            )
+    except sqlite3.OperationalError:
+        pass  # FTS5 not compiled in — search() falls back to LIKE
+
+
+# --------------------------------------------------------------------------
+# Journal — the append-only source of truth (G-Set CRDT)
+# --------------------------------------------------------------------------
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+
+
+def _canonical(obj):
+    """Stable bytes for hashing — must match merkle._canonical."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+
+
+def compute_hash(entry):
+    return "sha256:" + hashlib.sha256(_canonical(entry)).hexdigest()
+
+
+def _next_seq_and_prev(node_id):
+    """Next per-node monotonic seq and the hash of this node's latest entry.
+    Derived from the journal itself (stateless, correct after a fresh start)."""
+    mine = [e for e in merkle.read_all_entries(JOURNAL_DIR) if e.get("node_id") == node_id]
+    if not mine:
+        return 1, "sha256:genesis"
+    last = max(mine, key=lambda e: e["seq"])
+    return last["seq"] + 1, compute_hash(last)
+
+
+def _journal_path_for(timestamp):
+    return JOURNAL_DIR / f"{timestamp[:10]}.jsonl"
+
+
+def append_journal(entry_type, payload, timestamp=None):
+    """Mint and append a LOCAL journal entry. This is the core append API —
+    every local write goes through here. Returns the full entry dict."""
+    timestamp = timestamp or _now_iso()
+    seq, prev_hash = _next_seq_and_prev(NODE_ID)
+    entry = {
+        "node_id": NODE_ID,
+        "seq": seq,
+        "type": entry_type,          # fact | decision | entity | entity_fact
+        "timestamp": timestamp,
+        "payload": payload,
+        "prev_hash": prev_hash,
+    }
+    with open(_journal_path_for(timestamp), "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    return entry
+
+
+def journal_keys():
+    """Set of (node_id, seq) present in the journal — the G-Set membership."""
+    return {
+        (e["node_id"], e["seq"])
+        for e in merkle.read_all_entries(JOURNAL_DIR)
+        if e.get("node_id") is not None and e.get("seq") is not None
+    }
+
+
+def append_foreign_entries(entries):
+    """Append FOREIGN journal entries verbatim (preserving node_id/seq) with
+    G-Set dedup by (node_id, seq). Builds the dedup index once. Does NOT persist
+    to SQLite — the caller runs rebuild() once afterwards if accepted > 0.
+    Returns (accepted, duplicates)."""
+    existing = journal_keys()
+    accepted = duplicates = 0
+    for e in entries:
+        nid, seq = e.get("node_id"), e.get("seq")
+        if nid is None or seq is None:
+            continue
+        if (nid, seq) in existing:
+            duplicates += 1
+            continue
+        existing.add((nid, seq))
+        with open(_journal_path_for(e.get("timestamp", _now_iso())), "a") as f:
+            f.write(json.dumps(e) + "\n")
+        accepted += 1
+    return accepted, duplicates
+
+
+# --------------------------------------------------------------------------
+# Persistence — derive SQLite state from journal entries.
+#
+# Two phases (used by rebuild and, inline, by the live commands):
+#   pass 1: persist_* insert/upsert rows for fact|decision|entity and record
+#           (node_id, seq) -> local_id in journal_index.
+#   pass 2: resolve_* wire up cross-row links (entity_fact, decision supersedes)
+#           by mapping their (node_id, seq) references through journal_index.
+# Splitting the passes means a link can reference a row created later in the
+# journal (or on another node) without ordering/FK surprises.
+# --------------------------------------------------------------------------
+
+def _record_index(conn, entry, kind, local_id):
+    conn.execute(
+        "INSERT OR REPLACE INTO journal_index(node_id, seq, kind, local_id) VALUES (?,?,?,?)",
+        (entry.get("node_id"), entry.get("seq"), kind, local_id),
+    )
+
+
+def persist_fact(conn, entry):
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
+    cur = conn.cursor()
+    content = payload["content"]
+    cur.execute("SELECT id FROM facts WHERE content = ?", (content,))
+    row = cur.fetchone()
+    if row:
+        # Known content: this entry is CORROBORATION, not a new fact. Map its
+        # journal identity onto the existing row (so distinct sources stay
+        # countable) and bump access_count as telemetry only. Confidence is NOT
+        # mutated here — it is a pure projection recomputed by
+        # _recompute_confidence() over the set of distinct sources, so repetition
+        # can never launder confidence upward.
+        cur.execute(
+            "UPDATE facts SET access_count = access_count + 1, last_accessed = ? WHERE id = ?",
+            (ts, row["id"]),
+        )
+        _record_index(conn, entry, "fact", row["id"])
+        return {"id": row["id"], "inserted": False}
+    cur.execute("""
+        INSERT INTO facts (content, tags, importance, source_agent, source_session,
+                           created_at, trust_score, access_count, confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        content,
+        json.dumps(payload.get("tags", [])),
+        payload.get("importance", 0.5),
+        payload.get("source", "manual"),
+        payload.get("source_session"),
+        payload.get("created_at", ts),
+        payload.get("trust_score", 1.0),   # legacy column, retained but unused for ranking
+        payload.get("access_count", 0),
+        0.0,                                # confidence placeholder — set by _recompute_confidence()
+    ))
+    fid = cur.lastrowid
+    _record_index(conn, entry, "fact", fid)
+    return {"id": fid, "inserted": True}
+
+
+# --- Confidence projection (Phase A + D0 identity) ----------------------------
+# Confidence is a PURE, DETERMINISTIC projection over the immutable journal,
+# recomputed on every rebuild — never a mutable counter. It is a function of the
+# distinct INDEPENDENT IDENTITIES that asserted the exact content, with diminishing
+# returns and a hard cap below "certain". Repetition from one identity is
+# idempotent, so it cannot launder confidence upward. The G-Set journal converges
+# across nodes, so this yields identical values everywhere.
+#
+# D0: the corroborating identity is (node_id, app, instance) parsed from the source
+# string — NOT the raw source string. Structured agents (e.g. Hermes) vary their
+# source per session ("hermes:<ctx>/<agent>/<session8>"); counting the raw string
+# would treat one agent's two sessions as two corroborators. Session is excluded;
+# each identity is weighted by its context-class (primary/subagent/cron).
+# Deferred (D0-v2): same-node independence discount; principal + CAP_self.
+CONF_BASE = 0.5    # each new independent identity halves the remaining gap to CAP
+CONF_CAP = 0.90    # never "certain" without external/human verification
+SRC_CLASS_WEIGHT = {"primary": 1.0, "subagent": 0.5, "cron": 0.3}
+
+
+def _parse_source(source):
+    """Parse a source identity into (app, context_class, instance, session).
+    Structured: '<app>:<context_class>/<instance>/<session8>'.
+    Flat/legacy/CLI (e.g. 'manual', 'claude-code'): app=instance=string,
+    context_class='primary', session=None."""
+    s = source or "manual"
+    if ":" in s:
+        app, _, rest = s.partition(":")
+        parts = rest.split("/")
+        ctx = parts[0] if parts and parts[0] else "primary"
+        instance = parts[1] if len(parts) > 1 and parts[1] else (app or "manual")
+        session = parts[2] if len(parts) > 2 and parts[2] else None
+        return (app or "manual", ctx, instance, session)
+    return (s, "primary", s, None)
+
+
+def _identity_weight(node_id, source):
+    """The corroborating-identity key (node_id, app, instance) and its source-class
+    weight. Session is deliberately excluded so one agent across sessions = one identity."""
+    app, ctx, instance, _sess = _parse_source(source)
+    return (node_id, app, instance), SRC_CLASS_WEIGHT.get(ctx, 1.0)
+
+
+OWNER_APPS = {"owner"}    # governance source-class → decisive forget (FORGET_FLOOR)
+FORGET_FLOOR = -1.0       # owner-forget sits below the epistemic range [-CAP, +CAP]
+
+
+def _confidence_for(net):
+    """Signed, saturating projection of NET evidence (n_pos - n_neg, weighted floats):
+    CAP*(1 - BASE**|net|) with net's sign. +1->0.45 +2->0.675 0->0 -1->-0.45 -2->-0.675;
+    bounded [-CAP, +CAP]."""
+    if net == 0:
+        return 0.0
+    mag = round(CONF_CAP * (1 - CONF_BASE ** abs(net)), 6)
+    return mag if net > 0 else -mag
+
+
+HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence
+
+
+def _content_evidence(entries):
+    """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str}.
+    Facts add positive identity-evidence; `retract` entries add negative (peer) evidence or set
+    owner-forget (governance, decisive). last_ts = most-recent fact/retract timestamp (drives
+    decay). Pure projection over the journal."""
+    out = {}
+    seq_content = {}                       # (node_id, seq) of a fact entry -> its content
+    for e in entries:
+        if e.get("type") != "fact":
+            continue
+        p = e.get("payload", {})
+        content = p.get("content")
+        if content is None:
+            continue
+        seq_content[(e.get("node_id"), e.get("seq"))] = content
+        ev = out.setdefault(content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+        key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        if w > ev["pos"].get(key, 0.0):
+            ev["pos"][key] = w
+        ts = e.get("timestamp", "")
+        if ts > ev["last_ts"]:
+            ev["last_ts"] = ts
+    for e in entries:
+        if e.get("type") != "retract":
+            continue
+        p = e.get("payload", {})
+        ref = p.get("retracts_ref")
+        content = seq_content.get(tuple(ref)) if ref else None
+        if content is None or content not in out:
+            continue
+        ev = out[content]
+        app, ctx, instance, _sess = _parse_source(p.get("source", "manual"))
+        if app in OWNER_APPS or ctx == "owner":
+            ev["forget"] = True
+        else:
+            key = (e.get("node_id"), app, instance)
+            w = SRC_CLASS_WEIGHT.get(ctx, 1.0)
+            if w > ev["neg"].get(key, 0.0):
+                ev["neg"][key] = w
+        ts = e.get("timestamp", "")
+        if ts > ev["last_ts"]:
+            ev["last_ts"] = ts
+    return out
+
+
+def _content_confidence(ev):
+    """Time-INVARIANT base confidence for one content (forget -> FORGET_FLOOR; else signed net).
+    Stored in the projection; decay is applied separately at query time."""
+    if ev.get("forget"):
+        return FORGET_FLOOR
+    return _confidence_for(sum(ev["pos"].values()) - sum(ev["neg"].values()))
+
+
+def _apply_content_confidence(conn, content, ev):
+    """Write base confidence + contested flag + last-evidence ts for one content."""
+    contested = 1 if (not ev.get("forget") and ev.get("pos") and ev.get("neg")) else 0
+    conn.execute(
+        "UPDATE facts SET confidence = ?, contested = ?, last_evidence_at = ? WHERE content = ?",
+        (_content_confidence(ev), contested, ev.get("last_ts") or None, content),
+    )
+
+
+def _recompute_confidence(conn, entries):
+    """The ONLY writer of facts.confidence/contested/last_evidence_at. Pure SIGNED projection
+    over the journal (corroborators MINUS retractors, weighted; owner-retract forgets);
+    `contested` when a claim has BOTH support and dispute. Time-invariant — decay at query time."""
+    for content, ev in _content_evidence(entries).items():
+        _apply_content_confidence(conn, content, ev)
+
+
+def _to_dt(s):
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(s.strip().replace("Z", "+00:00")).replace(tzinfo=None)
+    except Exception:
+        return None
+
+
+def _effective_confidence(base, last_evidence_at, now):
+    """Query-time confidence: base decayed by recency. Owner-forget (FORGET_FLOOR) does NOT
+    decay (stays gone). Deterministic given (base, last_evidence_at, now) — `now` is injectable
+    via $HIVE_NOW so every node computes identical effective confidence for the same instant."""
+    if base == FORGET_FLOOR or not last_evidence_at:
+        return base
+    a, b = _to_dt(last_evidence_at), _to_dt(now)
+    if a is None or b is None:
+        return base
+    age_days = max(0.0, (b - a).total_seconds() / 86400.0)
+    return round(base * (0.5 ** (age_days / HALFLIFE_DAYS)), 6)
+
+
+def persist_decision(conn, entry):
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO decisions (content, rationale, source_agent, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (
+        payload["content"],
+        payload.get("rationale"),
+        payload.get("source", "manual"),
+        payload.get("created_at", ts),
+    ))
+    did = cur.lastrowid
+    _record_index(conn, entry, "decision", did)
+    return {"id": did}
+
+
+def persist_entity(conn, entry):
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
+    cur = conn.cursor()
+    attrs = payload.get("attributes", {})
+    attrs_json = attrs if isinstance(attrs, str) else json.dumps(attrs)
+    cur.execute("""
+        INSERT INTO entities (name, type, attributes, first_seen, last_updated)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(name) DO UPDATE SET
+            type = excluded.type,
+            attributes = excluded.attributes,
+            last_updated = excluded.last_updated
+    """, (
+        payload["name"],
+        payload.get("type", "unknown"),
+        attrs_json,
+        payload.get("created_at", ts),
+        ts,
+    ))
+    eid = cur.execute("SELECT id FROM entities WHERE name = ?", (payload["name"],)).fetchone()[0]
+    _record_index(conn, entry, "entity", eid)
+    return {"id": eid, "name": payload["name"], "type": payload.get("type", "unknown")}
+
+
+_PASS1 = {
+    "fact": persist_fact,
+    "decision": persist_decision,
+    "entity": persist_entity,
+}
+
+
+def persist_entry(conn, entry):
+    """Pass 1: apply a row-producing journal entry (fact/decision/entity)."""
+    fn = _PASS1.get(entry["type"])
+    return fn(conn, entry) if fn else None
+
+
+def _resolve_ref(conn, ref):
+    """Map a journal-identity reference [node_id, seq] to a local row id."""
+    if not ref:
+        return None
+    r = conn.execute(
+        "SELECT local_id FROM journal_index WHERE node_id = ? AND seq = ?",
+        (ref[0], ref[1]),
+    ).fetchone()
+    return r["local_id"] if r else None
+
+
+def resolve_entity_fact(conn, entry):
+    """Pass 2: wire an entity_fact link via journal-identity refs (falling back
+    to legacy local-id fields for pre-Phase-2 journals)."""
+    p = entry["payload"]
+    eid = _resolve_ref(conn, p.get("entity_ref"))
+    if eid is None:
+        eid = p.get("entity_id")        # legacy
+    fid = _resolve_ref(conn, p.get("fact_ref"))
+    if fid is None:
+        fid = p.get("fact_id")          # legacy
+    if eid is None or fid is None:
+        return
+    conn.execute(
+        "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
+        (eid, fid, p.get("confidence", 1.0)),
+    )
+
+
+def resolve_supersedes(conn, entry):
+    """Pass 2: mark the decision this entry supersedes (by journal identity,
+    falling back to a legacy local-id field)."""
+    p = entry["payload"]
+    old = _resolve_ref(conn, p.get("supersedes_ref"))
+    if old is None:
+        old = p.get("supersedes")       # legacy
+    if not old:
+        return
+    new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
+    if new is None:
+        return
+    conn.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?", (new, old))
+
+
+def _index_lookup(conn, kind, local_id):
+    """Reverse map: local row id -> its journal identity [node_id, seq]."""
+    r = conn.execute(
+        "SELECT node_id, seq FROM journal_index WHERE kind = ? AND local_id = ? LIMIT 1",
+        (kind, local_id),
+    ).fetchone()
+    return [r["node_id"], r["seq"]] if r else None
+
+
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
+
+# Salience Layer 2 (structural gate). CONSERVATIVE + CONTENT-NEUTRAL: it rejects clear
+# non-knowledge FORMS (trivially short, bare questions, short greetings) and passes
+# everything else — explicit writes are intentional. It is NOT a learned/importance
+# classifier (that would reintroduce a capturable authority); the rich judgment of "is
+# this a decision/outcome/correction worth keeping" stays with the AGENT (its rubric).
+# Opt-in via `remember --gate`; the shared core hosts it so every agent gates identically.
+_GREETINGS = ("hi ", "hi,", "hi!", "hello", "hey ", "thanks", "thank you",
+              "greetings", "good morning", "good afternoon", "good evening", "yo ")
+
+
+def _is_salient(content):
+    c = (content or "").strip()
+    if len(c) < 15:                                   # trivially short → noise
+        return False
+    if c.endswith("?") and "." not in c:              # a bare question is not a fact
+        return False
+    cl = c.lower()
+    if len(c) < 60 and any(cl.startswith(g) for g in _GREETINGS):  # short pleasantry
+        return False
+    return True
+
+
+def remember(args):
+    """Store a fact. Confidence is DERIVED from the number of distinct sources that
+    asserted identical content (not from repetition) — see _recompute_confidence."""
+    if getattr(args, "gate", False) and not _is_salient(args.content):
+        print(f"Skipped (low salience): {args.content[:60]}")
+        return
+    payload = {
+        "content": args.content,
+        "tags": args.tags.split(",") if args.tags else [],
+        "importance": args.importance,
+        "source": args.source or os.environ.get("HERMES_AGENT", "manual"),
+    }
+    entry = append_journal("fact", payload)
+
+    conn = get_conn()
+    res = persist_fact(conn, entry)
+    # Derive this content's confidence from its distinct IDENTITIES in the journal
+    # (keeps the live path consistent with rebuild without a full rebuild).
+    ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
+        args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+    n = len(ev["pos"])
+    conf = _content_confidence(ev)
+    _apply_content_confidence(conn, args.content, ev)
+    conn.commit()
+    conn.close()
+
+    src_word = "identity" if n == 1 else "identities"
+    if res["inserted"]:
+        print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+    else:
+        print(f"Corroborated fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+
+
+def retract(args):
+    """Record NEGATIVE evidence against a fact (soft-forget). Confidence stays a derived
+    projection: a peer retract counts negative (can drive 'rejected'); --owner forgets it
+    (governance — to the forget floor, regardless of corroboration). Never a self-set number.
+    The journal keeps the fact + the retract (auditable; reversible by re-corroboration)."""
+    conn = get_conn()
+    ref = _index_lookup(conn, "fact", args.fact_id)
+    row = conn.execute("SELECT content FROM facts WHERE id = ?", (args.fact_id,)).fetchone()
+    conn.close()
+    if ref is None or row is None:
+        print(f"No fact #{args.fact_id}")
+        return
+    content = row["content"]
+    source = "owner:owner/owner" if args.owner else (
+        args.source or os.environ.get("HERMES_AGENT", "manual"))
+    append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
+
+    conn = get_conn()
+    ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
+        content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+    conf = _content_confidence(ev)
+    _apply_content_confidence(conn, content, ev)
+    conn.commit()
+    conn.close()
+    kind = "FORGOTTEN (owner)" if args.owner else "retracted"
+    print(f"Fact #{args.fact_id} {kind} → confidence {conf:.2f}")
+
+
+def _fts_query(raw):
+    """Turn arbitrary user input into a safe FTS5 MATCH expression: each term
+    becomes a quoted token (implicit AND), so punctuation can't be parsed as an
+    operator. Returns None if there are no terms."""
+    terms = raw.split()
+    if not terms:
+        return None
+    return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
+
+
+def search(args):
+    """Search facts. Ranks/filters by EFFECTIVE confidence (the time-invariant base projection
+    decayed by recency, computed at query time with $HIVE_NOW); surfaces contested claims."""
+    conn = get_conn()
+    now = os.environ.get("HIVE_NOW") or _now_iso()
+    cols = "id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at"
+    rows = None
+
+    fts_expr = _fts_query(args.query)
+    if fts_expr is not None:
+        try:
+            rows = conn.execute(f"""
+                SELECT {', '.join('f.' + c for c in cols.split(', '))}
+                FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid
+                WHERE facts_fts MATCH ? LIMIT 200
+            """, (fts_expr,)).fetchall()
+        except sqlite3.OperationalError:
+            rows = None  # FTS unavailable — fall back
+
+    if rows is None:
+        like = f"%{args.query}%"
+        rows = conn.execute(f"SELECT {cols} FROM facts WHERE content LIKE ? LIMIT 200",
+                            (like,)).fetchall()
+    conn.close()
+
+    # Decay + threshold + rank in Python (effective confidence depends on `now`).
+    scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
+    scored = [(eff, r) for eff, r in scored if eff >= args.min_confidence]
+    scored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
+    scored = scored[:10]
+
+    if args.format == "json":
+        print(json.dumps([{**dict(r), "effective_confidence": eff} for eff, r in scored], indent=2))
+    else:
+        for eff, r in scored:
+            tags = json.loads(r["tags"]) if r["tags"] else []
+            flag = "  ⚠ CONTESTED" if r["contested"] else ""
+            print(f"[{r['id']}] {r['content']}")
+            print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  From: {r['source_agent']}{flag}")
+            print()
+
+
+def decide(args):
+    """Record a decision."""
+    # Resolve --supersedes (a local id) to a journal-identity reference so the
+    # supersedes link survives rebuilds and cross-node merges.
+    supersedes_ref = None
+    if args.supersedes:
+        conn0 = get_conn()
+        supersedes_ref = _index_lookup(conn0, "decision", args.supersedes)
+        conn0.close()
+
+    payload = {
+        "content": args.content,
+        "rationale": args.rationale,
+        "supersedes_ref": supersedes_ref,
+        "source": os.environ.get("HERMES_AGENT", "manual"),
+    }
+    entry = append_journal("decision", payload)
+
+    conn = get_conn()
+    res = persist_decision(conn, entry)
+    if supersedes_ref:
+        resolve_supersedes(conn, entry)
+    conn.commit()
+    conn.close()
+
+    print(f"Decided as decision #{res['id']}")
+
+
+def entity(args):
+    """Register or query an entity."""
+    if args.action == "add":
+        attrs = json.loads(args.attr) if args.attr else {}
+        payload = {"name": args.name, "type": args.type or "unknown", "attributes": attrs}
+        entry = append_journal("entity", payload)
+        conn = get_conn()
+        res = persist_entity(conn, entry)
+        conn.commit()
+        conn.close()
+        print(f"Entity #{res['id']}: {res['name']} ({res['type']})")
+        return
+
+    if args.action == "link":
+        # Link a fact to this entity: hv entity link --name X --fact-id N
+        conn = get_conn()
+        erow = conn.execute("SELECT id FROM entities WHERE name = ?", (args.name,)).fetchone()
+        if not erow:
+            print(f"No entity named '{args.name}'")
+            conn.close()
+            return
+        entity_ref = _index_lookup(conn, "entity", erow["id"])
+        fact_ref = _index_lookup(conn, "fact", args.fact_id)
+        if fact_ref is None:
+            print(f"No fact #{args.fact_id}")
+            conn.close()
+            return
+        payload = {
+            "entity_ref": entity_ref,
+            "fact_ref": fact_ref,
+            "confidence": args.confidence if args.confidence is not None else 1.0,
+        }
+        entry = append_journal("entity_fact", payload)
+        resolve_entity_fact(conn, entry)
+        conn.commit()
+        conn.close()
+        print(f"Linked fact #{args.fact_id} → entity '{args.name}'")
+        return
+
+    # Read-only actions
+    conn = get_conn()
+    if args.action == "list":
+        rows = conn.execute(
+            "SELECT id, name, type, attributes, first_seen FROM entities ORDER BY name"
+        ).fetchall()
+        if not rows:
+            print("No entities registered.")
+        for r in rows:
+            print(f"  [{r['id']}] {r['name']} ({r['type']})  since {r['first_seen']}")
+        conn.close()
+
+    elif args.action == "show":
+        row = conn.execute(
+            "SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?",
+            (args.name,),
+        ).fetchone()
+        if not row:
+            print(f"No entity named '{args.name}'")
+            conn.close()
+            return
+        print(f"Entity #{row['id']}: {row['name']} ({row['type']})")
+        print(f"  Attributes: {row['attributes']}")
+        print(f"  First seen: {row['first_seen']}  Last updated: {row['last_updated']}")
+        linked = conn.execute("""
+            SELECT f.id, f.content, ef.confidence
+            FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
+            WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
+        """, (row["id"],)).fetchall()
+        if linked:
+            print(f"  Linked facts ({len(linked)}):")
+            for lf in linked:
+                print(f"    [{lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+        conn.close()
+
+
+def rebuild_db():
+    """Rebuild SQLite entirely from the journal. Two-pass so cross-row links
+    resolve regardless of journal order. Returns a counts dict."""
+    init_db()
+    conn = get_conn()
+    # Drop the FTS index + triggers first: deleting every content row through
+    # the external-content delete triggers can desync FTS5 ("disk image is
+    # malformed"). We recreate and backfill the index after replay instead.
+    conn.executescript("""
+        DROP TRIGGER IF EXISTS facts_ai;
+        DROP TRIGGER IF EXISTS facts_ad;
+        DROP TRIGGER IF EXISTS facts_au;
+        DROP TABLE IF EXISTS facts_fts;
+        DELETE FROM entity_facts;
+        DELETE FROM facts;
+        DELETE FROM decisions;
+        DELETE FROM entities;
+        DELETE FROM journal_index;
+    """)
+    conn.commit()
+
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    # Pass 1: row-producing entries (records journal_index).
+    for entry in entries:
+        if entry["type"] in _PASS1:
+            persist_entry(conn, entry)
+    conn.commit()
+    # Pass 2: cross-row links.
+    for entry in entries:
+        if entry["type"] == "entity_fact":
+            resolve_entity_fact(conn, entry)
+        elif entry["type"] == "decision" and (
+            entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
+        ):
+            resolve_supersedes(conn, entry)
+    conn.commit()
+
+    # Phase A: confidence is a derived projection over the journal — recompute it
+    # here so every node converges to identical values over the same journal.
+    _recompute_confidence(conn, entries)
+    conn.commit()
+
+    _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
+    conn.commit()
+
+    counts = {
+        "entries": len(entries),
+        "facts": conn.execute("SELECT count(*) FROM facts").fetchone()[0],
+        "decisions": conn.execute("SELECT count(*) FROM decisions").fetchone()[0],
+        "entities": conn.execute("SELECT count(*) FROM entities").fetchone()[0],
+        "links": conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0],
+    }
+    conn.close()
+    return counts
+
+
+def rebuild(args):
+    c = rebuild_db()
+    print(f"Rebuilt from {c['entries']} journal entries:")
+    print(f"  Facts: {c['facts']}  Decisions: {c['decisions']}  "
+          f"Entities: {c['entities']}  Links: {c['links']}")
+
+
+def merkle_cmd(args):
+    """Show the Merkle index over the journal (root + per-chunk hashes)."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    chunks = merkle.chunk_hashes(entries)
+    root = merkle.merkle_root(chunks)
+    print(f"Entries: {len(entries)}")
+    print(f"Chunks:  {len(chunks)} (size {merkle.CHUNK_SIZE})")
+    print(f"Root:    {root}")
+    for i, h in enumerate(chunks):
+        print(f"  chunk {i}: {h}")
+
+
+def stats(args):
+    """Show memory usage stats."""
+    conn = get_conn()
+    facts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+    decisions = conn.execute("SELECT count(*) FROM decisions").fetchone()[0]
+    active_decisions = conn.execute(
+        "SELECT count(*) FROM decisions WHERE superseded_by IS NULL"
+    ).fetchone()[0]
+    entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
+    links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+    avg_conf = conn.execute("SELECT round(avg(confidence), 2) FROM facts").fetchone()[0] or 0
+    top_tags = conn.execute("""
+        SELECT tags, count(*) as cnt FROM facts WHERE tags IS NOT NULL
+        GROUP BY tags ORDER BY cnt DESC LIMIT 5
+    """).fetchall()
+    conn.close()
+
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    by_node = {}
+    for e in entries:
+        by_node[e["node_id"]] = by_node.get(e["node_id"], 0) + 1
+
+    print(f"Hive Mind Stats — {HIVE_HOME}")
+    print(f"  Node:               {NODE_ID}")
+    print(f"  Facts:              {facts}  (avg confidence: {avg_conf})")
+    print(f"  Decisions:          {decisions}  ({active_decisions} active)")
+    print(f"  Entities:           {entities}  ({links} fact-links)")
+    print(f"  Journal entries:    {len(entries)}  ({', '.join(f'{k}={v}' for k, v in sorted(by_node.items())) or 'empty'})")
+    if top_tags:
+        print(f"  Top tag groups:")
+        for t in top_tags:
+            print(f"    ({t['tags']}) x {t['cnt']}")
+
+
+def sync_cmd(args):
+    """Sync with peers (Phase 2 — implemented in sync_client / sync_daemon)."""
+    if args.sync_action == "now":
+        import sync_client
+        sync_client.sync_now()
+    elif args.sync_action == "daemon":
+        import sync_daemon
+        sync_daemon.run_daemon()
+    else:
+        print("usage: hv sync {now|daemon}")
+
+
+# --------------------------------------------------------------------------
+# CLI
+# --------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Hive Mind CLI — shared, confidence-weighted institutional memory.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "examples:\n"
+            '  hv remember "X happened" --tags a,b --source claude-code   # store a fact\n'
+            '  hv remember "..." --gate                                  # skip low-salience writes\n'
+            '  hv search "X" [--min-confidence -1] [--format json]        # ranked by effective confidence\n'
+            '  hv decide "chose Y" --rationale "because"                  # record a decision\n'
+            "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
+            "  hv retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
+            "  hv stats | rebuild | merkle | sync now|daemon\n"
+            "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
+            "decays with age ($HIVE_NOW injectable); owner-forget = -1.0."
+        ),
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    remember_parser = subparsers.add_parser("remember", help="Store a fact")
+    remember_parser.add_argument("content", help="Fact content")
+    remember_parser.add_argument("--tags", help="Comma-separated tags")
+    remember_parser.add_argument("--importance", type=float, default=0.5)
+    remember_parser.add_argument("--source", help="Source agent")
+    remember_parser.add_argument("--gate", action="store_true",
+                                 help="Apply the content-neutral salience gate; skip low-salience writes")
+
+    search_parser = subparsers.add_parser("search", help="Search facts")
+    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("--format", choices=["text", "json"], default="text")
+    search_parser.add_argument("--min-confidence", type=float, default=0.0,
+                               help="Hide facts below this confidence (default 0.0 = show all)")
+
+    decide_parser = subparsers.add_parser("decide", help="Record a decision")
+    decide_parser.add_argument("content", help="Decision content")
+    decide_parser.add_argument("--rationale", help="Why this decision")
+    decide_parser.add_argument("--supersedes", type=int, help="ID of decision this replaces")
+
+    retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")
+    retract_parser.add_argument("fact_id", type=int, help="Local fact id to retract")
+    retract_parser.add_argument("--reason", help="Why")
+    retract_parser.add_argument("--source", help="Retractor identity (default: env/manual)")
+    retract_parser.add_argument("--owner", action="store_true",
+                                help="Owner forget — governance, decisive (drives to the forget floor)")
+
+    entity_parser = subparsers.add_parser("entity", help="Manage entities")
+    entity_parser.add_argument("action", choices=["add", "list", "show", "link"], help="Sub-command")
+    entity_parser.add_argument("--name", help="Entity name")
+    entity_parser.add_argument("--type", help="Entity type (person, project, concept)")
+    entity_parser.add_argument("--attr", help="JSON attributes")
+    entity_parser.add_argument("--fact-id", type=int, help="Fact ID to link")
+    entity_parser.add_argument("--confidence", type=float, help="Link confidence")
+
+    subparsers.add_parser("stats", help="Show memory usage stats")
+    subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
+    subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
+
+    sync_parser = subparsers.add_parser("sync", help="Sync with peers (P2P)")
+    sync_subparsers = sync_parser.add_subparsers(dest="sync_action")
+    sync_subparsers.add_parser("now", help="One-shot bidirectional sync with all peers")
+    sync_subparsers.add_parser("daemon", help="Run the sync daemon (serve + periodic sync)")
+
+    args = parser.parse_args()
+
+    # Idempotent; also auto-migrates older DBs missing tables/indexes.
+    init_db()
+
+    if args.command == "remember":
+        remember(args)
+    elif args.command == "search":
+        search(args)
+    elif args.command == "decide":
+        decide(args)
+    elif args.command == "retract":
+        retract(args)
+    elif args.command == "entity":
+        entity(args)
+    elif args.command == "stats":
+        stats(args)
+    elif args.command == "rebuild":
+        rebuild(args)
+    elif args.command == "merkle":
+        merkle_cmd(args)
+    elif args.command == "sync":
+        sync_cmd(args)
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()

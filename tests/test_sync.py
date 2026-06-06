@@ -5,17 +5,76 @@ The heavy lifting lives in scripts/sync_smoke.sh (spins two daemons on
 link resolution). This wrapper makes it part of `pytest`. Requires curl.
 """
 
+import json
+import os
 import shutil
+import socket
 import subprocess
+import sys
+import time
+import urllib.request
 from pathlib import Path
 
 import pytest
 
 PROJECT = Path(__file__).resolve().parent.parent
 SMOKE = PROJECT / "scripts" / "sync_smoke.sh"
+HV = PROJECT / "hv"
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
 def test_two_node_convergence():
     r = subprocess.run([str(SMOKE)], capture_output=True, text=True)
     assert r.returncode == 0, f"sync_smoke.sh failed:\n{r.stdout}\n{r.stderr}"
+
+
+def _free_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _wait_until_serving(port, timeout=15):
+    deadline = time.time() + timeout
+    url = f"http://127.0.0.1:{port}/sync/merkle-root"
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                if r.status == 200:
+                    return
+        except Exception:
+            time.sleep(0.3)
+    raise AssertionError("daemon did not start serving in time")
+
+
+def test_daemon_singleton_guard(hive):
+    """A second `hv sync daemon` against the same bind:port must detect the
+    healthy incumbent and exit 0 cleanly — not crash-loop on EADDRINUSE."""
+    hive.run("remember", "seed fact for daemon test", "--tags", "test")
+    port = _free_port()
+    (hive.home / ".peers.json").write_text(json.dumps(
+        {"self": "test-node", "bind": "127.0.0.1", "port": port, "peers": []}))
+    env = dict(os.environ, HIVE_HOME=str(hive.home))
+
+    first = subprocess.Popen(
+        [sys.executable, str(HV), "sync", "daemon"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    try:
+        _wait_until_serving(port)
+        second = subprocess.run(
+            [sys.executable, str(HV), "sync", "daemon"],
+            env=env, capture_output=True, text=True, timeout=20,
+        )
+        out = (second.stdout + second.stderr).lower()
+        assert second.returncode == 0, (
+            f"duplicate daemon should exit cleanly, got {second.returncode}:\n{out}")
+        assert "already" in out, f"expected an 'already running' notice, got:\n{out}"
+    finally:
+        first.terminate()
+        try:
+            first.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            first.kill()

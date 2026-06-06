@@ -12,9 +12,11 @@ Endpoints:
   POST /sync/ingest       -> append foreign entries (G-Set dedup), rebuild, {accepted, duplicates}
 """
 
+import errno
 import json
 import threading
 import time
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -89,17 +91,59 @@ class Handler(BaseHTTPRequestHandler):
             self._send(500, {"error": str(e)})
 
 
+class AlreadyRunning(Exception):
+    """Another healthy hive sync daemon already owns the bind address.
+
+    Raised so a duplicate launcher (e.g. a second systemd unit, or a manual
+    `hv sync daemon` while one is already up) can no-op cleanly instead of
+    crash-looping on EADDRINUSE."""
+
+
+def _incumbent_is_hive(bind, port, attempts=3, delay=0.5):
+    """Probe whatever already holds bind:port — is it a healthy hive daemon?
+
+    Returns True iff GET /sync/merkle-root answers with a root_hash. Retries a
+    few times to cover the race where the incumbent has bound the port but is
+    not serving yet (e.g. two units starting together at boot)."""
+    host = "127.0.0.1" if bind in ("0.0.0.0", "", None) else bind
+    url = f"http://{host}:{port}/sync/merkle-root"
+    for i in range(attempts):
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                if "root_hash" in json.loads(r.read() or b"{}"):
+                    return True
+        except Exception:
+            pass
+        if i < attempts - 1:
+            time.sleep(delay)
+    return False
+
+
 def make_server(bind=None, port=None):
     cfg = sync_common.load_peers()
     bind = bind if bind is not None else cfg.get("bind", "0.0.0.0")
     port = port if port is not None else cfg.get("port", sync_common.PORT_DEFAULT)
-    return ThreadingHTTPServer((bind, port), Handler), bind, port
+    try:
+        return ThreadingHTTPServer((bind, port), Handler), bind, port
+    except OSError as e:
+        # If the port is taken by a healthy hive daemon, this launch is
+        # redundant — signal the caller to exit cleanly. Any other holder
+        # (or a non-responsive one) is a real error; re-raise it.
+        if e.errno == errno.EADDRINUSE and _incumbent_is_hive(bind, port):
+            raise AlreadyRunning(
+                f"a healthy hive sync daemon already owns {bind}:{port}"
+            ) from e
+        raise
 
 
 def serve_forever(bind=None, port=None):
     """Run the HTTP server in the foreground (blocks)."""
     hv.init_db()
-    server, bind, port = make_server(bind, port)
+    try:
+        server, bind, port = make_server(bind, port)
+    except AlreadyRunning as e:
+        print(f"sync daemon: {e}; nothing to do")
+        return
     print(f"sync daemon: serving on {bind}:{port} as {hv.NODE_ID}")
     server.serve_forever()
 
@@ -110,7 +154,11 @@ def run_daemon(interval=300):
     import sync_client
 
     hv.init_db()
-    server, bind, port = make_server()
+    try:
+        server, bind, port = make_server()
+    except AlreadyRunning as e:
+        print(f"sync daemon: {e}; nothing to do")
+        return
     t = threading.Thread(target=server.serve_forever, daemon=True)
     t.start()
     print(f"sync daemon: serving on {bind}:{port} as {hv.NODE_ID}; outbound every {interval}s")

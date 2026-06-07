@@ -1,0 +1,71 @@
+name: Sign release manifest
+
+# On every push to main that touches code, regenerate the source manifest (verify.json) and sign it
+# with the release key (the GitHub Actions secret HIVE_SIGNING_KEY), then commit both back. This keeps
+# the signed manifest exactly in step with the code on main, so a fresh `git clone` always passes
+# `hv verify`. Releasing is then just normal pushes — no manual signing step.
+#
+# One-time setup: run scripts/gen_keypair.py locally, commit hivemind.pub, publish it to the website,
+# and store the printed private key with:
+#   gh secret set HIVE_SIGNING_KEY --repo projectmentor/hive-mind --body '<base64 seed>'
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/*.py'
+      - '**/*.sh'
+      - '**/*.md'
+      - '**/*.mjs'
+      - '**/*.yml'
+      - '**/*.yaml'
+      - 'hv'
+      - '!verify.json'
+      - '!verify.json.sig'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sign-manifest
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Regenerate manifest
+        run: python3 scripts/gen_verify.py
+
+      - name: Sign and self-check
+        env:
+          HIVE_SIGNING_KEY: ${{ secrets.HIVE_SIGNING_KEY }}
+        run: |
+          if [ -z "$HIVE_SIGNING_KEY" ]; then
+            echo "HIVE_SIGNING_KEY not set yet — committing unsigned manifest only."
+            exit 0
+          fi
+          python3 scripts/sign_release.py
+          if [ -f hivemind.pub ]; then
+            HIVE_PUBKEY_URL="file://$PWD/hivemind.pub" ./hv verify | tee /tmp/v.txt
+            grep -q '✓ Official' /tmp/v.txt
+          else
+            echo "hivemind.pub not committed yet — skipping signature self-check."
+          fi
+
+      - name: Commit if changed
+        run: |
+          git config user.name  "hivemind-bot"
+          git config user.email "bot@projectmentor.org"
+          if [ -n "$(git status --porcelain verify.json verify.json.sig)" ]; then
+            git add verify.json verify.json.sig
+            git commit -m "chore: re-sign source manifest [skip ci]"
+            git push
+          else
+            echo "manifest already current; nothing to commit"
+          fi

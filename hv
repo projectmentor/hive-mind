@@ -1228,6 +1228,8 @@ def _compute_audit(depth=None, session=""):
             continue
         base = r["confidence"]
         eff = _effective_confidence(base, r["last_evidence_at"], now)
+        if base <= FORGET_FLOOR:
+            continue   # owner-forgotten: decisively settled, no action — keep it out of the audit
         if base <= -0.4:
             forgotten.append((r, eff))
         elif r["contested"]:

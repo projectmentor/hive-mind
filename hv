@@ -969,6 +969,7 @@ _NUDGE_DEFAULTS = {
     "SAVE_ON_PHRASE": "1",   # a matched phrase may trigger a save-nudge (still gated by MIN_GAP)
     "AUDIT_ON": "precompact,sessionend",
     "AUDIT_DEPTH": "light",
+    "VOLATILE_TTL_HOURS": "24",   # default freshness window for facts tagged `volatile`
     # Seeds inferred from real session history (see scripts/infer-phrases.py).
     "HIVE_NUDGE_PHRASES": ("we need,we should,i want,idea,wait,before we,keep,"
                            "remember,decision,the issue,lesson,wrong"),
@@ -1202,13 +1203,29 @@ def audit(args):
                 if union and len(toks[a] & toks[b]) / union >= thr:
                     paraphrase.append((a, b, round(len(toks[a] & toks[b]) / union, 2)))
 
-    # OBSOLETE: bucket by effective confidence.
+    # OBSOLETE + RECHECK: bucket facts by effective confidence; but VOLATILE facts (operational
+    # state that can flip) go to RECHECK when past their freshness window, not the slow age-decay
+    # path — so time-varying facts get selectively re-verified without relitigating the corpus.
+    ttl_default = _int(cfg, "VOLATILE_TTL_HOURS", 24)
     conn = get_conn()
     frows = conn.execute(
-        "SELECT id, content, confidence, contested, last_evidence_at FROM facts").fetchall()
+        "SELECT id, content, confidence, contested, last_evidence_at, tags FROM facts").fetchall()
     conn.close()
-    forgotten, contested, decayed = [], [], []
+    forgotten, contested, decayed, recheck = [], [], [], []
+    volatile_contents = set()
     for r in frows:
+        try:
+            tl = [str(t).strip().lower() for t in (json.loads(r["tags"]) if r["tags"] else [])]
+        except Exception:
+            tl = []
+        if "volatile" in tl or any(t.startswith("ttl:") for t in tl):
+            volatile_contents.add(r["content"])
+            a, b = _to_dt(r["last_evidence_at"]), _to_dt(now)
+            age_h = max(0.0, (b - a).total_seconds() / 3600.0) if (a and b) else None
+            ttl_h = _volatile_ttl_hours(tl, ttl_default)
+            if age_h is None or age_h > ttl_h:
+                recheck.append((r, age_h, ttl_h))
+            continue
         base = r["confidence"]
         eff = _effective_confidence(base, r["last_evidence_at"], now)
         if base <= -0.4:
@@ -1218,6 +1235,9 @@ def audit(args):
         elif base > 0 and eff < 0.2:
             decayed.append((r, eff))
     decayed.sort(key=lambda x: x[1])
+    recheck.sort(key=lambda x: (x[1] is not None, x[1] or 0), reverse=True)
+    # Re-verifying a volatile fact refreshes its freshness — that is the point, not redundancy.
+    redundant = [x for x in redundant if x[0] not in volatile_contents]
 
     missing_note = None
     if getattr(args, "session", ""):
@@ -1237,6 +1257,9 @@ def audit(args):
                 "contested": [{"id": r["id"], "content": r["content"]} for r, _e in contested[:cap]],
                 "decayed": [{"id": r["id"], "content": r["content"], "eff": e} for r, e in decayed[:cap]],
             },
+            "recheck": [{"id": r["id"], "content": r["content"],
+                         "age_hours": (round(a, 1) if a is not None else None), "ttl_hours": t}
+                        for r, a, t in recheck[:cap]],
             "well_corroborated": len(corroborated),
             "missing": missing_note,
         }, indent=2))
@@ -1261,9 +1284,24 @@ def audit(args):
         print(f"  [decayed eff {e:.2f}] #{r['id']} {short(r['content'])} → re-confirm or `hv retract {r['id']}`")
     if not (forgotten or contested or decayed):
         print("  (none)")
+    if recheck:
+        print(f"\nRECHECK (volatile facts past freshness) — {len(recheck)}")
+        for r, a, t in recheck[:cap]:
+            age = f"{a:.0f}h" if a is not None else "unknown"
+            print(f"  #{r['id']} {short(r['content'])} (age {age} > ttl {t}h) → re-verify")
     if missing_note:
         print(f"\nMISSING (session proxy)\n  {missing_note}")
     print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
+
+
+def _volatile_ttl_hours(tags_lower, default):
+    """Freshness window (hours) for a volatile fact: a `ttl:<n>h|d` tag overrides the default."""
+    for t in tags_lower:
+        m = re.match(r"ttl:(\d+)([hd])$", t)
+        if m:
+            n = int(m.group(1))
+            return n * 24 if m.group(2) == "d" else n
+    return default
 
 
 def version_cmd(args):

@@ -108,16 +108,114 @@ _KNOWLEDGE_PATTERNS = re.compile(
 )
 
 
-def _hv(*args: str, timeout: int = 10) -> tuple[bool, str]:
+def _hv(*args: str, timeout: int = 10, stdin_text: str = "") -> tuple[bool, str]:
     """Run the hv CLI. Returns (success, stdout|stderr)."""
     try:
         result = subprocess.run(
             [str(HV_PATH), *args],
-            capture_output=True, text=True, timeout=timeout,
+            input=stdin_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
         return result.returncode == 0, (result.stdout.strip() if result.returncode == 0 else result.stderr.strip())
     except Exception as e:
         return False, str(e)
+
+
+def _hv_nudge(event: str, *, session_id: str = "", cwd: str = "", agent: str = "", text: str = "") -> str:
+    """Best-effort wrapper around `hv nudge`; empty string means no hint."""
+    args = ["nudge", "--event", event]
+    if session_id:
+        args += ["--session", session_id]
+    if cwd:
+        args += ["--cwd", cwd]
+    if agent:
+        args += ["--agent", agent]
+    ok, out = _hv(*args, timeout=8, stdin_text=text)
+    return out if ok else ""
+
+
+def _spec_update_check(agent: str) -> str:
+    """Best-effort §0 check: record the current contract version marker.
+
+    Returns the version string that was recorded, or "" on failure. A major bump
+    logs a warning but never raises.
+    """
+    try:
+        ok, out = _hv("version", timeout=8)
+        version = out.strip().split()[-1] if ok and out.strip() else ""
+        if not version:
+            return ""
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", agent or "agent")[:60] or "agent"
+        marker = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind")) / ".nudge_state" / f"{safe}.spec"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        prev = marker.read_text().strip() if marker.exists() else ""
+        if prev and prev.split(".", 1)[0] != version.split(".", 1)[0]:
+            logger.warning(
+                "hive-mind: contract major changed %s -> %s for %s; re-integration required",
+                prev, version, agent,
+            )
+        marker.write_text(version)
+        return version
+    except Exception:
+        return ""
+
+
+def _hv_audit(*, session_id: str = "", depth: str = "", fmt: str = "text") -> str:
+    """Best-effort wrapper around `hv audit`; empty string means no surfaced audit."""
+    args = ["audit"]
+    if depth:
+        args += ["--depth", depth]
+    if session_id:
+        args += ["--session", session_id]
+    if fmt:
+        args += ["--format", fmt]
+    ok, out = _hv(*args, timeout=12)
+    return out if ok else ""
+
+
+def _load_nudge_cfg() -> dict[str, str]:
+    """Read nudge.env + env overrides for the cheap save-nudge gate."""
+    cfg = {
+        "SAVE_EVERY": "0",
+        "MIN_GAP": "6",
+        "SAVE_ON_PHRASE": "1",
+        "HIVE_NUDGE_PHRASES": "we need,we should,i want,idea,wait,before we,keep,remember,decision,the issue,lesson,wrong",
+    }
+    repo_root = Path(__file__).resolve().parent.parent
+    candidates = [
+        Path(os.environ.get("HIVE_HOME", repo_root)) / "nudge.env",
+        repo_root / "nudge.env",
+    ]
+    for p in candidates:
+        try:
+            if not p.exists():
+                continue
+            for line in p.read_text().splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                cfg[k.strip()] = v.strip()
+            break
+        except Exception:
+            pass
+    for k in list(cfg):
+        if k in os.environ:
+            cfg[k] = os.environ[k]
+    return cfg
+
+
+def _cfg_int(cfg: dict[str, str], key: str, default: int) -> int:
+    try:
+        return int(str(cfg.get(key, default)).strip())
+    except Exception:
+        return default
+
+
+def _cfg_phrases(cfg: dict[str, str]) -> list[str]:
+    return [p.strip().lower() for p in str(cfg.get("HIVE_NUDGE_PHRASES", "")).split(",") if p.strip()]
 
 
 def _hv_search_json(query: str) -> list[dict]:
@@ -218,6 +316,7 @@ class HiveMindMemoryProvider(MemoryProvider):
         self._session_id = session_id
         self._agent_context = kwargs.get("agent_context", "primary")
         self._agent_identity = kwargs.get("agent_identity", "default")
+        self._agent_label = f"hermes:{self._agent_identity}"
         self._platform = kwargs.get("platform", "cli")
 
         # Map agent_context to source namespace context_class
@@ -232,6 +331,9 @@ class HiveMindMemoryProvider(MemoryProvider):
 
         # Track content written this session (anti-self-amplification on read side)
         self._written_this_session: Set[str] = set()
+        self._last_audited_session: str = ""
+        self._prefetch_turns: int = 0
+        self._last_save_turn: int = 0
 
         if not self.is_available():
             logger.warning("hive-mind: hv CLI not found at %s", HV_PATH)
@@ -241,14 +343,25 @@ class HiveMindMemoryProvider(MemoryProvider):
     def system_prompt_block(self) -> str:
         """Inject project-context facts at session start.
 
-        Searches corpus for cwd / git-remote / project name.
-        Much more useful than just dumping stats.
+        Runs the §0 self-update check, then the session-start nudge, then
+        project search + stats. Best-effort throughout: any failure returns
+        a smaller block, never an error.
         """
         if not self.is_available():
             return ""
 
-        # Discover project identity
+        # §0 self-update protocol: best-effort version check + marker write.
+        _spec_update_check(getattr(self, "_agent_label", "hermes"))
+
         cwd = Path.cwd()
+        session_start_hint = _hv_nudge(
+            "session-start",
+            session_id=getattr(self, "_session_id", ""),
+            cwd=str(cwd),
+            agent=getattr(self, "_agent_label", "hermes"),
+        )
+
+        # Discover project identity
         project_name = cwd.name
 
         # Try git remote for a more stable identity
@@ -284,6 +397,9 @@ class HiveMindMemoryProvider(MemoryProvider):
             "EPISTEMIC TAG: add --tags speculation|observation|confirmed to signal status.\n"
         )
 
+        if session_start_hint:
+            block += f"\n## Hive Mind — Session Start\n{session_start_hint}\n"
+
         if ok_stats:
             block += f"\nCorpus status: {stats_out}\n"
 
@@ -302,7 +418,29 @@ class HiveMindMemoryProvider(MemoryProvider):
         if not self.is_available():
             return ""
 
-        # Evaluate triggers
+        session_id = session_id or getattr(self, "_session_id", "")
+        cfg = _load_nudge_cfg()
+        self._prefetch_turns = getattr(self, "_prefetch_turns", 0) + 1
+        nudge_hint = ""
+        save_every = _cfg_int(cfg, "SAVE_EVERY", 0)
+        min_gap = _cfg_int(cfg, "MIN_GAP", 6)
+        on_phrase = str(cfg.get("SAVE_ON_PHRASE", "1")).strip().lower() in ("1", "true", "yes")
+        low = query.lower()
+        phrase_hit = on_phrase and any(p in low for p in _cfg_phrases(cfg))
+        cadence_hit = save_every > 0 and (self._prefetch_turns % save_every == 0)
+        if phrase_hit or cadence_hit:
+            if not self._last_save_turn or (self._prefetch_turns - self._last_save_turn) >= min_gap:
+                nudge_hint = _hv_nudge(
+                    "user-prompt",
+                    session_id=session_id,
+                    cwd=str(Path.cwd()),
+                    agent=getattr(self, "_agent_label", "hermes"),
+                    text=query,
+                )
+                if nudge_hint:
+                    self._last_save_turn = self._prefetch_turns
+
+        # Evaluate read-side triggers for recall, independently of save nudges.
         is_error = bool(_ERROR_PATTERNS.search(query))
         is_uncertain = bool(_UNCERTAINTY_PATTERNS.search(query))
         is_knowledge = bool(_KNOWLEDGE_PATTERNS.search(query))
@@ -315,14 +453,14 @@ class HiveMindMemoryProvider(MemoryProvider):
         )]
         entity_trigger = bool(words)
 
-        if not any([is_error, is_uncertain, is_knowledge, entity_trigger]):
+        if not any([is_error, is_uncertain, is_knowledge, entity_trigger]) and not nudge_hint:
             return ""
 
         # Search with the most specific signal first
         search_query = query[:200]  # cap for FTS5
         facts = _hv_search_json(search_query)
 
-        if not facts:
+        if not facts and not nudge_hint:
             return ""
 
         # Filter to top 5 by trust, but preserve diversity (don't just top-3)
@@ -335,7 +473,12 @@ class HiveMindMemoryProvider(MemoryProvider):
         # Detect conflicts — surface tension intact
         conflicts = _detect_conflicts(facts)
 
-        lines = ["## Hive Mind — Recalled Context"]
+        lines = []
+        if nudge_hint:
+            lines.append("## Hive Mind — Save Nudge")
+            lines.append(nudge_hint)
+            lines.append("")
+        lines.append("## Hive Mind — Recalled Context")
 
         if is_error:
             lines.append("(triggered: error pattern detected — checking corpus for known gotchas)")
@@ -360,11 +503,12 @@ class HiveMindMemoryProvider(MemoryProvider):
                 )
             lines.append("")
 
-        lines.append("Facts (with provenance — treat as signals, not truth):")
-        formatted = _format_facts_with_provenance(facts, self._session_id)
-        lines.append(formatted)
+        if facts:
+            lines.append("Facts (with provenance — treat as signals, not truth):")
+            formatted = _format_facts_with_provenance(facts, self._session_id)
+            lines.append(formatted)
 
-        return "\n".join(lines)
+        return "\n".join(lines).strip()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
         """Expose hive_search as a first-class tool for deliberate deeper digs."""
@@ -494,8 +638,26 @@ class HiveMindMemoryProvider(MemoryProvider):
 
     def on_session_switch(self, new_session_id: str, *, reset: bool = False, **kwargs) -> None:
         """Reset per-session state on session switch."""
+        old_session_id = getattr(self, "_session_id", "")
+        if old_session_id and old_session_id != new_session_id and old_session_id != getattr(self, "_last_audited_session", ""):
+            cwd = str(Path.cwd())
+            nudge_hint = _hv_nudge(
+                "sessionend",
+                session_id=old_session_id,
+                cwd=cwd,
+                agent=getattr(self, "_agent_label", "hermes"),
+            )
+            if nudge_hint:
+                logger.info("hive-mind: audit hint for %s: %s", old_session_id, nudge_hint)
+            audit_hint = _hv_audit(session_id=old_session_id)
+            if audit_hint:
+                logger.info("hive-mind: audit for %s: %s", old_session_id, audit_hint)
+            self._last_audited_session = old_session_id
+
         self._session_id = new_session_id
         self._source_id = _build_source_id(self._agent_identity, new_session_id, self._context_class)
+        self._prefetch_turns = 0
+        self._last_save_turn = 0
         if reset:
             self._recall_set = set()
             self._written_this_session = set()
@@ -519,4 +681,18 @@ class HiveMindMemoryProvider(MemoryProvider):
         return True  # MVP: pass everything (explicit memory() calls are already intentional)
 
     def shutdown(self) -> None:
-        pass
+        session_id = getattr(self, "_session_id", "")
+        if session_id and session_id != getattr(self, "_last_audited_session", ""):
+            cwd = str(Path.cwd())
+            nudge_hint = _hv_nudge(
+                "sessionend",
+                session_id=session_id,
+                cwd=cwd,
+                agent=getattr(self, "_agent_label", "hermes"),
+            )
+            if nudge_hint:
+                logger.info("hive-mind: shutdown audit hint for %s: %s", session_id, nudge_hint)
+            audit_hint = _hv_audit(session_id=session_id)
+            if audit_hint:
+                logger.info("hive-mind: shutdown audit for %s: %s", session_id, audit_hint)
+            self._last_audited_session = session_id

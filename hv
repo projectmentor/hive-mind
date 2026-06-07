@@ -1084,6 +1084,32 @@ def _print_digest(cwd, cap=1200):
         return
 
 
+def _spec_update_check(agent):
+    """§0 of the Agent Integration Spec: detect a Spec-Version bump and nudge the
+    agent to re-integrate. Reads the LOCAL spec (repo currency is the install's
+    update path, not this hook). Best-effort; marks once per bump per agent."""
+    try:
+        spec = HIVE_HOME / "docs" / "AGENT_INTEGRATION.md"
+        if not spec.exists():
+            return
+        m = re.search(r"Spec-Version:\s*([0-9][0-9.]*)", spec.read_text())
+        if not m:
+            return
+        cur = m.group(1)
+        safe = re.sub(r"[^A-Za-z0-9_.-]", "_", agent or "agent")[:60] or "agent"
+        marker = HIVE_HOME / ".nudge_state" / f"{safe}.spec"
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        prev = marker.read_text().strip() if marker.exists() else ""
+        if prev == cur:
+            return
+        if prev:   # only nudge on a real bump, not on first integration
+            print(f"[hive] Integration spec is now v{cur} (you integrated v{prev}) — "
+                  "re-read docs/AGENT_INTEGRATION.md and update your wiring if the contract changed.")
+        marker.write_text(cur)
+    except Exception:
+        return
+
+
 def nudge(args):
     """Best-effort save/audit nudge or startup digest. NEVER raises (swallow-all)."""
     try:
@@ -1091,6 +1117,7 @@ def nudge(args):
         event = args.event
         if event == "session-start":
             _print_digest(getattr(args, "cwd", "") or os.getcwd())
+            _spec_update_check(getattr(args, "agent", "agent") or "agent")
             return
         if event in ("precompact", "sessionend"):
             on = [e.strip() for e in cfg.get("AUDIT_ON", "").split(",") if e.strip()]
@@ -1300,6 +1327,7 @@ def main():
                               choices=["user-prompt", "precompact", "sessionend", "session-start"])
     nudge_parser.add_argument("--session", default="", help="Session id (debounce state)")
     nudge_parser.add_argument("--cwd", default="", help="cwd for the session-start project digest")
+    nudge_parser.add_argument("--agent", default="agent", help="stable agent label for the spec-update marker")
 
     audit_parser = subparsers.add_parser("audit", help="Surface redundant/obsolete/missing facts")
     audit_parser.add_argument("--depth", choices=["light", "normal", "deep"], default=None)

@@ -1484,7 +1484,7 @@ def verify_cmd(args):
         print(f"  Could not reach {OFFICIAL_PUBKEY_URL} to confirm the key is the published one (offline?).")
         return
     if official_pub == bundled_pub:
-        print(f"✓ Official HiveMind v{ver} from Project Mentor — verified.")
+        print(f"✓ Official HiveMind v{ver} from ProjectMentor — verified.")
         print("  Source integrity OK, release signature valid, and the signing key matches the one "
               "published at hivemind.projectmentor.org.")
     else:

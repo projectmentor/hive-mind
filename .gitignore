@@ -9,6 +9,10 @@ store.db.bak.*
 # Peer registry is per-node, not versioned (use .peers.json.example as a template)
 .peers.json
 
+# Nudge config + per-session debounce state (per-node; use nudge.env.example as a template)
+nudge.env
+.nudge_state/
+
 # IDE
 .vscode/
 .idea/

@@ -19,9 +19,11 @@ Cross-node identity (Phase 2):
 """
 
 import argparse
+import collections
 import hashlib
 import json
 import os
+import re
 import socket
 import sqlite3
 import sys
@@ -948,6 +950,291 @@ def sync_cmd(args):
 
 
 # --------------------------------------------------------------------------
+# Nudge / audit — the capture-and-audit loop. ALL logic lives here; each agent
+# runtime gets a thin shim (Claude Code hook, MCP tool, Hermes/OpenClaw plugin)
+# that calls these. Contract: recent text on stdin -> a terse hint on stdout
+# (injected into the agent's context), or nothing. NEVER errors a session.
+# --------------------------------------------------------------------------
+
+_NUDGE_DEFAULTS = {
+    "SAVE_EVERY": "12",      # save-nudge cadence in user turns (0 = off)
+    "MIN_GAP": "6",          # hard floor: no two save-nudges within N turns
+    "SAVE_ON_PHRASE": "1",   # a matched phrase may trigger a save-nudge (still gated by MIN_GAP)
+    "AUDIT_ON": "precompact,sessionend",
+    "AUDIT_DEPTH": "light",
+    # Seeds inferred from real session history (see scripts/infer-phrases.py).
+    "HIVE_NUDGE_PHRASES": ("we need,we should,i want,idea,wait,before we,keep,"
+                           "remember,decision,the issue,lesson,wrong"),
+}
+
+
+def load_nudge_config():
+    """Read nudge.env (KEY=value) from HIVE_HOME, falling back to the repo root, then
+    defaults. Same-named env vars OVERRIDE the file (test + future-telemetry seam).
+    Mirrors sync_common.load_peers()'s per-node + ROOT-fallback pattern."""
+    cfg = dict(_NUDGE_DEFAULTS)
+    root = Path(__file__).resolve().parent
+    for p in (HIVE_HOME / "nudge.env", root / "nudge.env"):
+        try:
+            if p.exists():
+                for line in p.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    cfg[k.strip()] = v.strip()
+                break
+        except Exception:
+            pass
+    for k in list(cfg):
+        if k in os.environ:
+            cfg[k] = os.environ[k]
+    return cfg
+
+
+def _int(cfg, key, default):
+    try:
+        return int(str(cfg.get(key, default)).strip())
+    except Exception:
+        return default
+
+
+def _nudge_phrases(cfg):
+    return [p.strip().lower() for p in cfg.get("HIVE_NUDGE_PHRASES", "").split(",") if p.strip()]
+
+
+def _nudge_state_path(session):
+    safe = re.sub(r"[^A-Za-z0-9_-]", "_", session or "")[:80] or "_anon"
+    d = HIVE_HOME / ".nudge_state"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{safe}.json"
+
+
+def _read_state(path):
+    try:
+        return json.loads(path.read_text())
+    except Exception:
+        return {"turns": 0, "last_save_turn": 0}
+
+
+def _write_state(path, state):
+    try:
+        path.write_text(json.dumps(state))
+    except Exception:
+        pass
+
+
+# Nudge strings are HINTS — never auto-writes; the agent stays the salience judge.
+_NUDGE_SAVE_CADENCE = ('[hive] Several turns in — if a decision, outcome, correction, or '
+                       'constraint surfaced, consider: hv remember "..." --source claude-code '
+                       '(search first; skip if already known).')
+_NUDGE_SAVE_PHRASE = ('[hive] That sounded worth keeping — if it is a durable decision/outcome/'
+                      'fact, consider hv remember "..." --source claude-code (your call).')
+_NUDGE_AUDIT = ('[hive] Session winding down — consider running: hv audit '
+                '(surfaces redundant / obsolete / missing facts to reconcile before you go).')
+
+
+def _project_key(cwd):
+    """Project identity for the startup digest: git origin basename, else cwd basename."""
+    import subprocess
+    try:
+        url = subprocess.run(["git", "-C", cwd, "remote", "get-url", "origin"],
+                             capture_output=True, text=True, timeout=3).stdout.strip()
+        if url:
+            base = url.rstrip("/").split("/")[-1]
+            return base[:-4] if base.endswith(".git") else base
+    except Exception:
+        pass
+    return os.path.basename(os.path.normpath(cwd)) if cwd else ""
+
+
+def _print_digest(cwd, cap=1200):
+    """SessionStart: print a short, project-scoped digest of top facts (injected into context)."""
+    try:
+        key = _project_key(cwd)
+        if not key:
+            return
+        conn = get_conn()
+        now = os.environ.get("HIVE_NOW") or _now_iso()
+        cols = "id, content, confidence, last_evidence_at, created_at"
+        rows = None
+        expr = _fts_query(key)
+        if expr is not None:
+            try:
+                rows = conn.execute(
+                    f"SELECT {', '.join('f.' + c for c in cols.split(', '))} "
+                    "FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid "
+                    "WHERE facts_fts MATCH ? LIMIT 200", (expr,)).fetchall()
+            except sqlite3.OperationalError:
+                rows = None
+        if rows is None:
+            rows = conn.execute(f"SELECT {cols} FROM facts WHERE content LIKE ? LIMIT 200",
+                                (f"%{key}%",)).fetchall()
+        conn.close()
+        scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
+        scored = [t for t in scored if t[0] > 0]
+        scored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
+        if not scored:
+            return
+        lines = [f'[hive] Project context: {key}  (top facts; `hv search "<topic>"` for more)']
+        for eff, r in scored[:5]:
+            lines.append(f"  • [{r['id']}] {r['content'].splitlines()[0][:150]} (conf {eff:.2f})")
+        print("\n".join(lines)[:cap])
+    except Exception:
+        return
+
+
+def nudge(args):
+    """Best-effort save/audit nudge or startup digest. NEVER raises (swallow-all)."""
+    try:
+        cfg = load_nudge_config()
+        event = args.event
+        if event == "session-start":
+            _print_digest(getattr(args, "cwd", "") or os.getcwd())
+            return
+        if event in ("precompact", "sessionend"):
+            on = [e.strip() for e in cfg.get("AUDIT_ON", "").split(",") if e.strip()]
+            if event in on:
+                print(_NUDGE_AUDIT)
+            return
+        if event == "user-prompt":
+            save_every = _int(cfg, "SAVE_EVERY", 12)
+            min_gap = _int(cfg, "MIN_GAP", 6)
+            on_phrase = str(cfg.get("SAVE_ON_PHRASE", "1")).strip().lower() in ("1", "true", "yes")
+            path = _nudge_state_path(args.session)
+            st = _read_state(path)
+            st["turns"] = int(st.get("turns", 0)) + 1
+            _write_state(path, st)                       # advance counter first
+            try:
+                text = sys.stdin.read() or ""
+            except Exception:
+                text = ""
+            tl = text.lower()
+            phrase_hit = on_phrase and any(p in tl for p in _nudge_phrases(cfg))
+            cadence_hit = save_every > 0 and st["turns"] % save_every == 0
+            if not (phrase_hit or cadence_hit):
+                return
+            last_save = int(st.get("last_save_turn", 0))   # 0 = never fired → first nudge allowed
+            if last_save and (st["turns"] - last_save) < min_gap:
+                return
+            st["last_save_turn"] = st["turns"]
+            _write_state(path, st)
+            print(_NUDGE_SAVE_PHRASE if (phrase_hit and not cadence_hit) else _NUDGE_SAVE_CADENCE)
+    except Exception:
+        return  # never break the session
+
+
+def audit(args):
+    """Surface REDUNDANT (same-source duplication ONLY — never independent corroboration),
+    OBSOLETE (forgotten/contested/decayed), and (with --session) a MISSING proxy. Read-only."""
+    cfg = load_nudge_config()
+    depth = args.depth or cfg.get("AUDIT_DEPTH", "light")
+    cap = {"light": 3, "normal": 8, "deep": 20}.get(depth, 3)
+    now = os.environ.get("HIVE_NOW") or _now_iso()
+
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    counts = collections.Counter()
+    idents = collections.defaultdict(set)
+    for e in entries:
+        if e.get("type") != "fact":
+            continue
+        p = e.get("payload", {})
+        c = p.get("content")
+        if c is None:
+            continue
+        counts[c] += 1
+        key, _w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        idents[c].add(key)
+
+    # REDUNDANT (a): one identity asserted the SAME content more than once.
+    redundant = [(c, counts[c], len(idents[c])) for c in counts if counts[c] > len(idents[c])]
+    redundant.sort(key=lambda x: x[1] - x[2], reverse=True)
+    corroborated = [c for c in counts if len(idents[c]) >= 2]   # GOOD — never flagged
+
+    # REDUNDANT (b): near-duplicate DISTINCT contents from a single shared author.
+    paraphrase = []
+    if depth in ("normal", "deep"):
+        single = sorted([c for c in counts if len(idents[c]) == 1],
+                        key=lambda c: counts[c], reverse=True)[:(200 if depth == "deep" else 80)]
+        toks = {c: set(re.findall(r"[a-z0-9]{4,}", c.lower())) for c in single}
+        thr = 0.5 if depth == "deep" else 0.6
+        for i in range(len(single)):
+            a = single[i]
+            if not toks[a]:
+                continue
+            for j in range(i + 1, len(single)):
+                b = single[j]
+                if idents[a] != idents[b] or not toks[b]:
+                    continue
+                union = len(toks[a] | toks[b])
+                if union and len(toks[a] & toks[b]) / union >= thr:
+                    paraphrase.append((a, b, round(len(toks[a] & toks[b]) / union, 2)))
+
+    # OBSOLETE: bucket by effective confidence.
+    conn = get_conn()
+    frows = conn.execute(
+        "SELECT id, content, confidence, contested, last_evidence_at FROM facts").fetchall()
+    conn.close()
+    forgotten, contested, decayed = [], [], []
+    for r in frows:
+        base = r["confidence"]
+        eff = _effective_confidence(base, r["last_evidence_at"], now)
+        if base <= -0.4:
+            forgotten.append((r, eff))
+        elif r["contested"]:
+            contested.append((r, eff))
+        elif base > 0 and eff < 0.2:
+            decayed.append((r, eff))
+    decayed.sort(key=lambda x: x[1])
+
+    missing_note = None
+    if getattr(args, "session", ""):
+        st = _read_state(_nudge_state_path(args.session))
+        gap = int(st.get("turns", 0)) - int(st.get("last_save_turn", 0))
+        if gap >= _int(cfg, "SAVE_EVERY", 12):
+            missing_note = (f"{gap} turns since your last hive write this session — "
+                            "anything decided/learned worth keeping?")
+
+    if args.format == "json":
+        print(json.dumps({
+            "depth": depth,
+            "redundant": [{"content": c, "asserts": n, "identities": d} for c, n, d in redundant[:cap]],
+            "paraphrase": [{"a": a, "b": b, "overlap": o} for a, b, o in paraphrase[:cap]],
+            "obsolete": {
+                "forgotten": [{"id": r["id"], "content": r["content"]} for r, _e in forgotten[:cap]],
+                "contested": [{"id": r["id"], "content": r["content"]} for r, _e in contested[:cap]],
+                "decayed": [{"id": r["id"], "content": r["content"], "eff": e} for r, e in decayed[:cap]],
+            },
+            "well_corroborated": len(corroborated),
+            "missing": missing_note,
+        }, indent=2))
+        return
+
+    def short(s):
+        return s.replace("\n", " ")[:90]
+    print(f"hive audit (depth={depth})\n")
+    print(f"REDUNDANT (same-source duplication) — {len(redundant)}")
+    for c, n, d in redundant[:cap]:
+        print(f'  "{short(c)}"  asserted {n}x by {d} identity(ies) → consider one canonical fact')
+    for a, b, o in paraphrase[:cap]:
+        print(f'  near-dup ({o}) same author: "{short(a)}" ~ "{short(b)}"')
+    if not redundant and not paraphrase:
+        print("  (none)")
+    print(f"\nOBSOLETE — forgotten {len(forgotten)}, contested {len(contested)}, decayed {len(decayed)}")
+    for r, _e in forgotten[:cap]:
+        print(f"  [forgotten] #{r['id']} {short(r['content'])} → already soft-gone")
+    for r, _e in contested[:cap]:
+        print(f"  [contested] #{r['id']} {short(r['content'])} → needs adjudication")
+    for r, e in decayed[:cap]:
+        print(f"  [decayed eff {e:.2f}] #{r['id']} {short(r['content'])} → re-confirm or `hv retract {r['id']}`")
+    if not (forgotten or contested or decayed):
+        print("  (none)")
+    if missing_note:
+        print(f"\nMISSING (session proxy)\n  {missing_note}")
+    print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 
@@ -1008,6 +1295,17 @@ def main():
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
+    nudge_parser = subparsers.add_parser("nudge", help="Emit a best-effort save/audit nudge (for hooks)")
+    nudge_parser.add_argument("--event", required=True,
+                              choices=["user-prompt", "precompact", "sessionend", "session-start"])
+    nudge_parser.add_argument("--session", default="", help="Session id (debounce state)")
+    nudge_parser.add_argument("--cwd", default="", help="cwd for the session-start project digest")
+
+    audit_parser = subparsers.add_parser("audit", help="Surface redundant/obsolete/missing facts")
+    audit_parser.add_argument("--depth", choices=["light", "normal", "deep"], default=None)
+    audit_parser.add_argument("--session", default="", help="Session id (enables the MISSING proxy)")
+    audit_parser.add_argument("--format", choices=["text", "json"], default="text")
+
     sync_parser = subparsers.add_parser("sync", help="Sync with peers (P2P)")
     sync_subparsers = sync_parser.add_subparsers(dest="sync_action")
     sync_subparsers.add_parser("now", help="One-shot bidirectional sync with all peers")
@@ -1034,6 +1332,10 @@ def main():
         rebuild(args)
     elif args.command == "merkle":
         merkle_cmd(args)
+    elif args.command == "nudge":
+        nudge(args)
+    elif args.command == "audit":
+        audit(args)
     elif args.command == "sync":
         sync_cmd(args)
     else:

@@ -27,6 +27,7 @@ import os
 import re
 import socket
 import sqlite3
+import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -1368,12 +1369,29 @@ OFFICIAL_PUBKEY_URL = os.environ.get(
 OFFICIAL_SOURCE = "github.com/projectmentor/hive-mind"
 
 
+def _git_tracked(root):
+    """The set of git-tracked files (relative paths), or None if not a git repo / git unavailable.
+    Using the tracked set makes the manifest REPRODUCIBLE: it covers exactly the distributed source,
+    so a local untracked file (e.g. .claude/settings.local.json) can never shift the digest."""
+    try:
+        out = subprocess.run(["git", "-C", str(root), "ls-files", "-z"],
+                             capture_output=True, timeout=10)
+        if out.returncode != 0:
+            return None
+        return [n.decode() for n in out.stdout.split(b"\x00") if n]
+    except Exception:
+        return None
+
+
 def _source_manifest(root):
-    """Deterministic fingerprint of the source code (the files that define behavior). Excludes
-    runtime data, caches, node_modules, .git, and verify.json itself. Returns {version, files, digest}."""
+    """Deterministic fingerprint of the source code (the files that define behavior). Covers the
+    git-tracked source (reproducible from any clean clone); excludes the trust artifacts themselves,
+    runtime data, caches, and non-code files. Returns {version, files, digest}."""
     root = Path(root)
+    tracked = _git_tracked(root)
+    candidates = [root / t for t in tracked] if tracked is not None else list(root.rglob("*"))
     files = {}
-    for p in sorted(root.rglob("*")):
+    for p in sorted(candidates):
         if not p.is_file():
             continue
         rel = p.relative_to(root)

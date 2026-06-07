@@ -1123,6 +1123,45 @@ def _spec_update_check(agent):
         return
 
 
+def _freshness_check():
+    """Warn (read-only) if this checkout's adapter code is behind origin/main, so an agent never
+    silently runs a stale adapter. We refresh the remote ref with a short, credential-less,
+    throttled fetch and COUNT commits behind — we never pull, never touch the working tree, never
+    block. Safe on a dev checkout (counting/fetch don't alter local files). Silent when current,
+    offline, or not a git checkout."""
+    try:
+        root = str(HIVE_HOME)
+        # Throttle the network fetch to ~once / 6h; counting always uses the (cached) ref.
+        marker = HIVE_HOME / ".nudge_state" / ".last_fetch"
+        do_fetch = True
+        try:
+            if marker.exists():
+                last = _to_dt(marker.read_text().strip())
+                if last and (datetime.now(timezone.utc).replace(tzinfo=None) - last).total_seconds() < 6 * 3600:
+                    do_fetch = False
+        except Exception:
+            pass
+        if do_fetch:
+            try:
+                subprocess.run(["git", "-C", root, "fetch", "--quiet", "origin", "main"],
+                               env=dict(os.environ, GIT_TERMINAL_PROMPT="0"),
+                               capture_output=True, timeout=4)
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(_now_iso())
+            except Exception:
+                pass  # offline / slow: fall back to the cached origin/main ref
+        out = subprocess.run(["git", "-C", root, "rev-list", "--count", "HEAD..origin/main"],
+                             capture_output=True, text=True, timeout=5)
+        if out.returncode != 0:
+            return
+        behind = int((out.stdout or "0").strip() or "0")
+        if behind > 0:
+            print(f"[hive] heads up: your hive-mind checkout is {behind} commit(s) behind origin/main. "
+                  "Run `git pull` + restart to pick up the latest adapter.")
+    except Exception:
+        return
+
+
 def nudge(args):
     """Best-effort save/audit nudge or startup digest. NEVER raises (swallow-all)."""
     try:
@@ -1131,6 +1170,7 @@ def nudge(args):
         if event == "session-start":
             _print_digest(getattr(args, "cwd", "") or os.getcwd())
             _spec_update_check(getattr(args, "agent", "agent") or "agent")
+            _freshness_check()
             _audit_boot_summary()
             return
         if event in ("precompact", "sessionend"):

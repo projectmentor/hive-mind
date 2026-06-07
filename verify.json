@@ -1,5 +1,5 @@
 {
-  "digest": "2d6e5b25b6ef16b0c91345a48156c655b572623694fe165aaa6af70aa3c47ba5",
+  "digest": "2f1250694377d13982facfe65ee053e77a52eb51ed3cdba82d96109e916dd2b5",
   "files": {
     ".claude/settings.local.json": "804cf7de11c6f8cc3170748c987524700b3de40d195913d9aae50f354c68634b",
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
@@ -9,6 +9,7 @@
     ".github/pull_request_template.md": "64c9099d2857119c8d471c6cc6f7982232bdc4e4263a7a357a21ee58b433c054",
     ".github/workflows/ci.yml": "0542a7ca64f27654cd2b19f652a8a4d259c78fa4ff6a69645d132f32d95cf88b",
     ".github/workflows/cla.yml": "c9b9ef1fba789b9736a6fc976ae314ebcceed5ab15534663e179f390a1c139b3",
+    ".github/workflows/sign.yml": "8a5b54b1cedc3c1da0fb4ab35d1ece560bd4399ecbcbb9697193553bfdd62903",
     ".peers.json.example": "423edc35587b068ff591fe741225bec845a01f5bc9318ad0820d738452f3f363",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
@@ -18,9 +19,10 @@
     "docs/INTERNALS.md": "ba38f5b102f47b3ec372c2a5af6e5b567a8311a420cd640c3a262b8134a64f00",
     "docs/P2P_DESIGN.md": "2f31f387876dfcb0ea9fcc0dcddebd2aeb046ff4d538e949576e3aeae1676dbd",
     "docs/SYNC_API.md": "1741be80d5d5de16accc8a9499a3265b4c92663e0ca42603d49c7bcf3eaef204",
+    "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "6a0387f7c8ebbeb19669515b83adebb87e35313f3b669fa00643c214467718e7",
-    "hv": "429a73cf3b1298fdd2e958591169eb2ac17a2f10ffca0ca44025218f96d28cb0",
+    "hv": "55c7572b82f08b860020ae95ad543a485a01e6d12fa63409a11b4e498302ce19",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "f90f5301e6c8cf512e5cddad9db9a4b5ff433b102c93c079549c2b468948cc56",
@@ -31,6 +33,7 @@
     "nudge.env.example": "3259431253d78de3b0d4dd28200563b3f32f461ab0243b97287045f3d4359749",
     "requirements.txt": "7cc4959877dbe6b6c63a8eb1bfe3bfb545fa8fe5b28b1b2c13e4a7c1c0d1c4d4",
     "scripts/deploy_node.sh": "f20b6f62c983bf00125b84f83972bfe701674f69e0008be2fe5ec560e4b14216",
+    "scripts/gen_keypair.py": "f4bea820e3ad672fceda1dc6ede273df4076a2201256e8081654187fd5583933",
     "scripts/gen_verify.py": "66e39bf8c3eabca7ff770fd28272dc563573c6cb6ac7012b5beded33657489c7",
     "scripts/infer-phrases.py": "0d4ba2590788b02e0b6971c5f7301da245c56fbbf521c01dc03e94b8ff845184",
     "scripts/installer/_install_node.sh": "8a7eeb595256a6fe89504bfe9c02478f5f3b99e924c2d69f2718fac51915b0f3",
@@ -40,6 +43,7 @@
     "scripts/installer/install.sh": "4bc1790877a66b789a945b79796b3b771012187b4b3528d8e44c77a3f61b775f",
     "scripts/nudge_hook.sh": "c85845c1853efae974e7910cde632c5d5aea4a1e03b472e0c26fbdab6d8d86a5",
     "scripts/session_hook.sh": "93c36735e723579e9dc2a02cae71bd81ef595ac948ec61bbc900aff82081f234",
+    "scripts/sign_release.py": "186942b840b3950cd38a890d8b7b5df56d5f1529d5ff4bdfac303ec421fc9e7a",
     "scripts/smoke.sh": "a86538efd2ff512649c94a823351af144170c0676b6a585e86683dd92ad852d8",
     "scripts/sync_smoke.sh": "94281e9b7fb0b467bf6d14d62d60f9cc2dbb986859666cdd5f5982ccb93317c9",
     "sync_client.py": "198a74b3eabc109bb810ebfbd6f98b6e8fe4c4c0323360ffc62cf00c1ed3e287",
@@ -48,7 +52,8 @@
     "tests/conftest.py": "8cdd191e3b8336ac1e38a234cbe698784b09ee28c73f7071290b2183f14004ea",
     "tests/test_hv.py": "f782f4b069c7b2c36e6616a1f9e24c67398173cbfb43cf7c9a66ab36cd8866ea",
     "tests/test_nudge.py": "33e1e365935a7315456b169850ce98a1bae1785e20d3c27708b589554edf1ab2",
-    "tests/test_sync.py": "0faa0e72b82a71e3c2f04a550fa6fc12e5b33cdeef9b49d1f5b7da8dbbe40ef9"
+    "tests/test_sync.py": "0faa0e72b82a71e3c2f04a550fa6fc12e5b33cdeef9b49d1f5b7da8dbbe40ef9",
+    "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04"
   },
   "version": "1.0"
 }

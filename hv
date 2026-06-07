@@ -19,6 +19,7 @@ Cross-node identity (Phase 2):
 """
 
 import argparse
+import base64
 import collections
 import hashlib
 import json
@@ -27,12 +28,17 @@ import re
 import socket
 import sqlite3
 import sys
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
 # Make sibling modules (merkle.py) importable when run as ./hv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import merkle  # noqa: E402
+try:
+    import ed25519 as _ed25519  # bundled pure-Python signature verifier
+except Exception:
+    _ed25519 = None
 
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
@@ -1348,9 +1354,17 @@ def version_cmd(args):
 
 
 _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".nudge_state", "journal"}
-_VERIFY_EXCLUDE_NAMES = {"verify.json", "nudge.env", ".peers.json"}
+# The trust artifacts are NOT part of the manifest they vouch for: verify.json holds the digest,
+# verify.json.sig signs it, and hivemind.pub is the anchor (its integrity comes from the published
+# copy at the canonical site, not from being self-listed). Listing any of them would be circular.
+_VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env", ".peers.json"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg"}
 OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
+# The trust anchor: the public key, served from our own TLS domain (a DIFFERENT origin than the
+# code host). A fork can ship its own hivemind.pub, but it cannot change what this URL serves, so a
+# bundled key that does not match this one is the tell. Keep this in sync with hivemind.pub on main.
+OFFICIAL_PUBKEY_URL = os.environ.get(
+    "HIVE_PUBKEY_URL", "https://hivemind.projectmentor.org/.well-known/hivemind.pub")
 OFFICIAL_SOURCE = "github.com/projectmentor/hive-mind"
 
 
@@ -1377,44 +1391,80 @@ def _source_manifest(root):
     return {"version": CONTRACT_VERSION, "files": files, "digest": digest}
 
 
+def _b64bytes(s):
+    try:
+        return base64.b64decode("".join(str(s).split()), validate=False)
+    except Exception:
+        return None
+
+
+def _fetch_official_pubkey():
+    """Fetch the published public key from our own TLS domain (the trust anchor). Returns 32 raw
+    bytes, or None if unreachable / not yet published. Best-effort; never raises."""
+    try:
+        with urllib.request.urlopen(OFFICIAL_PUBKEY_URL, timeout=6) as r:
+            return _b64bytes((r.read() or b"").decode("ascii", "ignore"))
+    except Exception:
+        return None
+
+
 def verify_cmd(args):
-    """Confirm this is the official, untampered HiveMind. Compares the local source fingerprint to
-    the bundled manifest (local-tamper check) and to the official manifest at the canonical source
-    (provenance). The canonical source is the trust anchor; reach it directly to be sure."""
+    """Integrity + authenticity check. Three independent layers, strongest last:
+      1. INTEGRITY  — local source fingerprint matches the bundled manifest (verify.json). Catches
+         local edits and accidental drift.
+      2. SIGNATURE  — the manifest carries a valid Ed25519 signature (verify.json.sig) under the
+         bundled public key (hivemind.pub). Catches a fork that changed code: it cannot forge a
+         signature without the private key.
+      3. KEY ANCHOR — the bundled public key matches the key published at our own TLS domain
+         (a different origin than the code host). Catches a fork that ships its OWN key + self-signed
+         manifest: the bundled key will not match the one served from hivemind.projectmentor.org.
+    Each layer degrades gracefully; the command never raises and never blocks."""
     root = Path(__file__).resolve().parent
     local = _source_manifest(root)
     try:
-        bundled = json.loads((root / "verify.json").read_text())
+        manifest_bytes = (root / "verify.json").read_bytes()
+        bundled = json.loads(manifest_bytes)
     except Exception:
-        bundled = None
-    official = None
-    try:
-        with urllib.request.urlopen(OFFICIAL_VERIFY_URL, timeout=6) as r:
-            official = json.loads(r.read() or b"{}")
-    except Exception:
-        official = None
+        manifest_bytes, bundled = None, None
+    sig = _b64bytes((root / "verify.json.sig").read_text()) if (root / "verify.json.sig").exists() else None
+    bundled_pub = _b64bytes((root / "hivemind.pub").read_text()) if (root / "hivemind.pub").exists() else None
+    ver = (bundled or {}).get("version", "?")
 
-    if official and official.get("digest"):
-        if local["digest"] == official["digest"]:
-            print(f"✓ Official HiveMind v{official.get('version', '?')} from Project Mentor. "
-                  f"Verified against the canonical source ({OFFICIAL_SOURCE}).")
-            return
-        if bundled and local["digest"] == bundled.get("digest"):
-            print("⚠ This install does NOT match the official release. It may be a fork, a mirror, "
-                  "or an old version.")
-        else:
-            print("⚠ This install has been MODIFIED locally (files differ from the manifest).")
-        print(f"  Official source: {OFFICIAL_SOURCE}  (and https://hivemind.projectmentor.org)")
-        return
-    if bundled and local["digest"] == bundled.get("digest"):
-        print(f"✓ Matches the bundled manifest for v{bundled.get('version', '?')}. Could not reach the "
-              "canonical source to confirm provenance (offline?).")
-        print(f"  Confirm against {OFFICIAL_SOURCE} when online.")
-    elif bundled:
-        print("⚠ This install has been MODIFIED locally (files differ from its bundled manifest).")
-        print(f"  Official source: {OFFICIAL_SOURCE}")
-    else:
+    # Layer 1: integrity.
+    if not bundled:
         print(f"⚠ No manifest to verify against. Reinstall from the official source: {OFFICIAL_SOURCE}")
+        return
+    if local["digest"] != bundled.get("digest"):
+        print("⚠ This install has been MODIFIED locally — your files differ from the signed manifest.")
+        print(f"  If you did not edit it yourself, reinstall from the official source: {OFFICIAL_SOURCE}")
+        return
+
+    # Layer 2: signature.
+    if _ed25519 is None or sig is None or bundled_pub is None:
+        print(f"✓ Integrity OK: matches the bundled manifest for v{ver}. (No signature bundled yet — "
+              "this build predates signed releases.)")
+        print(f"  Confirm against {OFFICIAL_SOURCE} when online.")
+        return
+    if not _ed25519.verify(manifest_bytes, sig, bundled_pub):
+        print("⚠ SIGNATURE INVALID — the manifest is not signed by the HiveMind release key. This is "
+              "a tampered or forged copy.")
+        print(f"  Reinstall from the official source: {OFFICIAL_SOURCE}")
+        return
+
+    # Layer 3: key anchor (does the bundled key match the one published on our domain?).
+    official_pub = _fetch_official_pubkey()
+    if official_pub is None:
+        print(f"✓ Official HiveMind v{ver}: integrity OK and the release signature is valid.")
+        print(f"  Could not reach {OFFICIAL_PUBKEY_URL} to confirm the key is the published one (offline?).")
+        return
+    if official_pub == bundled_pub:
+        print(f"✓ Official HiveMind v{ver} from Project Mentor — verified.")
+        print("  Source integrity OK, release signature valid, and the signing key matches the one "
+              "published at hivemind.projectmentor.org.")
+    else:
+        print("⚠ Signed, but with a key that does NOT match the official key published at "
+              "hivemind.projectmentor.org. This is a fork or an impostor.")
+        print(f"  Reinstall from the official source: {OFFICIAL_SOURCE}")
 
 
 # --------------------------------------------------------------------------

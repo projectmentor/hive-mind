@@ -120,6 +120,10 @@ Most of the time your agents call `hv` for you. Full reference:
 Deeper reading: [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/INTERNALS.md`](docs/INTERNALS.md).
 
+**Integrating an agent?** See [`docs/AGENT_INTEGRATION.md`](docs/AGENT_INTEGRATION.md) — a
+runtime-agnostic spec each agent uses to wire *itself* to the hive (and keep itself current). One
+brain (`hv`), one spec, no hand-maintained per-agent adapters.
+
 ---
 
 ## Works with your agents

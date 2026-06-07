@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Spec-Version: 1`
+`Contract-Version: 1.0`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -9,8 +9,10 @@
 > (`hv`), this one spec, and one reference implementation. You generate the rest for your
 > runtime, once, and keep yourself current by re-reading this spec when its version changes.
 
-When this spec changes, only its `Spec-Version` and the relevant section move. Agents detect the
-bump on boot (§0) and re-integrate. Maintainers bump `Spec-Version` on any behavior change.
+When the contract changes, the `Contract-Version` and the relevant section move. A **MINOR** bump
+is additive and backward-compatible — your existing adapter keeps working, no re-integration needed.
+A **MAJOR** bump is breaking and triggers re-integration (see §0 and §7). Maintainers bump MINOR for
+additions, MAJOR only for breaking changes.
 
 ---
 
@@ -23,12 +25,13 @@ block or break a session:
 1. Make your local hive current. Your install's update path keeps the repo fresh (a periodic
    `hive-mind update` / git pull); a best-effort `git -C "$HIVE_HOME" pull --ff-only` is fine on a
    deployed checkout, but **skip auto-pull on a dev checkout** with local changes. Offline is fine.
-2. Read this spec's `Spec-Version` from `"$HIVE_HOME/docs/AGENT_INTEGRATION.md"`.
-3. Compare it to the version you last installed, recorded in your marker file
-   `"$HIVE_HOME/.nudge_state/<agent>.spec"`.
-4. **Unchanged** → you are up to date; do nothing (the fast path, every normal boot).
-5. **Newer, or first run** → re-read this spec, (re)wire your adapter per §2–§3, run the §5
-   self-verify, and **only on success** write the new version to your marker file.
+2. Read the current `Contract-Version` — authoritatively from `hv version`, else this spec's header.
+3. Compare it to the version you last integrated against (marker `"$HIVE_HOME/.nudge_state/<agent>.spec"`).
+4. **Same** → you are up to date; do nothing (the fast path, every normal boot).
+5. **MINOR bump** (same MAJOR) → additive and backward-compatible; you keep working — record the new
+   version, optionally skim the changes. **MAJOR bump, or first run** → re-read this spec, (re)wire per
+   §2–§3, run the §5 self-verify, and on success record the new version. (The reference
+   `hv nudge --event=session-start` already emits the re-integrate nudge on a MAJOR bump.)
 
 This is the one mechanism that makes integration self-updating: you are not regenerated every
 session (that would be unstable — see §4), but you never silently fall behind the spec either.
@@ -133,6 +136,27 @@ Per-node tuning lives in `nudge.env` (copy from `nudge.env.example`; mirrors the
 convention): `SAVE_EVERY`, `MIN_GAP`, `SAVE_ON_PHRASE`, `AUDIT_ON`, `AUDIT_DEPTH`,
 `HIVE_NUDGE_PHRASES`. `hv` reads it for you — your adapter does not need to parse it. Honor it by
 simply routing text through `hv nudge`/`hv audit`.
+
+---
+
+---
+
+## 7. Versioning & backward compatibility
+
+The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
+
+- **MINOR** — additive only: new verbs, new *optional* flags, new output fields. Existing behavior
+  never changes within a major, so an adapter written for any `N.x` keeps working on every later
+  `N.y`. No re-integration required.
+- **MAJOR** — breaking (a verb/flag removed or repurposed, an output format changed). Bumped only
+  when unavoidable. On a major bump: `hv` keeps the **previous major working as deprecated shims**
+  through a migration window; §0 fires a loud re-integrate nudge; and — because every adapter call
+  is best-effort and `exit 0` (§4) — an un-migrated adapter **degrades gracefully** (its nudges
+  silently no-op) rather than crashing. Migrate to the new major within the window.
+
+This is what makes future breaking changes safe: additive-within-major keeps old adapters running,
+the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly
+when it must re-wire.
 
 ---
 

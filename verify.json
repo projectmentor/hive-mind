@@ -1,7 +1,6 @@
 {
-  "digest": "2f1250694377d13982facfe65ee053e77a52eb51ed3cdba82d96109e916dd2b5",
+  "digest": "7f98802689cac5732a059fe32127eee7f5be78547c7dd340030604b200b37f98",
   "files": {
-    ".claude/settings.local.json": "804cf7de11c6f8cc3170748c987524700b3de40d195913d9aae50f354c68634b",
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
     ".github/ISSUE_TEMPLATE/config.yml": "8aeccd88bd062a2e6682923a0b92c7bae23973d0b0a00492e2d2fbaa544ae863",
@@ -9,7 +8,7 @@
     ".github/pull_request_template.md": "64c9099d2857119c8d471c6cc6f7982232bdc4e4263a7a357a21ee58b433c054",
     ".github/workflows/ci.yml": "0542a7ca64f27654cd2b19f652a8a4d259c78fa4ff6a69645d132f32d95cf88b",
     ".github/workflows/cla.yml": "c9b9ef1fba789b9736a6fc976ae314ebcceed5ab15534663e179f390a1c139b3",
-    ".github/workflows/sign.yml": "8a5b54b1cedc3c1da0fb4ab35d1ece560bd4399ecbcbb9697193553bfdd62903",
+    ".github/workflows/sign.yml": "e1f8b35c1873f95a4cf0a40337b6a918b5d626b350a624371a3efb0904fa9086",
     ".peers.json.example": "423edc35587b068ff591fe741225bec845a01f5bc9318ad0820d738452f3f363",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
@@ -22,7 +21,7 @@
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "6a0387f7c8ebbeb19669515b83adebb87e35313f3b669fa00643c214467718e7",
-    "hv": "55c7572b82f08b860020ae95ad543a485a01e6d12fa63409a11b4e498302ce19",
+    "hv": "3dde8caa06ae7c36cabade83822aa57e4ca008e5fc225133e8e6a132c13ea585",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "f90f5301e6c8cf512e5cddad9db9a4b5ff433b102c93c079549c2b468948cc56",

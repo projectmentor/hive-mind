@@ -13,6 +13,9 @@ store.db.bak.*
 nudge.env
 .nudge_state/
 
+# Telemetry is a LOCAL-ONLY observability lane (per-node; never synced, never in the corpus)
+.telemetry/
+
 # IDE
 .vscode/
 .idea/

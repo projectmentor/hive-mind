@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.0`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.1`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -52,6 +52,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv retract <id> [--owner]` | Negative evidence / owner-forget |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
+| `hv telemetry record --event=start\|end --agent=<you> --identity=<instance> --session=<id> [--cwd=<dir>]` | **(optional, since 1.1)** record session observability into the LOCAL telemetry lane |
 
 **Contract invariants you can rely on:** `hv nudge`/`hv audit` are best-effort and print to
 stdout (empty = no nudge); `--source` is your stable identity; confidence rises only from
@@ -86,6 +87,12 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    `hv audit` and reconciling redundant, obsolete, recheck (volatile past freshness), and missing.
    These two hooks are best-effort: a hard kill skips them, so they sit on top of audit-on-boot
    (behavior 1), which is the actual guarantee.
+5. **Telemetry (OPTIONAL, since 1.1).** If you want session observability, call
+   `hv telemetry record --event=start` at session start and `--event=end` at session end, passing a
+   stable `--agent` and `--identity` (your instance discriminator) plus `--session`/`--cwd`. This is
+   pure observability — token usage, duration, cost — written to a LOCAL-ONLY lane that **never enters
+   the corpus, the journal, or sync**. It has no effect on knowledge or confidence; skip it entirely
+   if you do not want it. Never write telemetry as a `hv remember` fact.
 
 ---
 
@@ -169,6 +176,9 @@ The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
 This is what makes future breaking changes safe: additive-within-major keeps old adapters running,
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly
 when it must re-wire.
+
+**Changelog.** `1.1` — added the optional `hv telemetry` verb (behavior 5). Additive and
+backward-compatible: a `1.0` adapter keeps working unchanged; wire telemetry only if you want it.
 
 ---
 

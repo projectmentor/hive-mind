@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Hive Mind session telemetry hook.
 #
-# Records Claude Code session start/stop events into the shared hive-mind
-# corpus via `hv remember`, dogfooding the product as institutional memory
-# for multi-agent systems. Wired from the GLOBAL ~/.claude/settings.json so it
-# fires for every Claude Code session in every project; `hv` resolves an
-# absolute HIVE_HOME, so all events land in the one corpus regardless of cwd.
+# Records Claude Code session start/end into the LOCAL telemetry lane via
+# `hv telemetry record` — NOT into the facts corpus. Telemetry is observability
+# (who/where/when + token usage + cost), not knowledge; it lives in its own
+# local-only store (.telemetry/) and never enters the journal/merkle. Wired from
+# the GLOBAL ~/.claude/settings.json so it fires for every Claude Code session.
 #
-# Contract: best-effort and NON-BLOCKING. It must never fail a session start,
-# so every path exits 0 and the hv write is capped with `timeout`.
+# Contract: best-effort and NON-BLOCKING. Every path exits 0 and the hv call is
+# capped with `timeout`, so it can never fail or slow a session.
 #
-# Usage (from settings.json):  session_hook.sh start   |   session_hook.sh end
-# Reads the hook JSON on stdin (we use the `cwd` field).
+# Usage (from settings.json):  session_hook.sh start  |  session_hook.sh end
+# Reads the hook JSON on stdin (cwd + session_id).
 
 event="${1:-start}"
 HV="${HIVE_HOME:-$HOME/projects/hive-mind}/hv"
@@ -19,23 +19,31 @@ HV="${HIVE_HOME:-$HOME/projects/hive-mind}/hv"
 # If hv isn't present/executable here, silently do nothing.
 [ -x "$HV" ] || exit 0
 
-ts=$(date '+%Y-%m-%d %H:%M:%S %Z')
-
-# Pull cwd out of the hook's stdin JSON (best-effort; python3 is always present
-# since hv itself is python). Falls back gracefully if stdin is empty/malformed.
-cwd=$(python3 -c 'import sys, json
+# Pull cwd + session id out of the hook's stdin JSON (best-effort; python3 is
+# always present since hv itself is python). Two lines so a cwd with spaces is safe.
+parsed=$(python3 -c 'import sys, json
 try:
-    print(json.load(sys.stdin).get("cwd", ""))
+    d = json.load(sys.stdin)
+    print(d.get("cwd", ""))
+    print(d.get("session_id") or d.get("sessionId") or "")
 except Exception:
-    pass' 2>/dev/null)
-[ -n "$cwd" ] || cwd="(unknown dir)"
+    print(); print()' 2>/dev/null)
+cwd=$(printf '%s\n' "$parsed" | sed -n '1p')
+sid=$(printf '%s\n' "$parsed" | sed -n '2p')
+[ -n "$cwd" ] || cwd="$PWD"
 
-# Timestamp in the content guarantees uniqueness so remember() does not collapse
-# successive sessions into a single trust-boosted row.
-timeout 10 "$HV" remember \
-    "Claude Code session ${event}: ${ts} in ${cwd}" \
-    --tags session,telemetry \
-    --source claude-code \
+node="$(hostname 2>/dev/null || echo node)"
+user="$(id -un 2>/dev/null || echo "${USER:-user}")"
+
+# Record into the telemetry lane. --identity keeps this instance distinct from
+# other agents (and other machines) sharing the "claude-code" name; hv also
+# captures node/os_user/ip and, on end, token usage + cost from the transcript.
+timeout 12 "$HV" telemetry record \
+    --event "$event" \
+    --agent claude-code \
+    --identity "${user}@${node}" \
+    --session "$sid" \
+    --cwd "$cwd" \
     >/dev/null 2>&1 || true
 
 exit 0

@@ -30,5 +30,5 @@ sid="$(parse session_id sessionId)"
 cwd="$(parse cwd)"
 text="$(parse prompt user_prompt)"
 
-printf '%s' "$text" | timeout 8 "$HV" nudge --event "$event" --session "$sid" --cwd "$cwd" 2>/dev/null || true
+printf '%s' "$text" | timeout 8 "$HV" nudge --event "$event" --session "$sid" --cwd "$cwd" --agent claude-code 2>/dev/null || true
 exit 0

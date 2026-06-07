@@ -20,7 +20,9 @@ The session-start integration you build in §2 **must itself perform this check*
 installed, it keeps you current with no human in the loop). All steps are best-effort — never
 block or break a session:
 
-1. Make your local hive current: `git -C "$HIVE_HOME" pull --ff-only` (ignore failure; offline is fine).
+1. Make your local hive current. Your install's update path keeps the repo fresh (a periodic
+   `hive-mind update` / git pull); a best-effort `git -C "$HIVE_HOME" pull --ff-only` is fine on a
+   deployed checkout, but **skip auto-pull on a dev checkout** with local changes. Offline is fine.
 2. Read this spec's `Spec-Version` from `"$HIVE_HOME/docs/AGENT_INTEGRATION.md"`.
 3. Compare it to the version you last installed, recorded in your marker file
    `"$HIVE_HOME/.nudge_state/<agent>.spec"`.

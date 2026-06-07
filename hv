@@ -1418,9 +1418,12 @@ def _b64bytes(s):
 
 def _fetch_official_pubkey():
     """Fetch the published public key from our own TLS domain (the trust anchor). Returns 32 raw
-    bytes, or None if unreachable / not yet published. Best-effort; never raises."""
+    bytes, or None if unreachable / not yet published. Best-effort; never raises.
+    Sends a normal User-Agent: the default 'Python-urllib' UA is blocked (403) by the CDN."""
     try:
-        with urllib.request.urlopen(OFFICIAL_PUBKEY_URL, timeout=6) as r:
+        req = urllib.request.Request(OFFICIAL_PUBKEY_URL, headers={
+            "User-Agent": "Mozilla/5.0 (compatible; hivemind-verify/1.0; +https://hivemind.projectmentor.org)"})
+        with urllib.request.urlopen(req, timeout=6) as r:
             return _b64bytes((r.read() or b"").decode("ascii", "ignore"))
     except Exception:
         return None

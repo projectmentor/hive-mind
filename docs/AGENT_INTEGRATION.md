@@ -64,21 +64,28 @@ stdout (empty = no nudge); `--source` is your stable identity; confidence rises 
 Map each behavior to the matching point in **your** runtime's lifecycle (§3). For each, the `hv`
 call is fixed; you provide the plumbing (where the text comes from, where the output goes).
 
-1. **Reorient on start.** At session start: run the §0 self-update check, then
-   `hv nudge --event=session-start --cwd="<cwd>"` and inject its stdout into your context so you
-   begin oriented to the project. (Equivalently, `hv search "<project>"`.)
+1. **Reorient on start, and audit-on-boot.** At session start: run the §0 self-update check, then
+   `hv nudge --event=session-start --cwd="<cwd>"` and inject its stdout. That output carries the
+   project digest **and** a short audit-on-boot line (what the previous session left to re-check,
+   stale, or duplicate). Audit-on-boot is the reliable floor of the whole loop, because session
+   start fires on every runtime even when shutdown and per-turn hooks do not. Surface it so the new
+   session can reconcile.
 2. **Capture.** When a decision, outcome, correction, or constraint occurs, write it:
    `hv remember "..." --tags ... --source <you>`. Search first; never write back something you
    just read this session (no echoes). **Tag time-varying/operational facts `volatile`**
-   (optionally `ttl:<n>h|d`) — "service running", "host reachable" — so the audit flags them for
-   re-verification instead of trusting them indefinitely.
-3. **Save-nudge.** On each user turn, pipe the user's message to
-   `hv nudge --event=user-prompt --session="<id>"` and inject any stdout. It is debounced and
-   phrase/cadence-driven inside `hv`; you just feed it text.
-4. **Audit-nudge.** Before context is lost (pre-compaction) and at session end, run
-   `hv nudge --event=precompact` / `--event=sessionend` and inject any stdout; act on it by
-   running `hv audit` and reconciling what it surfaces — redundant, obsolete, **recheck**
-   (volatile facts past freshness), and missing.
+   (optionally `ttl:<n>h|d`), for example "service running" or "host reachable", so the audit flags
+   them for re-verification instead of trusting them indefinitely.
+3. **Save-nudge (best-effort, not a guarantee).** Where your runtime has a per-turn pre-prompt
+   hook, pipe the user's message to `hv nudge --event=user-prompt --session="<id>"` and inject any
+   stdout. Gate cheaply first: skip the call on turns that are neither a phrase hit nor a cadence
+   checkpoint, so a quiet turn costs no process. It is phrase-first by default (turn-cadence is
+   opt-in via `SAVE_EVERY`); `hv` owns the precise debounce. If your runtime has no per-turn hook,
+   wire this to whatever in-session events you have (§3) and lean on audit-on-boot as the net.
+4. **Audit-nudge (bonus).** Before context is lost (pre-compaction) and at session end, run
+   `hv nudge --event=precompact` / `--event=sessionend` and inject any stdout; act on it by running
+   `hv audit` and reconciling redundant, obsolete, recheck (volatile past freshness), and missing.
+   These two hooks are best-effort: a hard kill skips them, so they sit on top of audit-on-boot
+   (behavior 1), which is the actual guarantee.
 
 ---
 
@@ -101,7 +108,9 @@ is real, working code in this repo — **study it, then write the equivalent for
   checkpoints (you cannot push per-turn).
 - **Any CLI agent:** a thin wrapper that calls `hv` at the points you control.
 
-If your runtime lacks one of the four points, wire what you can and skip the rest — partial is fine.
+If your runtime lacks one of these points, wire what you can and skip the rest; partial is fine.
+The per-turn save-nudge especially is optional. Where there is no per-turn hook, wire it to whatever
+in-session events you have and rely on audit-on-boot. Capture does not depend on the per-turn nudge.
 
 ---
 
@@ -114,7 +123,7 @@ Your adapter **must**:
 - **Hint, never act.** Nudges and audits only *prompt*. You never auto-write and never
   auto-delete. **You remain the salience judge**; erasing/forgetting is the **owner's** decision.
 - **Install once, persist.** Wire your adapter a single time and keep it. Do **not** regenerate
-  the live hook every session — re-wire only when §0 detects a `Spec-Version` bump. (Stability +
+  the live hook every session — re-wire only when §0 detects a `Contract-Version` MAJOR bump. (Stability +
   safety: a per-turn hook that must never break the session cannot be a fresh guess each boot.)
 - **Use a stable, distinct `--source`.** So independent corroboration across agents works
   (e.g. `claude-code`, `claude-ai`, `hermes:...`). Two agents agreeing must look like two sources.
@@ -163,5 +172,23 @@ when it must re-wire.
 
 ---
 
-*One brain (`hv`), one spec (this file), one reference (`scripts/nudge_hook.sh`). Everything else
-an agent writes for itself — and keeps current by re-reading this spec when its version changes.*
+---
+
+## 8. Cost and inference
+
+The checks use no model, and they should stay that way: the save-nudge gate, the audit (FTS plus
+identity for redundancy, confidence plus TTL for obsolete and recheck), and the version check are
+all deterministic code, which is cheaper than any model. Gate cheaply before you spend anything: a
+quiet turn should cost a counter and a string scan, not a process.
+
+The one place a model helps is the optional, deferred inference phase: reading a transcript to find
+decisions that were made but never written, semantic dedup, short summaries. When you build it, run
+it on a cheap, configurable model (a `BACKGROUND_MODEL` knob, cheap by default, separate from the
+in-session model), keep it optional and local-first (the deterministic path must work with no model
+and no API key), and treat its output as proposals or low-confidence machine-tagged writes that a
+real agent or the owner confirms. A background model never self-certifies a fact into being trusted.
+
+---
+
+*One brain (`hv`), one spec (this file), one reference (`scripts/nudge_hook.sh`). Everything else an
+agent writes for itself, and keeps current by re-reading this spec when its version changes.*

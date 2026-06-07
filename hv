@@ -1220,6 +1220,7 @@ def _compute_audit(depth=None, session=""):
     conn.close()
     forgotten, contested, decayed, recheck = [], [], [], []
     volatile_contents = set()
+    forgotten_contents = set()
     for r in frows:
         try:
             tl = [str(t).strip().lower() for t in (json.loads(r["tags"]) if r["tags"] else [])]
@@ -1236,7 +1237,8 @@ def _compute_audit(depth=None, session=""):
         base = r["confidence"]
         eff = _effective_confidence(base, r["last_evidence_at"], now)
         if base <= FORGET_FLOOR:
-            continue   # owner-forgotten: decisively settled, no action — keep it out of the audit
+            forgotten_contents.add(r["content"])  # owner-forgotten: keep it out of EVERY bucket
+            continue   # decisively settled, no action
         if base <= -0.4:
             forgotten.append((r, eff))
         elif r["contested"]:
@@ -1246,7 +1248,10 @@ def _compute_audit(depth=None, session=""):
     decayed.sort(key=lambda x: x[1])
     recheck.sort(key=lambda x: (x[1] is not None, x[1] or 0), reverse=True)
     # Re-verifying a volatile fact refreshes its freshness; that is the point, not redundancy.
-    redundant = [x for x in redundant if x[0] not in volatile_contents]
+    # Owner-forgotten contents drop out of every bucket too (else the audit nags about cleared dups).
+    redundant = [x for x in redundant if x[0] not in volatile_contents and x[0] not in forgotten_contents]
+    paraphrase = [p for p in paraphrase if p[0] not in forgotten_contents and p[1] not in forgotten_contents]
+    corroborated = [c for c in corroborated if c not in forgotten_contents]
 
     missing_note = None
     if session:

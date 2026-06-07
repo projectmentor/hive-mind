@@ -69,6 +69,21 @@ def test_audit_flags_same_source_duplication(tmp_path):
         "same identity asserting identical content twice = redundant"
 
 
+def test_audit_excludes_owner_forgotten_from_redundant(tmp_path):
+    import re as _re
+    run_hv(tmp_path, "remember", "the cache halves cold-start latency", "--source", "alice")
+    out = run_hv(tmp_path, "remember", "the cache halves cold-start latency", "--source", "alice").stdout
+    fid = _re.search(r"#(\d+)", out).group(1)
+    # Before forgetting, it is flagged.
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
+    assert any("cache halves" in x["content"] for x in data["redundant"])
+    # Owner-forget the canonical fact -> it must drop out of EVERY audit bucket.
+    run_hv(tmp_path, "retract", fid, "--owner")
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
+    assert not any("cache halves" in x["content"] for x in data["redundant"]), \
+        "owner-forgotten content must not keep appearing in the redundant bucket"
+
+
 def test_audit_does_not_flag_independent_corroboration(tmp_path):
     c = "tailscale gives ~5ms RTT between the nodes"
     for src in ("alice", "bob", "carol"):

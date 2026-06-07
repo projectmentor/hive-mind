@@ -62,10 +62,11 @@ jobs:
         run: |
           git config user.name  "hivemind-bot"
           git config user.email "bot@projectmentor.org"
-          if [ -n "$(git status --porcelain verify.json verify.json.sig)" ]; then
-            git add verify.json verify.json.sig
+          git add verify.json
+          [ -f verify.json.sig ] && git add verify.json.sig
+          if git diff --cached --quiet; then
+            echo "manifest already current; nothing to commit"
+          else
             git commit -m "chore: re-sign source manifest [skip ci]"
             git push
-          else
-            echo "manifest already current; nothing to commit"
           fi

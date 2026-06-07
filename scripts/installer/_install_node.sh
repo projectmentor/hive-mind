@@ -30,7 +30,7 @@ set -euo pipefail
 REPO_URL="https://github.com/projectmentor/hive-mind.git"
 HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE_NAME="hive-sync"
-TOTAL=12
+TOTAL=13
 
 # ── colours ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; CYN='\033[0;36m'; BLD='\033[1m'; RST='\033[0m'
@@ -391,9 +391,25 @@ else
 fi
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 11 — PATH persistence
+# STEP 11 — Claude Code integration (skill + telemetry/nudge hooks, best-effort)
 # ════════════════════════════════════════════════════════════════════════════
-step "11/$TOTAL  PATH"
+step "11/$TOTAL  Claude Code integration"
+
+if [ -d "$HOME/.claude" ] || command -v claude &>/dev/null; then
+  if bash "$HIVE_DIR/integrations/claude-code/install.sh" >/dev/null 2>&1; then
+    ok "Claude Code skill + telemetry/nudge hooks wired (~/.claude/settings.json)"
+  else
+    warn "Claude Code integration failed — run manually: bash $HIVE_DIR/integrations/claude-code/install.sh"
+  fi
+  echo "     Integration spec (self-updating): $HIVE_DIR/docs/AGENT_INTEGRATION.md"
+else
+  warn "Claude Code (~/.claude) not found — skipping (later: bash $HIVE_DIR/integrations/claude-code/install.sh)"
+fi
+
+# ════════════════════════════════════════════════════════════════════════════
+# STEP 12 — PATH persistence
+# ════════════════════════════════════════════════════════════════════════════
+step "12/$TOTAL  PATH"
 
 BIN_DIR="$HOME/.local/bin"
 if ! grep -q 'local/bin' "$HOME/.bashrc" 2>/dev/null; then
@@ -402,9 +418,9 @@ fi
 ok "~/.local/bin in PATH"
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 12 — Summary
+# STEP 13 — Summary
 # ════════════════════════════════════════════════════════════════════════════
-step "12/$TOTAL  Done"
+step "13/$TOTAL  Done"
 
 echo ""
 echo -e "${GRN}${BLD}╔══════════════════════════════════════╗${RST}"

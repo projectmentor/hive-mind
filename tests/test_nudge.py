@@ -111,6 +111,26 @@ def test_audit_depth_caps(tmp_path):
     assert light["depth"] == "light" and deep["depth"] == "deep"
 
 
+def test_audit_recheck_volatile(tmp_path):
+    run_hv(tmp_path, "remember", "gregorius sshd is reachable", "--tags", "volatile", "--source", "alice")
+    # default TTL 24h; jump 2 days ahead so it's past freshness
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json",
+                             HIVE_NOW="2027-12-01T00:00:00+00:00").stdout)
+    assert any("sshd is reachable" in x["content"] for x in data["recheck"]), \
+        "a volatile fact past its freshness window should land in RECHECK"
+    # and it must NOT be miscategorized as obsolete/decayed
+    assert not any("sshd is reachable" in x["content"] for x in data["obsolete"]["decayed"])
+
+
+def test_audit_volatile_not_flagged_redundant(tmp_path):
+    c = "the sync daemon is running"
+    run_hv(tmp_path, "remember", c, "--tags", "volatile", "--source", "alice")
+    run_hv(tmp_path, "remember", c, "--tags", "volatile", "--source", "alice")  # re-verify, same source
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
+    assert not any("sync daemon is running" in x["content"] for x in data["redundant"]), \
+        "re-verifying a volatile fact is freshness evidence, not redundancy"
+
+
 def test_audit_json_shape(tmp_path):
     run_hv(tmp_path, "remember", "a plain fact for shape check", "--source", "alice")
     data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)

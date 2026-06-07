@@ -964,7 +964,7 @@ def sync_cmd(args):
 # --------------------------------------------------------------------------
 
 _NUDGE_DEFAULTS = {
-    "SAVE_EVERY": "12",      # save-nudge cadence in user turns (0 = off)
+    "SAVE_EVERY": "0",       # save-nudge turn-cadence (0 = off; phrase-first by default, audit-on-boot is the floor)
     "MIN_GAP": "6",          # hard floor: no two save-nudges within N turns
     "SAVE_ON_PHRASE": "1",   # a matched phrase may trigger a save-nudge (still gated by MIN_GAP)
     "AUDIT_ON": "precompact,sessionend",
@@ -1124,6 +1124,7 @@ def nudge(args):
         if event == "session-start":
             _print_digest(getattr(args, "cwd", "") or os.getcwd())
             _spec_update_check(getattr(args, "agent", "agent") or "agent")
+            _audit_boot_summary()
             return
         if event in ("precompact", "sessionend"):
             on = [e.strip() for e in cfg.get("AUDIT_ON", "").split(",") if e.strip()]
@@ -1157,11 +1158,11 @@ def nudge(args):
         return  # never break the session
 
 
-def audit(args):
-    """Surface REDUNDANT (same-source duplication ONLY — never independent corroboration),
-    OBSOLETE (forgotten/contested/decayed), and (with --session) a MISSING proxy. Read-only."""
+def _compute_audit(depth=None, session=""):
+    """Compute the audit buckets (read-only). One implementation shared by `hv audit` and the
+    session-start boot summary. Returns lists + counts; callers format them."""
     cfg = load_nudge_config()
-    depth = args.depth or cfg.get("AUDIT_DEPTH", "light")
+    depth = depth or cfg.get("AUDIT_DEPTH", "light")
     cap = {"light": 3, "normal": 8, "deep": 20}.get(depth, 3)
     now = os.environ.get("HIVE_NOW") or _now_iso()
 
@@ -1182,7 +1183,7 @@ def audit(args):
     # REDUNDANT (a): one identity asserted the SAME content more than once.
     redundant = [(c, counts[c], len(idents[c])) for c in counts if counts[c] > len(idents[c])]
     redundant.sort(key=lambda x: x[1] - x[2], reverse=True)
-    corroborated = [c for c in counts if len(idents[c]) >= 2]   # GOOD — never flagged
+    corroborated = [c for c in counts if len(idents[c]) >= 2]   # GOOD, never flagged
 
     # REDUNDANT (b): near-duplicate DISTINCT contents from a single shared author.
     paraphrase = []
@@ -1203,9 +1204,8 @@ def audit(args):
                 if union and len(toks[a] & toks[b]) / union >= thr:
                     paraphrase.append((a, b, round(len(toks[a] & toks[b]) / union, 2)))
 
-    # OBSOLETE + RECHECK: bucket facts by effective confidence; but VOLATILE facts (operational
-    # state that can flip) go to RECHECK when past their freshness window, not the slow age-decay
-    # path — so time-varying facts get selectively re-verified without relitigating the corpus.
+    # OBSOLETE + RECHECK: bucket by effective confidence; VOLATILE facts past their freshness
+    # window go to RECHECK (re-verify) instead of the slow age-decay path.
     ttl_default = _int(cfg, "VOLATILE_TTL_HOURS", 24)
     conn = get_conn()
     frows = conn.execute(
@@ -1236,16 +1236,31 @@ def audit(args):
             decayed.append((r, eff))
     decayed.sort(key=lambda x: x[1])
     recheck.sort(key=lambda x: (x[1] is not None, x[1] or 0), reverse=True)
-    # Re-verifying a volatile fact refreshes its freshness — that is the point, not redundancy.
+    # Re-verifying a volatile fact refreshes its freshness; that is the point, not redundancy.
     redundant = [x for x in redundant if x[0] not in volatile_contents]
 
     missing_note = None
-    if getattr(args, "session", ""):
-        st = _read_state(_nudge_state_path(args.session))
+    if session:
+        st = _read_state(_nudge_state_path(session))
         gap = int(st.get("turns", 0)) - int(st.get("last_save_turn", 0))
-        if gap >= _int(cfg, "SAVE_EVERY", 12):
-            missing_note = (f"{gap} turns since your last hive write this session — "
+        thresh = _int(cfg, "SAVE_EVERY", 0) or 10   # floor for the proxy when cadence is off
+        if gap >= thresh:
+            missing_note = (f"{gap} turns since your last hive write this session, "
                             "anything decided/learned worth keeping?")
+
+    return {"depth": depth, "cap": cap, "redundant": redundant, "paraphrase": paraphrase,
+            "corroborated": corroborated, "forgotten": forgotten, "contested": contested,
+            "decayed": decayed, "recheck": recheck, "missing_note": missing_note}
+
+
+def audit(args):
+    """Surface REDUNDANT (same-source only), OBSOLETE (forgotten/contested/decayed), RECHECK
+    (volatile past freshness), and (with --session) a MISSING proxy. Read-only."""
+    a = _compute_audit(depth=args.depth, session=getattr(args, "session", ""))
+    depth, cap = a["depth"], a["cap"]
+    redundant, paraphrase, corroborated = a["redundant"], a["paraphrase"], a["corroborated"]
+    forgotten, contested, decayed, recheck = a["forgotten"], a["contested"], a["decayed"], a["recheck"]
+    missing_note = a["missing_note"]
 
     if args.format == "json":
         print(json.dumps({
@@ -1292,6 +1307,26 @@ def audit(args):
     if missing_note:
         print(f"\nMISSING (session proxy)\n  {missing_note}")
     print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
+
+
+def _audit_boot_summary():
+    """Audit-on-boot: a one-line summary printed at session start. This is the reliable floor
+    that catches what an in-session save-nudge may have missed, since session start fires on
+    every runtime even when shutdown/per-turn hooks do not. Best-effort; silent when clean."""
+    try:
+        a = _compute_audit()
+        parts = []
+        if a["recheck"]:
+            parts.append(f"{len(a['recheck'])} to re-check")
+        n_obs = len(a["forgotten"]) + len(a["contested"]) + len(a["decayed"])
+        if n_obs:
+            parts.append(f"{n_obs} stale/contested")
+        if a["redundant"]:
+            parts.append(f"{len(a['redundant'])} duplicate")
+        if parts:
+            print(f"[hive] audit on boot: {', '.join(parts)}. Run `hv audit` to review and reconcile.")
+    except Exception:
+        return
 
 
 def _volatile_ttl_hours(tags_lower, default):

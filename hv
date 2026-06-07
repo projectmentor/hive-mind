@@ -1347,6 +1347,76 @@ def version_cmd(args):
     print(f"hv contract-version {CONTRACT_VERSION}")
 
 
+_VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", ".nudge_state", "journal"}
+_VERIFY_EXCLUDE_NAMES = {"verify.json", "nudge.env", ".peers.json"}
+_VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg"}
+OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
+OFFICIAL_SOURCE = "github.com/projectmentor/hive-mind"
+
+
+def _source_manifest(root):
+    """Deterministic fingerprint of the source code (the files that define behavior). Excludes
+    runtime data, caches, node_modules, .git, and verify.json itself. Returns {version, files, digest}."""
+    root = Path(root)
+    files = {}
+    for p in sorted(root.rglob("*")):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(root)
+        if set(rel.parts) & _VERIFY_EXCLUDE_DIRS:
+            continue
+        if p.name in _VERIFY_EXCLUDE_NAMES or p.name.startswith("store.db") or ".bak" in p.name:
+            continue
+        if p.name != "hv" and p.suffix.lower() not in _VERIFY_EXTS:
+            continue
+        try:
+            files[str(rel)] = hashlib.sha256(p.read_bytes()).hexdigest()
+        except Exception:
+            continue
+    digest = hashlib.sha256("\n".join(f"{k}:{v}" for k, v in sorted(files.items())).encode()).hexdigest()
+    return {"version": CONTRACT_VERSION, "files": files, "digest": digest}
+
+
+def verify_cmd(args):
+    """Confirm this is the official, untampered HiveMind. Compares the local source fingerprint to
+    the bundled manifest (local-tamper check) and to the official manifest at the canonical source
+    (provenance). The canonical source is the trust anchor; reach it directly to be sure."""
+    root = Path(__file__).resolve().parent
+    local = _source_manifest(root)
+    try:
+        bundled = json.loads((root / "verify.json").read_text())
+    except Exception:
+        bundled = None
+    official = None
+    try:
+        with urllib.request.urlopen(OFFICIAL_VERIFY_URL, timeout=6) as r:
+            official = json.loads(r.read() or b"{}")
+    except Exception:
+        official = None
+
+    if official and official.get("digest"):
+        if local["digest"] == official["digest"]:
+            print(f"✓ Official HiveMind v{official.get('version', '?')} from Project Mentor. "
+                  f"Verified against the canonical source ({OFFICIAL_SOURCE}).")
+            return
+        if bundled and local["digest"] == bundled.get("digest"):
+            print("⚠ This install does NOT match the official release. It may be a fork, a mirror, "
+                  "or an old version.")
+        else:
+            print("⚠ This install has been MODIFIED locally (files differ from the manifest).")
+        print(f"  Official source: {OFFICIAL_SOURCE}  (and https://hivemind.projectmentor.org)")
+        return
+    if bundled and local["digest"] == bundled.get("digest"):
+        print(f"✓ Matches the bundled manifest for v{bundled.get('version', '?')}. Could not reach the "
+              "canonical source to confirm provenance (offline?).")
+        print(f"  Confirm against {OFFICIAL_SOURCE} when online.")
+    elif bundled:
+        print("⚠ This install has been MODIFIED locally (files differ from its bundled manifest).")
+        print(f"  Official source: {OFFICIAL_SOURCE}")
+    else:
+        print(f"⚠ No manifest to verify against. Reinstall from the official source: {OFFICIAL_SOURCE}")
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -1405,6 +1475,7 @@ def main():
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
 
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")
+    subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
@@ -1449,6 +1520,8 @@ def main():
         merkle_cmd(args)
     elif args.command == "version":
         version_cmd(args)
+    elif args.command == "verify":
+        verify_cmd(args)
     elif args.command == "nudge":
         nudge(args)
     elif args.command == "audit":

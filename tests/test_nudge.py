@@ -26,6 +26,50 @@ def _nudged(r):
     return "[hive]" in r.stdout
 
 
+# ---- session-start freshness check (warn-on-behind) ----
+
+def _git(cwd, *a):
+    subprocess.run(["git", "-C", str(cwd), *a], capture_output=True, check=True)
+
+
+def _checkout_with_origin(tmp_path, advance_origin):
+    """A git checkout (home) whose origin/main is optionally one commit ahead."""
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(origin)], capture_output=True, check=True)
+    home = tmp_path / "home"
+    subprocess.run(["git", "init", "-b", "main", str(home)], capture_output=True, check=True)
+    _git(home, "config", "user.email", "t@t"); _git(home, "config", "user.name", "t")
+    (home / "f.txt").write_text("1")
+    _git(home, "add", "-A"); _git(home, "commit", "-m", "c1")
+    _git(home, "remote", "add", "origin", str(origin))
+    _git(home, "push", "-u", "origin", "main")
+    if advance_origin:
+        work2 = tmp_path / "work2"
+        subprocess.run(["git", "clone", str(origin), str(work2)], capture_output=True, check=True)
+        _git(work2, "config", "user.email", "t@t"); _git(work2, "config", "user.name", "t")
+        (work2 / "g.txt").write_text("2")
+        _git(work2, "add", "-A"); _git(work2, "commit", "-m", "c2"); _git(work2, "push", "origin", "main")
+    return home
+
+
+def test_freshness_warns_when_behind(tmp_path):
+    home = _checkout_with_origin(tmp_path, advance_origin=True)
+    r = run_hv(home, "nudge", "--event", "session-start", "--cwd", str(home))
+    assert "behind origin/main" in r.stdout
+
+
+def test_freshness_silent_when_current(tmp_path):
+    home = _checkout_with_origin(tmp_path, advance_origin=False)
+    r = run_hv(home, "nudge", "--event", "session-start", "--cwd", str(home))
+    assert "behind origin/main" not in r.stdout
+
+
+def test_freshness_silent_when_not_a_git_checkout(tmp_path):
+    # The default test HIVE_HOME is not a git repo -> must never warn or error.
+    r = run_hv(tmp_path, "nudge", "--event", "session-start", "--cwd", str(tmp_path))
+    assert r.returncode == 0 and "behind origin/main" not in r.stdout
+
+
 # ---- save-nudge cadence / debounce / phrase ----
 
 def test_save_nudge_cadence(tmp_path):

@@ -216,6 +216,16 @@ fi
 chmod +x "$HIVE_DIR/hv"
 cd "$HIVE_DIR"
 
+# Authenticity: confirm the cloned code is the official, untampered HiveMind.
+VERIFY_OUT="$("$HIVE_DIR/hv" verify 2>/dev/null || true)"
+if printf '%s' "$VERIFY_OUT" | grep -q '⚠'; then
+  warn "Authenticity check flagged a problem with this repo:"
+  printf '%s\n' "$VERIFY_OUT" | sed 's/^/    /'
+  warn "If you did not intend a fork or mirror, STOP and reinstall from $REPO_URL"
+else
+  ok "$(printf '%s' "$VERIFY_OUT" | head -1)"
+fi
+
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 5 — Node identity
 # ════════════════════════════════════════════════════════════════════════════

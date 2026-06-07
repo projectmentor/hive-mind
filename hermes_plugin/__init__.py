@@ -175,6 +175,20 @@ def _hv_audit(*, session_id: str = "", depth: str = "", fmt: str = "text") -> st
     return out if ok else ""
 
 
+def _hv_telemetry(event: str, *, session_id: str = "", identity: str = "", cwd: str = "") -> None:
+    """Best-effort: record a session start/end into the LOCAL telemetry lane (never the corpus).
+    agent is always 'hermes'; `identity` is the stable instance discriminator (agent_identity) so
+    two hermes on the same node stay distinct. Failure is silent."""
+    args = ["telemetry", "record", "--event", event, "--agent", "hermes"]
+    if identity:
+        args += ["--identity", identity]
+    if session_id:
+        args += ["--session", session_id]
+    if cwd:
+        args += ["--cwd", cwd]
+    _hv(*args, timeout=10)
+
+
 def _load_nudge_cfg() -> dict[str, str]:
     """Read nudge.env + env overrides for the cheap save-nudge gate."""
     cfg = {
@@ -339,6 +353,9 @@ class HiveMindMemoryProvider(MemoryProvider):
             logger.warning("hive-mind: hv CLI not found at %s", HV_PATH)
         else:
             logger.info("hive-mind: initialized source_id=%s", self._source_id)
+            # Telemetry start (local-only observability; never the corpus).
+            _hv_telemetry("start", session_id=session_id,
+                          identity=self._agent_identity, cwd=str(Path.cwd()))
 
     def system_prompt_block(self) -> str:
         """Inject project-context facts at session start.
@@ -652,6 +669,8 @@ class HiveMindMemoryProvider(MemoryProvider):
             audit_hint = _hv_audit(session_id=old_session_id)
             if audit_hint:
                 logger.info("hive-mind: audit for %s: %s", old_session_id, audit_hint)
+            _hv_telemetry("end", session_id=old_session_id,
+                          identity=getattr(self, "_agent_identity", ""), cwd=cwd)
             self._last_audited_session = old_session_id
 
         self._session_id = new_session_id
@@ -695,4 +714,6 @@ class HiveMindMemoryProvider(MemoryProvider):
             audit_hint = _hv_audit(session_id=session_id)
             if audit_hint:
                 logger.info("hive-mind: shutdown audit for %s: %s", session_id, audit_hint)
+            _hv_telemetry("end", session_id=session_id,
+                          identity=getattr(self, "_agent_identity", ""), cwd=str(Path.cwd()))
             self._last_audited_session = session_id

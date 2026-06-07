@@ -69,13 +69,16 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    begin oriented to the project. (Equivalently, `hv search "<project>"`.)
 2. **Capture.** When a decision, outcome, correction, or constraint occurs, write it:
    `hv remember "..." --tags ... --source <you>`. Search first; never write back something you
-   just read this session (no echoes).
+   just read this session (no echoes). **Tag time-varying/operational facts `volatile`**
+   (optionally `ttl:<n>h|d`) — "service running", "host reachable" — so the audit flags them for
+   re-verification instead of trusting them indefinitely.
 3. **Save-nudge.** On each user turn, pipe the user's message to
    `hv nudge --event=user-prompt --session="<id>"` and inject any stdout. It is debounced and
    phrase/cadence-driven inside `hv`; you just feed it text.
 4. **Audit-nudge.** Before context is lost (pre-compaction) and at session end, run
    `hv nudge --event=precompact` / `--event=sessionend` and inject any stdout; act on it by
-   running `hv audit` and reconciling what it surfaces.
+   running `hv audit` and reconciling what it surfaces — redundant, obsolete, **recheck**
+   (volatile facts past freshness), and missing.
 
 ---
 

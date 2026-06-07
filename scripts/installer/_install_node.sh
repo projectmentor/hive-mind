@@ -383,6 +383,8 @@ if command -v hermes &>/dev/null; then
   hermes config set memory.provider hive-mind 2>/dev/null && \
     ok "Hermes memory plugin linked and activated" || \
     warn "Hermes plugin linked but config set failed — run manually: hermes config set memory.provider hive-mind"
+  ok "Hermes auto-reorients on boot (system_prompt_block). For the full capture-and-audit loop,"
+  echo "     have Hermes read $HIVE_DIR/docs/AGENT_INTEGRATION.md and self-integrate (it self-updates via 'hv version')."
 else
   warn "Hermes not installed — skipping plugin wiring"
   warn "  When Hermes is installed, run: hermes config set memory.provider hive-mind"

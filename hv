@@ -39,6 +39,13 @@ DB_PATH = HIVE_HOME / "store.db"
 JOURNAL_DIR = HIVE_HOME / "journal"
 NODE_ID = os.environ.get("HIVE_NODE_ID", socket.gethostname())
 
+# The agent-facing contract version (hv API + Agent Integration Spec), SemVer MAJOR.MINOR.
+# MINOR = additive / backward-compatible (never remove or repurpose existing verbs, flags, or
+# output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
+# major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
+# documents the same number. See `hv version`.
+CONTRACT_VERSION = "1.0"
+
 
 # --------------------------------------------------------------------------
 # Database
@@ -1085,26 +1092,24 @@ def _print_digest(cwd, cap=1200):
 
 
 def _spec_update_check(agent):
-    """§0 of the Agent Integration Spec: detect a Spec-Version bump and nudge the
-    agent to re-integrate. Reads the LOCAL spec (repo currency is the install's
-    update path, not this hook). Best-effort; marks once per bump per agent."""
+    """§0 of the Agent Integration Spec: compare the running hv's CONTRACT_VERSION
+    (SemVer MAJOR.MINOR) to what this agent last integrated against, and nudge to
+    re-integrate ONLY on a MAJOR (breaking) bump. MINOR bumps are additive and
+    backward-compatible → record silently, no action. Best-effort; marks once per
+    version per agent."""
     try:
-        spec = HIVE_HOME / "docs" / "AGENT_INTEGRATION.md"
-        if not spec.exists():
-            return
-        m = re.search(r"Spec-Version:\s*([0-9][0-9.]*)", spec.read_text())
-        if not m:
-            return
-        cur = m.group(1)
+        cur = CONTRACT_VERSION
+        cur_major = cur.split(".", 1)[0]
         safe = re.sub(r"[^A-Za-z0-9_.-]", "_", agent or "agent")[:60] or "agent"
         marker = HIVE_HOME / ".nudge_state" / f"{safe}.spec"
         marker.parent.mkdir(parents=True, exist_ok=True)
         prev = marker.read_text().strip() if marker.exists() else ""
         if prev == cur:
             return
-        if prev:   # only nudge on a real bump, not on first integration
-            print(f"[hive] Integration spec is now v{cur} (you integrated v{prev}) — "
-                  "re-read docs/AGENT_INTEGRATION.md and update your wiring if the contract changed.")
+        if prev and prev.split(".", 1)[0] != cur_major:   # MAJOR (breaking) bump only
+            print(f"[hive] BREAKING: integration contract is now v{cur} (you integrated v{prev}) — "
+                  "re-integrate per docs/AGENT_INTEGRATION.md; the previous major is deprecated.")
+        # first run, or an additive MINOR bump (backward-compatible): record silently.
         marker.write_text(cur)
     except Exception:
         return
@@ -1261,6 +1266,12 @@ def audit(args):
     print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
 
 
+def version_cmd(args):
+    """Print the agent-facing contract version (SemVer). Adapters/installers can
+    check this to confirm compatibility or pin to a major."""
+    print(f"hv contract-version {CONTRACT_VERSION}")
+
+
 # --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
@@ -1318,6 +1329,7 @@ def main():
     entity_parser.add_argument("--fact-id", type=int, help="Fact ID to link")
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
 
+    subparsers.add_parser("version", help="Print the hv contract version (SemVer)")
     subparsers.add_parser("stats", help="Show memory usage stats")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
@@ -1360,6 +1372,8 @@ def main():
         rebuild(args)
     elif args.command == "merkle":
         merkle_cmd(args)
+    elif args.command == "version":
+        version_cmd(args)
     elif args.command == "nudge":
         nudge(args)
     elif args.command == "audit":

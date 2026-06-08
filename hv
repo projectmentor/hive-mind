@@ -44,14 +44,62 @@ except Exception:
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
 JOURNAL_DIR = HIVE_HOME / "journal"
-NODE_ID = os.environ.get("HIVE_NODE_ID", socket.gethostname())
+# Device identity (Phase D-identity). A node is identified by an Ed25519 DEVICE KEY, not a
+# self-declared hostname. device_id = "k1:" + first 16 hex of sha256(pubkey); the 32-byte seed
+# lives at HIVE_HOME/.device-key (0600, never synced, never in the source manifest), and the
+# derived fingerprint is cached at .device-id so resolving NODE_ID stays a cheap file read.
+# Journal entries are signed by the device key and verified on ingest, so a peer cannot forge
+# another node's identity to launder corroboration. A key is minted only by `hv key init` or the
+# migration — importing hv NEVER creates one, so a legacy hostname node keeps its identity until
+# it is deliberately migrated. HIVE_NODE_ID still overrides (tests / two instances on one box).
+NODE_LABEL = os.environ.get("HIVE_NODE_LABEL", socket.gethostname())
+DEVICE_KEY_PATH = HIVE_HOME / ".device-key"
+DEVICE_ID_PATH = HIVE_HOME / ".device-id"
+
+
+def _device_seed():
+    """The 32-byte device seed if this node has a key, else None. Read-only; never creates."""
+    try:
+        if _ed25519 is None or not DEVICE_KEY_PATH.exists():
+            return None
+        seed = base64.b64decode(DEVICE_KEY_PATH.read_text().strip())
+        return seed if len(seed) == 32 else None
+    except Exception:
+        return None
+
+
+def _device_id_for_pub(pub):
+    """Stable, collision-safe device fingerprint: 'k1:' + first 16 hex of sha256(pubkey)."""
+    return "k1:" + hashlib.sha256(pub).hexdigest()[:16]
+
+
+def _resolve_node_id():
+    """HIVE_NODE_ID override, else the cached device fingerprint (or one derived from the seed),
+    else the hostname (legacy, pre-migration)."""
+    env = os.environ.get("HIVE_NODE_ID")
+    if env:
+        return env
+    try:
+        if DEVICE_ID_PATH.exists():
+            did = DEVICE_ID_PATH.read_text().strip()
+            if did:
+                return did
+    except Exception:
+        pass
+    seed = _device_seed()
+    if seed is not None:
+        return _device_id_for_pub(_ed25519.pub_from_seed(seed))
+    return socket.gethostname()
+
+
+NODE_ID = _resolve_node_id()
 
 # The agent-facing contract version (hv API + Agent Integration Spec), SemVer MAJOR.MINOR.
 # MINOR = additive / backward-compatible (never remove or repurpose existing verbs, flags, or
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.2"   # 1.2: remember auto-tags transient-status claims volatile (+ --no-volatile); 1.1: telemetry verb
+CONTRACT_VERSION = "1.3"   # 1.3: device identity — `hv key`, `migrate-device-identity`, signed journal entries (opt-in via .device-key); 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -220,6 +268,38 @@ def compute_hash(entry):
     return "sha256:" + hashlib.sha256(_canonical(entry)).hexdigest()
 
 
+def _entry_signing_bytes(entry):
+    """Canonical bytes a device signature covers: the whole entry except the signature itself.
+    `pub` IS covered, so the signing key is bound into what's signed. The hash chain
+    (compute_hash) commits to the full entry including `sig`."""
+    return _canonical({k: v for k, v in entry.items() if k != "sig"})
+
+
+def _sign_entry(entry, seed, pub):
+    """Attach `pub` (b64 signer key) then `sig` (b64 signature over the entry sans sig)."""
+    entry["pub"] = base64.b64encode(pub).decode()
+    entry["sig"] = base64.b64encode(_ed25519.sign(_entry_signing_bytes(entry), seed)).decode()
+    return entry
+
+
+def _verify_entry(entry):
+    """A SIGNED entry is valid iff its node_id is the fingerprint of its embedded pub and the
+    signature checks out — so no one can attribute an entry to a device_id they don't hold the
+    key for. UNSIGNED entries return True (grandfathered: pre-migration history, legacy peers)."""
+    if "sig" not in entry:
+        return True
+    if _ed25519 is None:
+        return True   # a stripped build can't verify; don't reject on that alone
+    try:
+        pub = base64.b64decode(entry.get("pub", ""))
+        sig = base64.b64decode(entry["sig"])
+        if len(pub) != 32 or entry.get("node_id") != _device_id_for_pub(pub):
+            return False
+        return _ed25519.verify(_entry_signing_bytes(entry), sig, pub)
+    except Exception:
+        return False
+
+
 def _next_seq_and_prev(node_id):
     """Next per-node monotonic seq and the hash of this node's latest entry.
     Derived from the journal itself (stateless, correct after a fresh start)."""
@@ -247,6 +327,9 @@ def append_journal(entry_type, payload, timestamp=None):
         "payload": payload,
         "prev_hash": prev_hash,
     }
+    seed = _device_seed()
+    if seed is not None:
+        _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
     with open(_journal_path_for(timestamp), "a") as f:
         f.write(json.dumps(entry) + "\n")
     return entry
@@ -267,7 +350,7 @@ def append_foreign_entries(entries):
     to SQLite — the caller runs rebuild() once afterwards if accepted > 0.
     Returns (accepted, duplicates)."""
     existing = journal_keys()
-    accepted = duplicates = 0
+    accepted = duplicates = rejected = 0
     for e in entries:
         nid, seq = e.get("node_id"), e.get("seq")
         if nid is None or seq is None:
@@ -275,10 +358,18 @@ def append_foreign_entries(entries):
         if (nid, seq) in existing:
             duplicates += 1
             continue
+        if not _verify_entry(e):
+            # A signed entry whose signature is invalid or whose node_id doesn't match its key
+            # is forged or corrupt — never persist it.
+            rejected += 1
+            continue
         existing.add((nid, seq))
         with open(_journal_path_for(e.get("timestamp", _now_iso())), "a") as f:
             f.write(json.dumps(e) + "\n")
         accepted += 1
+    if rejected:
+        print(f"append_foreign_entries: rejected {rejected} entr"
+              f"{'y' if rejected == 1 else 'ies'} with an invalid signature", file=sys.stderr)
     return accepted, duplicates
 
 
@@ -1457,7 +1548,8 @@ _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", 
 # The trust artifacts are NOT part of the manifest they vouch for: verify.json holds the digest,
 # verify.json.sig signs it, and hivemind.pub is the anchor (its integrity comes from the published
 # copy at the canonical site, not from being self-listed). Listing any of them would be circular.
-_VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env", ".peers.json"}
+_VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env",
+                         ".peers.json", ".device-key", ".device-id"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg"}
 OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
 # The trust anchor: the public key, served from our own TLS domain (a DIFFERENT origin than the
@@ -1598,6 +1690,171 @@ def verify_cmd(args):
     """Integrity + authenticity check (prints the layered verdict; see _verify_status)."""
     for line in _verify_status(Path(__file__).resolve().parent)["lines"]:
         print(line)
+
+
+def key_cmd(args):
+    """Show or create this node's Ed25519 device identity (the cryptographic node_id)."""
+    action = getattr(args, "key_action", None) or "show"
+    if action == "show":
+        seed = _device_seed()
+        if seed is None:
+            print("No device key — this node uses its legacy hostname identity.")
+            print(f"  node_id: {NODE_ID}")
+            print("  `hv key init` mints one on a fresh install; migrate an existing node with")
+            print("  `hv migrate-device-identity`.")
+            return
+        pub = _ed25519.pub_from_seed(seed)
+        print(f"device_id: {_device_id_for_pub(pub)}")
+        print(f"pubkey:    {base64.b64encode(pub).decode()}")
+        print(f"label:     {NODE_LABEL}")
+        return
+    if action == "init":
+        if _ed25519 is None:
+            print("ed25519 module unavailable; cannot create a device key.")
+            return
+        if DEVICE_KEY_PATH.exists() and not args.force:
+            print(f"Device key already exists at {DEVICE_KEY_PATH}. Use --force to replace it.")
+            return
+        # Minting a key on a node that already authored entries under its hostname would split
+        # its identity (old entries under the hostname, new ones under the device_id). On a
+        # populated journal the migration is the correct path; only let init run on an empty one.
+        if not args.force:
+            mine = [e for e in merkle.read_all_entries(JOURNAL_DIR)
+                    if e.get("node_id") == socket.gethostname()]
+            if mine:
+                print(f"This node already has {len(mine)} entries under its hostname.")
+                print("Use `hv migrate-device-identity` to re-stamp them (not `hv key init`).")
+                print("Pass --force only if the journal is disposable.")
+                return
+        seed = os.urandom(32)
+        HIVE_HOME.mkdir(parents=True, exist_ok=True)
+        DEVICE_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+        pub = _ed25519.pub_from_seed(seed)
+        did = _device_id_for_pub(pub)
+        DEVICE_ID_PATH.write_text(did + "\n")
+        try:
+            os.chmod(DEVICE_KEY_PATH, 0o600)
+        except Exception:
+            pass
+        print(f"Device key created. device_id: {did}")
+        print(f"  pubkey: {base64.b64encode(pub).decode()}")
+        print(f"  seed:   {DEVICE_KEY_PATH} (private — never commit or sync it)")
+        print("  Share the device_id + pubkey with peers (add them to .peers.json).")
+
+
+def migrate_device_identity_cmd(args):
+    """Re-stamp the journal from hostname node_ids to cryptographic device_ids. A one-time,
+    coordinated, DETERMINISTIC transform: every node runs it with the SAME {hostname: device_id}
+    map, so byte-for-byte identical re-stamped journals result and the peers stay converged
+    (equal Merkle roots) with no content re-sync. Historical entries are re-stamped and their
+    per-node hash chains recomputed; they stay UNSIGNED (they predate the keys, grandfathered on
+    ingest). New writes after this are signed because the node now has a device key."""
+    try:
+        mapping = json.loads(Path(args.map).read_text())
+    except Exception as e:
+        print(f"Could not read --map {args.map}: {e}")
+        return
+    if not isinstance(mapping, dict) or not all(isinstance(v, str) for v in mapping.values()):
+        print('Map must be a JSON object of {"hostname": "k1:device_id", ...} for every node.')
+        return
+
+    host = socket.gethostname()
+    local_did = None
+    if host in mapping:
+        # This node is being re-stamped: it must already hold the key whose fingerprint the map
+        # assigns it, so its future (signed) writes line up with its re-stamped history.
+        seed = _device_seed()
+        if seed is None:
+            print("This node has no device key. Run `hv key init --force` first, then put its")
+            print("device_id (from `hv key show`) in the map under this node's hostname.")
+            return
+        local_did = _device_id_for_pub(_ed25519.pub_from_seed(seed))
+        if mapping[host] != local_did:
+            print(f"Map mismatch: this node ({host}) holds device_id {local_did},")
+            print(f"  but the map says {mapping[host]!r}. Every node must share one identical map.")
+            return
+    else:
+        print(f"Note: this host ({host}) is not in the map; re-stamping the mapped nodes only.")
+        print("  Mint a key here with `hv key init` if this node should also sign its writes.")
+
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    if not entries:
+        print("Empty journal — nothing to migrate (new writes will be signed).")
+        return
+    present = {e.get("node_id") for e in entries}
+    if not (present & set(mapping.keys())):
+        print("Journal already uses device_ids — nothing to migrate.")
+        return
+
+    def remap(nid):
+        return mapping.get(nid, nid)
+
+    migrated = []
+    for e in entries:
+        e = dict(e)
+        e["node_id"] = remap(e.get("node_id"))
+        p = dict(e.get("payload", {}))
+        for refk in ("entity_ref", "fact_ref", "supersedes_ref"):
+            r = p.get(refk)
+            if isinstance(r, list) and len(r) == 2:
+                p[refk] = [remap(r[0]), r[1]]
+        e["payload"] = p
+        e.pop("sig", None)            # node_id changed; historical entries become unsigned
+        e.pop("pub", None)
+        migrated.append(e)
+
+    # Recompute each device's prev_hash chain from genesis (migrate_journal_v2 pattern).
+    by_node = {}
+    for e in migrated:
+        by_node.setdefault(e["node_id"], []).append(e)
+    for ents in by_node.values():
+        ents.sort(key=lambda x: x["seq"])
+        prev = "sha256:genesis"
+        for e in ents:
+            e["prev_hash"] = prev
+            prev = compute_hash(e)
+
+    migrated.sort(key=lambda e: (e["node_id"], e["seq"]))
+    if args.dry_run:
+        remapped = sum(1 for e in entries if e.get("node_id") in mapping)
+        print(f"DRY RUN: would re-stamp {remapped}/{len(entries)} entries via {len(mapping)} mapping(s).")
+        for src, did in sorted(mapping.items()):
+            n = sum(1 for e in entries if e.get("node_id") == src)
+            print(f"  {src} -> {did}   ({n} entries)")
+        root_after = merkle.merkle_root(merkle.chunk_hashes(
+            sorted(migrated, key=lambda e: (e["node_id"], e["seq"]))))
+        print(f"  resulting Merkle root: {root_after}")
+        return
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup = JOURNAL_DIR.parent / f"journal.bak.device-id.{stamp}"
+    JOURNAL_DIR.rename(backup)
+    JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    by_date = {}
+    for e in migrated:
+        by_date.setdefault(e["timestamp"][:10], []).append(e)
+    for date, ents in by_date.items():
+        with open(JOURNAL_DIR / f"{date}.jsonl", "w") as f:
+            for e in ents:
+                f.write(json.dumps(e) + "\n")
+    rebuild_db()
+
+    # Rekey local-only telemetry shards (this host -> its device_id); never synced.
+    try:
+        if local_did and TELEMETRY_DB.exists():
+            tconn = sqlite3.connect(TELEMETRY_DB)
+            tconn.execute("UPDATE telemetry_sessions SET node_id=? WHERE node_id=?", (local_did, host))
+            tconn.commit()
+            tconn.close()
+    except Exception:
+        pass
+
+    root = merkle.merkle_root(merkle.chunk_hashes(merkle.read_all_entries(JOURNAL_DIR)))
+    print(f"Migrated {len(migrated)} entries to device identity. Backup: {backup}")
+    if local_did:
+        print(f"  this node is now {local_did} (was {host}).")
+    print(f"  Merkle root: {root}")
+    print("  Run the SAME map on every peer; then `hv merkle` should match and `hv sync now` = in sync.")
 
 
 def _doctor_status():
@@ -2141,6 +2398,17 @@ def main():
 
     doctor_parser = subparsers.add_parser("doctor", help="Run local-node health checks (integrity, DB, sync, hygiene)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
+
+    key_parser = subparsers.add_parser("key", help="Show or create this node's device identity")
+    key_sub = key_parser.add_subparsers(dest="key_action")
+    key_sub.add_parser("show", help="Show this node's device_id and pubkey")
+    key_init = key_sub.add_parser("init", help="Mint a device key (fresh install)")
+    key_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
+
+    migrate_parser = subparsers.add_parser("migrate-device-identity",
+                                           help="Re-stamp the journal from hostnames to device_ids (one-time, coordinated)")
+    migrate_parser.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every node)')
+    migrate_parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
@@ -2204,6 +2472,10 @@ def main():
         verify_cmd(args)
     elif args.command == "doctor":
         doctor_cmd(args)
+    elif args.command == "key":
+        key_cmd(args)
+    elif args.command == "migrate-device-identity":
+        migrate_device_identity_cmd(args)
     elif args.command == "nudge":
         nudge(args)
     elif args.command == "audit":

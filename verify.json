@@ -1,5 +1,5 @@
 {
-  "digest": "287244a6025bd5403360b56f1c08c9f2cc740577cb014a365014560a21d9e634",
+  "digest": "d50252291a804699898339f60072d208809de07e0b49ebe37265a31ab09831c0",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -16,8 +16,8 @@
     "docs/AGENT_INTEGRATION.md": "21c53126d151cbf2c37dbf8f5f88b8f08861c439e1ba87f12f40207af0b33677",
     "docs/CLI_REFERENCE.md": "6b7c3595c9e3448e99226345dce19307d0c6479954d283787d8a4de88422ee29",
     "docs/INTERNALS.md": "432b4e35aceb6eb36eb42e109b25a648ddc94b9967e684e6826e64d6c722983d",
-    "docs/P2P_DESIGN.md": "2f31f387876dfcb0ea9fcc0dcddebd2aeb046ff4d538e949576e3aeae1676dbd",
-    "docs/SYNC_API.md": "1741be80d5d5de16accc8a9499a3265b4c92663e0ca42603d49c7bcf3eaef204",
+    "docs/P2P_DESIGN.md": "1c36522d82c089d76a32e0ae254798dfcbec58b9bb04a823b033372700f0b48a",
+    "docs/SYNC_API.md": "317b39beea64cf8dbda438473ed4478a4a4bb1e28a9fa873845d13f91d669c85",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",

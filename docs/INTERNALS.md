@@ -92,25 +92,46 @@ source strings. `node_id` here is the device identity (a key fingerprint), so
 fake. Session IDs (`session8`) are ignored for corroboration purposes.
 
 - Same agent, two sessions → **one** identity (idempotent)
-- Same agent, two devices → **two** identities (corroboration)
-- Two different agents, same device → **two** identities (corroboration)
+- Same agent, two **devices** → two independent corroborators
+- Two agents on the **same** device → correlated, **discounted** (see below)
 
-This prevents session churn from inflating confidence. Note that cryptographic
-identity stops *impersonation* (forging another device's `node_id`), not *Sybil*
-(an actor minting many keys); bounding Sybil is the job of peer authorization
-(`.peers.json`) and the planned principal weighting.
+This prevents session churn from inflating confidence.
+
+### Same-device discount, admission, CAP_self (D0-v2)
+
+Confidence is a *governed* projection. Three rules refine the raw identity count
+(all derived from the journal, so they stay identical on every node):
+
+- **Same-device discount.** Agents on one machine are correlated, not
+  independent. Each device contributes its strongest identity in full plus
+  `λ·(sum of its other identities)`; `λ = same_device_lambda` (default `0.5`).
+  So two agents on one box net `1.5`, not `2`; on two boxes, `2`.
+- **Admission gate.** Cryptographic identity stops *impersonation*, not *Sybil*
+  (one actor minting many keys). Once an **owner** is established (`hv owner
+  init`), only **admitted** devices (`hv admit`) count toward confidence;
+  unadmitted writes are still stored and synced but contribute zero.
+- **CAP_self.** When every device behind a fact maps to one **principal**
+  (`hv admit --principal`), confidence is clamped to `cap_self` (default
+  `0.70`): your own machines agreeing isn't independent corroboration.
+
+Governance lives in owner-signed `governance` journal entries
+(owner/admit/set-config), projected by `_governance_state`. Because it's
+journaled (not per-node config), every node derives the same admitted set,
+principal map, and config. No owner yet → discount applies, gate + CAP_self off.
 
 ### Retraction effects
 
 - Standard retraction (`hv retract`) → reduces confidence by excluding the
   retractor's identity from the projection
-- Owner retraction (`hv retract --owner`) → drives confidence to the floor
-  immediately, regardless of other corroborating sources
+- Owner retraction (`hv retract --owner`) → drives confidence to the floor.
+  Once an owner exists it must be **owner-signed** (you can't forge a forget with
+  a bare source tag); forgets predating the owner are grandfathered.
 
 ### Phase roadmap
 
 - **Phase A** (shipped): derived corroboration confidence, multi-source
-- **Phase B** (planned): independence discount, principal weighting, CAP_self
+- **Phase B / D0-v2** (shipped): journaled governance, same-device discount,
+  admission gate, principal weighting (CAP_self)
 - **Phase C** (shipped): contested flag + decay for contradicted facts
 
 ---

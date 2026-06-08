@@ -22,6 +22,9 @@ memory.
 | `hv stats` | See a summary of your memory |
 | `hv doctor` | Check that your node is healthy |
 | `hv key` | Show or create this node's device identity |
+| `hv owner` | Show or create the governance owner identity |
+| `hv admit` | Admit a device into the corroboration set (owner-only) |
+| `hv config` | Set a journaled confidence parameter (owner-only) |
 | `hv rebuild` | Fix the local database if something looks wrong |
 | `hv merkle` | Diagnose sync state between nodes |
 | `hv sync` | Sync with peer nodes |
@@ -211,7 +214,7 @@ hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
 | `fact_id` | The ID of the fact to retract. Get it from `hv search` output. Required. |
 | `--reason` | Why you're retracting it. Saved for reference. |
 | `--source` | Who is doing the retracting. Defaults to `manual`. |
-| `--owner` | Mark this as an authoritative retraction. Use when the fact is definitively wrong, not just uncertain. Immediately drives confidence to the floor. |
+| `--owner` | Mark this as an authoritative retraction. Use when the fact is definitively wrong, not just uncertain. Immediately drives confidence to the floor. Once you have an owner (see `hv owner`), this requires the **owner key** and is cryptographically signed, so a forget can't be forged; run it on the owner machine. |
 
 **Examples:**
 ```bash
@@ -366,6 +369,61 @@ re-transfer. The runbook, per node: `hv key init --force` to mint the key, share
 the resulting `device_id`, build the shared map, stop the sync daemons, run this
 on each node, confirm `hv merkle` roots match, then restart. Your old journal is
 backed up to `journal.bak.device-id.<timestamp>/`.
+
+---
+
+### `hv owner` — Governance owner identity
+
+Confidence weighs *who* corroborates a fact. A few of those rules need a shared,
+trusted source: which devices count, who owns each one, and a couple of tunable
+numbers. That trust is rooted in an **owner key** — a separate Ed25519 key (apart
+from your device keys) that signs governance decisions into the journal, so every
+node agrees on them.
+
+```
+hv owner show          # the established owner + admitted devices + config
+hv owner init          # mint the owner key and claim ownership (once)
+```
+
+You run `hv owner init` once, on whichever machine you want to hold the owner key.
+It writes an owner declaration into the journal that the other nodes pick up on
+sync. Until you do this, the governance rules below are simply off (every device
+counts, nothing is capped) — so it's opt-in.
+
+---
+
+### `hv admit` — Admit a device (owner-only)
+
+By default any device can corroborate. Once you have an owner, only **admitted**
+devices count toward confidence — so someone can't mint a pile of keys and fake a
+crowd (a Sybil attack). Admit your real devices:
+
+```
+hv admit k1:597b3e0f5fb92d37 --principal david
+```
+
+`--principal` tags who owns the device. When every device behind a fact belongs to
+the same principal, its confidence is capped (your own machines agreeing isn't the
+same as independent people agreeing). Get a device's id with `hv key show` on it.
+A device that isn't admitted still has its writes stored and synced; they just
+don't raise confidence.
+
+---
+
+### `hv config` — Tunable confidence parameters (owner-only)
+
+Two knobs are owner-set and journaled (so they're identical on every node, which is
+what keeps confidence converging):
+
+```
+hv config set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
+hv config set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
+```
+
+`same_device_lambda` is why two agents on one machine count for less than two on
+separate machines: the device contributes its strongest agent in full plus this
+fraction of the rest. `0` means a device is one voice no matter how many agents run
+on it; `1` removes the discount.
 
 ---
 

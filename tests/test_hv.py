@@ -51,6 +51,39 @@ def test_stats_excludes_forgotten_from_average(hive):
     assert m and float(m.group(1)) > 0, s
 
 
+def _tags(hive, content):
+    r = hive.query("SELECT tags FROM facts WHERE content=?", (content,))[0]["tags"]
+    return json.loads(r) if r else []
+
+
+def test_volatile_autotag_on_status_claim(hive):
+    r = hive.run("remember", "the sync daemon is running", "--source", "alice")
+    assert "tagged volatile" in r.stdout
+    assert "volatile" in _tags(hive, "the sync daemon is running")
+
+
+def test_volatile_not_tagged_on_durable_fact(hive):
+    hive.run("remember", "the deploy succeeded at commit abc123", "--source", "alice")
+    assert "volatile" not in _tags(hive, "the deploy succeeded at commit abc123")
+
+
+def test_volatile_up_to_date_is_not_volatile(hive):
+    # 'is up' must NOT match 'is up to date' (durable).
+    hive.run("remember", "the docs are up to date", "--source", "alice")
+    assert "volatile" not in _tags(hive, "the docs are up to date")
+
+
+def test_volatile_opt_out(hive):
+    hive.run("remember", "node b is reachable", "--no-volatile", "--source", "alice")
+    assert "volatile" not in _tags(hive, "node b is reachable")
+
+
+def test_volatile_explicit_ttl_not_double_tagged(hive):
+    hive.run("remember", "node b is reachable", "--tags", "ttl:6h", "--source", "alice")
+    t = _tags(hive, "node b is reachable")
+    assert "ttl:6h" in t and "volatile" not in t   # explicit ttl already governs freshness
+
+
 def test_search_punctuation_does_not_crash(hive):
     hive.run("remember", "uses C++ and (parens)")
     r = hive.run("search", 'C++ (parens) & punctuation!')

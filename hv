@@ -51,7 +51,7 @@ NODE_ID = os.environ.get("HIVE_NODE_ID", socket.gethostname())
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.1"   # 1.1: added the optional `hv telemetry` verb (additive, backward-compatible)
+CONTRACT_VERSION = "1.2"   # 1.2: remember auto-tags transient-status claims volatile (+ --no-volatile); 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -626,15 +626,46 @@ def _is_salient(content):
     return True
 
 
+# Structural markers of a TRANSIENT operational-status claim — a state that will change, so the
+# audit should RE-CHECK it (volatile) rather than trust it indefinitely. Deliberately HIGH-PRECISION
+# and content-NEUTRAL: it matches the claim FORM (a liveness predicate / freshness marker), never the
+# topic. Better to miss a volatile fact than to mislabel a durable one. `is up` excludes "up to date".
+_VOLATILE_RE = re.compile(
+    r"\b(is|are|stays?|remains?)\s+(currently\s+)?"
+    r"(running|up(?!\s+to\s+date)|down|online|offline|reachable|unreachable|listening|"
+    r"stopped|healthy|unhealthy|degraded|failing|connected|disconnected|available|unavailable)\b"
+    r"|\b(currently|right now|at the moment|at present)\b"
+    r"|\bas of (today|now|\d{4}-\d{2}-\d{2})\b"
+    r"|\bport\s+\d+\s+(is\s+)?(open|closed|listening)\b",
+    re.IGNORECASE,
+)
+
+
+def _detect_volatile(content):
+    """True if `content` asserts a transient operational status (see _VOLATILE_RE). Conservative."""
+    try:
+        return bool(_VOLATILE_RE.search(content or ""))
+    except Exception:
+        return False
+
+
 def remember(args):
     """Store a fact. Confidence is DERIVED from the number of distinct sources that
-    asserted identical content (not from repetition) — see _recompute_confidence."""
+    asserted identical content (not from repetition) — see _recompute_confidence.
+    Transient operational-status claims are auto-tagged `volatile` so the audit re-checks them."""
     if getattr(args, "gate", False) and not _is_salient(args.content):
         print(f"Skipped (low salience): {args.content[:60]}")
         return
+    tags = args.tags.split(",") if args.tags else []
+    tl = [t.strip().lower() for t in tags]
+    auto_volatile = (not getattr(args, "no_volatile", False)
+                     and "volatile" not in tl and not any(t.startswith("ttl:") for t in tl)
+                     and _detect_volatile(args.content))
+    if auto_volatile:
+        tags.append("volatile")
     payload = {
         "content": args.content,
-        "tags": args.tags.split(",") if args.tags else [],
+        "tags": tags,
         "importance": args.importance,
         "source": args.source or os.environ.get("HERMES_AGENT", "manual"),
     }
@@ -657,6 +688,9 @@ def remember(args):
         print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
     else:
         print(f"Corroborated fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+    if auto_volatile:
+        print("  ↻ tagged volatile (transient status — the audit will flag it to re-check; "
+              "use --no-volatile to opt out)")
 
 
 def retract(args):
@@ -1894,6 +1928,8 @@ def main():
     remember_parser.add_argument("--source", help="Source agent")
     remember_parser.add_argument("--gate", action="store_true",
                                  help="Apply the content-neutral salience gate; skip low-salience writes")
+    remember_parser.add_argument("--no-volatile", action="store_true",
+                                 help="Do not auto-tag transient operational-status claims as volatile")
 
     search_parser = subparsers.add_parser("search", help="Search facts")
     search_parser.add_argument("query", help="Search query")

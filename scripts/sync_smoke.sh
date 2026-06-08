@@ -61,8 +61,9 @@ env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess2b
 # Peer retract (Slice 2): negative evidence drives confidence below 0; must converge.
 env $EA "$HV" remember "retractable claim" --source peerX >/dev/null
 RFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT id FROM facts WHERE content LIKE 'retractable%'\").fetchone()[0])")"
-env $EA "$HV" retract "$RFID" --source peerY >/dev/null
-env $EA "$HV" retract "$RFID" --source peerZ >/dev/null
+# Two DISTINCT-device retractors (D0-v2: independence is per device) → net 1 - 2 = -1.
+env $EA HIVE_NODE_ID=nodeY "$HV" retract "$RFID" --source peerY >/dev/null
+env $EA HIVE_NODE_ID=nodeZ "$HV" retract "$RFID" --source peerZ >/dev/null
 
 # Start both daemons (serve-only).
 env $EA python3 -c "import sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
@@ -103,6 +104,20 @@ eq "B shows the link"  "$(count "$B" entity_facts)" "1"
 # And the link points to the alpha fact on B (resolved to B's local ids).
 BLINK="$(HIVE_HOME="$B" python3 -c "import sqlite3,os;c=sqlite3.connect(os.path.join('$B','store.db'));print(c.execute('SELECT f.content FROM entity_facts ef JOIN facts f ON f.id=ef.fact_id JOIN entities e ON e.id=ef.entity_id WHERE e.name=\"Bravo\"').fetchone()[0])")"
 case "$BLINK" in alpha*) ok "B's link resolves to the alpha fact";; *) no "B's link mispoints: '$BLINK'";; esac
+
+printf '\n%s── governance converges across nodes (D0-v2) ──%s\n' "$B_" "$N"
+# A asserts a claim from an ADMITTED device (nodeA) and a NON-admitted one (nodeC), then becomes
+# the owner and admits only nodeA/nodeB. B holds NO owner key, yet must read the synced, owner-signed
+# governance and compute the SAME governed confidence (nodeC excluded by the admission gate → 0.45).
+env $EA "$HV" remember "gov claim" --source agent >/dev/null
+env $EA HIVE_NODE_ID=nodeC "$HV" remember "gov claim" --source agent >/dev/null
+env $EA "$HV" owner init >/dev/null
+env $EA "$HV" admit nodeA --principal david >/dev/null
+env $EA "$HV" admit nodeB --principal david >/dev/null
+env $EA "$HV" sync now >/dev/null
+eq "governed conf converges (B has no owner key)" "$(conf "$A" "gov claim")" "$(conf "$B" "gov claim")"
+eq "admission gate applied (A)"  "$(conf "$A" "gov claim")" "0.45"
+eq "admission gate applied (B)"  "$(conf "$B" "gov claim")" "0.45"
 
 printf '\n%s%d passed, %d failed%s\n' "$B_" "$pass" "$fail" "$N"
 [ "$fail" -eq 0 ] || exit 1

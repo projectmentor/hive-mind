@@ -13,6 +13,9 @@ store.db.bak.*
 .device-key
 .device-id
 
+# Governance owner key (Ed25519 root of trust). SECRET — never commit or sync it.
+.owner-key
+
 # Nudge config + per-session debounce state (per-node; use nudge.env.example as a template)
 nudge.env
 .nudge_state/

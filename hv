@@ -558,8 +558,8 @@ def _governance_state(entries):
     the admitted device set, the principal map, and tunable config. Because it reads only the journal
     (which converges via the G-Set), every node derives the same governance state, so confidence stays
     identical everywhere. No owner declared yet → empty admitted set + default config (gate off)."""
-    gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "admitted": set(), "principals": {},
-           "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
+    gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
+           "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
     govs = []
     for e in entries:
         if e.get("type") != "governance":
@@ -575,6 +575,7 @@ def _governance_state(entries):
     for _ts, _nid, _seq, p, signer in govs:
         if p.get("action") == "owner" and signer == p.get("owner_id"):
             gov["owner_id"], gov["owner_pub"], gov["owner_ts"] = p.get("owner_id"), p.get("owner_pub"), _ts
+            gov["hive_id"] = p.get("hive_id", "")
             break
     if gov["owner_id"] is None:
         return gov
@@ -594,6 +595,12 @@ def _governance_state(entries):
             except (TypeError, ValueError):
                 pass
     return gov
+
+
+def _local_hive_id():
+    """This node's hive_id (from the established owner declaration), or '' if no owner yet. Used by
+    the sync layer to refuse merging journals across hives — two hives on one tailnet stay separate."""
+    return _governance_state(merkle.read_all_entries(JOURNAL_DIR)).get("hive_id", "")
 
 
 def _content_evidence(entries, gov=None):
@@ -2339,9 +2346,14 @@ def owner_cmd(args):
             pass
         pub = _ed25519.pub_from_seed(seed)
         oid = _owner_id_for_pub(pub)
-        append_journal("governance", _sign_governance_payload({"action": "owner", "owner_id": oid}, seed, pub))
+        # The genesis owner declaration also mints the hive_id: a public, owner-attested identifier
+        # that scopes sync, so two hives on one tailnet never merge their journals. Random (no key).
+        hive_id = "h1:" + os.urandom(8).hex()
+        append_journal("governance", _sign_governance_payload(
+            {"action": "owner", "owner_id": oid, "hive_id": hive_id}, seed, pub))
         rebuild_db()
         print(f"Owner established: {oid}")
+        print(f"  hive_id: {hive_id}")
         print(f"  key: {OWNER_KEY_PATH} (private — never commit or sync it)")
         print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
 

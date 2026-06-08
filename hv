@@ -29,6 +29,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1857,6 +1858,92 @@ def migrate_device_identity_cmd(args):
     print("  Run the SAME map on every peer; then `hv merkle` should match and `hv sync now` = in sync.")
 
 
+def _is_daemon_cmdline(toks):
+    """True iff an argv (token list) is a real `<...>/hv sync daemon` daemon, NOT a shell or
+    script that merely MENTIONS the string. The daemon's argv ENDS in `<path>/hv sync daemon`;
+    a `bash -c '... hv sync daemon ...'` wrapper does not (its script body sits earlier in argv).
+    This guard is load-bearing: `--fix` kills these PIDs, so it must never match an innocent shell."""
+    if not (len(toks) >= 3 and toks[-2:] == ["sync", "daemon"]
+            and (toks[-3].endswith("/hv") or toks[-3] == "hv")):
+        return False
+    head = toks[0].lower()
+    return "python" in head or head.endswith("/hv") or head == "hv"
+
+
+def _sync_daemon_pids():
+    """PIDs of real hive sync-daemon processes (Linux/Mac via pgrep). [] on any failure; excludes
+    our own PID. `pgrep -f` alone would also match this command's parent shell, so every hit is
+    re-checked against _is_daemon_cmdline."""
+    try:
+        out = subprocess.run(["pgrep", "-af", "sync daemon"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return []
+    me = os.getpid()
+    pids = []
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        if pid != me and _is_daemon_cmdline(parts[1].split()):
+            pids.append(pid)
+    return pids
+
+
+def _systemd_hive_sync():
+    """(unit_exists, main_pid) for the `--user` hive-sync unit. main_pid is set only when the unit
+    is active; None if dead/missing. Returns (False, None) where systemd isn't available."""
+    def _show(prop):
+        return subprocess.run(["systemctl", "--user", "show", "-p", prop, "--value", "hive-sync"],
+                              capture_output=True, text=True, timeout=5).stdout.strip()
+    try:
+        unit_exists = _show("LoadState") == "loaded"
+        active = subprocess.run(["systemctl", "--user", "is-active", "hive-sync"],
+                               capture_output=True, text=True, timeout=5).stdout.strip()
+        mp = _show("MainPID")
+        main_pid = int(mp) if (active == "active" and mp.isdigit() and mp != "0") else None
+        return unit_exists, main_pid
+    except Exception:
+        return False, None
+
+
+def _classify_orphans(pids, main_pid, unit_exists):
+    """Which daemon PIDs are orphans, i.e. NOT the one systemd is supposed to manage. Pure (testable).
+    - managed daemon present: any OTHER daemon process is an orphan (a second one outside systemd).
+    - a systemd unit exists but isn't running these: all of them are unmanaged orphans (the gotcha
+      where the unit is dead yet a stale daemon still holds the port).
+    - no systemd unit at all (manual management): only flag extras beyond a single survivor."""
+    if not pids:
+        return []
+    if main_pid and main_pid in pids:
+        return [p for p in pids if p != main_pid]
+    if unit_exists:
+        return list(pids)
+    return [p for p in pids if p != min(pids)] if len(pids) > 1 else []
+
+
+def _orphan_daemons():
+    """(orphan_pids, unit_exists) for the local sync daemon."""
+    pids = _sync_daemon_pids()
+    unit_exists, main_pid = _systemd_hive_sync()
+    return _classify_orphans(pids, main_pid, unit_exists), unit_exists
+
+
+def _kill_orphans(orphans):
+    """SIGTERM then (after a beat) SIGKILL any survivors. Returns the PIDs we signalled."""
+    for p in orphans:
+        subprocess.run(["kill", str(p)], capture_output=True)
+    if orphans:
+        time.sleep(1.5)
+        for p in orphans:
+            subprocess.run(["kill", "-9", str(p)], capture_output=True)
+    return list(orphans)
+
+
 def _doctor_status():
     """Run the local-node health checks (READ-ONLY) and return a list of
     {name, status: 'ok'|'warn'|'fail', detail}. Shared by `hv doctor` text + json output.
@@ -1944,16 +2031,22 @@ def _doctor_status():
     except Exception:
         requests = None
 
+    orphans, _unit_exists = _orphan_daemons()
     if requests is None:
-        checks.append({"name": "sync-daemon", "status": "warn", "detail": "python 'requests' not installed; cannot probe"})
+        status, detail = "warn", "python 'requests' not installed; cannot probe"
     else:
         try:
             r = requests.get(f"http://127.0.0.1:{port}/sync/merkle-root", timeout=3)
             r.raise_for_status()
-            checks.append({"name": "sync-daemon", "status": "ok", "detail": f"responding on 127.0.0.1:{port}"})
+            status, detail = "ok", f"responding on 127.0.0.1:{port}"
         except Exception:
-            checks.append({"name": "sync-daemon", "status": "warn",
-                           "detail": f"no response on 127.0.0.1:{port} (auto-sync off?) — `systemctl --user start hive-sync`"})
+            status, detail = "warn", f"no response on 127.0.0.1:{port} (auto-sync off?) — `systemctl --user start hive-sync`"
+    if orphans:
+        # A daemon is running outside systemd's control (e.g. the unit is dead but a stale process
+        # still holds the port and serves old code). The port may answer, but it's not the managed one.
+        status = "warn"
+        detail += f"; {len(orphans)} orphan daemon(s) outside systemd (PID {', '.join(map(str, orphans))}) — `hv doctor --fix`"
+    checks.append({"name": "sync-daemon", "status": status, "detail": detail, "orphans": orphans})
 
     if not peers:
         checks.append({"name": "peers", "status": "ok", "detail": "none configured"})
@@ -1988,8 +2081,10 @@ def _doctor_status():
 
 def doctor_cmd(args):
     """Aggregate local-node health check: authenticity, journal integrity, the derived DB, corpus
-    hygiene, the sync daemon, and peer reachability. Read-only. Exits non-zero if any check FAILED;
-    warnings are advisory and keep a zero exit (so cron/monitors alert only on real breakage)."""
+    hygiene, the sync daemon, and peer reachability. Read-only by default. `--fix` takes the one
+    safe remedial action: kill orphan sync daemons (a stale process holding :9876 outside systemd)
+    and restart the managed unit. Exits non-zero if any check FAILED; warnings keep a zero exit
+    (so cron/monitors alert only on real breakage)."""
     checks = _doctor_status()
     fails = [c for c in checks if c["status"] == "fail"]
     warns = [c for c in checks if c["status"] == "warn"]
@@ -2008,6 +2103,22 @@ def doctor_cmd(args):
             print(f"\nhealthy, with {len(warns)} advisory warning(s).")
         else:
             print("\nall checks passed.")
+
+    if getattr(args, "fix", False):
+        orphans = [p for c in checks for p in (c.get("orphans") or [])]
+        if not orphans:
+            print("\n--fix: no orphan daemons to clear.")
+        else:
+            print(f"\n--fix: killing {len(orphans)} orphan daemon(s): {', '.join(map(str, orphans))}")
+            _kill_orphans(orphans)
+            unit_exists, _ = _systemd_hive_sync()
+            if unit_exists:
+                subprocess.run(["systemctl", "--user", "restart", "hive-sync"], capture_output=True)
+                time.sleep(2)
+                print("  restarted the systemd hive-sync unit.")
+            after = next((c for c in _doctor_status() if c["name"] == "sync-daemon"), None)
+            print(f"  sync-daemon now: {after['detail'] if after else 'unknown'}")
+
     sys.exit(1 if fails else 0)
 
 
@@ -2398,6 +2509,8 @@ def main():
 
     doctor_parser = subparsers.add_parser("doctor", help="Run local-node health checks (integrity, DB, sync, hygiene)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
+    doctor_parser.add_argument("--fix", action="store_true",
+                               help="Take safe remedial action: kill orphan sync daemons and restart the managed unit")
 
     key_parser = subparsers.add_parser("key", help="Show or create this node's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")

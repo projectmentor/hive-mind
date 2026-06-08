@@ -1447,6 +1447,40 @@ def _print_digest(cwd, cap=1200):
         return
 
 
+def _pending_admissions(entries, gov):
+    """Devices that asked to join (a `join-request`) but aren't admitted yet → [{device_id, label}].
+    Deterministic; an admit for a device clears it. Empty before any owner exists."""
+    if not gov.get("owner_id"):
+        return []
+    out = {}
+    for e in entries:
+        if e.get("type") == "governance" and e.get("payload", {}).get("action") == "join-request":
+            p = e["payload"]
+            d = p.get("device_id")
+            if d and d not in gov["admitted"]:
+                out[d] = p.get("label", "")
+    return [{"device_id": d, "label": lbl} for d, lbl in out.items()]
+
+
+def _print_pending_admissions():
+    """SessionStart: on the OWNER node, surface pending join-requests into the agent's context, so
+    admitting a teammate's device bubbles up like an interrupt. Silent on non-owner nodes."""
+    try:
+        if _ed25519 is None or _owner_seed() is None:
+            return
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(entries)
+        if gov["owner_id"] != _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())):
+            return   # this node holds an owner key, but isn't the established owner
+        pend = _pending_admissions(entries, gov)
+        if pend:
+            who = ", ".join(f"{r['label'] or r['device_id']} ({r['device_id']})" for r in pend[:5])
+            print(f"[hive] {len(pend)} device(s) awaiting admission: {who}. "
+                  "Review with `hv admit`; admit with `hv admit <device_id> --principal <name>`.")
+    except Exception:
+        return
+
+
 def _spec_update_check(agent):
     """§0 of the Agent Integration Spec: compare the running hv's CONTRACT_VERSION
     (SemVer MAJOR.MINOR) to what this agent last integrated against, and nudge to
@@ -1517,6 +1551,7 @@ def nudge(args):
         event = args.event
         if event == "session-start":
             _print_digest(getattr(args, "cwd", "") or os.getcwd())
+            _print_pending_admissions()
             _spec_update_check(getattr(args, "agent", "agent") or "agent")
             _freshness_check()
             _audit_boot_summary()
@@ -2390,7 +2425,18 @@ def owner_cmd(args):
 
 
 def admit_cmd(args):
-    """Admit a device into the corroboration set and optionally tag its principal. Owner-only."""
+    """Admit a device into the corroboration set and optionally tag its principal (owner-only).
+    With no device_id, LIST the devices awaiting admission (their pending join-requests)."""
+    if not getattr(args, "device_id", None):
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        pend = _pending_admissions(entries, _governance_state(entries))
+        if not pend:
+            print("No devices awaiting admission.")
+            return
+        print(f"Devices awaiting admission ({len(pend)}):")
+        for r in pend:
+            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hv admit {r['device_id']} --principal <name>")
+        return
     payload = {"action": "admit", "device_id": args.device_id}
     if args.principal:
         payload["principal"] = args.principal
@@ -2447,6 +2493,27 @@ def discover_cmd(args):
         mine = "  (this hive)" if hid == local else ""
         print(f"  {info.get('label', '?')} — hive {hid}, owner {info.get('owner_id')}, "
               f"{info.get('node_count')} node(s), at {ip}:{port}{mine}")
+
+
+def join_cmd(args):
+    """Request to join this node's hive: emit a self-signed join-request the owner can admit.
+    Non-blocking — you're already syncing the hive; your writes simply do not count toward
+    confidence until the owner admits you. The request is device-signed (not owner-signed), so it
+    carries no authority — it's only a visible, pending ask."""
+    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    if not gov["owner_id"]:
+        print("No owner is established in this hive yet (have you synced it?). Nothing to join.")
+        return
+    if NODE_ID in gov["admitted"]:
+        print(f"This device ({NODE_ID}) is already admitted.")
+        return
+    payload = {"action": "join-request", "device_id": NODE_ID, "label": NODE_LABEL}
+    if args.principal:
+        payload["requested_principal"] = args.principal
+    append_journal("governance", payload)   # device-signed by append_journal; NOT owner-signed
+    rebuild_db()
+    print(f"Join request sent for {NODE_ID}. Ask the hive owner to admit you:")
+    print(f"  hv admit {NODE_ID}" + (f" --principal {args.principal}" if args.principal else ""))
 
 
 # --------------------------------------------------------------------------
@@ -2856,9 +2923,12 @@ def main():
     owner_init = owner_sub.add_parser("init", help="Mint the owner key and claim ownership")
     owner_init.add_argument("--force", action="store_true", help="Replace an existing owner key / override an established owner")
 
-    admit_parser = subparsers.add_parser("admit", help="Admit a device into the corroboration set (owner-only)")
-    admit_parser.add_argument("device_id", help="The peer's device_id (k1:…), from `hv key show` on that node")
+    admit_parser = subparsers.add_parser("admit", help="Admit a device (owner-only); no arg lists pending requests")
+    admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
     admit_parser.add_argument("--principal", help="Tag the device's principal (owner of the device), for CAP_self")
+
+    join_parser = subparsers.add_parser("join", help="Request admission to this node's hive (after syncing it)")
+    join_parser.add_argument("--principal", help="The principal (you) the device should be tagged with")
 
     config_parser = subparsers.add_parser("config", help="Set a journaled, owner-signed confidence parameter")
     config_sub = config_parser.add_subparsers(dest="config_action")
@@ -2938,6 +3008,8 @@ def main():
         owner_cmd(args)
     elif args.command == "admit":
         admit_cmd(args)
+    elif args.command == "join":
+        join_cmd(args)
     elif args.command == "config":
         config_cmd(args)
     elif args.command == "discover":

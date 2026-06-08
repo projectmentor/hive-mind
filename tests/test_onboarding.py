@@ -60,3 +60,41 @@ def test_owner_declaration_is_verifiable(tmp_path):
     assert hv._verify_governance(gen) == hv._governance_state(ents)["owner_id"]
     # no hive yet -> no declaration
     assert hv._owner_declaration([]) is None
+
+
+import sqlite3
+
+
+def _run_as(home, node_id, *args):
+    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args],
+                       env=dict(os.environ, HIVE_HOME=str(home), HIVE_NODE_ID=node_id),
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r
+
+
+def _conf(home, content):
+    conn = sqlite3.connect(Path(home) / "store.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute("SELECT confidence FROM facts WHERE content=?", (content,)).fetchone()
+        return row["confidence"] if row else None
+    finally:
+        conn.close()
+
+
+def test_join_request_pending_then_admit(tmp_path):
+    home = tmp_path
+    _run(home, "owner", "init")                                  # this home is the owner
+    _run_as(home, "dev-carol", "join", "--principal", "carol")   # a joiner asks in
+    _run_as(home, "dev-carol", "remember", "carol claim", "--source", "agent")
+
+    # pending list + the owner's session-start nudge both surface carol
+    assert "dev-carol" in _run(home, "admit").stdout
+    assert "awaiting admission" in _run(home, "nudge", "--event", "session-start", "--cwd", str(home)).stdout
+    # carol's write does NOT count yet (admission gate)
+    assert _conf(home, "carol claim") == 0.0
+
+    _run(home, "admit", "dev-carol", "--principal", "carol")     # owner admits
+    assert "No devices awaiting admission" in _run(home, "admit").stdout   # pending cleared
+    assert abs(_conf(home, "carol claim") - 0.45) < 1e-6                   # now counts

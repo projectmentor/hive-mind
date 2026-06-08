@@ -920,14 +920,21 @@ def merkle_cmd(args):
 def stats(args):
     """Show memory usage stats."""
     conn = get_conn()
-    facts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+    total_facts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+    # Average + headline count over LIVE facts only. Owner-forgotten facts sit at FORGET_FLOOR
+    # (-1.0); counting them would drag the average down as the corpus gets *cleaner* — backwards.
+    # This mirrors the audit, which already excludes base <= FORGET_FLOOR.
+    live_facts = conn.execute(
+        "SELECT count(*) FROM facts WHERE confidence > ?", (FORGET_FLOOR,)).fetchone()[0]
+    forgotten_facts = total_facts - live_facts
     decisions = conn.execute("SELECT count(*) FROM decisions").fetchone()[0]
     active_decisions = conn.execute(
         "SELECT count(*) FROM decisions WHERE superseded_by IS NULL"
     ).fetchone()[0]
     entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
     links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
-    avg_conf = conn.execute("SELECT round(avg(confidence), 2) FROM facts").fetchone()[0] or 0
+    avg_conf = conn.execute(
+        "SELECT round(avg(confidence), 2) FROM facts WHERE confidence > ?", (FORGET_FLOOR,)).fetchone()[0] or 0
     top_tags = conn.execute("""
         SELECT tags, count(*) as cnt FROM facts WHERE tags IS NOT NULL
         GROUP BY tags ORDER BY cnt DESC LIMIT 5
@@ -941,7 +948,10 @@ def stats(args):
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
     print(f"  Node:               {NODE_ID}")
-    print(f"  Facts:              {facts}  (avg confidence: {avg_conf})")
+    facts_line = f"{live_facts} live  (avg confidence: {avg_conf})"
+    if forgotten_facts:
+        facts_line += f"  +{forgotten_facts} forgotten"
+    print(f"  Facts:              {facts_line}")
     print(f"  Decisions:          {decisions}  ({active_decisions} active)")
     print(f"  Entities:           {entities}  ({links} fact-links)")
     print(f"  Journal entries:    {len(entries)}  ({', '.join(f'{k}={v}' for k, v in sorted(by_node.items())) or 'empty'})")

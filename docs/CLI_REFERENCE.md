@@ -21,9 +21,11 @@ memory.
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv stats` | See a summary of your memory |
 | `hv doctor` | Check that your node is healthy |
+| `hv key` | Show or create this node's device identity |
 | `hv rebuild` | Fix the local database if something looks wrong |
 | `hv merkle` | Diagnose sync state between nodes |
 | `hv sync` | Sync with peer nodes |
+| `hv migrate-device-identity` | One-time: re-stamp the journal to device identities |
 
 ---
 
@@ -318,6 +320,47 @@ the signed manifest has not caught up yet; pull the latest and re-run.
 
 ---
 
+### `hv key` — This node's device identity
+
+Each node is identified by an Ed25519 **device key**, not its hostname. The key
+proves which device wrote an entry, so a peer cannot impersonate your node to
+inflate confidence. Your `node_id` is the key's fingerprint, like
+`k1:2a2110f3d8963a9e`.
+
+```
+hv key show          # show this node's device_id and public key
+hv key init          # mint a device key (fresh install only)
+```
+
+A fresh install mints a key automatically. `hv key init` refuses to run on a node
+that already has history under its hostname, because minting a key there would
+split its identity; use `hv migrate-device-identity` for an existing node instead.
+The private seed lives at `HIVE_HOME/.device-key` — keep it secret, never commit
+or sync it. Share your `device_id` and public key with peers (they go in
+`.peers.json`).
+
+---
+
+### `hv migrate-device-identity` — Move an existing node to a device key
+
+A one-time, coordinated step that re-stamps an existing journal from hostname
+`node_id`s to cryptographic `device_id`s.
+
+```
+hv migrate-device-identity --map map.json --dry-run   # preview
+hv migrate-device-identity --map map.json             # apply
+```
+
+`map.json` is `{"hostname": "k1:device_id", ...}` covering every node, identical
+on each. Because the re-stamp is deterministic, running it on every peer with the
+same map produces byte-identical journals, so your nodes stay in sync with no
+re-transfer. The runbook, per node: `hv key init --force` to mint the key, share
+the resulting `device_id`, build the shared map, stop the sync daemons, run this
+on each node, confirm `hv merkle` roots match, then restart. Your old journal is
+backed up to `journal.bak.device-id.<timestamp>/`.
+
+---
+
 ### `hv rebuild` — Fix the local database
 
 If your local database looks wrong or out of date, `rebuild` resets it from
@@ -413,7 +456,8 @@ systemctl --user restart hive-sync
 | Variable | Default | Description |
 |---|---|---|
 | `HIVE_HOME` | The folder containing `hv` | Where your data lives. Override to point `hv` at a different location. |
-| `HIVE_NODE_ID` | Your machine's hostname | Your node's identity on the network. Only set this if you need to run two separate hive instances on the same machine. |
+| `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this node's identity. Normally a node identifies by its Ed25519 device key (see `hv key`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
+| `HIVE_NODE_LABEL` | Your machine's hostname | A human-friendly display label shown next to the `device_id` in `hv stats` and sync logs. Cosmetic; does not affect identity. |
 | `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
 
 ---

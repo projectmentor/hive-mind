@@ -29,23 +29,33 @@ Each line in a `.jsonl` file is a JSON object:
 
 ```json
 {
-  "node_id": "node-a",
+  "node_id": "k1:2a2110f3d8963a9e",
   "seq": 42,
   "type": "fact",
   "timestamp": "2026-06-05T09:15:00Z",
   "payload": { ... },
-  "prev_hash": "sha256:abc123..."
+  "prev_hash": "sha256:abc123...",
+  "pub": "<base64 Ed25519 public key>",
+  "sig": "<base64 signature over the entry sans sig>"
 }
 ```
 
 | Field | Description |
 |---|---|
-| `node_id` | Which node wrote this entry |
+| `node_id` | The authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)` |
 | `seq` | Per-node monotonic sequence number |
 | `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact` |
 | `timestamp` | ISO8601 wall clock at write time |
 | `payload` | Type-specific data |
 | `prev_hash` | Hash of the previous entry — forms a hash chain per node |
+| `pub` | The signer's Ed25519 public key (present on signed entries) |
+| `sig` | Ed25519 signature over the canonical entry minus `sig`; the hash chain commits to it |
+
+`node_id` is an unforgeable device fingerprint, not a hostname (see *Device
+identity* below). Signed entries are verified on ingest: an entry whose `node_id`
+isn't the fingerprint of its embedded `pub`, or whose `sig` fails, is rejected,
+so no one can attribute an entry to a device they don't hold the key for.
+Unsigned entries (pre-migration history, legacy peers) are grandfathered.
 
 Cross-row links (e.g. a retraction pointing at a fact, a decision superseding
 another) use `(node_id, seq)` journal identity — not local SQLite IDs. This
@@ -77,13 +87,18 @@ content.
 ### What counts as a distinct source
 
 The model counts distinct `(node_id, app, instance)` tuples — **not** full
-source strings. Session IDs (`session8`) are ignored for corroboration purposes.
+source strings. `node_id` here is the device identity (a key fingerprint), so
+"two nodes" means two devices that each hold a distinct key, which a peer cannot
+fake. Session IDs (`session8`) are ignored for corroboration purposes.
 
 - Same agent, two sessions → **one** identity (idempotent)
-- Same agent, two nodes → **two** identities (corroboration)
-- Two different agents, same node → **two** identities (corroboration)
+- Same agent, two devices → **two** identities (corroboration)
+- Two different agents, same device → **two** identities (corroboration)
 
-This prevents session churn from inflating confidence.
+This prevents session churn from inflating confidence. Note that cryptographic
+identity stops *impersonation* (forging another device's `node_id`), not *Sybil*
+(an actor minting many keys); bounding Sybil is the job of peer authorization
+(`.peers.json`) and the planned principal weighting.
 
 ### Retraction effects
 
@@ -114,11 +129,21 @@ to efficiently identify which entries a peer is missing.
 5. Ingest missing entries locally (`POST /sync/ingest`)
 6. Run `hv rebuild` once after all ingestion
 
-### Node ID collision
+### Device identity
 
-`node_id` is `socket.gethostname()`. Two instances on the same machine with
-the same hostname will collide — their journal entries are indistinguishable.
-Set `HIVE_NODE_ID` to give them distinct identities.
+A node is identified by an Ed25519 **device key**, not a hostname. `device_id`
+is `"k1:" + sha256(pubkey)[:16hex]`; the 32-byte seed lives at
+`HIVE_HOME/.device-key` (mode 0600, gitignored, excluded from the source
+manifest), and the fingerprint is cached at `.device-id` so resolving `NODE_ID`
+stays a cheap file read. `NODE_ID` resolves to: `HIVE_NODE_ID` override → the
+device fingerprint if a key is present → the hostname (legacy, pre-migration).
+
+A key is minted only by `hv key init` (fresh install) or the migration — importing
+`hv` never creates one, so a legacy hostname node keeps its identity until it is
+deliberately migrated. `hv migrate-device-identity --map` re-stamps an existing
+journal from hostnames to device_ids: a deterministic transform (same map on every
+node → byte-identical journals → peers stay converged). Two instances on one box
+still need distinct `HIVE_NODE_ID` or distinct keys.
 
 ---
 
@@ -158,8 +183,12 @@ Used in `--source` arguments and stored in journal entries.
 <app>:<context_class>/<instance>/<session8>
 ```
 
-The confidence model extracts `(node_id, app, instance)` from this string.
-`session8` is for human/log readability only and does not affect confidence.
+The confidence model extracts `(app, instance)` from this string and pairs it
+with the entry's `node_id` (the device identity). `--source` is a **human label**
+on top of the cryptographic device identity: it distinguishes agents/apps on one
+device, but it is self-asserted and not what proves who wrote an entry — the
+device signature is. `session8` is for human/log readability only and does not
+affect confidence.
 
 **Do not change this format** without updating `_recompute_confidence` in `hv`
 and coordinating with any live agent integrations (Hermes plugin, CC hooks).

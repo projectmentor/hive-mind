@@ -110,7 +110,9 @@ Most of the time your agents call `hv` for you. Full reference:
 ## How it works
 
 - **Journal** (`journal/YYYY-MM-DD.jsonl`) — an append-only event log. **This is the source of
-  truth.** Each entry carries a node id, per-node sequence, type, payload, and a hash chain.
+  truth.** Each entry carries a device id, per-node sequence, type, payload, a hash chain, and a
+  signature. A node identifies by an Ed25519 **device key** (not a hostname), and entries are
+  signed and verified on sync, so a peer cannot forge another node's identity to inflate confidence.
 - **SQLite** (`store.db`) — a derived index (WAL + FTS5) rebuilt from the journal on any node.
 - **Merkle index** — per-node chunk hashes for efficient delta sync: only missing entries move.
 - **Sync daemon** — a stdlib HTTP server on `:9876` that syncs with peers (every 5 minutes, or

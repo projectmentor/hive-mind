@@ -603,6 +603,37 @@ def _local_hive_id():
     return _governance_state(merkle.read_all_entries(JOURNAL_DIR)).get("hive_id", "")
 
 
+def _owner_declaration(entries):
+    """The owner-signed genesis governance payload that established the hive (for /hive/info, so a
+    joiner can verify the queen bee). None if no owner."""
+    gov = _governance_state(entries)
+    if not gov["owner_id"]:
+        return None
+    for e in entries:
+        if e.get("type") == "governance":
+            p = e.get("payload", {})
+            if (p.get("action") == "owner" and p.get("owner_id") == gov["owner_id"]
+                    and _verify_governance(p) == gov["owner_id"]):
+                return p
+    return None
+
+
+def _probe_hive(ip, port, timeout=3):
+    """GET /hive/info from ip:port and return it only if it's a GENUINE hive — a verifiable signed
+    genesis whose owner matches the claimed owner_id. Rejects a non-hive service squatting the port."""
+    try:
+        import requests
+        info = requests.get(f"http://{ip}:{port}/hive/info", timeout=timeout).json()
+    except Exception:
+        return None
+    gen = info.get("genesis")
+    if not info.get("hive_id") or not gen:
+        return None
+    if _verify_governance(gen) != info.get("owner_id"):
+        return None
+    return info
+
+
 def _content_evidence(entries, gov=None):
     """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str}.
     Facts add positive identity-evidence; `retract` entries add negative (peer) evidence or set
@@ -2384,6 +2415,40 @@ def config_cmd(args):
         print(f"set {args.key} = {val}")
 
 
+def discover_cmd(args):
+    """Scan the tailnet (via `tailscale status`) for hives — every device running a hive daemon.
+    Tailscale is the device directory; a `/hive/info` probe identifies which devices run a hive."""
+    try:
+        out = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=10).stdout
+        status = json.loads(out)
+    except Exception as e:
+        print(f"Could not read `tailscale status`: {e}")
+        return
+    ips = list(status.get("Self", {}).get("TailscaleIPs", []) or [])
+    for p in (status.get("Peer") or {}).values():
+        ips += p.get("TailscaleIPs", []) or []
+    ips = [ip for ip in ips if ":" not in ip]   # IPv4 only for the probe
+    try:
+        import sync_common
+        port = sync_common.load_peers().get("port", 9876)
+    except Exception:
+        port = 9876
+    found = {}
+    for ip in ips:
+        info = _probe_hive(ip, port)
+        if info:
+            found.setdefault(info["hive_id"], (ip, info))
+    if not found:
+        print(f"No hives found on this tailnet (probed {len(ips)} device(s) on :{port}).")
+        return
+    print(f"Hives on this tailnet ({len(found)}):")
+    local = _local_hive_id()
+    for hid, (ip, info) in found.items():
+        mine = "  (this hive)" if hid == local else ""
+        print(f"  {info.get('label', '?')} — hive {hid}, owner {info.get('owner_id')}, "
+              f"{info.get('node_count')} node(s), at {ip}:{port}{mine}")
+
+
 # --------------------------------------------------------------------------
 # Telemetry — a LOCAL-ONLY observability lane, deliberately OUTSIDE the journal
 # --------------------------------------------------------------------------
@@ -2800,6 +2865,8 @@ def main():
     config_set = config_sub.add_parser("set", help="Set same_device_lambda or cap_self")
     config_set.add_argument("key", help="same_device_lambda | cap_self")
     config_set.add_argument("value", help="numeric value")
+
+    subparsers.add_parser("discover", help="Scan the tailnet for hives (Tailscale + /hive/info probe)")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
@@ -2873,6 +2940,8 @@ def main():
         admit_cmd(args)
     elif args.command == "config":
         config_cmd(args)
+    elif args.command == "discover":
+        discover_cmd(args)
     elif args.command == "nudge":
         nudge(args)
     elif args.command == "audit":

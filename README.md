@@ -155,8 +155,8 @@ cd ~/projects/hive-mind
 
 ## Roadmap
 
-- **Federated hives** — separate hives (personal, team, project) that selectively share what
-  matters, so groups pool knowledge without merging into one pool.
+- **Federated hives (a colony)** — separate hives (personal, team, project) that selectively share
+  what matters, so groups pool knowledge without merging into one pool. Multiple hives form a colony.
 - **More platforms** — Mac and Android.
 - **Hosted relay** — an optional managed tier for nodes that can't reach each other directly.
 

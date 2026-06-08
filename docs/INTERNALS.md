@@ -166,6 +166,23 @@ journal from hostnames to device_ids: a deterministic transform (same map on eve
 node → byte-identical journals → peers stay converged). Two instances on one box
 still need distinct `HIVE_NODE_ID` or distinct keys.
 
+### Hives and onboarding
+
+A **hive** is the set of nodes sharing one queen bee's journal. `hv owner init`
+mints a `hive_id` (`"h1:" + 8 random bytes`, public, in the owner-signed genesis)
+that **scopes sync**: `/sync/hello` and `/sync/ingest` advertise/check it, and a
+node refuses to merge a journal from a different `hive_id`. Without that, two hives
+on one tailnet would merge into one confused journal. An empty `hive_id` (no owner
+yet) syncs with other empty ones, so the genesis can propagate during bootstrap.
+
+Discovery uses Tailscale as the directory: `hv discover` reads `tailscale status`
+and probes each device's `GET /hive/info` (metadata + the signed genesis, never the
+journal — so listing stays open even if reads are later gated). A new node either
+**bootstraps** (first node → `owner init`, becomes queen bee) or **joins** (`hv join`
+emits a self-signed `join-request`; the owner sees it in their session-start digest
+and runs `hv admit`). Joining is non-blocking — the joiner syncs immediately; its
+writes are stored but count zero until admitted.
+
 ---
 
 ## SQLite schema

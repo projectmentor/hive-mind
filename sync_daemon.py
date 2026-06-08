@@ -25,6 +25,10 @@ import sync_common
 
 hv = sync_common.load_hv()
 
+# Sync wire-protocol version. Advertised in /sync/hello and /hive/info so additive handshake
+# changes (e.g. later read-gating) can be negotiated without a journal-schema break.
+PROTOCOL_VERSION = 1
+
 # Serialize journal-mutating ingests so an inbound POST and the periodic
 # outbound sync (M5) don't rebuild SQLite concurrently.
 _ingest_lock = threading.Lock()
@@ -56,6 +60,8 @@ class Handler(BaseHTTPRequestHandler):
                 es = _entries()
                 self._send(200, {
                     "node_id": hv.NODE_ID,
+                    "hive_id": hv._local_hive_id(),
+                    "protocol_version": PROTOCOL_VERSION,
                     "journal_summary": {"total": len(es), "by_node": merkle.node_max_seq(es)},
                     "chunks": merkle.node_chunk_hashes(es),
                 })
@@ -81,6 +87,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
+            # Refuse a cross-hive push: if both sides have a hive_id and they differ, this is a
+            # different hive's journal and must not merge into ours.
+            local_hive, sender_hive = hv._local_hive_id(), body.get("hive_id", "")
+            if local_hive and sender_hive and local_hive != sender_hive:
+                self._send(409, {"error": "different hive", "hive_id": local_hive, "accepted": 0})
+                return
             entries = body.get("entries", [])
             with _ingest_lock:
                 accepted, duplicates = hv.append_foreign_entries(entries)

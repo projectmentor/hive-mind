@@ -126,3 +126,45 @@ def test_config_lambda_zero_collapses_same_device(tmp_path):
     _run(home, "remember", "one box", "--source", "bob", node_id="dev-a")
     # lambda=0 → a device is one voice no matter how many agents → 0.45.
     assert abs(_conf(home, "one box") - 0.45) < 1e-6
+
+
+def test_owner_forget_authority():
+    # The forget-authorization rule (pure reader test): once an owner exists, only an owner-SIGNED
+    # forget (or one predating the owner) is honored; an unsigned `owner:owner/owner` is ignored.
+    hv = _loadhv()
+    oseed = os.urandom(32)
+    opub = hv._ed25519.pub_from_seed(oseed)
+    oid = hv._owner_id_for_pub(opub)
+
+    def gov_owner(ts):
+        p = hv._sign_governance_payload({"action": "owner", "owner_id": oid}, oseed, opub)
+        return {"node_id": "n", "seq": 1, "type": "governance", "timestamp": ts, "payload": p,
+                "prev_hash": "sha256:genesis"}
+
+    fact = {"node_id": "dev", "seq": 1, "type": "fact", "timestamp": "2026-02-01T00:00:00Z",
+            "payload": {"content": "X", "source": "alice"}, "prev_hash": "sha256:genesis"}
+
+    def forget(ts, signed):
+        pl = {"retracts_ref": ["dev", 1], "reason": "", "source": "owner:owner/owner"}
+        if signed:
+            pl = hv._sign_governance_payload(pl, oseed, opub)
+        return {"node_id": "dev", "seq": 2, "type": "retract", "timestamp": ts, "payload": pl,
+                "prev_hash": "sha256:genesis"}
+
+    owner = gov_owner("2026-01-01T00:00:00Z")   # owner established before the fact
+    gov = hv._governance_state([owner])
+
+    # unsigned forget AFTER the owner -> ignored (the closed hole)
+    ev = hv._content_evidence([owner, fact, forget("2026-03-01T00:00:00Z", signed=False)], gov)
+    assert ev["X"]["forget"] is False
+    # owner-signed forget -> honored
+    ev = hv._content_evidence([owner, fact, forget("2026-03-01T00:00:00Z", signed=True)], gov)
+    assert ev["X"]["forget"] is True
+    # unsigned forget that PREDATES the owner -> grandfathered (honored)
+    late_owner = gov_owner("2026-04-01T00:00:00Z")
+    gov2 = hv._governance_state([late_owner])
+    ev = hv._content_evidence([late_owner, fact, forget("2026-03-01T00:00:00Z", signed=False)], gov2)
+    assert ev["X"]["forget"] is True
+    # with NO owner at all -> legacy unsigned forget honored
+    ev = hv._content_evidence([fact, forget("2026-03-01T00:00:00Z", signed=False)], None)
+    assert ev["X"]["forget"] is True

@@ -23,7 +23,9 @@ memory.
 | `hv doctor` | Check that your node is healthy |
 | `hv key` | Show or create this node's device identity |
 | `hv owner` | Show or create the governance owner identity |
-| `hv admit` | Admit a device into the corroboration set (owner-only) |
+| `hv discover` | Find hives on your tailnet |
+| `hv join` | Request admission to a hive you've synced |
+| `hv admit` | Admit a device (owner-only); no arg lists pending requests |
 | `hv config` | Set a journaled confidence parameter (owner-only) |
 | `hv rebuild` | Fix the local database if something looks wrong |
 | `hv merkle` | Diagnose sync state between nodes |
@@ -386,9 +388,41 @@ hv owner init          # mint the owner key and claim ownership (once)
 ```
 
 You run `hv owner init` once, on whichever machine you want to hold the owner key.
-It writes an owner declaration into the journal that the other nodes pick up on
-sync. Until you do this, the governance rules below are simply off (every device
-counts, nothing is capped) — so it's opt-in.
+It mints a **`hive_id`** (a public identifier that keeps your hive separate from
+any other hive on the same tailnet) and writes an owner declaration into the
+journal that the other nodes pick up on sync. Until you do this, the governance
+rules below are simply off (every device counts, nothing is capped) — so it's opt-in.
+
+---
+
+### `hv discover` — Find hives on your tailnet
+
+Lists every device on your Tailscale network that's running a hive, with its
+queen bee (owner) and node count — so a new machine can find a hive to join
+without knowing any IP.
+
+```
+hv discover
+```
+
+It reads `tailscale status` and probes each device. A random service squatting
+the sync port is not mistaken for a hive (the probe verifies a signed genesis).
+
+---
+
+### `hv join` — Request admission to a hive
+
+After your node has synced a hive (its peer is in `.peers.json`), `hv join` asks
+that hive's owner to admit you.
+
+```
+hv join --principal carol
+```
+
+This is **non-blocking**: you're already reading the hive, and you can write, but
+your writes don't count toward confidence until you're admitted. The request shows
+up for the owner to approve; you don't wait. It prints your `device_id` so you can
+pass it along.
 
 ---
 
@@ -399,14 +433,15 @@ devices count toward confidence — so someone can't mint a pile of keys and fak
 crowd (a Sybil attack). Admit your real devices:
 
 ```
+hv admit                                  # list devices awaiting admission
 hv admit k1:597b3e0f5fb92d37 --principal david
 ```
 
-`--principal` tags who owns the device. When every device behind a fact belongs to
-the same principal, its confidence is capped (your own machines agreeing isn't the
-same as independent people agreeing). Get a device's id with `hv key show` on it.
-A device that isn't admitted still has its writes stored and synced; they just
-don't raise confidence.
+With no argument, `hv admit` lists the pending join-requests. (Those also surface
+in your session-start digest, so your agent can prompt you.) `--principal` tags who
+owns the device; when every device behind a fact belongs to the same principal, its
+confidence is capped. Get a device's id with `hv key show` on it. A device that
+isn't admitted still has its writes stored and synced; they just don't raise confidence.
 
 ---
 

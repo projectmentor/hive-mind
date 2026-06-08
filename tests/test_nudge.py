@@ -181,6 +181,44 @@ def test_audit_recheck_volatile(tmp_path):
     assert not any("sshd is reachable" in x["content"] for x in data["obsolete"]["decayed"])
 
 
+def _insert_raw_fact(home, content, tags_json="[]", last_ev="2026-01-01T00:00:00+00:00"):
+    """Insert a fact straight into the table to simulate a pre-existing (pre-auto-tag) row."""
+    import sqlite3
+    run_hv(home, "stats")  # ensure init_db ran
+    c = sqlite3.connect(home / "store.db")
+    c.execute("INSERT INTO facts (content, tags, source_agent, confidence, last_evidence_at) "
+              "VALUES (?,?,?,?,?)", (content, tags_json, "alice", 0.45, last_ev))
+    c.commit(); c.close()
+
+
+def test_audit_rechecks_untagged_operational_fact_by_content(tmp_path):
+    # An OLD fact (no volatile tag) whose content reads as a transient status must still
+    # land in RECHECK — volatility is detected from content at audit time (retro-coverage).
+    _insert_raw_fact(tmp_path, "the build server is currently down")
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json",
+                             HIVE_NOW="2027-12-01T00:00:00+00:00").stdout)
+    assert any("build server" in x["content"] for x in data["recheck"])
+    assert not any("build server" in x["content"] for x in data["obsolete"]["decayed"])
+
+
+def test_audit_respects_durable_optout(tmp_path):
+    # A fact the owner marked durable (--no-volatile) must NOT be re-detected as volatile.
+    _insert_raw_fact(tmp_path, "the build server is currently down", tags_json='["durable"]')
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json",
+                             HIVE_NOW="2027-12-01T00:00:00+00:00").stdout)
+    assert not any("build server" in x["content"] for x in data["recheck"])
+
+
+def test_remember_no_volatile_marks_durable(tmp_path):
+    run_hv(tmp_path, "remember", "node b is reachable", "--no-volatile", "--source", "alice")
+    import sqlite3
+    c = sqlite3.connect(tmp_path / "store.db"); c.row_factory = sqlite3.Row
+    tags = json.loads(c.execute("SELECT tags FROM facts WHERE content=?",
+                                ("node b is reachable",)).fetchone()["tags"])
+    c.close()
+    assert "durable" in tags and "volatile" not in tags
+
+
 def test_audit_volatile_not_flagged_redundant(tmp_path):
     c = "the sync daemon is running"
     run_hv(tmp_path, "remember", c, "--tags", "volatile", "--source", "alice")

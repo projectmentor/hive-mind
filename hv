@@ -631,14 +631,16 @@ def _is_salient(content):
 # and content-NEUTRAL: it matches the claim FORM (a liveness predicate / freshness marker), never the
 # topic. Better to miss a volatile fact than to mislabel a durable one. `is up` excludes "up to date".
 _VOLATILE_RE = re.compile(
-    r"\b(is|are|stays?|remains?)\s+(currently\s+)?"
+    r"\b(is|are|stays?|remains?)\s+(currently\s+|now\s+)?"
     r"(running|up(?!\s+to\s+date)|down|online|offline|reachable|unreachable|listening|"
     r"stopped|healthy|unhealthy|degraded|failing|connected|disconnected|available|unavailable)\b"
-    r"|\b(currently|right now|at the moment|at present)\b"
     r"|\bas of (today|now|\d{4}-\d{2}-\d{2})\b"
     r"|\bport\s+\d+\s+(is\s+)?(open|closed|listening)\b",
     re.IGNORECASE,
 )
+# NOTE: bare freshness adverbs ("currently", "right now") are deliberately NOT triggers — they
+# fire on durable prose ("currently agents don't ...") too. They only count when attached to a
+# status above ("is currently down"). High precision: better to miss than to mislabel.
 
 
 def _detect_volatile(content):
@@ -658,11 +660,14 @@ def remember(args):
         return
     tags = args.tags.split(",") if args.tags else []
     tl = [t.strip().lower() for t in tags]
-    auto_volatile = (not getattr(args, "no_volatile", False)
-                     and "volatile" not in tl and not any(t.startswith("ttl:") for t in tl)
-                     and _detect_volatile(args.content))
+    detected = _detect_volatile(args.content)
+    already = "volatile" in tl or any(t.startswith("ttl:") for t in tl)
+    opted_out = getattr(args, "no_volatile", False)
+    auto_volatile = detected and not already and not opted_out
     if auto_volatile:
         tags.append("volatile")
+    elif detected and not already and opted_out:
+        tags.append("durable")   # record the opt-out so audit-time detection honors it
     payload = {
         "content": args.content,
         "tags": tags,
@@ -1310,7 +1315,12 @@ def _compute_audit(depth=None, session=""):
             tl = [str(t).strip().lower() for t in (json.loads(r["tags"]) if r["tags"] else [])]
         except Exception:
             tl = []
-        if "volatile" in tl or any(t.startswith("ttl:") for t in tl):
+        # Volatility is a DERIVED projection over content (like confidence): a fact is volatile if
+        # tagged volatile/ttl OR its content reads as a transient operational-status claim — UNLESS
+        # the owner opted out (`durable`). This retroactively covers facts written before auto-tagging.
+        is_volatile = ("volatile" in tl or any(t.startswith("ttl:") for t in tl)
+                       or (_detect_volatile(r["content"]) and "durable" not in tl))
+        if is_volatile:
             volatile_contents.add(r["content"])
             a, b = _to_dt(r["last_evidence_at"]), _to_dt(now)
             age_h = max(0.0, (b - a).total_seconds() / 3600.0) if (a and b) else None

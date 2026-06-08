@@ -144,21 +144,38 @@ def _incumbent_is_hive(bind, port, attempts=3, delay=0.5):
     return False
 
 
+def _persist_port(port):
+    """Record the port the daemon actually bound, so the CLI + peers use it."""
+    try:
+        path = sync_common.hive_home() / ".peers.json"
+        cfg = json.loads(path.read_text()) if path.exists() else {}
+        cfg["port"] = port
+        path.write_text(json.dumps(cfg, indent=2) + "\n")
+    except Exception:
+        pass
+
+
 def make_server(bind=None, port=None):
     cfg = sync_common.load_peers()
     bind = bind if bind is not None else cfg.get("bind", "0.0.0.0")
-    port = port if port is not None else cfg.get("port", sync_common.PORT_DEFAULT)
-    try:
-        return ThreadingHTTPServer((bind, port), Handler), bind, port
-    except OSError as e:
-        # If the port is taken by a healthy hive daemon, this launch is
-        # redundant — signal the caller to exit cleanly. Any other holder
-        # (or a non-responsive one) is a real error; re-raise it.
-        if e.errno == errno.EADDRINUSE and _incumbent_is_hive(bind, port):
-            raise AlreadyRunning(
-                f"a healthy hive sync daemon already owns {bind}:{port}"
-            ) from e
-        raise
+    base = port if port is not None else cfg.get("port", sync_common.PORT_DEFAULT)
+    # Bind the base port, or fall back to the next few if a NON-hive service squats it — so a port
+    # conflict degrades gracefully instead of failing the install. A healthy hive on the base port
+    # still means "already running" (redundant launch → clean no-op).
+    for p in range(base, base + 5):
+        try:
+            srv = ThreadingHTTPServer((bind, p), Handler)
+            if p != base:
+                print(f"sync daemon: :{base} is held by a non-hive service; using :{p}")
+                _persist_port(p)
+            return srv, bind, p
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                if _incumbent_is_hive(bind, p):
+                    raise AlreadyRunning(f"a healthy hive sync daemon already owns {bind}:{p}") from e
+                continue   # a squatter on this port — try the next one
+            raise
+    raise OSError(f"no free port in {base}..{base + 4} for the hive sync daemon")
 
 
 def serve_forever(bind=None, port=None):

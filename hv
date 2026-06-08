@@ -2481,18 +2481,20 @@ def discover_cmd(args):
         port = 9876
     found = {}
     for ip in ips:
-        info = _probe_hive(ip, port)
-        if info:
-            found.setdefault(info["hive_id"], (ip, info))
+        for p in range(port, port + 5):   # cover a daemon that fell back off a squatted port
+            info = _probe_hive(ip, p)
+            if info:
+                found.setdefault(info["hive_id"], (ip, p, info))
+                break
     if not found:
         print(f"No hives found on this tailnet (probed {len(ips)} device(s) on :{port}).")
         return
     print(f"Hives on this tailnet ({len(found)}):")
     local = _local_hive_id()
-    for hid, (ip, info) in found.items():
+    for hid, (ip, p, info) in found.items():
         mine = "  (this hive)" if hid == local else ""
         print(f"  {info.get('label', '?')} — hive {hid}, owner {info.get('owner_id')}, "
-              f"{info.get('node_count')} node(s), at {ip}:{port}{mine}")
+              f"{info.get('node_count')} node(s), at {ip}:{p}{mine}")
 
 
 def join_cmd(args):

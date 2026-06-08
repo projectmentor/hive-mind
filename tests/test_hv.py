@@ -330,3 +330,41 @@ def test_rebuild_roundtrip(hive):
     assert before == after
     # FTS index survives the rebuild
     assert "rt fact one" in hive.run("search", "fact one").stdout
+
+
+def test_doctor_reports_all_checks(hive):
+    # An empty .peers.json keeps doctor offline: no peers to probe. The journal +
+    # database checks are deterministic in a fresh sandbox; authenticity / sync-daemon
+    # depend on the signing state and whether a daemon is up, so we don't assert them.
+    (hive.home / ".peers.json").write_text('{"peers": []}')
+    hive.run("remember", "doctor can see this stored fact", "--source", "alice")
+
+    r = hive.run("doctor", "--format", "json", check=False)
+    data = json.loads(r.stdout)
+    names = {c["name"]: c["status"] for c in data["checks"]}
+
+    assert set(names) >= {"authenticity", "journal", "database", "hygiene", "sync-daemon", "peers"}
+    assert names["journal"] == "ok"        # own hash chain intact from genesis
+    assert names["database"] == "ok"       # store.db reflects the journal
+    assert names["peers"] == "ok"          # none configured -> nothing to probe
+    assert data["verdict"] in {"ok", "warn", "fail"}
+
+
+def test_doctor_detects_a_broken_journal(hive):
+    # Tamper with the journal so the hash chain no longer links; doctor must FAIL it.
+    (hive.home / ".peers.json").write_text('{"peers": []}')
+    hive.run("remember", "first fact, genesis of the chain")
+    hive.run("remember", "second fact, links to the first")
+
+    jf = sorted(hive.journal.glob("*.jsonl"))[0]
+    lines = jf.read_text().splitlines()
+    entry = json.loads(lines[-1])
+    entry["prev_hash"] = "sha256:" + "0" * 64   # break the link
+    lines[-1] = json.dumps(entry)
+    jf.write_text("\n".join(lines) + "\n")
+
+    r = hive.run("doctor", "--format", "json", check=False)
+    data = json.loads(r.stdout)
+    journal = next(c for c in data["checks"] if c["name"] == "journal")
+    assert journal["status"] == "fail", data
+    assert r.returncode == 1

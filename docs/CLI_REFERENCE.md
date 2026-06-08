@@ -20,6 +20,7 @@ memory.
 | `hv retract` | Correct a fact you got wrong |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv stats` | See a summary of your memory |
+| `hv doctor` | Check that your node is healthy |
 | `hv rebuild` | Fix the local database if something looks wrong |
 | `hv merkle` | Diagnose sync state between nodes |
 | `hv sync` | Sync with peer nodes |
@@ -289,6 +290,31 @@ hv stats
 
 Run this at the start of a session to get oriented, or after a sync to confirm
 entries came across from a peer.
+
+---
+
+### `hv doctor` — Check that your node is healthy
+
+Runs a single set of checks over your local node and tells you whether anything
+needs attention. It looks at six things:
+
+- **authenticity** — your copy of HiveMind matches the signed official release
+- **journal** — your node's history is intact and unbroken from the start
+- **database** — the local lookup index is in step with that history
+- **hygiene** — whether duplicate or obsolete facts have built up
+- **sync-daemon** — whether the background sync service is running
+- **peers** — whether your peer nodes are reachable and in sync
+
+```
+hv doctor
+hv doctor --format json    # machine-readable, for scripts and monitoring
+```
+
+Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
+non-zero only when a check actually fails, so you can wire it into a cron job or a
+monitoring probe and get alerted on real breakage, not on a peer being briefly
+offline. A failed `authenticity` check right after an upgrade usually just means
+the signed manifest has not caught up yet; pull the latest and re-run.
 
 ---
 

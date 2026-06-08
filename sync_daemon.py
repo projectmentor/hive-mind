@@ -65,6 +65,19 @@ class Handler(BaseHTTPRequestHandler):
                     "journal_summary": {"total": len(es), "by_node": merkle.node_max_seq(es)},
                     "chunks": merkle.node_chunk_hashes(es),
                 })
+            elif u.path == "/hive/info":
+                # Discovery: minimal hive metadata + the signed genesis (for verification). NEVER
+                # the journal — so listing stays open even if reads are gated later.
+                es = _entries()
+                gov = hv._governance_state(es)
+                self._send(200, {
+                    "hive_id": gov["hive_id"],
+                    "owner_id": gov["owner_id"],
+                    "label": hv.NODE_LABEL,
+                    "node_count": len(gov["admitted"]) or len({e.get("node_id") for e in es}),
+                    "protocol_version": PROTOCOL_VERSION,
+                    "genesis": hv._owner_declaration(es),
+                })
             elif u.path == "/sync/merkle-root":
                 es = _entries()
                 self._send(200, {"root_hash": merkle.merkle_root(merkle.chunk_hashes(es))})

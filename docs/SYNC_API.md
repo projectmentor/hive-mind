@@ -44,7 +44,7 @@ step during a sync round.
 
 | Field | Description |
 |---|---|
-| `node_id` | This node's identity (`HIVE_NODE_ID` or hostname) |
+| `node_id` | This node's identity — its device-key fingerprint (`HIVE_NODE_ID` overrides) |
 | `journal_summary.by_node` | Highest seq seen per source node — used for quick divergence detection |
 | `chunks` | Per-node array of 100-entry chunk hashes (Merkle leaf hashes). Used to localize which windows need syncing |
 
@@ -188,25 +188,34 @@ All journal entries share this structure. The journal is the source of truth —
 
 ```json
 {
-  "node_id": "node-a",
+  "node_id": "k1:2a2110f3d8963a9e",
   "seq": 42,
   "type": "fact | decision | entity | entity_fact | retract | dispute | verify",
   "timestamp": "2026-06-04T12:00:00Z",
   "payload": { ... },
   "prev_hash": "sha256:...",
-  "hash": "sha256:..."
+  "pub": "<base64 Ed25519 public key>",
+  "sig": "<base64 signature over the entry minus sig>"
 }
 ```
 
 | Field | Description |
 |---|---|
-| `node_id` | Authoring node (self-declared; Phase B1 adds transport-attribution sidecar) |
+| `node_id` | Authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)`, not a self-declared name |
 | `seq` | Per-node monotonic sequence number. `(node_id, seq)` is the global unique identity for cross-row links |
 | `type` | Entry type (see below) |
 | `timestamp` | ISO8601 UTC |
 | `payload` | Type-specific data (see below) |
 | `prev_hash` | Hash of the previous entry from this node — forms a per-node hash chain |
-| `hash` | SHA256 of `(prev_hash + json(payload))` |
+| `pub` | Signer's Ed25519 public key (present on signed entries) |
+| `sig` | Ed25519 signature over the canonical entry minus `sig`; the chain commits to it |
+
+A receiver verifies a signed entry on ingest: the `node_id` must be the fingerprint
+of its embedded `pub`, and the `sig` must check out, or the entry is rejected —
+so a node cannot author entries under another node's `node_id`. Unsigned entries
+(pre-migration history, legacy peers) are accepted as-is. This is the cryptographic
+identity that the earlier "self-declared; Phase B1 transport-attribution" note
+anticipated; identity now travels in the entry itself.
 
 ### Entry Types and Payloads
 
@@ -267,11 +276,11 @@ All journal entries share this structure. The journal is the source of truth —
   "peers": [
     {
       "url": "http://100.64.0.2:9876",
-      "node_id": "node-b"
+      "node_id": "k1:10f6b761dd1c2a90"
     },
     {
       "url": "http://100.64.0.1:9876",
-      "node_id": "node-a"
+      "node_id": "k1:597b3e0f5fb92d37"
     }
   ],
   "bind": "0.0.0.0",
@@ -282,9 +291,11 @@ All journal entries share this structure. The journal is the source of truth —
 | Field | Default | Description |
 |---|---|---|
 | `peers[].url` | required | Base URL of the peer's sync daemon |
-| `peers[].node_id` | optional | Human label for logging |
+| `peers[].node_id` | optional | The peer's device id (`k1:…`), for logging and the admitted-peer set |
 | `bind` | `0.0.0.0` | Interface to bind the daemon to |
 | `port` | `9876` | Port the daemon listens on |
+
+Get a node's device id and public key with `hv key show` on that machine.
 
 `.peers.json` is gitignored (contains Tailscale IPs). Copy from
 `.peers.json.example` and edit per node.

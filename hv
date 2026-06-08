@@ -1528,8 +1528,9 @@ def _fetch_official_pubkey():
         return None
 
 
-def verify_cmd(args):
-    """Integrity + authenticity check. Three independent layers, strongest last:
+def _verify_status(root, check_anchor=True):
+    """The integrity + authenticity verdict, as data (shared by `verify` and `doctor`).
+    Three independent layers, strongest last:
       1. INTEGRITY  — local source fingerprint matches the bundled manifest (verify.json). Catches
          local edits and accidental drift.
       2. SIGNATURE  — the manifest carries a valid Ed25519 signature (verify.json.sig) under the
@@ -1538,8 +1539,10 @@ def verify_cmd(args):
       3. KEY ANCHOR — the bundled public key matches the key published at our own TLS domain
          (a different origin than the code host). Catches a fork that ships its OWN key + self-signed
          manifest: the bundled key will not match the one served from hivemind.projectmentor.org.
-    Each layer degrades gracefully; the command never raises and never blocks."""
-    root = Path(__file__).resolve().parent
+    Returns {level, version, ok, lines}. `ok` is True once integrity holds and the bundled signature
+    (if any) is valid; the key-anchor layer only changes the headline, never `ok`. check_anchor=False
+    skips the network layer (fast, offline-safe). Never raises and never blocks."""
+    root = Path(root)
     local = _source_manifest(root)
     try:
         manifest_bytes = (root / "verify.json").read_bytes()
@@ -1552,39 +1555,203 @@ def verify_cmd(args):
 
     # Layer 1: integrity.
     if not bundled:
-        print(f"⚠ No manifest to verify against. Reinstall from the official source: {OFFICIAL_SOURCE}")
-        return
+        return {"level": "no_manifest", "version": ver, "ok": False, "lines": [
+            f"⚠ No manifest to verify against. Reinstall from the official source: {OFFICIAL_SOURCE}"]}
     if local["digest"] != bundled.get("digest"):
-        print("⚠ This install has been MODIFIED locally — your files differ from the signed manifest.")
-        print(f"  If you did not edit it yourself, reinstall from the official source: {OFFICIAL_SOURCE}")
-        return
+        return {"level": "modified", "version": ver, "ok": False, "lines": [
+            "⚠ This install has been MODIFIED locally — your files differ from the signed manifest.",
+            f"  If you did not edit it yourself, reinstall from the official source: {OFFICIAL_SOURCE}"]}
 
     # Layer 2: signature.
     if _ed25519 is None or sig is None or bundled_pub is None:
-        print(f"✓ Integrity OK: matches the bundled manifest for v{ver}. (No signature bundled yet — "
-              "this build predates signed releases.)")
-        print(f"  Confirm against {OFFICIAL_SOURCE} when online.")
-        return
+        return {"level": "integrity_only", "version": ver, "ok": True, "lines": [
+            f"✓ Integrity OK: matches the bundled manifest for v{ver}. (No signature bundled yet — "
+            "this build predates signed releases.)",
+            f"  Confirm against {OFFICIAL_SOURCE} when online."]}
     if not _ed25519.verify(manifest_bytes, sig, bundled_pub):
-        print("⚠ SIGNATURE INVALID — the manifest is not signed by the HiveMind release key. This is "
-              "a tampered or forged copy.")
-        print(f"  Reinstall from the official source: {OFFICIAL_SOURCE}")
-        return
+        return {"level": "sig_invalid", "version": ver, "ok": False, "lines": [
+            "⚠ SIGNATURE INVALID — the manifest is not signed by the HiveMind release key. This is "
+            "a tampered or forged copy.",
+            f"  Reinstall from the official source: {OFFICIAL_SOURCE}"]}
+    if not check_anchor:
+        return {"level": "signed", "version": ver, "ok": True, "lines": [
+            f"✓ HiveMind v{ver}: integrity OK and the release signature is valid."]}
 
     # Layer 3: key anchor (does the bundled key match the one published on our domain?).
     official_pub = _fetch_official_pubkey()
     if official_pub is None:
-        print(f"✓ Official HiveMind v{ver}: integrity OK and the release signature is valid.")
-        print(f"  Could not reach {OFFICIAL_PUBKEY_URL} to confirm the key is the published one (offline?).")
-        return
+        return {"level": "offline_ok", "version": ver, "ok": True, "lines": [
+            f"✓ Official HiveMind v{ver}: integrity OK and the release signature is valid.",
+            f"  Could not reach {OFFICIAL_PUBKEY_URL} to confirm the key is the published one (offline?)."]}
     if official_pub == bundled_pub:
-        print(f"✓ Official HiveMind v{ver} from ProjectMentor — verified.")
-        print("  Source integrity OK, release signature valid, and the signing key matches the one "
-              "published at hivemind.projectmentor.org.")
+        return {"level": "official", "version": ver, "ok": True, "lines": [
+            f"✓ Official HiveMind v{ver} from ProjectMentor — verified.",
+            "  Source integrity OK, release signature valid, and the signing key matches the one "
+            "published at hivemind.projectmentor.org."]}
+    return {"level": "fork", "version": ver, "ok": False, "lines": [
+        "⚠ Signed, but with a key that does NOT match the official key published at "
+        "hivemind.projectmentor.org. This is a fork or an impostor.",
+        f"  Reinstall from the official source: {OFFICIAL_SOURCE}"]}
+
+
+def verify_cmd(args):
+    """Integrity + authenticity check (prints the layered verdict; see _verify_status)."""
+    for line in _verify_status(Path(__file__).resolve().parent)["lines"]:
+        print(line)
+
+
+def _doctor_status():
+    """Run the local-node health checks (READ-ONLY) and return a list of
+    {name, status: 'ok'|'warn'|'fail', detail}. Shared by `hv doctor` text + json output.
+
+    'fail' = something is broken and needs action (tampered source, corrupt journal, empty DB).
+    'warn' = degraded or advisory (auto-sync off, a peer offline, hygiene to reconcile). A warn
+    does not mean the node is unhealthy, so it does not set a non-zero exit on its own."""
+    checks = []
+    entries = []
+
+    # 1. Authenticity — integrity + signature. Skip the slow network key-anchor layer so doctor
+    #    stays fast and works offline; `hv verify` does the full three-layer check.
+    try:
+        v = _verify_status(Path(__file__).resolve().parent, check_anchor=False)
+        headline = v["lines"][0].lstrip("✓⚠ ").strip()
+        checks.append({"name": "authenticity", "status": "ok" if v["ok"] else "fail", "detail": headline})
+    except Exception as e:
+        checks.append({"name": "authenticity", "status": "warn", "detail": f"check error: {e}"})
+
+    # 2. Journal — THIS node's hash chain is contiguous from genesis and each prev_hash links.
+    #    A break means local corruption or tampering (foreign nodes may be partial, so only ours).
+    try:
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        mine = sorted([e for e in entries if e.get("node_id") == NODE_ID], key=lambda e: e["seq"])
+        broken, expect_prev, expect_seq = None, "sha256:genesis", 1
+        for e in mine:
+            if e["seq"] != expect_seq:
+                broken = f"seq gap at {e['seq']} (expected {expect_seq})"
+                break
+            if e.get("prev_hash") != expect_prev:
+                broken = f"hash chain breaks at seq {e['seq']}"
+                break
+            expect_prev, expect_seq = compute_hash(e), expect_seq + 1
+        root_hash = merkle.merkle_root(merkle.chunk_hashes(entries))
+        if broken:
+            checks.append({"name": "journal", "status": "fail",
+                           "detail": f"{broken} — local journal corruption or tampering"})
+        else:
+            checks.append({"name": "journal", "status": "ok",
+                           "detail": f"{len(mine)} own entries chained from genesis, {len(entries)} total, root {root_hash[7:23]}"})
+    except Exception as e:
+        checks.append({"name": "journal", "status": "fail", "detail": f"unreadable: {e}"})
+
+    # 3. Database — store.db (the derived index) is readable and in step with the journal.
+    #    Content-duplicate facts collapse to one row, so rows <= journal fact-entries; the red flag
+    #    is an empty DB over a non-empty journal (a missed rebuild).
+    jfacts = sum(1 for e in entries if e.get("type") == "fact")
+    try:
+        conn = get_conn()
+        nfacts = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+        conn.close()
+        if jfacts and nfacts == 0:
+            checks.append({"name": "database", "status": "fail",
+                           "detail": f"store.db has 0 facts but the journal has {jfacts} — run `hv rebuild`"})
+        else:
+            checks.append({"name": "database", "status": "ok",
+                           "detail": f"{nfacts} fact rows from {jfacts} journal fact-entries"})
+    except Exception as e:
+        checks.append({"name": "database", "status": "fail",
+                       "detail": f"store.db unreadable ({e}) — run `hv rebuild`"})
+
+    # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
+    try:
+        a = _compute_audit(depth="light")
+        red = len(a["redundant"])
+        obs = len(a["forgotten"]) + len(a["contested"]) + len(a["decayed"])
+        rec = len(a["recheck"])
+        if red or obs or rec:
+            checks.append({"name": "hygiene", "status": "warn",
+                           "detail": f"{red} duplicate, {obs} obsolete, {rec} to re-check — run `hv audit`"})
+        else:
+            checks.append({"name": "hygiene", "status": "ok", "detail": "no duplicates or obsolete facts"})
+    except Exception as e:
+        checks.append({"name": "hygiene", "status": "warn", "detail": f"audit error: {e}"})
+
+    # 5 + 6. Sync daemon liveness + peer reachability — best-effort network probes.
+    try:
+        import sync_common
+        cfg = sync_common.load_peers()
+        port, peers = cfg.get("port", 9876), cfg.get("peers", [])
+    except Exception:
+        port, peers = 9876, []
+    try:
+        import requests
+    except Exception:
+        requests = None
+
+    if requests is None:
+        checks.append({"name": "sync-daemon", "status": "warn", "detail": "python 'requests' not installed; cannot probe"})
     else:
-        print("⚠ Signed, but with a key that does NOT match the official key published at "
-              "hivemind.projectmentor.org. This is a fork or an impostor.")
-        print(f"  Reinstall from the official source: {OFFICIAL_SOURCE}")
+        try:
+            r = requests.get(f"http://127.0.0.1:{port}/sync/merkle-root", timeout=3)
+            r.raise_for_status()
+            checks.append({"name": "sync-daemon", "status": "ok", "detail": f"responding on 127.0.0.1:{port}"})
+        except Exception:
+            checks.append({"name": "sync-daemon", "status": "warn",
+                           "detail": f"no response on 127.0.0.1:{port} (auto-sync off?) — `systemctl --user start hive-sync`"})
+
+    if not peers:
+        checks.append({"name": "peers", "status": "ok", "detail": "none configured"})
+    elif requests is None:
+        checks.append({"name": "peers", "status": "warn", "detail": f"{len(peers)} configured; cannot probe (no 'requests')"})
+    else:
+        local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
+        up, down, diverged = [], [], []
+        for p in peers:
+            base = str(p.get("url", "")).rstrip("/")
+            pid = p.get("id", base)
+            try:
+                rr = requests.get(f"{base}/sync/merkle-root", timeout=5)
+                rr.raise_for_status()
+                (up if rr.json().get("root_hash") == local_root else diverged).append(pid)
+            except Exception:
+                down.append(pid)
+        if down or diverged:
+            bits = []
+            if up:
+                bits.append(f"{len(up)} in sync")
+            if diverged:
+                bits.append(f"diverged: {', '.join(diverged)} (run `hv sync now`)")
+            if down:
+                bits.append(f"unreachable: {', '.join(down)}")
+            checks.append({"name": "peers", "status": "warn", "detail": "; ".join(bits)})
+        else:
+            checks.append({"name": "peers", "status": "ok", "detail": f"{len(up)} peer(s) reachable and in sync"})
+
+    return checks
+
+
+def doctor_cmd(args):
+    """Aggregate local-node health check: authenticity, journal integrity, the derived DB, corpus
+    hygiene, the sync daemon, and peer reachability. Read-only. Exits non-zero if any check FAILED;
+    warnings are advisory and keep a zero exit (so cron/monitors alert only on real breakage)."""
+    checks = _doctor_status()
+    fails = [c for c in checks if c["status"] == "fail"]
+    warns = [c for c in checks if c["status"] == "warn"]
+
+    if getattr(args, "format", "text") == "json":
+        verdict = "fail" if fails else ("warn" if warns else "ok")
+        print(json.dumps({"verdict": verdict, "node": NODE_ID, "checks": checks}, indent=2))
+    else:
+        glyph = {"ok": "✓", "warn": "•", "fail": "✗"}
+        print(f"hive doctor — {NODE_ID}")
+        for c in checks:
+            print(f"  {glyph.get(c['status'], '?')} {c['name']:<13} {c['detail']}")
+        if fails:
+            print(f"\n{len(fails)} check(s) FAILED — see above.")
+        elif warns:
+            print(f"\nhealthy, with {len(warns)} advisory warning(s).")
+        else:
+            print("\nall checks passed.")
+    sys.exit(1 if fails else 0)
 
 
 # --------------------------------------------------------------------------
@@ -1924,7 +2091,8 @@ def main():
             '  hv decide "chose Y" --rationale "because"                  # record a decision\n'
             "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
             "  hv retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
-            "  hv stats | rebuild | merkle | sync now|daemon\n"
+            "  hv stats | rebuild | merkle | doctor | sync now|daemon\n"
+            "  hv doctor [--format json]                                 # local-node health check\n"
             "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
             "decays with age ($HIVE_NOW injectable); owner-forget = -1.0."
         ),
@@ -1970,6 +2138,9 @@ def main():
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")
     subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
+
+    doctor_parser = subparsers.add_parser("doctor", help="Run local-node health checks (integrity, DB, sync, hygiene)")
+    doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
@@ -2031,6 +2202,8 @@ def main():
         version_cmd(args)
     elif args.command == "verify":
         verify_cmd(args)
+    elif args.command == "doctor":
+        doctor_cmd(args)
     elif args.command == "nudge":
         nudge(args)
     elif args.command == "audit":

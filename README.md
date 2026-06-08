@@ -90,6 +90,7 @@ wsl --shutdown
 ./hv search "payments"
 ./hv decide "Use AGPL for the core" --rationale "keeps the dual-license option open"
 ./hv stats
+./hv doctor          # health check: integrity, DB, sync, hygiene
 ./hv sync now        # manual sync to all peers
 ```
 

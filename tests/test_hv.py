@@ -38,6 +38,19 @@ def test_remember_and_fts_search(hive):
     assert "real estate" in hive.run("search", "real estate").stdout
 
 
+def test_stats_excludes_forgotten_from_average(hive):
+    import re
+    hive.run("remember", "fact alpha is true", "--source", "alice")
+    out = hive.run("remember", "fact beta is true", "--source", "bob").stdout
+    fid = re.search(r"#(\d+)", out).group(1)
+    hive.run("retract", fid, "--owner")          # -> FORGET_FLOOR (-1.0)
+    s = hive.run("stats").stdout
+    assert "1 live" in s and "1 forgotten" in s, s
+    # average is over the live fact (~0.45), NOT dragged toward -1.0 by the forgotten one
+    m = re.search(r"avg confidence: ([\-0-9.]+)", s)
+    assert m and float(m.group(1)) > 0, s
+
+
 def test_search_punctuation_does_not_crash(hive):
     hive.run("remember", "uses C++ and (parens)")
     r = hive.run("search", 'C++ (parens) & punctuation!')

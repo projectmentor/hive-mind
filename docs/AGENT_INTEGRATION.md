@@ -137,6 +137,9 @@ Your adapter **must**:
   safety: a per-turn hook that must never break the session cannot be a fresh guess each boot.)
 - **Use a stable, distinct `--source`.** So independent corroboration across agents works
   (e.g. `claude-code`, `claude-ai`, `hermes:...`). Two agents agreeing must look like two sources.
+  `--source` is a human label that distinguishes apps/agents *on one device*; the device itself is
+  identified cryptographically (an Ed25519 key — see `hv key` and INTERNALS "Device identity"), and
+  entries are signed under it. You set the label; you do not get to assert which device you are.
 
 ---
 

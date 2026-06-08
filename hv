@@ -558,7 +558,7 @@ def _governance_state(entries):
     the admitted device set, the principal map, and tunable config. Because it reads only the journal
     (which converges via the G-Set), every node derives the same governance state, so confidence stays
     identical everywhere. No owner declared yet → empty admitted set + default config (gate off)."""
-    gov = {"owner_id": None, "owner_pub": None, "admitted": set(), "principals": {},
+    gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "admitted": set(), "principals": {},
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
     govs = []
     for e in entries:
@@ -574,7 +574,7 @@ def _governance_state(entries):
     # 1) Establish the owner: the first valid self-signed `owner` declaration wins (TOFU).
     for _ts, _nid, _seq, p, signer in govs:
         if p.get("action") == "owner" and signer == p.get("owner_id"):
-            gov["owner_id"], gov["owner_pub"] = p.get("owner_id"), p.get("owner_pub")
+            gov["owner_id"], gov["owner_pub"], gov["owner_ts"] = p.get("owner_id"), p.get("owner_pub"), _ts
             break
     if gov["owner_id"] is None:
         return gov
@@ -596,11 +596,17 @@ def _governance_state(entries):
     return gov
 
 
-def _content_evidence(entries):
+def _content_evidence(entries, gov=None):
     """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str}.
     Facts add positive identity-evidence; `retract` entries add negative (peer) evidence or set
     owner-forget (governance, decisive). last_ts = most-recent fact/retract timestamp (drives
-    decay). Pure projection over the journal."""
+    decay). Pure projection over the journal.
+
+    Owner-forget authority: once an owner is established, a forget is honored only if it is
+    OWNER-SIGNED by that owner, or it predates the owner (grandfathered). Before any owner exists,
+    the legacy source-tag forget (`owner:owner/owner`) is honored — so existing forgets are never
+    resurrected, and after `hv owner init` a forged unsigned forget no longer carries authority."""
+    gov = gov or _DEFAULT_GOV
     out = {}
     seq_content = {}                       # (node_id, seq) of a fact entry -> its content
     for e in entries:
@@ -629,7 +635,14 @@ def _content_evidence(entries):
         ev = out[content]
         app, ctx, instance, _sess = _parse_source(p.get("source", "manual"))
         if app in OWNER_APPS or ctx == "owner":
-            ev["forget"] = True
+            if gov["owner_id"]:
+                # Owner established: honor only an owner-signed forget from that owner, or one that
+                # predates the owner (grandfathered). An unsigned/forged owner-forget is ignored.
+                signer = _verify_governance(p) if "owner_sig" in p else None
+                if signer == gov["owner_id"] or e.get("timestamp", "") < gov["owner_ts"]:
+                    ev["forget"] = True
+            else:
+                ev["forget"] = True   # pre-governance: legacy source-tag forget honored
         else:
             key = (e.get("node_id"), app, instance)
             w = SRC_CLASS_WEIGHT.get(ctx, 1.0)
@@ -641,7 +654,7 @@ def _content_evidence(entries):
     return out
 
 
-_DEFAULT_GOV = {"owner_id": None, "admitted": set(), "principals": {},
+_DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "principals": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
 
 
@@ -696,7 +709,7 @@ def _recompute_confidence(conn, entries):
     projection over the journal (corroborators MINUS retractors, weighted, admitted-and-discounted;
     owner-retract forgets). Time-invariant — decay at query time."""
     gov = _governance_state(entries)
-    for content, ev in _content_evidence(entries).items():
+    for content, ev in _content_evidence(entries, gov).items():
         _apply_content_confidence(conn, content, ev, gov)
 
 
@@ -912,7 +925,7 @@ def remember(args):
     # (keeps the live path consistent with rebuild without a full rebuild).
     all_entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(all_entries)
-    ev = _content_evidence(all_entries).get(
+    ev = _content_evidence(all_entries, gov).get(
         args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     n = len(ev["pos"])
     conf = _content_confidence(ev, gov)
@@ -943,14 +956,28 @@ def retract(args):
         print(f"No fact #{args.fact_id}")
         return
     content = row["content"]
-    source = "owner:owner/owner" if args.owner else (
-        args.source or os.environ.get("HERMES_AGENT", "manual"))
-    append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
+    if args.owner:
+        # Owner-forget. Once an owner is established it must be cryptographically authorized:
+        # require the owner key and sign the retract, so a bare `--owner` source tag can no longer
+        # forge governance. Before any owner exists, the legacy unsigned forget still works.
+        gov0 = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+        owner_seed = _owner_seed()
+        if gov0["owner_id"] and owner_seed is None:
+            print("Owner-forget now requires the owner key (an owner is established). "
+                  "Run this on the owner machine.")
+            return
+        payload = {"retracts_ref": ref, "reason": args.reason or "", "source": "owner:owner/owner"}
+        if owner_seed is not None:
+            payload = _sign_governance_payload(payload, owner_seed, _ed25519.pub_from_seed(owner_seed))
+        append_journal("retract", payload)
+    else:
+        source = args.source or os.environ.get("HERMES_AGENT", "manual")
+        append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
 
     conn = get_conn()
     all_entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(all_entries)
-    ev = _content_evidence(all_entries).get(
+    ev = _content_evidence(all_entries, gov).get(
         content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     conf = _content_confidence(ev, gov)
     _apply_content_confidence(conn, content, ev, gov)

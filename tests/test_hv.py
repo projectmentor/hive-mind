@@ -23,6 +23,20 @@ def _hash(entry):
     return "sha256:" + hashlib.sha256(_canonical(entry)).hexdigest()
 
 
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+
+def _as(home, node_id, *args):
+    """Run hv against `home` under a specific device identity (HIVE_NODE_ID) — for writing the
+    same content from DISTINCT devices, which (post D0-v2) is what earns full corroboration."""
+    env = dict(os.environ, HIVE_HOME=str(home), HIVE_NODE_ID=node_id)
+    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r
+
+
 def test_wal_enabled(hive):
     hive.run("stats")  # triggers init_db
     mode = hive.query("PRAGMA journal_mode")[0][0]
@@ -104,25 +118,37 @@ def test_repetition_does_not_inflate_confidence(hive):
     assert abs(rows[0]["conf"] - 0.45) < 1e-6     # 1 distinct source → 0.45, unchanged
 
 
-def test_distinct_sources_raise_confidence_with_cap(hive):
-    for src in ("alice", "bob", "carol"):
-        hive.run("remember", "corroborated claim", "--source", src)
+def test_distinct_devices_raise_confidence_with_cap(hive):
+    # Distinct DEVICES corroborating (post D0-v2: independence is per device).
+    for dev in ("dev-a", "dev-b", "dev-c"):
+        _as(hive.home, dev, "remember", "corroborated claim", "--source", "agent")
     conf = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("corroborated claim",)
     )[0]["confidence"]
-    assert abs(conf - 0.7875) < 1e-6              # 3 distinct sources, diminishing returns
-    # Seven more distinct sources still stay strictly below the cap.
-    for src in ("d", "e", "f", "g", "h", "i", "j"):
-        hive.run("remember", "corroborated claim", "--source", src)
+    assert abs(conf - 0.7875) < 1e-6              # 3 distinct devices, diminishing returns
+    # Seven more distinct devices still stay strictly below the cap.
+    for dev in ("d", "e", "f", "g", "h", "i", "j"):
+        _as(hive.home, dev, "remember", "corroborated claim", "--source", "agent")
     capped = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("corroborated claim",)
     )[0]["confidence"]
     assert capped < 0.90
 
 
+def test_same_device_discount(hive):
+    # Several agents on ONE device are correlated, not independent: the device contributes its
+    # strongest identity in full plus lambda (0.5) times the rest. Two primary agents -> net 1.5.
+    hive.run("remember", "local claim", "--source", "alice")
+    hive.run("remember", "local claim", "--source", "bob")
+    conf = hive.query(
+        "SELECT confidence FROM facts WHERE content=?", ("local claim",)
+    )[0]["confidence"]
+    assert abs(conf - 0.581802) < 1e-5           # _confidence_for(1 + 0.5*1)
+
+
 def test_confidence_is_pure_projection_across_rebuild(hive):
-    for src in ("alice", "bob"):
-        hive.run("remember", "stable claim", "--source", src)
+    for dev in ("dev-a", "dev-b"):
+        _as(hive.home, dev, "remember", "stable claim", "--source", "agent")
     before = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
     )[0]["confidence"]
@@ -147,12 +173,13 @@ def test_same_agent_across_sessions_is_idempotent(hive):
 
 
 def test_distinct_structured_agents_corroborate(hive):
-    hive.run("remember", "joint claim", "--source", "hermes:primary/default/aaaa1111")
-    hive.run("remember", "joint claim", "--source", "claude-code")
+    # Two distinct agents on two distinct DEVICES → full independent corroboration.
+    _as(hive.home, "dev-a", "remember", "joint claim", "--source", "hermes:primary/default/aaaa1111")
+    _as(hive.home, "dev-b", "remember", "joint claim", "--source", "claude-code")
     conf = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("joint claim",)
     )[0]["confidence"]
-    assert abs(conf - 0.675) < 1e-6               # two distinct identities
+    assert abs(conf - 0.675) < 1e-6               # two distinct devices
 
 
 def test_context_class_weighting(hive):
@@ -169,11 +196,11 @@ def _fid(hive, content):
 
 
 def test_peer_retract_drives_negative(hive):
-    # 1 corroborator, 2 distinct peer retractors → net = 1 - 2 = -1 → -0.45 (rejected).
+    # 1 corroborator, 2 distinct-DEVICE peer retractors → net = 1 - 2 = -1 → -0.45 (rejected).
     hive.run("remember", "claim to reject", "--source", "alice")
     fid = _fid(hive, "claim to reject")
-    hive.run("retract", str(fid), "--source", "bob")
-    hive.run("retract", str(fid), "--source", "carol")
+    _as(hive.home, "dev-b", "retract", str(fid), "--source", "bob")
+    _as(hive.home, "dev-c", "retract", str(fid), "--source", "carol")
     conf = hive.query("SELECT confidence FROM facts WHERE content=?", ("claim to reject",))[0]["confidence"]
     assert abs(conf - (-0.45)) < 1e-6
 
@@ -200,8 +227,8 @@ def test_rejected_hidden_from_default_search(hive):
 def test_retract_is_pure_projection_across_rebuild(hive):
     hive.run("remember", "rebuild retract", "--source", "alice")
     fid = _fid(hive, "rebuild retract")
-    hive.run("retract", str(fid), "--source", "bob")
-    hive.run("retract", str(fid), "--source", "carol")
+    _as(hive.home, "dev-b", "retract", str(fid), "--source", "bob")
+    _as(hive.home, "dev-c", "retract", str(fid), "--source", "carol")
     before = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
     hive.run("rebuild")
     after = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]

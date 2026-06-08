@@ -95,12 +95,36 @@ def _resolve_node_id():
 
 NODE_ID = _resolve_node_id()
 
+
+# Owner identity (governance root). A separate Ed25519 key, distinct from the device key, is the
+# root of trust for governance: it admits devices, tags their principal, and sets tunable confidence
+# parameters. Those declarations are JOURNALED as owner-signed `governance` entries, so every node
+# derives the same admitted set / principal map / config and confidence stays identical across nodes
+# (the convergence invariant). Minted only by `hv owner init`; importing hv never creates it.
+OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
+
+
+def _owner_seed():
+    """The 32-byte owner seed if this node holds the owner key, else None. Read-only; never creates."""
+    try:
+        if _ed25519 is None or not OWNER_KEY_PATH.exists():
+            return None
+        seed = base64.b64decode(OWNER_KEY_PATH.read_text().strip())
+        return seed if len(seed) == 32 else None
+    except Exception:
+        return None
+
+
+def _owner_id_for_pub(pub):
+    """Owner fingerprint: 'o1:' + first 16 hex of sha256(pubkey)."""
+    return "o1:" + hashlib.sha256(pub).hexdigest()[:16]
+
 # The agent-facing contract version (hv API + Agent Integration Spec), SemVer MAJOR.MINOR.
 # MINOR = additive / backward-compatible (never remove or repurpose existing verbs, flags, or
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.3"   # 1.3: device identity — `hv key`, `migrate-device-identity`, signed journal entries (opt-in via .device-key); 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.4"   # 1.4: D0-v2 corroboration — journaled governance (`hv owner`/`admit`/`config`), same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -301,6 +325,35 @@ def _verify_entry(entry):
         return False
 
 
+def _sign_governance_payload(payload, owner_seed, owner_pub):
+    """Attach `owner_pub` then `owner_sig` (the owner's signature over the payload sans owner_sig).
+    This authorizes the governance ACTION independently of which device appends the entry."""
+    payload = dict(payload)
+    payload["owner_pub"] = base64.b64encode(owner_pub).decode()
+    body = _canonical({k: v for k, v in payload.items() if k != "owner_sig"})
+    payload["owner_sig"] = base64.b64encode(_ed25519.sign(body, owner_seed)).decode()
+    return payload
+
+
+def _verify_governance(payload):
+    """Return the owner_id that signed this governance payload (verified), or None if the owner
+    signature is missing/invalid. The signer is the fingerprint of the embedded owner_pub, so an
+    action can only be attributed to an owner key it was actually signed with."""
+    if _ed25519 is None:
+        return None
+    try:
+        owner_pub = base64.b64decode(payload.get("owner_pub", ""))
+        owner_sig = base64.b64decode(payload.get("owner_sig", ""))
+        if len(owner_pub) != 32:
+            return None
+        body = _canonical({k: v for k, v in payload.items() if k != "owner_sig"})
+        if not _ed25519.verify(body, owner_sig, owner_pub):
+            return None
+        return _owner_id_for_pub(owner_pub)
+    except Exception:
+        return None
+
+
 def _next_seq_and_prev(node_id):
     """Next per-node monotonic seq and the hash of this node's latest entry.
     Derived from the journal itself (stateless, correct after a fresh start)."""
@@ -362,6 +415,11 @@ def append_foreign_entries(entries):
         if not _verify_entry(e):
             # A signed entry whose signature is invalid or whose node_id doesn't match its key
             # is forged or corrupt — never persist it.
+            rejected += 1
+            continue
+        if e.get("type") == "governance" and _verify_governance(e.get("payload", {})) is None:
+            # A governance entry with no valid owner signature is forged/corrupt. Rejection is
+            # deterministic, so every honest node drops the same ones and journals stay converged.
             rejected += 1
             continue
         existing.add((nid, seq))
@@ -450,6 +508,9 @@ def persist_fact(conn, entry):
 CONF_BASE = 0.5    # each new independent identity halves the remaining gap to CAP
 CONF_CAP = 0.90    # never "certain" without external/human verification
 SRC_CLASS_WEIGHT = {"primary": 1.0, "subagent": 0.5, "cron": 0.3}
+# D0-v2 defaults (owner-overridable via journaled `set-config`, so they stay identical on every node).
+CONF_SAME_DEVICE_LAMBDA = 0.5   # weight of EACH additional identity on the same device (1.0 = no discount)
+CONF_CAP_SELF = 0.70            # ceiling when all corroboration traces to ONE principal (self-reinforcement)
 
 
 def _parse_source(source):
@@ -490,6 +551,49 @@ def _confidence_for(net):
 
 
 HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence
+
+
+def _governance_state(entries):
+    """Pure, deterministic projection over owner-signed `governance` entries → the established owner,
+    the admitted device set, the principal map, and tunable config. Because it reads only the journal
+    (which converges via the G-Set), every node derives the same governance state, so confidence stays
+    identical everywhere. No owner declared yet → empty admitted set + default config (gate off)."""
+    gov = {"owner_id": None, "owner_pub": None, "admitted": set(), "principals": {},
+           "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
+    govs = []
+    for e in entries:
+        if e.get("type") != "governance":
+            continue
+        p = e.get("payload", {})
+        signer = _verify_governance(p)
+        if signer is None:
+            continue   # unsigned or forged governance is ignored
+        govs.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p, signer))
+    govs.sort(key=lambda x: (x[0], x[1], x[2]))   # deterministic order across nodes
+
+    # 1) Establish the owner: the first valid self-signed `owner` declaration wins (TOFU).
+    for _ts, _nid, _seq, p, signer in govs:
+        if p.get("action") == "owner" and signer == p.get("owner_id"):
+            gov["owner_id"], gov["owner_pub"] = p.get("owner_id"), p.get("owner_pub")
+            break
+    if gov["owner_id"] is None:
+        return gov
+
+    # 2) Apply admits + config, but only from the established owner.
+    for _ts, _nid, _seq, p, signer in govs:
+        if signer != gov["owner_id"]:
+            continue
+        action = p.get("action")
+        if action == "admit" and p.get("device_id"):
+            gov["admitted"].add(p["device_id"])
+            if p.get("principal"):
+                gov["principals"][p["device_id"]] = p["principal"]
+        elif action == "set-config" and p.get("key") in ("same_device_lambda", "cap_self"):
+            try:
+                gov["config"][p["key"]] = float(p.get("value"))
+            except (TypeError, ValueError):
+                pass
+    return gov
 
 
 def _content_evidence(entries):
@@ -537,29 +641,63 @@ def _content_evidence(entries):
     return out
 
 
-def _content_confidence(ev):
-    """Time-INVARIANT base confidence for one content (forget -> FORGET_FLOOR; else signed net).
-    Stored in the projection; decay is applied separately at query time."""
+_DEFAULT_GOV = {"owner_id": None, "admitted": set(), "principals": {},
+                "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
+
+
+def _governed_side(weights, gov):
+    """Collapse identity weights {(device_id, app, instance): w} into a single governed total.
+    (D0-v2) ADMISSION: once an owner is established, only admitted devices count. SAME-DEVICE
+    DISCOUNT: each device contributes its strongest identity in full plus λ·(its others), since
+    agents on one machine are correlated, not independent. Returns (total, set_of_device_ids)."""
+    has_owner, admitted = gov["owner_id"] is not None, gov["admitted"]
+    lam = gov["config"]["same_device_lambda"]
+    by_dev = {}
+    for (dev, _app, _inst), w in weights.items():
+        if has_owner and dev not in admitted:
+            continue
+        by_dev.setdefault(dev, []).append(w)
+    total = 0.0
+    for ws in by_dev.values():
+        ws.sort(reverse=True)
+        total += ws[0] + lam * sum(ws[1:])
+    return total, set(by_dev.keys())
+
+
+def _content_confidence(ev, gov=None):
+    """Time-INVARIANT base confidence for one content: a SIGNED, GOVERNED projection. forget ->
+    FORGET_FLOOR. Else net = governed(pos) - governed(neg) -> _confidence_for, then CAP_self clamps
+    positive confidence when every contributing device shares one principal (self-reinforcement).
+    Pure over (journal facts + governance) -> identical on every node. Decay applied at query time."""
     if ev.get("forget"):
         return FORGET_FLOOR
-    return _confidence_for(sum(ev["pos"].values()) - sum(ev["neg"].values()))
+    gov = gov or _DEFAULT_GOV
+    pos, pos_devs = _governed_side(ev["pos"], gov)
+    neg, _ = _governed_side(ev["neg"], gov)
+    base = _confidence_for(pos - neg)
+    if base > 0 and pos_devs:
+        prins = [gov["principals"].get(d) for d in pos_devs]
+        if all(p is not None for p in prins) and len(set(prins)) == 1:
+            base = min(base, gov["config"]["cap_self"])
+    return base
 
 
-def _apply_content_confidence(conn, content, ev):
+def _apply_content_confidence(conn, content, ev, gov=None):
     """Write base confidence + contested flag + last-evidence ts for one content."""
     contested = 1 if (not ev.get("forget") and ev.get("pos") and ev.get("neg")) else 0
     conn.execute(
         "UPDATE facts SET confidence = ?, contested = ?, last_evidence_at = ? WHERE content = ?",
-        (_content_confidence(ev), contested, ev.get("last_ts") or None, content),
+        (_content_confidence(ev, gov), contested, ev.get("last_ts") or None, content),
     )
 
 
 def _recompute_confidence(conn, entries):
-    """The ONLY writer of facts.confidence/contested/last_evidence_at. Pure SIGNED projection
-    over the journal (corroborators MINUS retractors, weighted; owner-retract forgets);
-    `contested` when a claim has BOTH support and dispute. Time-invariant — decay at query time."""
+    """The ONLY writer of facts.confidence/contested/last_evidence_at. Pure SIGNED, GOVERNED
+    projection over the journal (corroborators MINUS retractors, weighted, admitted-and-discounted;
+    owner-retract forgets). Time-invariant — decay at query time."""
+    gov = _governance_state(entries)
     for content, ev in _content_evidence(entries).items():
-        _apply_content_confidence(conn, content, ev)
+        _apply_content_confidence(conn, content, ev, gov)
 
 
 def _to_dt(s):
@@ -772,11 +910,13 @@ def remember(args):
     res = persist_fact(conn, entry)
     # Derive this content's confidence from its distinct IDENTITIES in the journal
     # (keeps the live path consistent with rebuild without a full rebuild).
-    ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
+    all_entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(all_entries)
+    ev = _content_evidence(all_entries).get(
         args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     n = len(ev["pos"])
-    conf = _content_confidence(ev)
-    _apply_content_confidence(conn, args.content, ev)
+    conf = _content_confidence(ev, gov)
+    _apply_content_confidence(conn, args.content, ev, gov)
     conn.commit()
     conn.close()
 
@@ -808,10 +948,12 @@ def retract(args):
     append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
 
     conn = get_conn()
-    ev = _content_evidence(merkle.read_all_entries(JOURNAL_DIR)).get(
+    all_entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(all_entries)
+    ev = _content_evidence(all_entries).get(
         content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
-    conf = _content_confidence(ev)
-    _apply_content_confidence(conn, content, ev)
+    conf = _content_confidence(ev, gov)
+    _apply_content_confidence(conn, content, ev, gov)
     conn.commit()
     conn.close()
     kind = "FORGOTTEN (owner)" if args.owner else "retracted"
@@ -1550,7 +1692,7 @@ _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", 
 # verify.json.sig signs it, and hivemind.pub is the anchor (its integrity comes from the published
 # copy at the canonical site, not from being self-listed). Listing any of them would be circular.
 _VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env",
-                         ".peers.json", ".device-key", ".device-id"}
+                         ".peers.json", ".device-key", ".device-id", ".owner-key"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg"}
 OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
 # The trust anchor: the public key, served from our own TLS domain (a DIFFERENT origin than the
@@ -2122,6 +2264,87 @@ def doctor_cmd(args):
     sys.exit(1 if fails else 0)
 
 
+def _append_governance(action_payload):
+    """Owner-sign and append a governance entry, then rebuild so confidence reflects it. Requires
+    the owner key on this node. Returns the entry, or None if this node isn't the owner."""
+    seed = _owner_seed()
+    if seed is None:
+        print("This node does not hold the owner key — run governance commands on the owner machine.")
+        return None
+    pub = _ed25519.pub_from_seed(seed)
+    entry = append_journal("governance", _sign_governance_payload(action_payload, seed, pub))
+    rebuild_db()
+    return entry
+
+
+def owner_cmd(args):
+    """Show or create the governance owner identity (the root of trust for membership + config)."""
+    action = getattr(args, "owner_action", None) or "show"
+    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    if action == "show":
+        if not gov["owner_id"]:
+            print("No owner established. Run `hv owner init` to mint the owner key and claim it.")
+            return
+        seed = _owner_seed()
+        held = seed is not None and _owner_id_for_pub(_ed25519.pub_from_seed(seed)) == gov["owner_id"]
+        print(f"owner: {gov['owner_id']}" + ("  (this node holds the owner key)" if held else ""))
+        print(f"  admitted devices: {len(gov['admitted'])}; principals tagged: {len(gov['principals'])}")
+        print(f"  config: same_device_lambda={gov['config']['same_device_lambda']}, "
+              f"cap_self={gov['config']['cap_self']}")
+        return
+    if action == "init":
+        if _ed25519 is None:
+            print("ed25519 unavailable; cannot create an owner key.")
+            return
+        if OWNER_KEY_PATH.exists() and not args.force:
+            print(f"Owner key already exists at {OWNER_KEY_PATH}. Use --force to replace it.")
+            return
+        if gov["owner_id"] and not args.force:
+            print(f"An owner is already established ({gov['owner_id']}). Use --force to override "
+                  "(risks governance disagreement across nodes).")
+            return
+        seed = os.urandom(32)
+        HIVE_HOME.mkdir(parents=True, exist_ok=True)
+        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+        try:
+            os.chmod(OWNER_KEY_PATH, 0o600)
+        except Exception:
+            pass
+        pub = _ed25519.pub_from_seed(seed)
+        oid = _owner_id_for_pub(pub)
+        append_journal("governance", _sign_governance_payload({"action": "owner", "owner_id": oid}, seed, pub))
+        rebuild_db()
+        print(f"Owner established: {oid}")
+        print(f"  key: {OWNER_KEY_PATH} (private — never commit or sync it)")
+        print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
+
+
+def admit_cmd(args):
+    """Admit a device into the corroboration set and optionally tag its principal. Owner-only."""
+    payload = {"action": "admit", "device_id": args.device_id}
+    if args.principal:
+        payload["principal"] = args.principal
+    if _append_governance(payload):
+        print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else ""))
+
+
+def config_cmd(args):
+    """Set a journaled, owner-signed tunable confidence parameter (same on every node). Owner-only."""
+    if getattr(args, "config_action", None) != "set":
+        print("usage: hv config set <same_device_lambda|cap_self> <value>")
+        return
+    if args.key not in ("same_device_lambda", "cap_self"):
+        print(f"unknown config key {args.key!r} (known: same_device_lambda, cap_self)")
+        return
+    try:
+        val = float(args.value)
+    except ValueError:
+        print(f"value must be a number, got {args.value!r}")
+        return
+    if _append_governance({"action": "set-config", "key": args.key, "value": val}):
+        print(f"set {args.key} = {val}")
+
+
 # --------------------------------------------------------------------------
 # Telemetry — a LOCAL-ONLY observability lane, deliberately OUTSIDE the journal
 # --------------------------------------------------------------------------
@@ -2522,6 +2745,22 @@ def main():
                                            help="Re-stamp the journal from hostnames to device_ids (one-time, coordinated)")
     migrate_parser.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every node)')
     migrate_parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
+
+    owner_parser = subparsers.add_parser("owner", help="Show or create the governance owner identity")
+    owner_sub = owner_parser.add_subparsers(dest="owner_action")
+    owner_sub.add_parser("show", help="Show the established owner + governance state")
+    owner_init = owner_sub.add_parser("init", help="Mint the owner key and claim ownership")
+    owner_init.add_argument("--force", action="store_true", help="Replace an existing owner key / override an established owner")
+
+    admit_parser = subparsers.add_parser("admit", help="Admit a device into the corroboration set (owner-only)")
+    admit_parser.add_argument("device_id", help="The peer's device_id (k1:…), from `hv key show` on that node")
+    admit_parser.add_argument("--principal", help="Tag the device's principal (owner of the device), for CAP_self")
+
+    config_parser = subparsers.add_parser("config", help="Set a journaled, owner-signed confidence parameter")
+    config_sub = config_parser.add_subparsers(dest="config_action")
+    config_set = config_sub.add_parser("set", help="Set same_device_lambda or cap_self")
+    config_set.add_argument("key", help="same_device_lambda | cap_self")
+    config_set.add_argument("value", help="numeric value")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
@@ -2589,6 +2828,12 @@ def main():
         key_cmd(args)
     elif args.command == "migrate-device-identity":
         migrate_device_identity_cmd(args)
+    elif args.command == "owner":
+        owner_cmd(args)
+    elif args.command == "admit":
+        admit_cmd(args)
+    elif args.command == "config":
+        config_cmd(args)
     elif args.command == "nudge":
         nudge(args)
     elif args.command == "audit":

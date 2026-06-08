@@ -9,6 +9,10 @@ store.db.bak.*
 # Peer registry is per-node, not versioned (use .peers.json.example as a template)
 .peers.json
 
+# Device identity (per-node Ed25519 key). The seed is SECRET — never commit or sync it.
+.device-key
+.device-id
+
 # Nudge config + per-session debounce state (per-node; use nudge.env.example as a template)
 nudge.env
 .nudge_state/

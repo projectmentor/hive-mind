@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.1`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.2`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -75,7 +75,10 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    `hv remember "..." --tags ... --source <you>`. Search first; never write back something you
    just read this session (no echoes). **Tag time-varying/operational facts `volatile`**
    (optionally `ttl:<n>h|d`), for example "service running" or "host reachable", so the audit flags
-   them for re-verification instead of trusting them indefinitely.
+   them for re-verification instead of trusting them indefinitely. Since 1.2 `hv remember`
+   **auto-tags** transient-status claims `volatile` (high-precision, content-neutral; pass
+   `--no-volatile` to opt out, or an explicit `ttl:` to set the window) — you can rely on it, but
+   tagging explicitly is still good practice.
 3. **Save-nudge (best-effort, not a guarantee).** Where your runtime has a per-turn pre-prompt
    hook, pipe the user's message to `hv nudge --event=user-prompt --session="<id>"` and inject any
    stdout. Gate cheaply first: skip the call on turns that are neither a phrase hit nor a cadence
@@ -177,8 +180,11 @@ This is what makes future breaking changes safe: additive-within-major keeps old
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly
 when it must re-wire.
 
-**Changelog.** `1.1` — added the optional `hv telemetry` verb (behavior 5). Additive and
-backward-compatible: a `1.0` adapter keeps working unchanged; wire telemetry only if you want it.
+**Changelog.**
+- `1.2` — `hv remember` auto-tags transient operational-status claims `volatile` (new optional
+  `--no-volatile` flag). Additive: existing calls keep working; you just get smarter freshness tagging.
+- `1.1` — added the optional `hv telemetry` verb (behavior 5). Additive and backward-compatible:
+  a `1.0` adapter keeps working unchanged; wire telemetry only if you want it.
 
 ---
 

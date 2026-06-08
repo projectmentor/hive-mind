@@ -57,6 +57,13 @@ def _sync_with_peer(peer):
         return
 
     hello = _get(base, "/sync/hello")
+    # Hive scoping: if both sides have a hive_id and they differ, this is a different hive —
+    # never merge its journal into ours. (Empty on either side = pre-owner, allowed so the genesis
+    # owner declaration can propagate during bootstrap.)
+    local_hive, peer_hive = hv._local_hive_id(), hello.get("hive_id", "")
+    if local_hive and peer_hive and local_hive != peer_hive:
+        print(f"  {pid}: different hive ({peer_hive} vs {local_hive}) — not syncing")
+        return
     remote_chunks = hello.get("chunks", {})
 
     # PULL differing/missing windows from the peer.
@@ -79,7 +86,7 @@ def _sync_with_peer(peer):
 
     pushed = 0
     if push:
-        pushed = _post(base, "/sync/ingest", {"entries": push}).get("accepted", 0)
+        pushed = _post(base, "/sync/ingest", {"entries": push, "hive_id": local_hive}).get("accepted", 0)
 
     print(f"  {pid}: pulled {accepted} (dup {duplicates}), pushed {pushed}")
 

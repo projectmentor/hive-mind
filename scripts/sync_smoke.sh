@@ -119,5 +119,19 @@ eq "governed conf converges (B has no owner key)" "$(conf "$A" "gov claim")" "$(
 eq "admission gate applied (A)"  "$(conf "$A" "gov claim")" "0.45"
 eq "admission gate applied (B)"  "$(conf "$B" "gov claim")" "0.45"
 
+printf '\n%s── two hives on one wire do NOT merge (onboarding) ──%s\n' "$B_" "$N"
+# C is its OWN hive (different hive_id). Pointed at A's daemon, it must refuse to merge either way.
+C=$(mktemp -d)
+env HIVE_HOME="$C" "$HV" owner init >/dev/null
+env HIVE_HOME="$C" "$HV" remember "only in hive C" --source agent >/dev/null
+A_BEFORE=$(count "$A" facts)
+printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":29876}' "$PA" > "$C/.peers.json"
+env HIVE_HOME="$C" "$HV" sync now 2>&1 | sed 's/^/  /'
+eq "C did not pull A's alpha fact"  "$(HIVE_HOME="$C" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$C','store.db')).execute(\"SELECT count(*) FROM facts WHERE content LIKE 'alpha%'\").fetchone()[0])")" "0"
+eq "A did not ingest C's fact"      "$(count "$A" facts)" "$A_BEFORE"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
+eq "cross-hive /sync/ingest rejected" "$CODE" "409"
+rm -rf "$C"
+
 printf '\n%s%d passed, %d failed%s\n' "$B_" "$pass" "$fail" "$N"
 [ "$fail" -eq 0 ] || exit 1

@@ -27,8 +27,9 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
 - **Syncs automatically** — when one agent learns something, every other agent on every machine
   gets it, over Tailscale, with only the differences transferred (a Merkle delta).
 - **Trust earned, not assumed** — confidence in a fact rises only when *distinct, independent*
-  agents agree. A single agent cannot inflate its own credibility, and conflicts are surfaced,
-  not silently overwritten.
+  agents agree. A single agent cannot inflate its own credibility, agents on one machine count
+  for less than agents on separate machines, and only devices you have admitted count at all, so
+  no one can mint a crowd of keys to fake agreement. Conflicts are surfaced, not silently overwritten.
 - **Coordinate without a coordinator** — no leader, no Raft, no lock server. A conflict-free
   set (G-Set CRDT) over an append-only journal, so every node is equal and converges.
 - **Works offline** — agents keep working with no connection; entries merge cleanly on reconnect.
@@ -117,8 +118,12 @@ Most of the time your agents call `hv` for you. Full reference:
 - **Merkle index** — per-node chunk hashes for efficient delta sync: only missing entries move.
 - **Sync daemon** — a stdlib HTTP server on `:9876` that syncs with peers (every 5 minutes, or
   on demand). No leader, no central broker.
-- **Confidence model** — a fact's confidence is *derived* from independent corroboration; it is
-  never declared by the agent that wrote it.
+- **Confidence model** — a fact's confidence is *derived* from independent corroboration, never
+  declared by the agent that wrote it. It's a governed projection: agreement across distinct
+  **devices** counts most, multiple agents on one device are discounted, only owner-**admitted**
+  devices count, and agreement among one principal's own machines is capped. Governance (owner,
+  admitted devices, tunable parameters) lives in owner-signed journal entries, so every node
+  computes the same confidence. See `hv owner` / `hv admit` and `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/INTERNALS.md`](docs/INTERNALS.md).

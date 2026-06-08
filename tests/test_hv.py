@@ -368,3 +368,34 @@ def test_doctor_detects_a_broken_journal(hive):
     journal = next(c for c in data["checks"] if c["name"] == "journal")
     assert journal["status"] == "fail", data
     assert r.returncode == 1
+
+
+def test_classify_orphans_logic():
+    hv = _loadhv()
+    f = hv._classify_orphans
+    # healthy: the managed daemon is the only one
+    assert f([100], 100, True) == []
+    # a second daemon outside systemd alongside the managed one
+    assert f([100, 200], 100, True) == [200]
+    # the gotcha: unit exists but is dead (main_pid None) while a stale daemon runs
+    assert f([1212], None, True) == [1212]
+    assert sorted(f([1212, 1300], None, True)) == [1212, 1300]
+    # no systemd unit at all (manual single daemon) -> not an orphan
+    assert f([100], None, False) == []
+    # no unit, two manual daemons -> all but the survivor
+    assert f([100, 200], None, False) == [200]
+    # nothing running
+    assert f([], 100, True) == []
+
+
+def test_is_daemon_cmdline_excludes_shells():
+    hv = _loadhv()
+    g = hv._is_daemon_cmdline
+    # real daemons
+    assert g(["/usr/bin/python3", "/home/david/projects/hive-mind/hv", "sync", "daemon"]) is True
+    assert g(["python3", "./hv", "sync", "daemon"]) is True
+    # shells / scripts that merely MENTION the string must NOT match (so --fix can't kill them)
+    assert g(["/bin/bash", "-c", "cd", "x", "&&", "nohup", "./hv", "sync", "daemon", "&&", "rm", "x"]) is False
+    assert g(["/bin/bash", "-c", "nohup", "./hv", "sync", "daemon"]) is False   # shell ending in the string
+    assert g(["python3", "./hv", "doctor"]) is False
+    assert g(["hv", "sync", "now"]) is False

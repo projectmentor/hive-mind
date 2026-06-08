@@ -310,7 +310,15 @@ needs attention. It looks at six things:
 ```
 hv doctor
 hv doctor --format json    # machine-readable, for scripts and monitoring
+hv doctor --fix            # take the one safe remedial action (clear orphan daemons)
 ```
+
+The `sync-daemon` check also flags **orphan daemons** — a stale `hv sync daemon`
+left running outside systemd (for example, the unit died but an old process still
+holds the port and serves stale code, so the port answers while nothing is
+actually managed). `hv doctor --fix` kills those orphans and restarts the managed
+unit. Without `--fix`, doctor only reports — it never kills anything, so it stays
+safe to run from cron.
 
 Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
 non-zero only when a check actually fails, so you can wire it into a cron job or a

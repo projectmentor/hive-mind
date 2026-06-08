@@ -92,16 +92,23 @@
 
 ```json
 {
-  "node_id": "node-a",
+  "node_id": "k1:597b3e0f5fb92d37",
   "seq": 147,
   "type": "fact|decision|entity|entity_fact",
   "timestamp": "2026-06-03T14:30:00.123Z",
   "payload": { "... type-specific ..." },
-  "prev_hash": "sha256:abc123..."
+  "prev_hash": "sha256:abc123...",
+  "pub": "<base64 Ed25519 pubkey>",
+  "sig": "<base64 signature>"
 }
 ```
 
-Composite key `(node_id, seq)` = globally unique, no coordination.
+Composite key `(node_id, seq)` = globally unique, no coordination. As implemented,
+`node_id` is a cryptographic **device identity** (`k1:` + `sha256(pubkey)[:16]`), not
+a self-declared name, and entries are signed and verified on ingest so a peer cannot
+forge another node's `node_id`. See `docs/INTERNALS.md` "Device identity". The LWW
+tiebreaker below (`max(node_id)` lexicographically) is unaffected — device ids are
+ordinary comparable strings.
 
 ### 4.2 Merkle Index:
 

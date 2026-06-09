@@ -106,7 +106,7 @@ Most of the time your agents call `hv` for you. Full reference:
 | `hive-mind install` | Full device setup from scratch |
 | `hive-mind update`  | Pull latest and restart the daemon |
 | `hive-mind status`  | Show device health and peer sync state |
-| `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys) |
+| `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys; `--yes` skips the confirmation prompt) |
 
 ---
 

@@ -55,19 +55,30 @@ chain-of-thought, restatements, or speculation. Mark epistemic status via tags.
 WHEN YOU READ, treat results as signals with provenance, not truth — weigh the confidence,
 the number of sources, and which agent/node said it. If the corpus holds CONFLICTING facts,
 surface BOTH with their provenance and hold the tension; do not silently pick a winner.
+
+LIFECYCLE (you are a pull-only host — there are no per-turn hooks, so you call these yourself):
+At the START of a conversation, call hive_nudge(event="session-start") and act on the digest plus
+the audit-on-boot line it returns. When wrapping up, or on any audit hint, call hive_audit and
+reconcile what it surfaces — but you remain the salience judge: audits only prompt, they never
+auto-write or auto-delete, and forgetting is the owner's call.
 """
 
 mcp = FastMCP("hive-memory", instructions=INSTRUCTIONS)
 
 
 # ── Shell-out helper ─────────────────────────────────────────────────────────
-def _run_hv(args: list[str], timeout: int = 30) -> str:
-    """Run `hv <args>` and return stdout. Raises with hv's stderr on failure."""
+def _run_hv(args: list[str], timeout: int = 30, stdin_text: str | None = None) -> str:
+    """Run `hv <args>` and return stdout. Raises with hv's stderr on failure.
+
+    stdin_text, if given, is piped to the process (e.g. the user's turn text for
+    `hv nudge --event=user-prompt`, which reads recent text on stdin).
+    """
     if not HV.exists():
         raise RuntimeError(f"hv CLI not found at {HV} (set HIVE_HOME to the repo root)")
     try:
         proc = subprocess.run(
             [str(HV), *args],
+            input=stdin_text,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -147,6 +158,66 @@ def hive_stats() -> str:
 def hive_sync() -> str:
     """Trigger a peer sync round now (hv sync now). Normally the daemon handles this."""
     return _run_hv(["sync", "now"], timeout=60)
+
+
+@mcp.tool()
+def hive_nudge(event: str, session_id: str = "", cwd: str = "", text: str = "") -> str:
+    """Get a startup digest or a save/audit hint from the hive (the pull-only lifecycle hook).
+
+    An MCP host cannot run per-turn hooks, so YOU call this at your checkpoints:
+
+    - event="session-start": call once at the START of a conversation, passing cwd. Returns the
+      project digest PLUS a short audit-on-boot line (what the previous session left to re-check,
+      dedup, or reconcile) — inject it and act on it. It also emits a re-integrate nudge if the
+      contract had a MAJOR bump since you last integrated.
+    - event="user-prompt": optional; pass the user's message as `text` (piped on stdin). Returns a
+      terse save-nudge or nothing. `hv` owns the debounce — a quiet turn returns empty.
+    - event="precompact" / "sessionend": optional; before context is lost or at the end, get an
+      audit hint, then call hive_audit and reconcile.
+
+    Returns hv's hint, or "" when there is nothing to surface.
+    """
+    args = ["nudge", "--event", event, "--agent", "claude-ai"]
+    if session_id:
+        args += ["--session", session_id]
+    if cwd:
+        args += ["--cwd", cwd]
+    # Only the per-turn path consumes stdin; for other events there is nothing to pipe.
+    return _run_hv(args, stdin_text=text if event == "user-prompt" else None)
+
+
+@mcp.tool()
+def hive_audit(depth: str = "normal", session_id: str = "", format: str = "text") -> str:
+    """Surface facts to reconcile: redundant, obsolete, recheck (volatile past freshness), missing.
+
+    Call after a hive_nudge audit hint, or when wrapping up a session. You remain the salience
+    judge — audit only PROMPTS; it never auto-writes or auto-deletes. Reconcile by writing
+    corrections or (owner-only) retracting.
+
+    depth: light|normal|deep. format: text|json. Pass session_id to enable the MISSING proxy.
+    """
+    args = ["audit", "--depth", depth, "--format", format]
+    if session_id:
+        args += ["--session", session_id]
+    return _run_hv(args)
+
+
+@mcp.tool()
+def hive_telemetry(event: str, session_id: str = "", cwd: str = "") -> str:
+    """Record session observability (start/end) to the LOCAL-ONLY telemetry lane.
+
+    This is pure observability — duration/usage. It NEVER enters the corpus, the journal, or sync,
+    and has no effect on knowledge or confidence. It is not a fact; never use hive_remember for it.
+
+    event="start" at the beginning, event="end" when wrapping up. Pull-only caveat: an MCP host
+    cannot guarantee the end call fires, so event="end" is best-effort.
+    """
+    args = ["telemetry", "record", "--event", event, "--agent", "claude-ai"]
+    if session_id:
+        args += ["--session", session_id]
+    if cwd:
+        args += ["--cwd", cwd]
+    return _run_hv(args)
 
 
 if __name__ == "__main__":

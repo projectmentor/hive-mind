@@ -2,7 +2,7 @@
 # =============================================================================
 # hive-mind install  —  scripts/installer/_install_node.sh
 #
-# Full node setup. Invoked by: hive-mind install
+# Full device setup. Invoked by: hive-mind install
 #
 # Steps:
 #   1.  Pre-flight checks (WSL2, systemd)
@@ -43,7 +43,7 @@ ask()  { echo -e "${BLD}[?>]${RST}  $*"; }
 
 echo ""
 echo -e "${BLD}╔══════════════════════════════════════╗${RST}"
-echo -e "${BLD}║       hive-mind node installer       ║${RST}"
+echo -e "${BLD}║         hive-mind installer          ║${RST}"
 echo -e "${BLD}╚══════════════════════════════════════╝${RST}"
 echo ""
 
@@ -160,7 +160,7 @@ if [[ "$TS_BACKEND" == "Running" ]]; then
 else
   echo ""
   warn "Tailscale needs authentication."
-  warn "A URL will appear below — open it in a browser to authenticate this node."
+  warn "A URL will appear below — open it in a browser to authenticate this device."
   warn "(Takes ~30 seconds)"
   echo ""
   sudo tailscale up --ssh --accept-routes
@@ -234,8 +234,8 @@ step "5/$TOTAL  Node identity"
 cd "$HIVE_DIR"
 THIS_IP="$TS_IP"
 THIS_NODE=$(hostname)
-# Mint this node's Ed25519 device key. On a fresh install the journal is still empty, so this
-# succeeds; the node then identifies by an unforgeable key fingerprint, not a hostname.
+# Mint this device's Ed25519 device key. On a fresh install the journal is still empty, so this
+# succeeds; the device then identifies by an unforgeable key fingerprint, not a hostname.
 if ./hv key show 2>/dev/null | grep -q '^device_id:'; then
   THIS_DEVICE=$(./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')
   ok "Device key present: $THIS_DEVICE"
@@ -246,7 +246,7 @@ else
   warn "Could not mint a device key (existing journal?). Continuing with hostname identity."
   THIS_DEVICE="$THIS_NODE"
 fi
-ok "This node: $THIS_NODE ($THIS_DEVICE) @ $THIS_IP"
+ok "This device: $THIS_NODE ($THIS_DEVICE) @ $THIS_IP"
 
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 6 — Bootstrap or join a hive
@@ -488,14 +488,14 @@ echo -e "${GRN}${BLD}╔══════════════════�
 echo -e "${GRN}${BLD}║         Hive setup complete          ║${RST}"
 echo -e "${GRN}${BLD}╚══════════════════════════════════════╝${RST}"
 echo ""
-echo "  Node:    $THIS_NODE"
+echo "  Device:  $THIS_NODE"
 echo "  IP:      $THIS_IP"
 echo "  Data:    $HIVE_DIR"
 echo "  Daemon:  systemctl --user status $SERVICE_NAME"
 echo "  Logs:    journalctl --user -u $SERVICE_NAME -f"
 echo "  Try:     hv stats   (health check: hv doctor)   — reload your shell first: source ~/.bashrc"
 echo ""
-echo "  SSH to this node from any peer:"
+echo "  SSH to this device from any peer:"
 echo "    tailscale ssh ${USER}@${THIS_IP}"
 echo ""
 

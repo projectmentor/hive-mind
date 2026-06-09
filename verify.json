@@ -1,5 +1,5 @@
 {
-  "digest": "d9166adce33a2f8caacada8988ad68b775d77fa017e17c8adf2b902686650540",
+  "digest": "b240aacfbde6998df066435d84cbd558d68f5f0e0445ed2e718ebdb70ac386ec",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -37,9 +37,10 @@
     "scripts/infer-phrases.py": "0d4ba2590788b02e0b6971c5f7301da245c56fbbf521c01dc03e94b8ff845184",
     "scripts/installer/_install_node.sh": "cfb1e5adabe525c8db85b6a5daf81417a54bb4c8bb9954bafffd3b708fd5cf0e",
     "scripts/installer/_status.sh": "d123197979c588e47bbab49a48d1f7c7f7d64a947ab26be3bd5d257f28e24761",
+    "scripts/installer/_uninstall.sh": "bb022743500e9034b53213f8602e4098922720ce32983eaf98ac4a53ac7366c9",
     "scripts/installer/_update.sh": "a85628d9cb274918c0c90371e8b58e39f1cee296303378fc7b9eb4ef66619297",
     "scripts/installer/cleanup.sh": "16290a8d9b242922c1fcd6095878b210f1bb6fd47899b0a0af414a84448ae7e9",
-    "scripts/installer/install.sh": "b3aa97f59ac1f99552f0f9769e30c08fcbecc137d0c5c7162152796f79966144",
+    "scripts/installer/install.sh": "d3b47ddf4cfd32082e22541e4ff043005d1f1fe94e85990cc322e97309f9dea6",
     "scripts/nudge_hook.sh": "c85845c1853efae974e7910cde632c5d5aea4a1e03b472e0c26fbdab6d8d86a5",
     "scripts/session_hook.sh": "ed8880743eb24514bfa61a3c20c2ebb333a2bc250d9d0a59599444d9a733a8d4",
     "scripts/sign_release.py": "186942b840b3950cd38a890d8b7b5df56d5f1529d5ff4bdfac303ec421fc9e7a",

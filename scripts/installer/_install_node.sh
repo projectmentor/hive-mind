@@ -460,11 +460,11 @@ fi
 ln -sf "$HIVE_DIR/hv" "$BIN_DIR/hv"
 ok "~/.local/bin in PATH; hv linked ($BIN_DIR/hv)"
 
-# ── Optional: critical security update emails ───────────────────────────────
+# ── Optional: security alerts + project update emails ───────────────────────
 echo ""
-echo "  HiveMind is alpha software. We can email you ONLY about critical security"
-echo "  issues — vulnerabilities and urgent fixes. No marketing, no newsletters."
-ask "Email for critical security updates (optional — press Enter to skip): "
+echo "  HiveMind is alpha software. Leave your email to get critical security alerts"
+echo "  and the occasional important update about the project. Low volume, unsubscribe anytime."
+ask "Email for security alerts and updates (optional, press Enter to skip): "
 read -r SEC_EMAIL
 case "$SEC_EMAIL" in
   "") : ;;
@@ -472,7 +472,7 @@ case "$SEC_EMAIL" in
     SUB_BODY=$(python3 -c "import json,sys;print(json.dumps({'email':sys.argv[1].strip().lower(),'source':'installer-security'}))" "$SEC_EMAIL")
     if curl -fsS -m 10 -X POST "https://hivemind.projectmentor.org/api/subscribe" \
          -H "Content-Type: application/json" -d "$SUB_BODY" >/dev/null 2>&1; then
-      ok "Subscribed for critical security updates. Unsubscribe anytime at hivemind.projectmentor.org."
+      ok "You're on the list. We'll email security alerts and important updates. Unsubscribe anytime at hivemind.projectmentor.org."
     else
       warn "Could not reach the update service — skipped. You can subscribe later at hivemind.projectmentor.org."
     fi ;;

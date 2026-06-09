@@ -2479,16 +2479,20 @@ def discover_cmd(args):
         port = sync_common.load_peers().get("port", 9876)
     except Exception:
         port = 9876
+    # Probe every (device, port) concurrently so the scan is bounded by one short timeout, not the
+    # sum — otherwise each offline tailnet device costs a full timeout and the scan appears to hang.
+    import concurrent.futures
+    candidates = [(ip, p) for ip in ips for p in range(port, port + 5)]
     found = {}
-    for ip in ips:
-        for p in range(port, port + 5):   # cover a daemon that fell back off a squatted port
-            info = _probe_hive(ip, p)
-            if info:
-                found.setdefault(info["hive_id"], {
-                    "hive_id": info["hive_id"], "owner_id": info.get("owner_id"),
-                    "label": info.get("label"), "node_count": info.get("node_count"),
-                    "ip": ip, "port": p})
-                break
+    if candidates:
+        print(f"  probing {len(ips)} tailnet device(s)…", file=sys.stderr)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(candidates))) as ex:
+            for ip, p, info in ex.map(lambda c: (c[0], c[1], _probe_hive(c[0], c[1], timeout=1.5)), candidates):
+                if info and info["hive_id"] not in found:
+                    found[info["hive_id"]] = {
+                        "hive_id": info["hive_id"], "owner_id": info.get("owner_id"),
+                        "label": info.get("label"), "node_count": info.get("node_count"),
+                        "ip": ip, "port": p}
     hives = list(found.values())
     if getattr(args, "format", "text") == "json":
         print(json.dumps(hives))

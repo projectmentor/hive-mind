@@ -231,56 +231,76 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step "5/$TOTAL  Node identity"
 
+cd "$HIVE_DIR"
 THIS_IP="$TS_IP"
 THIS_NODE=$(hostname)
-ok "This node: $THIS_NODE @ $THIS_IP"
+# Mint this node's Ed25519 device key. On a fresh install the journal is still empty, so this
+# succeeds; the node then identifies by an unforgeable key fingerprint, not a hostname.
+if ./hv key show 2>/dev/null | grep -q '^device_id:'; then
+  THIS_DEVICE=$(./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')
+  ok "Device key present: $THIS_DEVICE"
+elif ./hv key init >/dev/null 2>&1; then
+  THIS_DEVICE=$(./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')
+  ok "Device key minted: $THIS_DEVICE"
+else
+  warn "Could not mint a device key (existing journal?). Continuing with hostname identity."
+  THIS_DEVICE="$THIS_NODE"
+fi
+ok "This node: $THIS_NODE ($THIS_DEVICE) @ $THIS_IP"
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 6 — Peer configuration
+# STEP 6 — Bootstrap or join a hive
 # ════════════════════════════════════════════════════════════════════════════
-step "6/$TOTAL  Peer configuration"
+step "6/$TOTAL  Bootstrap or join a hive"
 
 PEERS_FILE="$HIVE_DIR/.peers.json"
 
-if [ -f "$PEERS_FILE" ]; then
-  ok ".peers.json already exists — skipping peer prompt"
-  echo "  (delete $PEERS_FILE and re-run to reconfigure peers)"
+if [ -f "$PEERS_FILE" ] && ./hv owner show 2>/dev/null | grep -q '^owner:'; then
+  ok "Already part of a hive ($(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')) — skipping."
+  echo "  (delete $PEERS_FILE and re-run to reconfigure)"
 else
-  echo ""
-  echo "  Enter the Tailscale IPs of your peer nodes."
-  echo "  Use the WSL Tailscale IP for each peer (run: tailscale ip on the peer)."
-  echo "  Comma-separated for multiple peers, e.g.: 100.64.0.2"
-  echo ""
-  echo "  First node / no peers yet? Just press Enter — you can add peers later"
-  echo "  by editing $HIVE_DIR/.peers.json and running: hive-mind install"
-  echo ""
-  ask "Peer WSL Tailscale IPs (or Enter to skip): "
-  read -r PEER_INPUT
+  info "Scanning the tailnet for existing hives..."
+  HIVES_JSON=$(./hv discover --format json 2>/dev/null || echo '[]')
+  HIVE_COUNT=$(printf '%s' "$HIVES_JSON" | python3 -c "import sys,json;print(len(json.loads(sys.stdin.read() or '[]')))" 2>/dev/null || echo 0)
 
-  PEERS_JSON="[]"
-  if [ -n "$PEER_INPUT" ]; then
-    PEERS_JSON=$(python3 - "$PEER_INPUT" << 'PYEOF'
-import sys, json
-ips = [x.strip() for x in sys.argv[1].split(',') if x.strip()]
-peers = [{"id": ip.replace('.', '-'), "url": f"http://{ip}:9876"} for ip in ips]
-print(json.dumps(peers, indent=2))
-PYEOF
-)
+  CHOICE="n"
+  if [ "${HIVE_COUNT:-0}" -gt 0 ]; then
+    echo ""
+    echo "  Found $HIVE_COUNT hive(s) on your tailnet:"
+    printf '%s' "$HIVES_JSON" | python3 -c "import sys,json
+for i,h in enumerate(json.loads(sys.stdin.read())):
+    print(f\"    [{i+1}] {h['label'] or h['hive_id']}  (owner {h['owner_id']}, {h['node_count']} node(s), at {h['ip']}:{h['port']})\")"
+    echo "    [n] Start your OWN new hive (you become the owner)"
+    echo ""
+    ask "Join which hive? (number, or 'n' for a new hive): "
+    read -r CHOICE
+  else
+    ok "No existing hive found on the tailnet."
   fi
 
-  python3 - "$THIS_NODE" "$THIS_IP" "$PEERS_JSON" "$PEERS_FILE" << 'PYEOF'
-import sys, json
-node, ip, peers_raw, outfile = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-config = {
-  "self": node.lower(),
-  "bind": "0.0.0.0",
-  "port": 9876,
-  "peers": json.loads(peers_raw)
-}
-json.dump(config, open(outfile, 'w'), indent=2)
-print(f"wrote {outfile}")
-PYEOF
-  ok ".peers.json written"
+  if [ "$CHOICE" = "n" ] || [ "$CHOICE" = "N" ] || [ -z "$CHOICE" ]; then
+    # ── Bootstrap: become the owner (queen bee) ──
+    ask "Your name (principal tag for your devices): "
+    read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
+    python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
+    ./hv owner init >/dev/null && ok "New hive created — you are the owner."
+    ./hv admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
+    ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
+  else
+    # ── Join: configure the chosen hive's node as a peer, sync, request admission ──
+    PEER=$(printf '%s' "$HIVES_JSON" | python3 -c "import sys,json;hs=json.loads(sys.stdin.read());i=int('$CHOICE')-1;h=hs[i];print(h['ip'],h['port'])" 2>/dev/null)
+    PEER_IP=$(echo "$PEER" | awk '{print $1}'); PEER_PORT=$(echo "$PEER" | awk '{print $2}')
+    [ -n "$PEER_IP" ] || die "Invalid choice '$CHOICE'."
+    python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[{'id':sys.argv[2].replace('.','-'),'url':'http://'+sys.argv[2]+':'+sys.argv[3]}]},open(sys.argv[4],'w'),indent=2)" "$THIS_DEVICE" "$PEER_IP" "$PEER_PORT" "$PEERS_FILE"
+    ok "Peer configured: $PEER_IP:$PEER_PORT"
+    info "Syncing the hive (pulling its journal + owner declaration)..."
+    ./hv sync now >/dev/null 2>&1 || true
+    ask "Your name (the principal you'd like to be admitted as): "
+    read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
+    ./hv join --principal "$PRINCIPAL" 2>/dev/null || true
+    warn "You're syncing the hive but NOT yet admitted — your writes won't count until the owner admits you."
+    echo "  Ask the hive's owner to run:  hv admit $THIS_DEVICE --principal $PRINCIPAL"
+  fi
 fi
 
 # ════════════════════════════════════════════════════════════════════════════

@@ -399,13 +399,33 @@ def journal_keys():
 
 
 def append_foreign_entries(entries):
-    """Append FOREIGN journal entries verbatim (preserving node_id/seq) with
-    G-Set dedup by (node_id, seq). Builds the dedup index once. Does NOT persist
-    to SQLite — the caller runs rebuild() once afterwards if accepted > 0.
-    Returns (accepted, duplicates)."""
+    """Append FOREIGN journal entries verbatim (preserving node_id/seq) with G-Set dedup by
+    (node_id, seq). Two membership gates keep the shared journal sound (D0-v2 two-tier membership):
+
+      • GOVERNANCE: an authority-BEARING act (owner / admit / set-config) must carry a valid OWNER
+        signature. An authority-LESS `join-request` is accepted on its device signature alone — it
+        grants nothing (`_governance_state` ignores any governance lacking an owner sig), it is only
+        a pending ask. Accepting it is what lets the owner's session-start tickle surface the joiner.
+      • CONTENT: once an owner is established, content (fact/decision/entity/entity_fact) is accepted
+        only from ADMITTED devices. A synced-but-unadmitted device is a READ-ONLY member — it reads
+        the whole hive and may tickle to join, but its content does not land in (pollute) the shared
+        journal until the owner admits it. A pre-owner (bootstrap) hive accepts everything so the
+        genesis owner declaration can propagate.
+
+    Governance is processed first so an admit that arrives in the same batch takes effect before that
+    device's content is gated. Does NOT persist to SQLite — the caller runs rebuild() once afterwards
+    if accepted > 0. Returns (accepted, duplicates)."""
     existing = journal_keys()
     accepted = duplicates = rejected = 0
+
+    def _persist(e):
+        with open(_journal_path_for(e.get("timestamp", _now_iso())), "a") as f:
+            f.write(json.dumps(e) + "\n")
+
+    # ── Pass 1: governance (owner-signed acts + authority-less join-requests) ────────────────────
     for e in entries:
+        if e.get("type") != "governance":
+            continue
         nid, seq = e.get("node_id"), e.get("seq")
         if nid is None or seq is None:
             continue
@@ -413,22 +433,46 @@ def append_foreign_entries(entries):
             duplicates += 1
             continue
         if not _verify_entry(e):
-            # A signed entry whose signature is invalid or whose node_id doesn't match its key
-            # is forged or corrupt — never persist it.
-            rejected += 1
+            rejected += 1               # forged/corrupt device signature
             continue
-        if e.get("type") == "governance" and _verify_governance(e.get("payload", {})) is None:
-            # A governance entry with no valid owner signature is forged/corrupt. Rejection is
-            # deterministic, so every honest node drops the same ones and journals stay converged.
+        if e.get("payload", {}).get("action") != "join-request" and _verify_governance(e.get("payload", {})) is None:
+            # An authority-bearing governance act with no valid owner signature is forged. Rejection
+            # is deterministic, so every honest node drops the same ones and journals stay converged.
             rejected += 1
             continue
         existing.add((nid, seq))
-        with open(_journal_path_for(e.get("timestamp", _now_iso())), "a") as f:
-            f.write(json.dumps(e) + "\n")
+        _persist(e)
         accepted += 1
+
+    # Recompute governance AFTER pass 1 so admits that just landed populate the admitted set.
+    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    has_owner, admitted = gov["owner_id"] is not None, gov["admitted"]
+
+    # ── Pass 2: content, admission-gated once an owner exists ────────────────────────────────────
+    for e in entries:
+        if e.get("type") == "governance":
+            continue
+        nid, seq = e.get("node_id"), e.get("seq")
+        if nid is None or seq is None:
+            continue
+        if (nid, seq) in existing:
+            duplicates += 1
+            continue
+        if not _verify_entry(e):
+            rejected += 1
+            continue
+        if has_owner and nid not in admitted:
+            # Read-only member: its content does not land until the owner admits the device.
+            rejected += 1
+            continue
+        existing.add((nid, seq))
+        _persist(e)
+        accepted += 1
+
     if rejected:
         print(f"append_foreign_entries: rejected {rejected} entr"
-              f"{'y' if rejected == 1 else 'ies'} with an invalid signature", file=sys.stderr)
+              f"{'y' if rejected == 1 else 'ies'} (bad signature, unauthorized governance, or "
+              f"content from an unadmitted device)", file=sys.stderr)
     return accepted, duplicates
 
 

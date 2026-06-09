@@ -22,10 +22,10 @@ case "$CMD" in
     echo "Usage: hive-mind <subcommand>"
     echo ""
     echo "Subcommands:"
-    echo "  install      Set up this node from scratch"
+    echo "  install      Set up this device from scratch"
     echo "  update       Pull latest + restart daemon"
-    echo "  status       Show node health and peer sync state"
-    echo "  uninstall    Remove HiveMind from this node (--keep-hive to keep your data)"
+    echo "  status       Show device health and peer sync state"
+    echo "  uninstall    Remove HiveMind from this device (--keep-hive to keep your data)"
     echo ""
     ;;
 esac

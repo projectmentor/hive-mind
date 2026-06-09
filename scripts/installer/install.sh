@@ -10,7 +10,7 @@
 #
 # What this does:
 #   1. Installs the `hive-mind` command to ~/.local/bin
-#   2. Runs `hive-mind install` which sets up the full node environment
+#   2. Runs `hive-mind install` which sets up the full HiveMind environment
 #
 # Assumptions:
 #   - Running inside WSL2 (Ubuntu) on Windows 11
@@ -21,9 +21,9 @@
 #   - systemd enabled in WSL (/etc/wsl.conf [boot] systemd=true)
 #
 # Subcommands installed:
-#   hive-mind install   — full node setup (clone, daemon, .wslconfig, peers)
+#   hive-mind install   — full device setup (clone, daemon, .wslconfig, peers)
 #   hive-mind update    — pull latest + restart daemon  [future]
-#   hive-mind status    — show node health              [future]
+#   hive-mind status    — show device health            [future]
 #   hive-mind peers     — manage peer list              [future]
 # =============================================================================
 

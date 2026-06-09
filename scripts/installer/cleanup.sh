@@ -2,7 +2,7 @@
 # =============================================================================
 # hive-mind cleanup  —  scripts/installer/cleanup.sh
 #
-# Removes the Win11 OpenSSH bridge setup from a node.
+# Removes the Win11 OpenSSH bridge setup from a device.
 # Run from WSL on each node (has access to /mnt/c and powershell.exe).
 #
 # What it removes:

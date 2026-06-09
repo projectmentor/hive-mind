@@ -594,14 +594,17 @@ hive-mind <subcommand> [options]
 ### `hive-mind uninstall`
 
 ```bash
-hive-mind uninstall [--keep-hive] [--yes]
+hive-mind uninstall [--keep-hive] [--keep-identity] [--yes]
 ```
 
 | Flag | Effect |
 |---|---|
-| `--keep-hive` | Preserve your Hive data (journal, device + owner keys, `peers.json`) by copying it to a timestamped backup folder `~/hive-mind-keep-<UTC-timestamp>` instead of deleting it. Without this, all Hive data is removed. |
+| `--keep-hive` | Preserve your **full Hive** (journal, keys, `peers.json`) to a timestamped backup folder `~/hive-mind-keep-<UTC-timestamp>`, **and** keep this device's identity (see `--keep-identity`) so a reinstall resumes the same `device_id`. Without this, all Hive data is removed. |
+| `--keep-identity` | Delete the Hive data but preserve only this device's **identity** (its keys) to `~/.config/hive-mind/identity/` — a stable location that survives uninstall. A reinstall then offers to resume the same `device_id`, so the owner's prior **admission still applies (no re-admit)**. Lighter than `--keep-hive`. |
 | `-y`, `--yes` | Skip the `Continue? [y/N]` confirmation prompt and proceed — for unattended or scripted removal. |
 | `-h`, `--help` | Print usage and exit. |
+
+On the next `hive-mind install`, if a preserved identity is found it offers to **resume** it (so a sterile/fertile device keeps its standing); decline to mint a fresh one. A plain `uninstall` (no flag) is a clean slate — identity is gone and a reinstall mints a new `device_id`.
 
 ---
 

@@ -277,6 +277,23 @@ step "5/$TOTAL  Node identity"
 cd "$HIVE_DIR"
 THIS_IP="$TS_IP"
 THIS_NODE=$(hostname)
+
+# Resume a preserved identity (from a prior `uninstall --keep-identity` / `--keep-hive`) BEFORE
+# minting, so a reinstall keeps the same device_id — and the owner's prior admission (keyed by
+# device_id in the synced journal) still applies, with no re-admit.
+_IDLIB="$HIVE_DIR/scripts/installer/_identity.sh"
+[ -f "$_IDLIB" ] && . "$_IDLIB"
+if command -v keep_identity_can_restore >/dev/null 2>&1 && keep_identity_can_restore "$HIVE_DIR"; then
+  _stashed="$(keep_identity_stashed_id)"
+  info "Found a preserved device identity${_stashed:+ ($_stashed)} from a previous install."
+  _resume="y"
+  if [ -t 0 ]; then printf "  Resume it (keeps your admission — no re-admit)? [Y/n] "; read -r _resume; fi
+  case "${_resume:-y}" in
+    n|N|no|NO) info "Starting fresh — a new device identity will be minted." ;;
+    *) keep_identity_restore "$HIVE_DIR" && ok "Resumed device identity${_stashed:+ $_stashed}." ;;
+  esac
+fi
+
 # Mint this device's Ed25519 device key. On a fresh install the journal is still empty, so this
 # succeeds; the device then identifies by an unforgeable key fingerprint, not a hostname.
 if ./hv key show 2>/dev/null | grep -q '^device_id:'; then

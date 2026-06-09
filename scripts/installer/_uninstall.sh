@@ -28,12 +28,17 @@ BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 UNIT_FILE="${UNIT_FILE:-$HOME/.config/systemd/user/$SERVICE_NAME.service}"
 SETTINGS="${SETTINGS:-$HOME/.claude/settings.json}"
 
-KEEP_HIVE=""; ASSUME_YES=""
+# Reusable identity-preservation primitive (lives in the repo — source before we delete it).
+_IDLIB="$HIVE_DIR/scripts/installer/_identity.sh"
+[ -f "$_IDLIB" ] && . "$_IDLIB"
+
+KEEP_HIVE=""; KEEP_IDENTITY=""; ASSUME_YES=""
 for a in "$@"; do
   case "$a" in
-    --keep-hive) KEEP_HIVE=1 ;;
-    -y|--yes)    ASSUME_YES=1 ;;
-    -h|--help)   echo "Usage: hive-mind uninstall [--keep-hive] [--yes]"; exit 0 ;;
+    --keep-hive)     KEEP_HIVE=1 ;;
+    --keep-identity) KEEP_IDENTITY=1 ;;
+    -y|--yes)        ASSUME_YES=1 ;;
+    -h|--help)       echo "Usage: hive-mind uninstall [--keep-hive] [--keep-identity] [--yes]"; exit 0 ;;
     *) warn "Ignoring unknown option: $a" ;;
   esac
 done
@@ -43,7 +48,11 @@ echo -e "${BLD}hive-mind uninstall${RST}"
 echo "────────────────────────────────────────────"
 echo "  Removes: the sync daemon, the hive-mind + hv commands, the Claude Code hooks."
 if [ -n "$KEEP_HIVE" ]; then
-  echo "  Your Hive (journal + keys) will be PRESERVED to a backup folder."
+  echo "  Your Hive (journal + keys) will be PRESERVED to a backup folder,"
+  echo "  and this device's identity kept so a reinstall resumes it (no re-admit)."
+elif [ -n "$KEEP_IDENTITY" ]; then
+  echo "  Your Hive DATA will be DELETED, but this device's IDENTITY is kept"
+  echo "  so a reinstall resumes the same device_id (no re-admit)."
 else
   echo -e "  Your Hive DATA (journal, keys, store.db) will be ${BLD}DELETED${RST}."
 fi
@@ -101,7 +110,18 @@ fi
 rm -rf "$HOME/.claude/skills/hive-memory" 2>/dev/null || true
 rm -f /tmp/hive-sync.log 2>/dev/null || true
 
-# ── 4. Hive data ────────────────────────────────────────────────────────────
+# ── 4. Identity + Hive data ──────────────────────────────────────────────────
+# Preserve the device IDENTITY (to the stable stash) whenever the user asked to keep anything, so
+# a reinstall can resume the same device_id with no re-admit. --keep-hive ALSO snapshots the full
+# journal to a timestamped folder.
+if [ -n "$KEEP_HIVE" ] || [ -n "$KEEP_IDENTITY" ]; then
+  if command -v keep_identity_save >/dev/null 2>&1 && keep_identity_save "$HIVE_DIR"; then
+    ok "Device identity preserved → ${HIVE_IDENTITY_STASH}"
+    echo "  A reinstall will offer to resume it (same device_id; your admission still applies)."
+  else
+    warn "Could not preserve device identity (no key found, or identity primitive unavailable)."
+  fi
+fi
 if [ -n "$KEEP_HIVE" ]; then
   STAMP=$(date -u +%Y%m%dT%H%M%SZ)
   KEEP_DIR="$HOME/hive-mind-keep-$STAMP"
@@ -110,10 +130,11 @@ if [ -n "$KEEP_HIVE" ]; then
     [ -e "$HIVE_DIR/$f" ] && cp -a "$HIVE_DIR/$f" "$KEEP_DIR/" 2>/dev/null || true
   done
   echo ""
-  ok "App removed. Your Hive (journal + keys) is preserved at:"
+  ok "App removed. Full Hive backup (journal + keys) at:"
   echo "    $KEEP_DIR"
-  echo "  To resume after a reinstall: run hive-mind install, then copy those files into"
-  echo "  the new $HIVE_DIR and run: hv rebuild"
+elif [ -n "$KEEP_IDENTITY" ]; then
+  echo ""
+  ok "App + Hive data removed; device identity kept for a future reinstall."
 else
   echo ""
   ok "App + Hive data removed."

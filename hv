@@ -1525,6 +1525,65 @@ def _print_pending_admissions():
         return
 
 
+def _self_membership(gov):
+    """THIS device's standing in the established hive: returns (status, principal) where status is
+    'owner' | 'fertile' | 'sterile' | 'no-hive'. Pure projection over governance — same on every node."""
+    if not gov.get("owner_id"):
+        return "no-hive", None
+    if (_ed25519 is not None and _owner_seed() is not None
+            and _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())) == gov["owner_id"]):
+        return "owner", gov["principals"].get(NODE_ID)
+    if NODE_ID in gov["admitted"]:
+        return "fertile", gov["principals"].get(NODE_ID)
+    return "sterile", None
+
+
+def _print_self_status():
+    """SessionStart: tell THIS device its standing ONLY when there's something to act on — it's
+    sterile (read-only) or has a request pending. Quiet when fertile/owner (no action needed; the
+    owner separately gets the pending-admissions tickle). Mirrors the 'silent unless actionable' rule."""
+    try:
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(entries)
+        if not gov["owner_id"]:
+            return
+        status, _principal = _self_membership(gov)
+        if status != "sterile":
+            return
+        pending = any(r["device_id"] == NODE_ID for r in _pending_admissions(entries, gov))
+        tail = ("a join request is pending — the owner will admit you" if pending
+                else "run `hv join --principal <you>` to request write access")
+        print(f"[hive] you are STERILE (read-only) in {gov['hive_id']} — {tail}. (`hv whoami` for details)")
+    except Exception:
+        return
+
+
+def whoami_cmd(args):
+    """Show THIS device's identity and membership standing in the hive (read-only; no side effects)."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    print(f"device:    {NODE_ID}  ({NODE_LABEL})")
+    if not gov["owner_id"]:
+        print("hive:      (none — no owner established yet)")
+        print("status:    UNAFFILIATED  (`hv owner init` to start a hive, or sync one then `hv join`)")
+        return
+    status, principal = _self_membership(gov)
+    print(f"hive:      {gov['hive_id']}")
+    print(f"owner:     {gov['owner_id']}")
+    desc = {
+        "owner":   "OWNER — you hold the owner key (governance: admit / config / forget)",
+        "fertile": "FERTILE — admitted; your writes land in the shared journal and count",
+        "sterile": "STERILE — read-only; you read the whole hive but your content won't land until admitted",
+    }[status]
+    print(f"status:    {desc}")
+    if principal:
+        print(f"principal: {principal}")
+    if status == "sterile":
+        pending = any(r["device_id"] == NODE_ID for r in _pending_admissions(entries, gov))
+        print("           " + (f"join request pending — owner runs `hv admit {NODE_ID}`" if pending
+                               else "`hv join --principal <you>` to request write access"))
+
+
 def _spec_update_check(agent):
     """§0 of the Agent Integration Spec: compare the running hv's CONTRACT_VERSION
     (SemVer MAJOR.MINOR) to what this agent last integrated against, and nudge to
@@ -1596,6 +1655,7 @@ def nudge(args):
         if event == "session-start":
             _print_digest(getattr(args, "cwd", "") or os.getcwd())
             _print_pending_admissions()
+            _print_self_status()
             _spec_update_check(getattr(args, "agent", "agent") or "agent")
             _freshness_check()
             _audit_boot_summary()
@@ -2958,6 +3018,7 @@ def build_parser():
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")
     subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
+    subparsers.add_parser("whoami", help="Show this device's identity + membership status (sterile/fertile/owner)")
 
     doctor_parser = subparsers.add_parser("doctor", help="Run local health checks (integrity, DB, sync, hygiene)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -3086,6 +3147,8 @@ def main():
         sync_cmd(args)
     elif args.command == "telemetry":
         telemetry_cmd(args)
+    elif args.command == "whoami":
+        whoami_cmd(args)
     else:
         parser.print_help()
 

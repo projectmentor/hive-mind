@@ -1,5 +1,5 @@
 {
-  "digest": "41917bcceeb8ed8e1dc6bc4edda0976dc4b4d5acc86293a21d09d124d8728210",
+  "digest": "d1068b989b99ed021edf5c17c6f64fa566ee723979b4ca82166f7db9d292c743",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -37,7 +37,7 @@
     "scripts/infer-phrases.py": "0d4ba2590788b02e0b6971c5f7301da245c56fbbf521c01dc03e94b8ff845184",
     "scripts/installer/_install_node.sh": "cfb1e5adabe525c8db85b6a5daf81417a54bb4c8bb9954bafffd3b708fd5cf0e",
     "scripts/installer/_status.sh": "d123197979c588e47bbab49a48d1f7c7f7d64a947ab26be3bd5d257f28e24761",
-    "scripts/installer/_uninstall.sh": "bb022743500e9034b53213f8602e4098922720ce32983eaf98ac4a53ac7366c9",
+    "scripts/installer/_uninstall.sh": "e28205d744d87a64aca5d890a1302f742668e5f1d405f8af99f913f0e40af7ae",
     "scripts/installer/_update.sh": "aec6e59b77bcac587bf997e14ee2cb0ccb3defe44f867de2f3c7a08b66fe0dfa",
     "scripts/installer/cleanup.sh": "16290a8d9b242922c1fcd6095878b210f1bb6fd47899b0a0af414a84448ae7e9",
     "scripts/installer/dispatcher.sh": "103b9bdce29714485653adb0aca764199a9f92c3160a4cc03f7bef1c1a0ba27c",

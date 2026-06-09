@@ -292,7 +292,7 @@ for i,h in enumerate(json.loads(sys.stdin.read())):
     ask "Your name (principal tag for your devices): "
     read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
-    ./hv owner init >/dev/null && ok "New hive created — you are the owner."
+    ./hv owner init >/dev/null && ok "New hive created — you are the queen bee!"
     ./hv admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
     ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
   else
@@ -451,10 +451,33 @@ fi
 step "12/$TOTAL  PATH"
 
 BIN_DIR="$HOME/.local/bin"
+mkdir -p "$BIN_DIR"
 if ! grep -q 'local/bin' "$HOME/.bashrc" 2>/dev/null; then
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 fi
-ok "~/.local/bin in PATH"
+# Put `hv` on PATH so the CLI works from anywhere. hv resolves its own real directory
+# (Path(__file__).resolve()) for imports, so a symlink is fine.
+ln -sf "$HIVE_DIR/hv" "$BIN_DIR/hv"
+ok "~/.local/bin in PATH; hv linked ($BIN_DIR/hv)"
+
+# ── Optional: critical security update emails ───────────────────────────────
+echo ""
+echo "  HiveMind is alpha software. We can email you ONLY about critical security"
+echo "  issues — vulnerabilities and urgent fixes. No marketing, no newsletters."
+ask "Email for critical security updates (optional — press Enter to skip): "
+read -r SEC_EMAIL
+case "$SEC_EMAIL" in
+  "") : ;;
+  *@*.*)
+    SUB_BODY=$(python3 -c "import json,sys;print(json.dumps({'email':sys.argv[1].strip().lower(),'source':'installer-security'}))" "$SEC_EMAIL")
+    if curl -fsS -m 10 -X POST "https://hivemind.projectmentor.org/api/subscribe" \
+         -H "Content-Type: application/json" -d "$SUB_BODY" >/dev/null 2>&1; then
+      ok "Subscribed for critical security updates. Unsubscribe anytime at hivemind.projectmentor.org."
+    else
+      warn "Could not reach the update service — skipped. You can subscribe later at hivemind.projectmentor.org."
+    fi ;;
+  *) warn "That doesn't look like an email — skipped." ;;
+esac
 
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 13 — Summary
@@ -463,7 +486,7 @@ step "13/$TOTAL  Done"
 
 echo ""
 echo -e "${GRN}${BLD}╔══════════════════════════════════════╗${RST}"
-echo -e "${GRN}${BLD}║     hive-mind node setup complete    ║${RST}"
+echo -e "${GRN}${BLD}║         Hive setup complete          ║${RST}"
 echo -e "${GRN}${BLD}╚══════════════════════════════════════╝${RST}"
 echo ""
 echo "  Node:    $THIS_NODE"
@@ -471,6 +494,7 @@ echo "  IP:      $THIS_IP"
 echo "  Data:    $HIVE_DIR"
 echo "  Daemon:  systemctl --user status $SERVICE_NAME"
 echo "  Logs:    journalctl --user -u $SERVICE_NAME -f"
+echo "  Try:     hv stats   (health check: hv doctor)   — reload your shell first: source ~/.bashrc"
 echo ""
 echo "  SSH to this node from any peer:"
 echo "    tailscale ssh ${USER}@${THIS_IP}"

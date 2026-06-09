@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.2`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.4`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -49,14 +49,20 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv search "<q>" [--format json] [--min-confidence N]` | Read the corpus (ranked by effective confidence) |
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
 | `hv decide "<decision>" --rationale "<why>"` | Record a decision |
-| `hv retract <id> [--owner]` | Negative evidence / owner-forget |
+| `hv retract <id> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
 | `hv telemetry record --event=start\|end --agent=<you> --identity=<instance> --session=<id> [--cwd=<dir>]` | **(optional, since 1.1)** record session observability into the LOCAL telemetry lane |
 
 **Contract invariants you can rely on:** `hv nudge`/`hv audit` are best-effort and print to
 stdout (empty = no nudge); `--source` is your stable identity; confidence rises only from
-*independent* corroboration (never from one agent repeating itself).
+*independent* corroboration (never from one agent repeating itself). Confidence is a **governed
+projection** — its derivation parameters are owner-signed and journaled (`hv config`) — but it is
+still derived, never declared: you read it, you never set it.
+
+Hive membership and governance are **device/owner-level, outside the per-session adapter loop**:
+onboarding (`hv discover` / `join` / `admit`, and the `hive_id` that scopes sync) and confidence
+governance (`hv config`) are not behaviors you wire — see `docs/CLI_REFERENCE.md`.
 
 ---
 
@@ -184,6 +190,13 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,
+  same-source discount) are owner-signed and journaled via the new `hv config` verb, and owner-forget
+  (`hv retract --owner`) is cryptographically authorized once an owner exists. Additive: adapters
+  still only *read* derived confidence and never set it; nothing to re-wire.
+- `1.3` — cryptographic **device identity**: `node_id` is an Ed25519 device-key fingerprint
+  (`k1:` + `sha256(pub)[:16]`) and entries are signed under it (see §4, `hv key`). Additive: your
+  `--source` label is unchanged; the device is identified for you.
 - `1.2` — `hv remember` auto-tags transient operational-status claims `volatile` (new optional
   `--no-volatile` flag). Additive: existing calls keep working; you just get smarter freshness tagging.
 - `1.1` — added the optional `hv telemetry` verb (behavior 5). Additive and backward-compatible:

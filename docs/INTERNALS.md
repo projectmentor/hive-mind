@@ -100,7 +100,7 @@ This prevents session churn from inflating confidence.
 ### Same-device discount, admission, CAP_self (D0-v2)
 
 Confidence is a *governed* projection. Three rules refine the raw identity count
-(all derived from the journal, so they stay identical on every node):
+(all derived from the journal, so they stay identical on every device):
 
 - **Same-device discount.** Agents on one machine are correlated, not
   independent. Each device contributes its strongest identity in full plus
@@ -116,7 +116,7 @@ Confidence is a *governed* projection. Three rules refine the raw identity count
 
 Governance lives in owner-signed `governance` journal entries
 (owner/admit/set-config), projected by `_governance_state`. Because it's
-journaled (not per-node config), every node derives the same admitted set,
+journaled (not per-node config), every device derives the same admitted set,
 principal map, and config. No owner yet → discount applies, gate + CAP_self off.
 
 ### Retraction effects

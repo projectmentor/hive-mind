@@ -8,10 +8,10 @@
 
 ## 1. Problem Statement
 
-**Current state:** Asymmetric push/pull requires one node to run `php artisan serve`. If the serving node dies, the other loses access to shared memory. Violates "house burns down, one laptop survives" requirement.
+**Current state:** Asymmetric push/pull requires one device to run `php artisan serve`. If the serving node dies, the other loses access to shared memory. Violates "house burns down, one laptop survives" requirement.
 
 ### Requirements:
-- Full corpus on every node (no sharding)
+- Full corpus on every device (no sharding)
 - Any single survivor reconstructs everything
 - No central server / no primary
 - Offline writes allowed, merged later

@@ -31,12 +31,12 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
   for less than agents on separate machines, and only devices you have admitted count at all, so
   no one can mint a crowd of keys to fake agreement. Conflicts are surfaced, not silently overwritten.
 - **Coordinate without a coordinator** — no leader, no Raft, no lock server. A conflict-free
-  set (G-Set CRDT) over an append-only journal, so every node is equal and converges.
+  set (G-Set CRDT) over an append-only journal, so every device is equal and converges.
 - **Works offline** — agents keep working with no connection; entries merge cleanly on reconnect.
 - **Fast local search** — full-text search runs on your machine in milliseconds, ranked by
   corroboration. No round trips, no data leaving your network.
 - **Nothing to operate** — no servers to provision, no database to manage, no cloud accounts.
-  Any single node's journal is the complete memory; a backup is just files.
+  Any single device's journal is the complete memory; a backup is just files.
 - **Auditable** — every fact records who wrote it and when; nothing is silently overwritten.
 - **Works with your agents today** — Claude Code, Hermes, Claude Desktop (via MCP), and any
   agent that can run a shell command.
@@ -57,7 +57,7 @@ The installer will:
 1. Install Tailscale inside WSL (used for syncing between machines) and authenticate it
 2. Install Python dependencies
 3. Clone this repo to `~/projects/hive-mind`
-4. Ask for one input: your peer node's Tailscale IP. **First node with no peers yet? Just press
+4. Ask for one input: your peer's Tailscale IP. **First machine with no peers yet? Just press
    Enter** — you can add peers later by editing `.peers.json`.
 5. Initialise the local database
 6. Install and start the sync daemon as a systemd service
@@ -98,14 +98,14 @@ wsl --shutdown
 Most of the time your agents call `hv` for you. Full reference:
 [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md).
 
-### The `hive-mind` node command
+### The `hive-mind` command
 
 | Command | Description |
 |---|---|
-| `hive-mind install` | Full node setup from scratch |
+| `hive-mind install` | Full device setup from scratch |
 | `hive-mind update`  | Pull latest and restart the daemon |
-| `hive-mind status`  | Show node health and peer sync state |
-| `hive-mind uninstall` | Remove HiveMind from this node (`--keep-hive` preserves your journal + keys) |
+| `hive-mind status`  | Show device health and peer sync state |
+| `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys) |
 
 ---
 
@@ -123,7 +123,7 @@ Most of the time your agents call `hv` for you. Full reference:
   declared by the agent that wrote it. It's a governed projection: agreement across distinct
   **devices** counts most, multiple agents on one device are discounted, only owner-**admitted**
   devices count, and agreement among one principal's own machines is capped. Governance (owner,
-  admitted devices, tunable parameters) lives in owner-signed journal entries, so every node
+  admitted devices, tunable parameters) lives in owner-signed journal entries, so every device
   computes the same confidence. See `hv owner` / `hv admit` and `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md),
@@ -151,7 +151,7 @@ brain (`hv`), one spec, no hand-maintained per-agent adapters.
 ## Multi-node sync
 
 Run the installer on each machine. When prompted for peer IPs, enter the **WSL Tailscale IP** of
-the other node (run `tailscale ip -4` in WSL on that machine). Each WSL instance is its own
+the other machine (run `tailscale ip -4` in WSL on that machine). Each WSL instance is its own
 machine on the tailnet, so use that IP, not the Windows host IP.
 
 ```bash

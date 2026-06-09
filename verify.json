@@ -1,5 +1,5 @@
 {
-  "digest": "5b716a030f0ec712069565d8e8ac7cd4fa7fd6d1aa6800dfaf48775a80566c84",
+  "digest": "6978a1ef920cb774c770109065118bed810bdfd7b51b9d0cd5b18fe832d38113",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -35,7 +35,7 @@
     "scripts/gen_keypair.py": "f4bea820e3ad672fceda1dc6ede273df4076a2201256e8081654187fd5583933",
     "scripts/gen_verify.py": "66e39bf8c3eabca7ff770fd28272dc563573c6cb6ac7012b5beded33657489c7",
     "scripts/infer-phrases.py": "0d4ba2590788b02e0b6971c5f7301da245c56fbbf521c01dc03e94b8ff845184",
-    "scripts/installer/_install_node.sh": "dfb4515c920eafefe8328eb2858ec5ba25ef227805d4a361d38293d3241ef2c1",
+    "scripts/installer/_install_node.sh": "163a3e5f2e6a1357b8eefeb4a415dd2313a53a0bc2e795b4b47bc2bc6bb14dc6",
     "scripts/installer/_status.sh": "d123197979c588e47bbab49a48d1f7c7f7d64a947ab26be3bd5d257f28e24761",
     "scripts/installer/_uninstall.sh": "e28205d744d87a64aca5d890a1302f742668e5f1d405f8af99f913f0e40af7ae",
     "scripts/installer/_update.sh": "aec6e59b77bcac587bf997e14ee2cb0ccb3defe44f867de2f3c7a08b66fe0dfa",

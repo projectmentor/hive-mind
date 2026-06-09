@@ -2,7 +2,7 @@
 # =============================================================================
 # hive-mind uninstall  —  scripts/installer/_uninstall.sh
 #
-# Removes HiveMind from this node: the sync daemon, the `hive-mind` and `hv`
+# Removes HiveMind from this device: the sync daemon, the `hive-mind` and `hv`
 # commands, and the Claude Code hooks. By default it also DELETES the Hive
 # (journal, keys, store.db). Pass --keep-hive to preserve your journal + keys
 # to a backup folder so a reinstall can resume the same identity.

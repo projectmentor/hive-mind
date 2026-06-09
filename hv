@@ -59,7 +59,7 @@ DEVICE_ID_PATH = HIVE_HOME / ".device-id"
 
 
 def _device_seed():
-    """The 32-byte device seed if this node has a key, else None. Read-only; never creates."""
+    """The 32-byte device seed if this device has a key, else None. Read-only; never creates."""
     try:
         if _ed25519 is None or not DEVICE_KEY_PATH.exists():
             return None
@@ -105,7 +105,7 @@ OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
 
 
 def _owner_seed():
-    """The 32-byte owner seed if this node holds the owner key, else None. Read-only; never creates."""
+    """The 32-byte owner seed if this device holds the owner key, else None. Read-only; never creates."""
     try:
         if _ed25519 is None or not OWNER_KEY_PATH.exists():
             return None
@@ -355,7 +355,7 @@ def _verify_governance(payload):
 
 
 def _next_seq_and_prev(node_id):
-    """Next per-node monotonic seq and the hash of this node's latest entry.
+    """Next per-node monotonic seq and the hash of this device's latest entry.
     Derived from the journal itself (stateless, correct after a fresh start)."""
     mine = [e for e in merkle.read_all_entries(JOURNAL_DIR) if e.get("node_id") == node_id]
     if not mine:
@@ -598,7 +598,7 @@ def _governance_state(entries):
 
 
 def _local_hive_id():
-    """This node's hive_id (from the established owner declaration), or '' if no owner yet. Used by
+    """This device's hive_id (from the established owner declaration), or '' if no owner yet. Used by
     the sync layer to refuse merging journals across hives — two hives on one tailnet stay separate."""
     return _governance_state(merkle.read_all_entries(JOURNAL_DIR)).get("hive_id", "")
 
@@ -1285,7 +1285,7 @@ def stats(args):
         by_node[e["node_id"]] = by_node.get(e["node_id"], 0) + 1
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
-    print(f"  Node:               {NODE_ID}")
+    print(f"  Device:             {NODE_ID}")
     facts_line = f"{live_facts} live  (avg confidence: {avg_conf})"
     if forgotten_facts:
         facts_line += f"  +{forgotten_facts} forgotten"
@@ -1471,7 +1471,7 @@ def _print_pending_admissions():
         entries = merkle.read_all_entries(JOURNAL_DIR)
         gov = _governance_state(entries)
         if gov["owner_id"] != _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())):
-            return   # this node holds an owner key, but isn't the established owner
+            return   # this device holds an owner key, but isn't the established owner
         pend = _pending_admissions(entries, gov)
         if pend:
             who = ", ".join(f"{r['label'] or r['device_id']} ({r['device_id']})" for r in pend[:5])
@@ -1936,14 +1936,14 @@ def verify_cmd(args):
 
 
 def key_cmd(args):
-    """Show or create this node's Ed25519 device identity (the cryptographic node_id)."""
+    """Show or create this device's Ed25519 device identity (the cryptographic node_id)."""
     action = getattr(args, "key_action", None) or "show"
     if action == "show":
         seed = _device_seed()
         if seed is None:
-            print("No device key — this node uses its legacy hostname identity.")
+            print("No device key — this device uses its legacy hostname identity.")
             print(f"  node_id: {NODE_ID}")
-            print("  `hv key init` mints one on a fresh install; migrate an existing node with")
+            print("  `hv key init` mints one on a fresh install; migrate an existing device with")
             print("  `hv migrate-device-identity`.")
             return
         pub = _ed25519.pub_from_seed(seed)
@@ -1965,7 +1965,7 @@ def key_cmd(args):
             mine = [e for e in merkle.read_all_entries(JOURNAL_DIR)
                     if e.get("node_id") == socket.gethostname()]
             if mine:
-                print(f"This node already has {len(mine)} entries under its hostname.")
+                print(f"This device already has {len(mine)} entries under its hostname.")
                 print("Use `hv migrate-device-identity` to re-stamp them (not `hv key init`).")
                 print("Pass --force only if the journal is disposable.")
                 return
@@ -1998,27 +1998,27 @@ def migrate_device_identity_cmd(args):
         print(f"Could not read --map {args.map}: {e}")
         return
     if not isinstance(mapping, dict) or not all(isinstance(v, str) for v in mapping.values()):
-        print('Map must be a JSON object of {"hostname": "k1:device_id", ...} for every node.')
+        print('Map must be a JSON object of {"hostname": "k1:device_id", ...} for every device.')
         return
 
     host = socket.gethostname()
     local_did = None
     if host in mapping:
-        # This node is being re-stamped: it must already hold the key whose fingerprint the map
+        # This device is being re-stamped: it must already hold the key whose fingerprint the map
         # assigns it, so its future (signed) writes line up with its re-stamped history.
         seed = _device_seed()
         if seed is None:
-            print("This node has no device key. Run `hv key init --force` first, then put its")
-            print("device_id (from `hv key show`) in the map under this node's hostname.")
+            print("This device has no device key. Run `hv key init --force` first, then put its")
+            print("device_id (from `hv key show`) in the map under this device's hostname.")
             return
         local_did = _device_id_for_pub(_ed25519.pub_from_seed(seed))
         if mapping[host] != local_did:
-            print(f"Map mismatch: this node ({host}) holds device_id {local_did},")
-            print(f"  but the map says {mapping[host]!r}. Every node must share one identical map.")
+            print(f"Map mismatch: this device ({host}) holds device_id {local_did},")
+            print(f"  but the map says {mapping[host]!r}. Every device must share one identical map.")
             return
     else:
-        print(f"Note: this host ({host}) is not in the map; re-stamping the mapped nodes only.")
-        print("  Mint a key here with `hv key init` if this node should also sign its writes.")
+        print(f"Note: this host ({host}) is not in the map; re-stamping the mapped devices only.")
+        print("  Mint a key here with `hv key init` if this device should also sign its writes.")
 
     entries = merkle.read_all_entries(JOURNAL_DIR)
     if not entries:
@@ -2095,7 +2095,7 @@ def migrate_device_identity_cmd(args):
     root = merkle.merkle_root(merkle.chunk_hashes(merkle.read_all_entries(JOURNAL_DIR)))
     print(f"Migrated {len(migrated)} entries to device identity. Backup: {backup}")
     if local_did:
-        print(f"  this node is now {local_did} (was {host}).")
+        print(f"  this device is now {local_did} (was {host}).")
     print(f"  Merkle root: {root}")
     print("  Run the SAME map on every peer; then `hv merkle` should match and `hv sync now` = in sync.")
 
@@ -2187,7 +2187,7 @@ def _kill_orphans(orphans):
 
 
 def _doctor_status():
-    """Run the local-node health checks (READ-ONLY) and return a list of
+    """Run the local health checks (READ-ONLY) and return a list of
     {name, status: 'ok'|'warn'|'fail', detail}. Shared by `hv doctor` text + json output.
 
     'fail' = something is broken and needs action (tampered source, corrupt journal, empty DB).
@@ -2322,7 +2322,7 @@ def _doctor_status():
 
 
 def doctor_cmd(args):
-    """Aggregate local-node health check: authenticity, journal integrity, the derived DB, corpus
+    """Aggregate local health check: authenticity, journal integrity, the derived DB, corpus
     hygiene, the sync daemon, and peer reachability. Read-only by default. `--fix` takes the one
     safe remedial action: kill orphan sync daemons (a stale process holding :9876 outside systemd)
     and restart the managed unit. Exits non-zero if any check FAILED; warnings keep a zero exit
@@ -2366,10 +2366,10 @@ def doctor_cmd(args):
 
 def _append_governance(action_payload):
     """Owner-sign and append a governance entry, then rebuild so confidence reflects it. Requires
-    the owner key on this node. Returns the entry, or None if this node isn't the owner."""
+    the owner key on this device. Returns the entry, or None if this device isn't the owner."""
     seed = _owner_seed()
     if seed is None:
-        print("This node does not hold the owner key — run governance commands on the owner machine.")
+        print("This device does not hold the owner key — run governance commands on the owner machine.")
         return None
     pub = _ed25519.pub_from_seed(seed)
     entry = append_journal("governance", _sign_governance_payload(action_payload, seed, pub))
@@ -2387,7 +2387,7 @@ def owner_cmd(args):
             return
         seed = _owner_seed()
         held = seed is not None and _owner_id_for_pub(_ed25519.pub_from_seed(seed)) == gov["owner_id"]
-        print(f"owner: {gov['owner_id']}" + ("  (this node holds the owner key)" if held else ""))
+        print(f"owner: {gov['owner_id']}" + ("  (this device holds the owner key)" if held else ""))
         print(f"  hive_id: {gov['hive_id']}")
         print(f"  admitted devices: {len(gov['admitted'])}; principals tagged: {len(gov['principals'])}")
         print(f"  config: same_device_lambda={gov['config']['same_device_lambda']}, "
@@ -2510,7 +2510,7 @@ def discover_cmd(args):
 
 
 def join_cmd(args):
-    """Request to join this node's hive: emit a self-signed join-request the owner can admit.
+    """Request to join this device's hive: emit a self-signed join-request the owner can admit.
     Non-blocking — you're already syncing the hive; your writes simply do not count toward
     confidence until the owner admits you. The request is device-signed (not owner-signed), so it
     carries no authority — it's only a visible, pending ask."""
@@ -2868,7 +2868,7 @@ def main():
             "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
             "  hv retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
             "  hv stats | rebuild | merkle | doctor | sync now|daemon\n"
-            "  hv doctor [--format json]                                 # local-node health check\n"
+            "  hv doctor [--format json]                                 # local health check\n"
             "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
             "decays with age ($HIVE_NOW injectable); owner-forget = -1.0."
         ),
@@ -2915,20 +2915,20 @@ def main():
     subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
 
-    doctor_parser = subparsers.add_parser("doctor", help="Run local-node health checks (integrity, DB, sync, hygiene)")
+    doctor_parser = subparsers.add_parser("doctor", help="Run local health checks (integrity, DB, sync, hygiene)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
     doctor_parser.add_argument("--fix", action="store_true",
                                help="Take safe remedial action: kill orphan sync daemons and restart the managed unit")
 
-    key_parser = subparsers.add_parser("key", help="Show or create this node's device identity")
+    key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")
-    key_sub.add_parser("show", help="Show this node's device_id and pubkey")
+    key_sub.add_parser("show", help="Show this device's device_id and pubkey")
     key_init = key_sub.add_parser("init", help="Mint a device key (fresh install)")
     key_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
 
     migrate_parser = subparsers.add_parser("migrate-device-identity",
                                            help="Re-stamp the journal from hostnames to device_ids (one-time, coordinated)")
-    migrate_parser.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every node)')
+    migrate_parser.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every device)')
     migrate_parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
 
     owner_parser = subparsers.add_parser("owner", help="Show or create the governance owner identity")
@@ -2941,7 +2941,7 @@ def main():
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
     admit_parser.add_argument("--principal", help="Tag the device's principal (owner of the device), for CAP_self")
 
-    join_parser = subparsers.add_parser("join", help="Request admission to this node's hive (after syncing it)")
+    join_parser = subparsers.add_parser("join", help="Request admission to this device's hive (after syncing it)")
     join_parser.add_argument("--principal", help="The principal (you) the device should be tagged with")
 
     config_parser = subparsers.add_parser("config", help="Set a journaled, owner-signed confidence parameter")
@@ -2981,7 +2981,7 @@ def main():
     tel_rec.add_argument("--session", default="", help="session id")
     tel_rec.add_argument("--cwd", default="", help="working dir (for project + transcript lookup)")
     tel_rec.add_argument("--transcript", default="", help="explicit transcript path (else auto-located by session)")
-    tel_rep = tel_sub.add_parser("report", help="Aggregate telemetry (this node)")
+    tel_rep = tel_sub.add_parser("report", help="Aggregate telemetry (this device)")
     tel_rep.add_argument("--since", default="", help="window, e.g. 7d, 24h, 30m (default: all)")
     tel_rep.add_argument("--by", choices=["project", "agent", "node"], default=None)
     tel_rep.add_argument("--format", choices=["text", "json"], default="text")

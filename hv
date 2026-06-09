@@ -2484,17 +2484,24 @@ def discover_cmd(args):
         for p in range(port, port + 5):   # cover a daemon that fell back off a squatted port
             info = _probe_hive(ip, p)
             if info:
-                found.setdefault(info["hive_id"], (ip, p, info))
+                found.setdefault(info["hive_id"], {
+                    "hive_id": info["hive_id"], "owner_id": info.get("owner_id"),
+                    "label": info.get("label"), "node_count": info.get("node_count"),
+                    "ip": ip, "port": p})
                 break
-    if not found:
+    hives = list(found.values())
+    if getattr(args, "format", "text") == "json":
+        print(json.dumps(hives))
+        return
+    if not hives:
         print(f"No hives found on this tailnet (probed {len(ips)} device(s) on :{port}).")
         return
-    print(f"Hives on this tailnet ({len(found)}):")
+    print(f"Hives on this tailnet ({len(hives)}):")
     local = _local_hive_id()
-    for hid, (ip, p, info) in found.items():
-        mine = "  (this hive)" if hid == local else ""
-        print(f"  {info.get('label', '?')} — hive {hid}, owner {info.get('owner_id')}, "
-              f"{info.get('node_count')} node(s), at {ip}:{p}{mine}")
+    for h in hives:
+        mine = "  (this hive)" if h["hive_id"] == local else ""
+        print(f"  {h['label'] or '?'} — hive {h['hive_id']}, owner {h['owner_id']}, "
+              f"{h['node_count']} node(s), at {h['ip']}:{h['port']}{mine}")
 
 
 def join_cmd(args):
@@ -2938,7 +2945,8 @@ def main():
     config_set.add_argument("key", help="same_device_lambda | cap_self")
     config_set.add_argument("value", help="numeric value")
 
-    subparsers.add_parser("discover", help="Scan the tailnet for hives (Tailscale + /hive/info probe)")
+    discover_parser = subparsers.add_parser("discover", help="Scan the tailnet for hives (Tailscale + /hive/info probe)")
+    discover_parser.add_argument("--format", choices=["text", "json"], default="text")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
     subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 

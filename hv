@@ -2529,9 +2529,64 @@ def owner_cmd(args):
         print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
 
 
+def _self_sync_url():
+    """This device's reachable sync URL (Tailscale IPv4 : configured port) — carried in a
+    join-request so the owner can peer back on admit. Best-effort; '' if the IP is unknown."""
+    try:
+        import sync_common
+        port = sync_common.load_peers().get("port", 9876)
+    except Exception:
+        port = 9876
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout
+        ip = (out.strip().splitlines() or [""])[0].strip()
+    except Exception:
+        ip = ""
+    return f"http://{ip}:{port}" if ip else ""
+
+
+def _join_request_url(device_id):
+    """The reachable URL a device advertised in its join-request (last one wins), or '' if none."""
+    url = ""
+    for e in merkle.read_all_entries(JOURNAL_DIR):
+        if e.get("type") == "governance":
+            p = e.get("payload", {})
+            if p.get("action") == "join-request" and p.get("device_id") == device_id and p.get("url"):
+                url = p["url"]
+    return url
+
+
+def _add_peer(url, label):
+    """Idempotently add {url} to this node's .peers.json (skips self + duplicates). Returns True if
+    added. This is how admission SEEDS reciprocal peering — connectivity stays a separate concern
+    from the trust grant (admit confers no governance), and the peer list remains editable."""
+    if not url or url.rstrip("/") == _self_sync_url().rstrip("/"):
+        return False
+    path = HIVE_HOME / ".peers.json"
+    try:
+        cfg = json.loads(path.read_text()) if path.exists() else {}
+    except Exception:
+        cfg = {}
+    peers = cfg.get("peers") or []
+    if any(str(p.get("url", "")).rstrip("/") == url.rstrip("/") for p in peers):
+        return False
+    peers.append({"url": url, "id": label or url})
+    cfg["peers"] = peers
+    cfg.setdefault("self", NODE_ID)
+    cfg.setdefault("bind", "0.0.0.0")
+    cfg.setdefault("port", 9876)
+    try:
+        path.write_text(json.dumps(cfg, indent=2) + "\n")
+    except Exception:
+        return False
+    return True
+
+
 def admit_cmd(args):
     """Admit a device into the corroboration set and optionally tag its principal (owner-only).
-    With no device_id, LIST the devices awaiting admission (their pending join-requests)."""
+    With no device_id, LIST the devices awaiting admission (their pending join-requests).
+    On admit, the owner also SEEDS a reciprocal peer from the join-request's advertised URL, so
+    sync is symmetric (the owner syncs to the member, not only the member to the owner)."""
     if not getattr(args, "device_id", None):
         entries = merkle.read_all_entries(JOURNAL_DIR)
         pend = _pending_admissions(entries, _governance_state(entries))
@@ -2547,6 +2602,9 @@ def admit_cmd(args):
         payload["principal"] = args.principal
     if _append_governance(payload):
         print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else ""))
+        if _add_peer(_join_request_url(args.device_id), args.principal or args.device_id):
+            print("  + reciprocal peer added from its join-request URL — the owner now syncs to "
+                  "this device too (daemon picks it up next cycle, or `hv sync now`).")
 
 
 def config_cmd(args):
@@ -2628,6 +2686,9 @@ def join_cmd(args):
     payload = {"action": "join-request", "device_id": NODE_ID, "label": NODE_LABEL}
     if args.principal:
         payload["requested_principal"] = args.principal
+    _url = _self_sync_url()                  # advertise where we're reachable so the owner can peer back
+    if _url:
+        payload["url"] = _url
     append_journal("governance", payload)   # device-signed by append_journal; NOT owner-signed
     rebuild_db()
     print(f"Join request sent for {NODE_ID}. Ask the hive owner to admit you:")

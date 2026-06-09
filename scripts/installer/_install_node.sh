@@ -88,6 +88,38 @@ esac
 
 ok "Pre-flight OK ($([ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'))"
 
+# ── Already installed AND running? Offer the lighter path before redoing the work. ──────────
+# Re-running install is safe and idempotent — it KEEPS this device's identity (STEP 5 reuses an
+# existing .device-key). But if the device is already set up and the sync daemon is live, the
+# user most likely wants `hive-mind update`, not all 13 steps again — so surface that and let
+# them bail. Non-blocking on a non-interactive shell (automation re-runs proceed).
+_existing_device=""
+if [ -x "$HIVE_DIR/hv" ]; then
+  _existing_device="$(cd "$HIVE_DIR" && ./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')"
+fi
+_daemon_live=""
+if [ "$INIT_SYSTEM" = "systemctl" ] && systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+  _daemon_live=1
+fi
+if [ -n "$_existing_device" ] && [ -n "$_daemon_live" ]; then
+  _existing_hive="$(cd "$HIVE_DIR" && ./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
+  warn "hive-mind is already installed and running on this device:"
+  echo  "        device: $_existing_device${_existing_hive:+   hive: $_existing_hive}"
+  echo  "        • Just want the latest code + a daemon restart?  →  hive-mind update"
+  echo  "        • Want a completely fresh start (NEW identity)?  →  hive-mind uninstall, then install"
+  echo  "        (Re-running install is safe and keeps this device's identity.)"
+  if [ -t 0 ]; then
+    printf "        Continue with a full re-install anyway? [y/N] "
+    read -r _reinstall_ans
+    case "$_reinstall_ans" in
+      y|Y|yes|YES) ok "Continuing with full re-install." ;;
+      *) info "Aborted. Tip: run \`hive-mind update\` to just pull + restart."; exit 0 ;;
+    esac
+  else
+    warn "Non-interactive shell — continuing with the (idempotent) re-install."
+  fi
+fi
+
 # ── (WSL only) stale Windows-host portproxy on 9876 ─────────────────────────
 # Legacy host-Tailscale + portproxy setups can squat :9876; clean them via
 # Windows interop. Irrelevant on native Linux (no powershell.exe), so skip.

@@ -44,7 +44,7 @@ step during a sync round.
 
 | Field | Description |
 |---|---|
-| `node_id` | This node's identity — its device-key fingerprint (`HIVE_NODE_ID` overrides) |
+| `node_id` | This device's identity — its device-key fingerprint (`HIVE_NODE_ID` overrides) |
 | `journal_summary.by_node` | Highest seq seen per source node — used for quick divergence detection |
 | `chunks` | Per-node array of 100-entry chunk hashes (Merkle leaf hashes). Used to localize which windows need syncing |
 
@@ -109,7 +109,7 @@ the chunk hash from `/sync/hello` to detect transmission errors.
 
 ### `POST /sync/ingest`
 
-Append foreign journal entries to this node's journal (G-Set union merge).
+Append foreign journal entries to this device's journal (G-Set union merge).
 Deduplicates by `(node_id, seq)`. After accepting entries, triggers
 `rebuild_db()` to recompute SQLite + confidence projection.
 
@@ -206,7 +206,7 @@ All journal entries share this structure. The journal is the source of truth —
 | `type` | Entry type (see below) |
 | `timestamp` | ISO8601 UTC |
 | `payload` | Type-specific data (see below) |
-| `prev_hash` | Hash of the previous entry from this node — forms a per-node hash chain |
+| `prev_hash` | Hash of the previous entry from this device — forms a per-node hash chain |
 | `pub` | Signer's Ed25519 public key (present on signed entries) |
 | `sig` | Ed25519 signature over the canonical entry minus `sig`; the chain commits to it |
 

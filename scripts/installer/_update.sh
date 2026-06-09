@@ -17,6 +17,15 @@ info "Pulling latest from GitHub..."
 git -C "$HIVE_DIR" pull --ff-only
 ok "Repo updated"
 
+# Refresh the command symlinks so new subcommands land without a reinstall.
+# (Older installs had a static dispatcher copy that never picked up new commands.)
+info "Refreshing commands..."
+BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
+mkdir -p "$BIN_DIR"
+ln -sf "$HIVE_DIR/scripts/installer/dispatcher.sh" "$BIN_DIR/hive-mind"
+ln -sf "$HIVE_DIR/hv" "$BIN_DIR/hv"
+ok "Commands refreshed (hive-mind, hv)"
+
 info "Rebuilding database..."
 cd "$HIVE_DIR" && ./hv rebuild
 ok "DB rebuilt"

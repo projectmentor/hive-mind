@@ -87,16 +87,18 @@ CMD="${1:-help}"
 shift 2>/dev/null || true
 
 case "$CMD" in
-  install) exec bash "$INSTALLER/_install_node.sh" "$@" ;;
-  update)  exec bash "$INSTALLER/_update.sh"       "$@" ;;
-  status)  exec bash "$INSTALLER/_status.sh"       "$@" ;;
+  install)   exec bash "$INSTALLER/_install_node.sh" "$@" ;;
+  update)    exec bash "$INSTALLER/_update.sh"       "$@" ;;
+  status)    exec bash "$INSTALLER/_status.sh"       "$@" ;;
+  uninstall) exec bash "$INSTALLER/_uninstall.sh"    "$@" ;;
   *)
     echo "Usage: hive-mind <subcommand>"
     echo ""
     echo "Subcommands:"
-    echo "  install    Set up this node from scratch"
-    echo "  update     Pull latest + restart daemon"
-    echo "  status     Show node health and peer sync state"
+    echo "  install      Set up this node from scratch"
+    echo "  update       Pull latest + restart daemon"
+    echo "  status       Show node health and peer sync state"
+    echo "  uninstall    Remove HiveMind from this node (--keep-hive to keep your data)"
     echo ""
     ;;
 esac

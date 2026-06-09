@@ -552,6 +552,38 @@ systemctl --user restart hive-sync
 
 ---
 
+## The `hive-mind` command — device management
+
+`hv` works with the memory corpus; the separate `hive-mind` command manages the HiveMind
+install on this device (set up, update, health, removal). It is a thin dispatcher
+(`scripts/installer/dispatcher.sh`) symlinked onto your PATH, so a plain `git pull` keeps its
+subcommands current.
+
+```bash
+hive-mind <subcommand> [options]
+```
+
+| Subcommand | What it does |
+|---|---|
+| `install` | Set up this device from scratch (discovery-driven bootstrap or join). |
+| `update` | Pull the latest code and restart the sync daemon. |
+| `status` | Show device health and peer sync state. |
+| `uninstall` | Remove HiveMind from this device (see flags below). |
+
+### `hive-mind uninstall`
+
+```bash
+hive-mind uninstall [--keep-hive] [--yes]
+```
+
+| Flag | Effect |
+|---|---|
+| `--keep-hive` | Preserve your Hive data (journal, device + owner keys, `peers.json`) by copying it to a timestamped backup folder `~/hive-mind-keep-<UTC-timestamp>` instead of deleting it. Without this, all Hive data is removed. |
+| `-y`, `--yes` | Skip the `Continue? [y/N]` confirmation prompt and proceed — for unattended or scripted removal. |
+| `-h`, `--help` | Print usage and exit. |
+
+---
+
 ## Environment variables
 
 | Variable | Default | Description |

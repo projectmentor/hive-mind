@@ -2855,7 +2855,7 @@ def _telemetry_list(args):
 # CLI
 # --------------------------------------------------------------------------
 
-def main():
+def build_parser():
     parser = argparse.ArgumentParser(
         description="Hive Mind CLI — shared, confidence-weighted institutional memory.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -2988,6 +2988,11 @@ def main():
     tel_lst = tel_sub.add_parser("list", help="Recent sessions")
     tel_lst.add_argument("--limit", type=int, default=20)
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Idempotent; also auto-migrates older DBs missing tables/indexes.

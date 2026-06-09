@@ -2487,7 +2487,7 @@ def discover_cmd(args):
     if candidates:
         print(f"  probing {len(ips)} tailnet device(s)…", file=sys.stderr)
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(candidates))) as ex:
-            for ip, p, info in ex.map(lambda c: (c[0], c[1], _probe_hive(c[0], c[1], timeout=1.5)), candidates):
+            for ip, p, info in ex.map(lambda c: (c[0], c[1], _probe_hive(c[0], c[1], timeout=3)), candidates):
                 if info and info["hive_id"] not in found:
                     found[info["hive_id"]] = {
                         "hive_id": info["hive_id"], "owner_id": info.get("owner_id"),

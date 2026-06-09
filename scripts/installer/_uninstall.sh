@@ -124,4 +124,8 @@ echo "  (Tailscale and your ~/.bashrc PATH line were left untouched.)"
 echo "  Reload your shell to drop the removed commands: source ~/.bashrc"
 echo ""
 
-rm -rf "$HIVE_DIR"   # last — removes this script too (open fd keeps it running)
+# Last: remove the repo dir itself — which contains THIS running script. `exec` hands
+# off to a standalone rm so the deletion can't depend on bash still reading its own
+# (now-deleted) script file. cd to a safe place first so we're not inside the target.
+cd "$HOME"
+exec rm -rf "$HIVE_DIR"

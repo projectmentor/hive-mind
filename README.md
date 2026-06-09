@@ -45,7 +45,7 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
 
 ## Install
 
-Open a WSL terminal and run:
+On Linux (or a WSL terminal on Windows 11), run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/projectmentor/hive-mind/main/scripts/installer/install.sh | bash
@@ -54,7 +54,7 @@ hive-mind install
 
 The installer will:
 
-1. Install Tailscale inside WSL (used for syncing between machines) and authenticate it
+1. Install Tailscale (used for syncing between machines) and authenticate it
 2. Install Python dependencies
 3. Clone this repo to `~/projects/hive-mind`
 4. Ask for one input: your peer's Tailscale IP. **First machine with no peers yet? Just press
@@ -65,10 +65,11 @@ The installer will:
 
 ### Requirements
 
-- **Windows 11 with WSL2** and systemd enabled (Mac and Android support are in progress)
+- **Linux** (native) or **Windows 11 with WSL2**, with systemd enabled (Mac and Android
+  support are in progress)
 - **Internet access** (for the install and git clone)
-- **Tailscale** *only if you want multiple machines to sync.* It installs **inside WSL**
-  (the installer handles it) and is **not** needed on the Windows host. A single-machine
+- **Tailscale** *only if you want multiple machines to sync.* The installer sets it up for
+  you (inside WSL on Windows; it is **not** needed on the Windows host). A single-machine
   setup needs no Tailscale at all — there are no peers to reach.
 
 <details>

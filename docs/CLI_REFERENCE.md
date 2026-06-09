@@ -14,23 +14,24 @@ memory.
 
 | Command | What it does |
 |---|---|
-| `hv remember` | Store a fact |
-| `hv search` | Search stored facts |
-| `hv decide` | Record a decision |
-| `hv retract` | Correct a fact you got wrong |
-| `hv entity` | Track named things (people, projects, concepts) |
-| `hv stats` | See a summary of your memory |
-| `hv doctor` | Check that your device is healthy |
-| `hv key` | Show or create this device's device identity |
-| `hv owner` | Show or create the governance owner identity |
-| `hv discover` | Find hives on your tailnet |
-| `hv join` | Request admission to a hive you've synced |
 | `hv admit` | Admit a device (owner-only); no arg lists pending requests |
 | `hv config` | Set a journaled confidence parameter (owner-only) |
-| `hv rebuild` | Fix the local database if something looks wrong |
+| `hv decide` | Record a decision |
+| `hv discover` | Find hives on your tailnet |
+| `hv doctor` | Check that your device is healthy |
+| `hv entity` | Track named things (people, projects, concepts) |
+| `hv join` | Request admission to a hive you've synced |
+| `hv key` | Show or create this device's device identity |
 | `hv merkle` | Diagnose sync state between nodes |
-| `hv sync` | Sync with peer nodes |
 | `hv migrate-device-identity` | One-time: re-stamp the journal to device identities |
+| `hv owner` | Show or create the governance owner identity |
+| `hv rebuild` | Fix the local database if something looks wrong |
+| `hv remember` | Store a fact |
+| `hv retract` | Correct a fact you got wrong |
+| `hv search` | Search stored facts |
+| `hv stats` | See a summary of your memory |
+| `hv sync` | Sync with peer nodes |
+| `hv whoami` | Show this device's identity and membership status (sterile/fertile/owner) |
 
 ---
 
@@ -44,6 +45,285 @@ cd ~/projects/hive-mind
 ---
 
 ## Commands
+
+---
+
+### `hv admit` — Admit a device (owner-only)
+
+By default any device can corroborate. Once you have an owner, only **admitted**
+devices count toward confidence — so someone can't mint a pile of keys and fake a
+crowd (a Sybil attack). Admit your real devices:
+
+```
+hv admit                                  # list devices awaiting admission
+hv admit k1:597b3e0f5fb92d37 --principal david
+```
+
+With no argument, `hv admit` lists the pending join-requests. (Those also surface
+in your session-start digest, so your agent can prompt you.) `--principal` tags who
+owns the device; when every device behind a fact belongs to the same principal, its
+confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
+join-request advertised, so the owner syncs *to* the member too (not only the member to the
+owner) — connectivity is seeded by admission but stays editable in `.peers.json`. Admission
+grants only write/fertility, never governance. Get a device's id with `hv key show` on it. A device that isn't admitted
+is a **read-only ("sterile") member**: it reads the whole hive, but its content writes are **not
+accepted into the shared journal** until you admit it (only its join-request propagates). Run
+`hv whoami` on any device to see whether it's sterile, fertile (admitted), or the owner.
+
+---
+
+### `hv config` — Tunable confidence parameters (owner-only)
+
+Two knobs are owner-set and journaled (so they're identical on every device, which is
+what keeps confidence converging):
+
+```
+hv config set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
+hv config set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
+```
+
+`same_device_lambda` is why two agents on one machine count for less than two on
+separate machines: the device contributes its strongest agent in full plus this
+fraction of the rest. `0` means a device is one voice no matter how many agents run
+on it; `1` removes the discount.
+
+---
+
+### `hv decide` — Record a decision
+
+Decisions are for choices you've made — not just facts, but the *why* behind
+them. You can link a new decision to an older one it replaces, so you always
+have a clear trail of what changed and why.
+
+```
+hv decide <content> [--rationale TEXT] [--supersedes ID]
+```
+
+**Arguments:**
+
+| Argument | What it does |
+|---|---|
+| `content` | The decision, stated clearly. Required. |
+| `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
+| `--supersedes` | The ID of a previous decision this replaces. The old decision stays on record; this one is linked to it. |
+
+**Examples:**
+```bash
+# Minimal — just the decision
+./hv decide "Use Tailscale SSH for inter-node access"
+
+# With rationale
+./hv decide "Use Tailscale SSH for inter-node access" \
+    --rationale "Zero-config, auth handled by the tailnet, nothing to maintain"
+
+# Replacing a previous decision
+./hv decide "Install Tailscale inside WSL — each device gets its own IP" \
+    --rationale "Cleaner than portproxy, WSL appears as its own tailnet machine" \
+    --supersedes 5
+
+# All options together
+./hv decide "peers.json must use WSL Tailscale IPs, not Windows host IPs" \
+    --rationale "WSL gets its own 100.x — Windows host IP is irrelevant to WSL daemon" \
+    --supersedes 3
+```
+
+---
+
+### `hv discover` — Find hives on your tailnet
+
+Lists every device on your Tailscale network that's running a hive, with its
+queen bee (owner) and node count — so a new machine can find a hive to join
+without knowing any IP.
+
+```
+hv discover
+```
+
+It reads `tailscale status` and probes each device. A random service squatting
+the sync port is not mistaken for a hive (the probe verifies a signed genesis).
+
+---
+
+### `hv doctor` — Check that your device is healthy
+
+Runs a single set of checks over your local device and tells you whether anything
+needs attention. It looks at six things:
+
+- **authenticity** — your copy of HiveMind matches the signed official release
+- **journal** — your device's history is intact and unbroken from the start
+- **database** — the local lookup index is in step with that history
+- **hygiene** — whether duplicate or obsolete facts have built up
+- **sync-daemon** — whether the background sync service is running
+- **peers** — whether your peer nodes are reachable and in sync
+
+```
+hv doctor
+hv doctor --format json    # machine-readable, for scripts and monitoring
+hv doctor --fix            # take the one safe remedial action (clear orphan daemons)
+```
+
+The `sync-daemon` check also flags **orphan daemons** — a stale `hv sync daemon`
+left running outside systemd (for example, the unit died but an old process still
+holds the port and serves stale code, so the port answers while nothing is
+actually managed). `hv doctor --fix` kills those orphans and restarts the managed
+unit. Without `--fix`, doctor only reports — it never kills anything, so it stays
+safe to run from cron.
+
+Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
+non-zero only when a check actually fails, so you can wire it into a cron job or a
+monitoring probe and get alerted on real breakage, not on a peer being briefly
+offline. A failed `authenticity` check right after an upgrade usually just means
+the signed manifest has not caught up yet; pull the latest and re-run.
+
+---
+
+### `hv entity` — Track named things
+
+Entities are named anchors — a person, a project, a concept — that you can
+attach facts to. Instead of hunting through search results, you can ask
+"what do we know about X?" and get everything linked to it in one place.
+
+```
+hv entity {add,list,show,link} [options]
+```
+
+**Sub-commands:**
+
+| Sub-command | What it does |
+|---|---|
+| `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
+| `list` | List all entities. |
+| `show` | Show an entity and all facts linked to it. Needs `--name`. |
+| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id`. Optionally set `--confidence` to indicate how strongly the fact relates. |
+
+**Examples:**
+```bash
+# add — minimal
+./hv entity add --name "HiveMind" --type project
+
+# add — with attributes
+./hv entity add --name "HiveMind" --type project \
+    --attr '{"repo":"projectmentor/hive-mind","status":"active"}'
+
+# list — show all entities
+./hv entity list
+
+# show — everything linked to a named entity
+./hv entity show --name "HiveMind"
+
+# link — attach a fact to an entity (minimal)
+./hv entity link --name "HiveMind" --fact-id 42
+
+# link — with confidence score
+./hv entity link --name "HiveMind" --fact-id 42 --confidence 0.9
+```
+
+---
+
+### `hv join` — Request admission to a hive
+
+After your device has synced a hive (its peer is in `.peers.json`), `hv join` asks
+that hive's owner to admit you.
+
+```
+hv join --principal carol
+```
+
+This is **non-blocking**: you're already reading the hive, and you can write, but
+your writes don't count toward confidence until you're admitted. The request shows
+up for the owner to approve; you don't wait. It prints your `device_id` so you can
+pass it along.
+
+---
+
+### `hv key` — This device's device identity
+
+Each device is identified by an Ed25519 **device key**, not its hostname. The key
+proves which device wrote an entry, so a peer cannot impersonate your device to
+inflate confidence. Your `node_id` is the key's fingerprint, like
+`k1:2a2110f3d8963a9e`.
+
+```
+hv key show          # show this device's device_id and public key
+hv key init          # mint a device key (fresh install only)
+```
+
+A fresh install mints a key automatically. `hv key init` refuses to run on a node
+that already has history under its hostname, because minting a key there would
+split its identity; use `hv migrate-device-identity` for an existing node instead.
+The private seed lives at `HIVE_HOME/.device-key` — keep it secret, never commit
+or sync it. Share your `device_id` and public key with peers (they go in
+`.peers.json`).
+
+---
+
+### `hv merkle` — Diagnose sync problems
+
+Shows a fingerprint of your current data. If two nodes show the same
+fingerprint, they're in sync. If they differ, `hv sync now` will sort it out.
+
+You don't normally need to run this — `hv sync` handles it automatically. It's
+here for when you're troubleshooting and want to see exactly where two nodes
+diverge.
+
+```
+hv merkle
+```
+
+---
+
+### `hv migrate-device-identity` — Move an existing node to a device key
+
+A one-time, coordinated step that re-stamps an existing journal from hostname
+`node_id`s to cryptographic `device_id`s.
+
+```
+hv migrate-device-identity --map map.json --dry-run   # preview
+hv migrate-device-identity --map map.json             # apply
+```
+
+`map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
+on each. Because the re-stamp is deterministic, running it on every peer with the
+same map produces byte-identical journals, so your devices stay in sync with no
+re-transfer. The runbook, per node: `hv key init --force` to mint the key, share
+the resulting `device_id`, build the shared map, stop the sync daemons, run this
+on each device, confirm `hv merkle` roots match, then restart. Your old journal is
+backed up to `journal.bak.device-id.<timestamp>/`.
+
+---
+
+### `hv owner` — Governance owner identity
+
+Confidence weighs *who* corroborates a fact. A few of those rules need a shared,
+trusted source: which devices count, who owns each one, and a couple of tunable
+numbers. That trust is rooted in an **owner key** — a separate Ed25519 key (apart
+from your device keys) that signs governance decisions into the journal, so every
+node agrees on them.
+
+```
+hv owner show          # the established owner + admitted devices + config
+hv owner init          # mint the owner key and claim ownership (once)
+```
+
+You run `hv owner init` once, on whichever machine you want to hold the owner key.
+It mints a **`hive_id`** (a public identifier that keeps your hive separate from
+any other hive on the same tailnet) and writes an owner declaration into the
+journal that the other nodes pick up on sync. Until you do this, the governance
+rules below are simply off (every device counts, nothing is capped) — so it's opt-in.
+
+---
+
+### `hv rebuild` — Fix the local database
+
+If your local database looks wrong or out of date, `rebuild` resets it from
+scratch. It's safe to run any time — your data won't be lost.
+
+Also useful after pulling in entries from a peer node, or if HiveMind exited
+unexpectedly.
+
+```
+hv rebuild
+```
 
 ---
 
@@ -115,89 +395,6 @@ source — self-repetition does nothing.
 
 ---
 
-### `hv search` — Search stored facts
-
-Find facts by keyword. Results are ranked by confidence — the most corroborated
-facts come first.
-
-```
-hv search <query> [--format {text,json}] [--min-confidence N]
-```
-
-**Arguments:**
-
-| Argument | What it does |
-|---|---|
-| `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. |
-| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. |
-| `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. |
-
-**Examples:**
-```bash
-# Minimal — keyword search
-./hv search "tailscale"
-
-# Multiple keywords (all must match)
-./hv search "sync daemon"
-
-# Either/or
-./hv search "tailscale OR portproxy"
-
-# Exact phrase
-./hv search '"address already in use"'
-
-# Filter by confidence
-./hv search "billing" --min-confidence 0.6
-
-# Machine-readable output
-./hv search "sync" --format json
-
-# All options together
-./hv search "infrastructure" --format json --min-confidence 0.5
-```
-
----
-
-### `hv decide` — Record a decision
-
-Decisions are for choices you've made — not just facts, but the *why* behind
-them. You can link a new decision to an older one it replaces, so you always
-have a clear trail of what changed and why.
-
-```
-hv decide <content> [--rationale TEXT] [--supersedes ID]
-```
-
-**Arguments:**
-
-| Argument | What it does |
-|---|---|
-| `content` | The decision, stated clearly. Required. |
-| `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
-| `--supersedes` | The ID of a previous decision this replaces. The old decision stays on record; this one is linked to it. |
-
-**Examples:**
-```bash
-# Minimal — just the decision
-./hv decide "Use Tailscale SSH for inter-node access"
-
-# With rationale
-./hv decide "Use Tailscale SSH for inter-node access" \
-    --rationale "Zero-config, auth handled by the tailnet, nothing to maintain"
-
-# Replacing a previous decision
-./hv decide "Install Tailscale inside WSL — each device gets its own IP" \
-    --rationale "Cleaner than portproxy, WSL appears as its own tailnet machine" \
-    --supersedes 5
-
-# All options together
-./hv decide "peers.json must use WSL Tailscale IPs, not Windows host IPs" \
-    --rationale "WSL gets its own 100.x — Windows host IP is irrelevant to WSL daemon" \
-    --supersedes 3
-```
-
----
-
 ### `hv retract` — Correct a fact you got wrong
 
 When a stored fact turns out to be wrong, use `retract` to say so. The fact
@@ -243,45 +440,45 @@ hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
 
 ---
 
-### `hv entity` — Track named things
+### `hv search` — Search stored facts
 
-Entities are named anchors — a person, a project, a concept — that you can
-attach facts to. Instead of hunting through search results, you can ask
-"what do we know about X?" and get everything linked to it in one place.
+Find facts by keyword. Results are ranked by confidence — the most corroborated
+facts come first.
 
 ```
-hv entity {add,list,show,link} [options]
+hv search <query> [--format {text,json}] [--min-confidence N]
 ```
 
-**Sub-commands:**
+**Arguments:**
 
-| Sub-command | What it does |
+| Argument | What it does |
 |---|---|
-| `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
-| `list` | List all entities. |
-| `show` | Show an entity and all facts linked to it. Needs `--name`. |
-| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id`. Optionally set `--confidence` to indicate how strongly the fact relates. |
+| `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. |
+| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. |
+| `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. |
 
 **Examples:**
 ```bash
-# add — minimal
-./hv entity add --name "HiveMind" --type project
+# Minimal — keyword search
+./hv search "tailscale"
 
-# add — with attributes
-./hv entity add --name "HiveMind" --type project \
-    --attr '{"repo":"projectmentor/hive-mind","status":"active"}'
+# Multiple keywords (all must match)
+./hv search "sync daemon"
 
-# list — show all entities
-./hv entity list
+# Either/or
+./hv search "tailscale OR portproxy"
 
-# show — everything linked to a named entity
-./hv entity show --name "HiveMind"
+# Exact phrase
+./hv search '"address already in use"'
 
-# link — attach a fact to an entity (minimal)
-./hv entity link --name "HiveMind" --fact-id 42
+# Filter by confidence
+./hv search "billing" --min-confidence 0.6
 
-# link — with confidence score
-./hv entity link --name "HiveMind" --fact-id 42 --confidence 0.9
+# Machine-readable output
+./hv search "sync" --format json
+
+# All options together
+./hv search "infrastructure" --format json --min-confidence 0.5
 ```
 
 ---
@@ -297,221 +494,6 @@ hv stats
 
 Run this at the start of a session to get oriented, or after a sync to confirm
 entries came across from a peer.
-
----
-
-### `hv doctor` — Check that your device is healthy
-
-Runs a single set of checks over your local device and tells you whether anything
-needs attention. It looks at six things:
-
-- **authenticity** — your copy of HiveMind matches the signed official release
-- **journal** — your device's history is intact and unbroken from the start
-- **database** — the local lookup index is in step with that history
-- **hygiene** — whether duplicate or obsolete facts have built up
-- **sync-daemon** — whether the background sync service is running
-- **peers** — whether your peer nodes are reachable and in sync
-
-```
-hv doctor
-hv doctor --format json    # machine-readable, for scripts and monitoring
-hv doctor --fix            # take the one safe remedial action (clear orphan daemons)
-```
-
-The `sync-daemon` check also flags **orphan daemons** — a stale `hv sync daemon`
-left running outside systemd (for example, the unit died but an old process still
-holds the port and serves stale code, so the port answers while nothing is
-actually managed). `hv doctor --fix` kills those orphans and restarts the managed
-unit. Without `--fix`, doctor only reports — it never kills anything, so it stays
-safe to run from cron.
-
-Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
-non-zero only when a check actually fails, so you can wire it into a cron job or a
-monitoring probe and get alerted on real breakage, not on a peer being briefly
-offline. A failed `authenticity` check right after an upgrade usually just means
-the signed manifest has not caught up yet; pull the latest and re-run.
-
----
-
-### `hv key` — This device's device identity
-
-Each device is identified by an Ed25519 **device key**, not its hostname. The key
-proves which device wrote an entry, so a peer cannot impersonate your device to
-inflate confidence. Your `node_id` is the key's fingerprint, like
-`k1:2a2110f3d8963a9e`.
-
-```
-hv key show          # show this device's device_id and public key
-hv key init          # mint a device key (fresh install only)
-```
-
-A fresh install mints a key automatically. `hv key init` refuses to run on a node
-that already has history under its hostname, because minting a key there would
-split its identity; use `hv migrate-device-identity` for an existing node instead.
-The private seed lives at `HIVE_HOME/.device-key` — keep it secret, never commit
-or sync it. Share your `device_id` and public key with peers (they go in
-`.peers.json`).
-
----
-
-### `hv migrate-device-identity` — Move an existing node to a device key
-
-A one-time, coordinated step that re-stamps an existing journal from hostname
-`node_id`s to cryptographic `device_id`s.
-
-```
-hv migrate-device-identity --map map.json --dry-run   # preview
-hv migrate-device-identity --map map.json             # apply
-```
-
-`map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
-on each. Because the re-stamp is deterministic, running it on every peer with the
-same map produces byte-identical journals, so your devices stay in sync with no
-re-transfer. The runbook, per node: `hv key init --force` to mint the key, share
-the resulting `device_id`, build the shared map, stop the sync daemons, run this
-on each device, confirm `hv merkle` roots match, then restart. Your old journal is
-backed up to `journal.bak.device-id.<timestamp>/`.
-
----
-
-### `hv owner` — Governance owner identity
-
-Confidence weighs *who* corroborates a fact. A few of those rules need a shared,
-trusted source: which devices count, who owns each one, and a couple of tunable
-numbers. That trust is rooted in an **owner key** — a separate Ed25519 key (apart
-from your device keys) that signs governance decisions into the journal, so every
-node agrees on them.
-
-```
-hv owner show          # the established owner + admitted devices + config
-hv owner init          # mint the owner key and claim ownership (once)
-```
-
-You run `hv owner init` once, on whichever machine you want to hold the owner key.
-It mints a **`hive_id`** (a public identifier that keeps your hive separate from
-any other hive on the same tailnet) and writes an owner declaration into the
-journal that the other nodes pick up on sync. Until you do this, the governance
-rules below are simply off (every device counts, nothing is capped) — so it's opt-in.
-
----
-
-### `hv discover` — Find hives on your tailnet
-
-Lists every device on your Tailscale network that's running a hive, with its
-queen bee (owner) and node count — so a new machine can find a hive to join
-without knowing any IP.
-
-```
-hv discover
-```
-
-It reads `tailscale status` and probes each device. A random service squatting
-the sync port is not mistaken for a hive (the probe verifies a signed genesis).
-
----
-
-### `hv join` — Request admission to a hive
-
-After your device has synced a hive (its peer is in `.peers.json`), `hv join` asks
-that hive's owner to admit you.
-
-```
-hv join --principal carol
-```
-
-This is **non-blocking**: you're already reading the hive, and you can write, but
-your writes don't count toward confidence until you're admitted. The request shows
-up for the owner to approve; you don't wait. It prints your `device_id` so you can
-pass it along.
-
----
-
-### `hv admit` — Admit a device (owner-only)
-
-By default any device can corroborate. Once you have an owner, only **admitted**
-devices count toward confidence — so someone can't mint a pile of keys and fake a
-crowd (a Sybil attack). Admit your real devices:
-
-```
-hv admit                                  # list devices awaiting admission
-hv admit k1:597b3e0f5fb92d37 --principal david
-```
-
-With no argument, `hv admit` lists the pending join-requests. (Those also surface
-in your session-start digest, so your agent can prompt you.) `--principal` tags who
-owns the device; when every device behind a fact belongs to the same principal, its
-confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
-join-request advertised, so the owner syncs *to* the member too (not only the member to the
-owner) — connectivity is seeded by admission but stays editable in `.peers.json`. Admission
-grants only write/fertility, never governance. Get a device's id with `hv key show` on it. A device that isn't admitted
-is a **read-only ("sterile") member**: it reads the whole hive, but its content writes are **not
-accepted into the shared journal** until you admit it (only its join-request propagates). Run
-`hv whoami` on any device to see whether it's sterile, fertile (admitted), or the owner.
-
----
-
-### `hv whoami` — Your device's identity and membership status
-
-Answers "who am I, and what can I do here?" — read-only, no side effects:
-
-```
-hv whoami
-```
-
-It prints this device's `device_id`, the `hive_id` and `owner`, your `principal`, and your **status**:
-
-- **OWNER** — you hold the owner key (admit devices, set config, forget facts).
-- **FERTILE** — admitted; your writes land in the shared journal and count toward confidence.
-- **STERILE** — read-only; you read the whole hive, but your content won't land until the owner admits you (`hv join` to request it).
-- **UNAFFILIATED** — no hive yet (`hv owner init` to start one, or sync one and `hv join`).
-
-If you're sterile, your session-start digest says so too, so your agent isn't left guessing.
-
----
-
-### `hv config` — Tunable confidence parameters (owner-only)
-
-Two knobs are owner-set and journaled (so they're identical on every device, which is
-what keeps confidence converging):
-
-```
-hv config set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
-hv config set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
-```
-
-`same_device_lambda` is why two agents on one machine count for less than two on
-separate machines: the device contributes its strongest agent in full plus this
-fraction of the rest. `0` means a device is one voice no matter how many agents run
-on it; `1` removes the discount.
-
----
-
-### `hv rebuild` — Fix the local database
-
-If your local database looks wrong or out of date, `rebuild` resets it from
-scratch. It's safe to run any time — your data won't be lost.
-
-Also useful after pulling in entries from a peer node, or if HiveMind exited
-unexpectedly.
-
-```
-hv rebuild
-```
-
----
-
-### `hv merkle` — Diagnose sync problems
-
-Shows a fingerprint of your current data. If two nodes show the same
-fingerprint, they're in sync. If they differ, `hv sync now` will sort it out.
-
-You don't normally need to run this — `hv sync` handles it automatically. It's
-here for when you're troubleshooting and want to see exactly where two nodes
-diverge.
-
-```
-hv merkle
-```
 
 ---
 
@@ -573,6 +555,25 @@ journalctl --user -u hive-sync -f
 # Restart the background service (e.g. after editing peers.json)
 systemctl --user restart hive-sync
 ```
+
+---
+
+### `hv whoami` — Your device's identity and membership status
+
+Answers "who am I, and what can I do here?" — read-only, no side effects:
+
+```
+hv whoami
+```
+
+It prints this device's `device_id`, the `hive_id` and `owner`, your `principal`, and your **status**:
+
+- **OWNER** — you hold the owner key (admit devices, set config, forget facts).
+- **FERTILE** — admitted; your writes land in the shared journal and count toward confidence.
+- **STERILE** — read-only; you read the whole hive, but your content won't land until the owner admits you (`hv join` to request it).
+- **UNAFFILIATED** — no hive yet (`hv owner init` to start one, or sync one and `hv join`).
+
+If you're sterile, your session-start digest says so too, so your agent isn't left guessing.
 
 ---
 

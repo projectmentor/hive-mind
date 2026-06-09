@@ -1,5 +1,5 @@
 {
-  "digest": "6978a1ef920cb774c770109065118bed810bdfd7b51b9d0cd5b18fe832d38113",
+  "digest": "5936a5ad3f80ac29b3a6c6f8fc03ada5ddf2c23d94480ae84fd7c555be7b294b",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -21,7 +21,7 @@
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",
-    "hv": "6113057701c0ae757f38c9be5f351837c386fe56a25127a4a6b00de295114d00",
+    "hv": "2f802fc17775651a579fead3a027db5243e8d910fd0792f5488c8d791ad253b7",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "f90f5301e6c8cf512e5cddad9db9a4b5ff433b102c93c079549c2b468948cc56",

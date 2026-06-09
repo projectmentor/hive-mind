@@ -1,5 +1,5 @@
 {
-  "digest": "809be875a3ca2609e6d99d11bbc735a9de6425385470a22a9dd574be8995e328",
+  "digest": "04c393d1f0c835ed41cb464244703d3166b45693a28c76cf316cf7353f70ad52",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -14,14 +14,14 @@
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
     "README.md": "dd2f1c2a743212b2fa6599381b8993ea3083ac112bb0673a78776a79a7d9bfb3",
     "docs/AGENT_INTEGRATION.md": "18f24e381192652a379c6e8533ea235181ae7cfba345d8b5adb2fc3defb1df89",
-    "docs/CLI_REFERENCE.md": "880ac39daf8412e471ffd37a1baa8d2655355b54cc05c5f555d6e96ee9a0f2ed",
+    "docs/CLI_REFERENCE.md": "c0b11eff483dfef803005ea0407494beccf4ee99e14ad8bb0f6267f0c440bd5d",
     "docs/INTERNALS.md": "1f6bbdc7de742bc37484252e499d7df8c90f565ab73104613203d80018fd4f54",
     "docs/P2P_DESIGN.md": "57789cb220b61b54c845d3b1f6791980e69d431f0c6353f10bcd6d616dcfa573",
     "docs/SYNC_API.md": "a490a1b0e6c8ed20df8ed5511596179493ba4582c0f32c66a07c00ec8df12ce2",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",
-    "hv": "de987d75418cae5cd7f255cf709db5739d4e60cddaa9076326fb3f7cd2f3fcdb",
+    "hv": "fee373b5c7257046525c313d3d9fd13dbbc5d1a4b12ed7df49b2ec4d3dc5e9f0",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "4c2503bbc1ca40833842a046f8963dc71db022d1f1d131da44b09ec7189d1fae",
@@ -61,7 +61,8 @@
     "tests/test_onboarding.py": "7a26f267931f899b5dd21ed137891b164deb0b70e671e362817ba8299f7c982f",
     "tests/test_sync.py": "0faa0e72b82a71e3c2f04a550fa6fc12e5b33cdeef9b49d1f5b7da8dbbe40ef9",
     "tests/test_telemetry.py": "685a12ab3470d7a68ed0ca858bfa8dfe40dc53bd6eaf423e17417ac3f17ac427",
-    "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04"
+    "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04",
+    "tests/test_whoami.py": "1d858fbdc8fd9efd2157f416c1c4d23ecc5ca2bb2d2a9eaafb7bde05dcfb7b22"
   },
   "version": "1.4"
 }

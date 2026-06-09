@@ -53,10 +53,15 @@ fi
 
 # ── 1. ensure ~/.local/bin exists and is on PATH ───────────────────────────
 mkdir -p "$BIN_DIR"
+PATH_ADDED=""
 if [[ ":$PATH:" != *":$BIN_DIR:"* ]]; then
-  warn "$BIN_DIR is not in PATH. Adding to ~/.bashrc and current session."
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
-  export PATH="$BIN_DIR:$PATH"
+  export PATH="$BIN_DIR:$PATH"      # this subshell only — can't touch the caller's shell
+  # Persist to ~/.bashrc for future shells (idempotent — don't stack duplicate lines on re-run).
+  if ! grep -qsF 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+  fi
+  PATH_ADDED=1
+  warn "$BIN_DIR added to PATH in ~/.bashrc (new shells will pick it up)."
 fi
 
 # ── 2. clone or update the repo to get the latest installer ───────────────
@@ -100,8 +105,13 @@ chmod +x "$CMD"
 ok "hive-mind command installed at $CMD"
 
 echo ""
-echo -e "${BLD}Bootstrap complete.${RST}"
+echo -e "${BLD}hive-mind command installed.${RST}"
 echo ""
-echo "  Run the full node setup:"
+echo "  Set up your Hive:"
 echo -e "    ${BLD}hive-mind install${RST}"
 echo ""
+if [ -n "$PATH_ADDED" ]; then
+  echo "  (first reload your shell so 'hive-mind' resolves:  source ~/.bashrc"
+  echo -e "   — or run it by full path:  ${BLD}$CMD install${RST})"
+  echo ""
+fi

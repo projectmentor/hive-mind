@@ -462,8 +462,7 @@ ok "~/.local/bin in PATH; hv linked ($BIN_DIR/hv)"
 
 # ── Optional: security alerts + project update emails ───────────────────────
 echo ""
-echo "  HiveMind is alpha software. Leave your email to get critical security alerts."
-echo "  Unsubscribe anytime."
+echo "  Leave your email to get critical security alerts. Unsubscribe anytime."
 ask "Email for critical security alerts and updates (optional, press Enter to skip): "
 read -r SEC_EMAIL
 case "$SEC_EMAIL" in

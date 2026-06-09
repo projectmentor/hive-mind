@@ -440,8 +440,29 @@ hv admit k1:597b3e0f5fb92d37 --principal david
 With no argument, `hv admit` lists the pending join-requests. (Those also surface
 in your session-start digest, so your agent can prompt you.) `--principal` tags who
 owns the device; when every device behind a fact belongs to the same principal, its
-confidence is capped. Get a device's id with `hv key show` on it. A device that
-isn't admitted still has its writes stored and synced; they just don't raise confidence.
+confidence is capped. Get a device's id with `hv key show` on it. A device that isn't admitted
+is a **read-only ("sterile") member**: it reads the whole hive, but its content writes are **not
+accepted into the shared journal** until you admit it (only its join-request propagates). Run
+`hv whoami` on any device to see whether it's sterile, fertile (admitted), or the owner.
+
+---
+
+### `hv whoami` — Your device's identity and membership status
+
+Answers "who am I, and what can I do here?" — read-only, no side effects:
+
+```
+hv whoami
+```
+
+It prints this device's `device_id`, the `hive_id` and `owner`, your `principal`, and your **status**:
+
+- **OWNER** — you hold the owner key (admit devices, set config, forget facts).
+- **FERTILE** — admitted; your writes land in the shared journal and count toward confidence.
+- **STERILE** — read-only; you read the whole hive, but your content won't land until the owner admits you (`hv join` to request it).
+- **UNAFFILIATED** — no hive yet (`hv owner init` to start one, or sync one and `hv join`).
+
+If you're sterile, your session-start digest says so too, so your agent isn't left guessing.
 
 ---
 

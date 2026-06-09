@@ -2388,6 +2388,7 @@ def owner_cmd(args):
         seed = _owner_seed()
         held = seed is not None and _owner_id_for_pub(_ed25519.pub_from_seed(seed)) == gov["owner_id"]
         print(f"owner: {gov['owner_id']}" + ("  (this node holds the owner key)" if held else ""))
+        print(f"  hive_id: {gov['hive_id']}")
         print(f"  admitted devices: {len(gov['admitted'])}; principals tagged: {len(gov['principals'])}")
         print(f"  config: same_device_lambda={gov['config']['same_device_lambda']}, "
               f"cap_self={gov['config']['cap_self']}")

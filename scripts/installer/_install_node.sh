@@ -52,8 +52,13 @@ echo ""
 # ════════════════════════════════════════════════════════════════════════════
 step "1/$TOTAL  Pre-flight checks"
 
-grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null \
-  || die "Must run inside WSL2 on Windows 11."
+# HiveMind runs on Linux. WSL2 is a Linux kernel, so native Linux works the same;
+# we only branch on the handful of Windows-interop steps below (gated on IS_WSL).
+if [ "$(uname -s)" != "Linux" ]; then
+  die "HiveMind installs on Linux (native, or WSL2 on Windows 11). This system is not Linux."
+fi
+IS_WSL=""
+grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null && IS_WSL=1
 
 # ── detect init system ──────────────────────────────────────────────────────
 INIT_SYSTEM="none"
@@ -73,15 +78,20 @@ case "$INIT_SYSTEM" in
   initd)     ok "Init system: init.d" ;;
   none)
     warn "No known init system detected — daemon will run via @reboot cron as fallback."
-    warn "For proper persistence, enable systemd in WSL:"
-    warn "  sudo bash -c 'echo -e \"[boot]\nsystemd=true\" >> /etc/wsl.conf'"
-    warn "  Then from Windows: wsl --shutdown, reopen WSL and re-run hive-mind install"
+    if [ -n "$IS_WSL" ]; then
+      warn "For proper persistence, enable systemd in WSL:"
+      warn "  sudo bash -c 'echo -e \"[boot]\nsystemd=true\" >> /etc/wsl.conf'"
+      warn "  Then from Windows: wsl --shutdown, reopen WSL and re-run hive-mind install"
+    fi
     ;;
 esac
 
-ok "WSL2 + systemd confirmed"
+ok "Pre-flight OK ($([ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'))"
 
-# ── check for stale portproxy on 9876 ───────────────────────────────────────
+# ── (WSL only) stale Windows-host portproxy on 9876 ─────────────────────────
+# Legacy host-Tailscale + portproxy setups can squat :9876; clean them via
+# Windows interop. Irrelevant on native Linux (no powershell.exe), so skip.
+if [ -n "$IS_WSL" ]; then
 PORTPROXY=$(powershell.exe -NoProfile -Command \
   "netsh interface portproxy show all" 2>/dev/null | tr -d '\r' | grep 9876 || true)
 
@@ -122,6 +132,7 @@ WBAT
   fi
   ok "Portproxy rule removed"
 fi
+fi  # end IS_WSL portproxy check
 
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 2 — Tailscale in WSL

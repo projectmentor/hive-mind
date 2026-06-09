@@ -20,8 +20,8 @@ memory.
 | `hv retract` | Correct a fact you got wrong |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv stats` | See a summary of your memory |
-| `hv doctor` | Check that your node is healthy |
-| `hv key` | Show or create this node's device identity |
+| `hv doctor` | Check that your device is healthy |
+| `hv key` | Show or create this device's device identity |
 | `hv owner` | Show or create the governance owner identity |
 | `hv discover` | Find hives on your tailnet |
 | `hv join` | Request admission to a hive you've synced |
@@ -186,7 +186,7 @@ hv decide <content> [--rationale TEXT] [--supersedes ID]
     --rationale "Zero-config, auth handled by the tailnet, nothing to maintain"
 
 # Replacing a previous decision
-./hv decide "Install Tailscale inside WSL — each node gets its own IP" \
+./hv decide "Install Tailscale inside WSL — each device gets its own IP" \
     --rationale "Cleaner than portproxy, WSL appears as its own tailnet machine" \
     --supersedes 5
 
@@ -300,13 +300,13 @@ entries came across from a peer.
 
 ---
 
-### `hv doctor` — Check that your node is healthy
+### `hv doctor` — Check that your device is healthy
 
-Runs a single set of checks over your local node and tells you whether anything
+Runs a single set of checks over your local device and tells you whether anything
 needs attention. It looks at six things:
 
 - **authenticity** — your copy of HiveMind matches the signed official release
-- **journal** — your node's history is intact and unbroken from the start
+- **journal** — your device's history is intact and unbroken from the start
 - **database** — the local lookup index is in step with that history
 - **hygiene** — whether duplicate or obsolete facts have built up
 - **sync-daemon** — whether the background sync service is running
@@ -333,15 +333,15 @@ the signed manifest has not caught up yet; pull the latest and re-run.
 
 ---
 
-### `hv key` — This node's device identity
+### `hv key` — This device's device identity
 
-Each node is identified by an Ed25519 **device key**, not its hostname. The key
-proves which device wrote an entry, so a peer cannot impersonate your node to
+Each device is identified by an Ed25519 **device key**, not its hostname. The key
+proves which device wrote an entry, so a peer cannot impersonate your device to
 inflate confidence. Your `node_id` is the key's fingerprint, like
 `k1:2a2110f3d8963a9e`.
 
 ```
-hv key show          # show this node's device_id and public key
+hv key show          # show this device's device_id and public key
 hv key init          # mint a device key (fresh install only)
 ```
 
@@ -364,12 +364,12 @@ hv migrate-device-identity --map map.json --dry-run   # preview
 hv migrate-device-identity --map map.json             # apply
 ```
 
-`map.json` is `{"hostname": "k1:device_id", ...}` covering every node, identical
+`map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
 on each. Because the re-stamp is deterministic, running it on every peer with the
-same map produces byte-identical journals, so your nodes stay in sync with no
+same map produces byte-identical journals, so your devices stay in sync with no
 re-transfer. The runbook, per node: `hv key init --force` to mint the key, share
 the resulting `device_id`, build the shared map, stop the sync daemons, run this
-on each node, confirm `hv merkle` roots match, then restart. Your old journal is
+on each device, confirm `hv merkle` roots match, then restart. Your old journal is
 backed up to `journal.bak.device-id.<timestamp>/`.
 
 ---
@@ -412,7 +412,7 @@ the sync port is not mistaken for a hive (the probe verifies a signed genesis).
 
 ### `hv join` — Request admission to a hive
 
-After your node has synced a hive (its peer is in `.peers.json`), `hv join` asks
+After your device has synced a hive (its peer is in `.peers.json`), `hv join` asks
 that hive's owner to admit you.
 
 ```
@@ -447,7 +447,7 @@ isn't admitted still has its writes stored and synced; they just don't raise con
 
 ### `hv config` — Tunable confidence parameters (owner-only)
 
-Two knobs are owner-set and journaled (so they're identical on every node, which is
+Two knobs are owner-set and journaled (so they're identical on every device, which is
 what keeps confidence converging):
 
 ```
@@ -493,7 +493,7 @@ hv merkle
 
 ### `hv sync` — Sync with peer nodes
 
-Keeps your node up to date with peers — pulling in any facts they have that you
+Keeps your device up to date with peers — pulling in any facts they have that you
 don't, and pushing yours to them. Only the differences are transferred, not
 everything.
 
@@ -557,7 +557,7 @@ systemctl --user restart hive-sync
 | Variable | Default | Description |
 |---|---|---|
 | `HIVE_HOME` | The folder containing `hv` | Where your data lives. Override to point `hv` at a different location. |
-| `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this node's identity. Normally a node identifies by its Ed25519 device key (see `hv key`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
+| `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this device's identity. Normally a node identifies by its Ed25519 device key (see `hv key`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
 | `HIVE_NODE_LABEL` | Your machine's hostname | A human-friendly display label shown next to the `device_id` in `hv stats` and sync logs. Cosmetic; does not affect identity. |
 | `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
 

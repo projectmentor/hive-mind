@@ -260,7 +260,16 @@ if [ -f "$PEERS_FILE" ] && ./hv owner show 2>/dev/null | grep -q '^owner:'; then
   echo "  (delete $PEERS_FILE and re-run to reconfigure)"
 else
   info "Scanning the tailnet for existing hives..."
-  HIVES_JSON=$(./hv discover --format json 2>/dev/null || echo '[]')
+  HIVES_TMP=$(mktemp)
+  ./hv discover --format json >"$HIVES_TMP" 2>/dev/null &
+  SCAN_PID=$!
+  SP='|/-\'; k=0
+  while kill -0 "$SCAN_PID" 2>/dev/null; do
+    k=$(((k + 1) % 4)); printf "\r  scanning %s" "${SP:$k:1}"; sleep 0.2
+  done
+  wait "$SCAN_PID" 2>/dev/null; printf "\r            \r"
+  HIVES_JSON=$(cat "$HIVES_TMP" 2>/dev/null); rm -f "$HIVES_TMP"
+  [ -n "$HIVES_JSON" ] || HIVES_JSON='[]'
   HIVE_COUNT=$(printf '%s' "$HIVES_JSON" | python3 -c "import sys,json;print(len(json.loads(sys.stdin.read() or '[]')))" 2>/dev/null || echo 0)
 
   CHOICE="n"

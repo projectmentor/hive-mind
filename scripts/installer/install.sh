@@ -76,34 +76,11 @@ else
   ok "Repo cloned"
 fi
 
-# ── 3. write the hive-mind dispatcher to ~/.local/bin ────────────────────
+# ── 3. link the hive-mind dispatcher into ~/.local/bin ───────────────────
+# Symlink (not a copy) so a future `git pull` keeps the command current and new
+# subcommands appear with no reinstall. Same approach as the `hv` symlink below.
 info "Installing hive-mind command to $CMD ..."
-cat > "$CMD" << 'DISPATCHER'
-#!/usr/bin/env bash
-# hive-mind command dispatcher
-HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
-INSTALLER="$HIVE_DIR/scripts/installer"
-CMD="${1:-help}"
-shift 2>/dev/null || true
-
-case "$CMD" in
-  install)   exec bash "$INSTALLER/_install_node.sh" "$@" ;;
-  update)    exec bash "$INSTALLER/_update.sh"       "$@" ;;
-  status)    exec bash "$INSTALLER/_status.sh"       "$@" ;;
-  uninstall) exec bash "$INSTALLER/_uninstall.sh"    "$@" ;;
-  *)
-    echo "Usage: hive-mind <subcommand>"
-    echo ""
-    echo "Subcommands:"
-    echo "  install      Set up this node from scratch"
-    echo "  update       Pull latest + restart daemon"
-    echo "  status       Show node health and peer sync state"
-    echo "  uninstall    Remove HiveMind from this node (--keep-hive to keep your data)"
-    echo ""
-    ;;
-esac
-DISPATCHER
-chmod +x "$CMD"
+ln -sf "$HIVE_DIR/scripts/installer/dispatcher.sh" "$CMD"
 ok "hive-mind command installed at $CMD"
 
 echo ""

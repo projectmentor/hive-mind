@@ -22,6 +22,16 @@ info "Pulling latest from GitHub..."
 git -C "$HIVE_DIR" pull --ff-only
 ok "Repo updated"
 
+# The pull above may have replaced THIS script on disk, but bash is still running
+# the old copy from memory — so any update logic added in the new version (e.g.
+# rewriting systemd units) would silently not run until a SECOND update. Re-exec
+# the freshly-pulled copy once so the new logic applies on the FIRST update. The
+# env-var guard prevents an infinite re-exec loop.
+if [ -z "${HIVE_UPDATE_REEXEC:-}" ]; then
+  export HIVE_UPDATE_REEXEC=1
+  exec bash "$HIVE_DIR/scripts/installer/_update.sh" "$@"
+fi
+
 # Refresh the command symlinks so new subcommands land without a reinstall.
 # (Older installs had a static dispatcher copy that never picked up new commands.)
 info "Refreshing commands..."

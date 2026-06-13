@@ -24,7 +24,7 @@ python3 -m pytest -q
 
 echo "== node identity =="
 echo "  node_id : ${HIVE_NODE_ID:-$(python3 -c 'import socket;print(socket.gethostname())')}"
-echo -n "  merkle  : "; ./hv merkle | awk '/^Root:/{print $2}'
+echo -n "  merkle  : "; ./hv doctor merkle | awk '/^Root:/{print $2}'
 
 if [ -f .peers.json ]; then
   echo "== .peers.json present =="

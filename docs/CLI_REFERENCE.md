@@ -17,12 +17,10 @@ memory.
 | `hv config` | Device identity (`identity`) + owner-signed confidence params (`confidence`) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals; subcommands `merkle` + `migrate-identity` |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv join` | Request admission to a hive you've synced |
-| `hv merkle` | Diagnose sync state between nodes |
-| `hv migrate-device-identity` | One-time: re-stamp the journal to device identities |
 | `hv owner` | Show or create the governance owner identity |
 | `hv rebuild` | Fix the local database if something looks wrong |
 | `hv remember` | Store a fact |
@@ -281,7 +279,7 @@ or sync it. Share your `device_id` and public key with peers (they go in
 
 ---
 
-### `hv merkle` — Diagnose sync problems
+### `hv doctor merkle` — Diagnose sync problems
 
 Shows a fingerprint of your current data. If two nodes show the same
 fingerprint, they're in sync. If they differ, `hv sync now` will sort it out.
@@ -291,28 +289,32 @@ here for when you're troubleshooting and want to see exactly where two nodes
 diverge.
 
 ```
-hv merkle
+hv doctor merkle
 ```
+
+> `hv merkle` is kept as a silent alias.
 
 ---
 
-### `hv migrate-device-identity` — Move an existing node to a device key
+### `hv doctor migrate-identity` — Move an existing node to a device key
 
 A one-time, coordinated step that re-stamps an existing journal from hostname
 `node_id`s to cryptographic `device_id`s.
 
 ```
-hv migrate-device-identity --map map.json --dry-run   # preview
-hv migrate-device-identity --map map.json             # apply
+hv doctor migrate-identity --map map.json --dry-run   # preview
+hv doctor migrate-identity --map map.json             # apply
 ```
 
 `map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
 on each. Because the re-stamp is deterministic, running it on every peer with the
 same map produces byte-identical journals, so your devices stay in sync with no
-re-transfer. The runbook, per node: `hv key init --force` to mint the key, share
-the resulting `device_id`, build the shared map, stop the sync daemons, run this
-on each device, confirm `hv merkle` roots match, then restart. Your old journal is
+re-transfer. The runbook, per node: `hv config identity init --force` to mint the key,
+share the resulting `device_id`, build the shared map, stop the sync daemons, run this
+on each device, confirm `hv doctor merkle` roots match, then restart. Your old journal is
 backed up to `journal.bak.device-id.<timestamp>/`.
+
+> `hv migrate-device-identity` is kept as a silent alias.
 
 ---
 

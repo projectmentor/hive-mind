@@ -2456,7 +2456,15 @@ def doctor_cmd(args):
     hygiene, the sync daemon, and peer reachability. Read-only by default. `--fix` takes the one
     safe remedial action: kill orphan sync daemons (a stale process holding :9876 outside systemd)
     and restart the managed unit. Exits non-zero if any check FAILED; warnings keep a zero exit
-    (so cron/monitors alert only on real breakage)."""
+    (so cron/monitors alert only on real breakage). Subcommands fold in the rarely-used device
+    maintenance ops: `hv doctor merkle` (sync diagnostic) and `hv doctor migrate-identity`."""
+    action = getattr(args, "doctor_action", None)
+    if action == "merkle":
+        merkle_cmd(args)
+        return
+    if action == "migrate-identity":
+        migrate_device_identity_cmd(args)
+        return
     checks = _doctor_status()
     fails = [c for c in checks if c["status"] == "fail"]
     warns = [c for c in checks if c["status"] == "warn"]
@@ -3149,8 +3157,9 @@ def build_parser():
             '  hv decide "chose Y" --rationale "because"                  # record a decision\n'
             "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
             "  hv retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
-            "  hv stats | rebuild | merkle | doctor | sync now|daemon\n"
-            "  hv doctor [--format json]                                 # local health check\n"
+            "  hv stats | rebuild | sync now|daemon\n"
+            "  hv doctor [--format json] [--fix]                          # health check (+ self-heal)\n"
+            "  hv doctor merkle | migrate-identity --map m.json           # sync diagnostic / one-time re-stamp\n"
             "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
             "decays with age ($HIVE_NOW injectable); owner-forget = -1.0."
         ),
@@ -3198,10 +3207,16 @@ def build_parser():
     subparsers.add_parser("stats", help="Show memory usage stats")
     subparsers.add_parser("whoami", help="Show this device's identity + membership status (sterile/fertile/owner)")
 
-    doctor_parser = subparsers.add_parser("doctor", help="Run local health checks (integrity, DB, sync, hygiene)")
+    doctor_parser = subparsers.add_parser("doctor", help="Health checks + device maintenance (merkle, migrate-identity)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
     doctor_parser.add_argument("--fix", action="store_true",
                                help="Take safe remedial action: kill orphan sync daemons and restart the managed unit")
+    doctor_sub = doctor_parser.add_subparsers(dest="doctor_action")
+    doctor_sub.add_parser("merkle", help="Show the Merkle index over the journal (sync diagnostic)")
+    doctor_mig = doctor_sub.add_parser("migrate-identity",
+                                       help="One-time, coordinated: re-stamp the journal from hostnames to device_ids")
+    doctor_mig.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every device)')
+    doctor_mig.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
 
     key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")
@@ -3209,10 +3224,6 @@ def build_parser():
     key_init = key_sub.add_parser("init", help="Mint a device key (fresh install)")
     key_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
 
-    migrate_parser = subparsers.add_parser("migrate-device-identity",
-                                           help="Re-stamp the journal from hostnames to device_ids (one-time, coordinated)")
-    migrate_parser.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every device)')
-    migrate_parser.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
 
     owner_parser = subparsers.add_parser("owner", help="Show or create the governance owner identity")
     owner_sub = owner_parser.add_subparsers(dest="owner_action")
@@ -3264,7 +3275,6 @@ def build_parser():
     discover_parser = subparsers.add_parser("discover", help="Scan the tailnet for hives (Tailscale + /hive/info probe)")
     discover_parser.add_argument("--format", choices=["text", "json"], default="text")
     subparsers.add_parser("rebuild", help="Rebuild store.db from the journal")
-    subparsers.add_parser("merkle", help="Show the Merkle index over the journal")
 
     nudge_parser = subparsers.add_parser("nudge", help="Emit a best-effort save/audit nudge (for hooks)")
     nudge_parser.add_argument("--event", required=True,
@@ -3304,7 +3314,15 @@ def build_parser():
 
 def main():
     parser = build_parser()
-    args = parser.parse_args()
+    # Back-compat: the old top-level `hv merkle` and `hv migrate-device-identity` now live under
+    # `hv doctor` (denser surface). Rewrite their argv to the canonical subcommand so the old
+    # invocations keep working without cluttering the top-level help.
+    argv = sys.argv[1:]
+    if argv[:1] == ["merkle"]:
+        argv = ["doctor", "merkle"] + argv[1:]
+    elif argv[:1] == ["migrate-device-identity"]:
+        argv = ["doctor", "migrate-identity"] + argv[1:]
+    args = parser.parse_args(argv)
 
     # Idempotent; also auto-migrates older DBs missing tables/indexes.
     init_db()
@@ -3323,8 +3341,6 @@ def main():
         stats(args)
     elif args.command == "rebuild":
         rebuild(args)
-    elif args.command == "merkle":
-        merkle_cmd(args)
     elif args.command == "version":
         version_cmd(args)
     elif args.command == "verify":
@@ -3333,8 +3349,6 @@ def main():
         doctor_cmd(args)
     elif args.command == "key":
         key_cmd(args)
-    elif args.command == "migrate-device-identity":
-        migrate_device_identity_cmd(args)
     elif args.command == "owner":
         owner_cmd(args)
     elif args.command == "admit":

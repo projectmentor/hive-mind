@@ -161,7 +161,7 @@ device fingerprint if a key is present → the hostname (legacy, pre-migration).
 
 A key is minted only by `hv config identity init` (fresh install) or the migration — importing
 `hv` never creates one, so a legacy hostname node keeps its identity until it is
-deliberately migrated. `hv migrate-device-identity --map` re-stamps an existing
+deliberately migrated. `hv doctor migrate-identity --map` re-stamps an existing
 journal from hostnames to device_ids: a deterministic transform (same map on every
 node → byte-identical journals → peers stay converged). Two instances on one box
 still need distinct `HIVE_NODE_ID` or distinct keys.

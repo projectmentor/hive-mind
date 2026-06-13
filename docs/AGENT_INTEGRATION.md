@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.4`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.5`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -190,6 +190,12 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.5` — membership **lifecycle** + a unified settings surface. New owner-only `hv group`
+  verb groups the admission lifecycle: `admit / revoke / deny / change / purge / list`
+  (revoke is reversible; purge is a final tombstone — its entries stay in the journal but stop
+  counting and it can't be re-admitted). `hv config` gains `identity` (this device's key) and
+  `confidence` (the params) sub-namespaces. `hv key`, `hv admit`, and `hv config set …` are kept
+  as silent aliases. Additive: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,
   same-source discount) are owner-signed and journaled via the new `hv config` verb, and owner-forget
   (`hv retract --owner`) is cryptographically authorized once an owner exists. Additive: adapters

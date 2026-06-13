@@ -104,7 +104,7 @@ ok "Pre-flight OK ($([ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'))"
 # them bail. Non-blocking on a non-interactive shell (automation re-runs proceed).
 _existing_device=""
 if [ -x "$HIVE_DIR/hv" ]; then
-  _existing_device="$(cd "$HIVE_DIR" && ./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')"
+  _existing_device="$(cd "$HIVE_DIR" && ./hv config identity show 2>/dev/null | awk '/^device_id:/{print $2}')"
 fi
 _daemon_live=""
 if [ "$INIT_SYSTEM" = "systemctl" ] && systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
@@ -305,11 +305,11 @@ fi
 
 # Mint this device's Ed25519 device key. On a fresh install the journal is still empty, so this
 # succeeds; the device then identifies by an unforgeable key fingerprint, not a hostname.
-if ./hv key show 2>/dev/null | grep -q '^device_id:'; then
-  THIS_DEVICE=$(./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')
+if ./hv config identity show 2>/dev/null | grep -q '^device_id:'; then
+  THIS_DEVICE=$(./hv config identity show 2>/dev/null | awk '/^device_id:/{print $2}')
   ok "Device key present: $THIS_DEVICE"
-elif ./hv key init >/dev/null 2>&1; then
-  THIS_DEVICE=$(./hv key show 2>/dev/null | awk '/^device_id:/{print $2}')
+elif ./hv config identity init >/dev/null 2>&1; then
+  THIS_DEVICE=$(./hv config identity show 2>/dev/null | awk '/^device_id:/{print $2}')
   ok "Device key minted: $THIS_DEVICE"
 else
   warn "Could not mint a device key (existing journal?). Continuing with hostname identity."
@@ -362,7 +362,7 @@ for i,h in enumerate(json.loads(sys.stdin.read())):
     read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
     ./hv owner init >/dev/null && ok "New hive created — you are the queen bee!"
-    ./hv admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
+    ./hv group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
     ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
   else
     # ── Join: configure the chosen hive's node as a peer, sync, request admission ──
@@ -377,7 +377,7 @@ for i,h in enumerate(json.loads(sys.stdin.read())):
     read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
     ./hv join --principal "$PRINCIPAL" 2>/dev/null || true
     warn "You're syncing the hive but NOT yet admitted — your writes won't count until the owner admits you."
-    echo "  Ask the hive's owner to run:  hv admit $THIS_DEVICE --principal $PRINCIPAL"
+    echo "  Ask the hive's owner to run:  hv group admit $THIS_DEVICE --principal $PRINCIPAL"
   fi
 fi
 

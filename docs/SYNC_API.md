@@ -295,7 +295,7 @@ anticipated; identity now travels in the entry itself.
 | `bind` | `0.0.0.0` | Interface to bind the daemon to |
 | `port` | `9876` | Port the daemon listens on |
 
-Get a node's device id and public key with `hv key show` on that machine.
+Get a node's device id and public key with `hv config identity show` on that machine.
 
 `.peers.json` is gitignored (contains Tailscale IPs). Copy from
 `.peers.json.example` and edit per node.

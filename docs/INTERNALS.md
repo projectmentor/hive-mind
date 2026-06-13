@@ -108,10 +108,10 @@ Confidence is a *governed* projection. Three rules refine the raw identity count
   So two agents on one box net `1.5`, not `2`; on two boxes, `2`.
 - **Admission gate.** Cryptographic identity stops *impersonation*, not *Sybil*
   (one actor minting many keys). Once an **owner** is established (`hv owner
-  init`), only **admitted** devices (`hv admit`) count toward confidence;
+  init`), only **admitted** devices (`hv group admit`) count toward confidence;
   unadmitted writes are still stored and synced but contribute zero.
 - **CAP_self.** When every device behind a fact maps to one **principal**
-  (`hv admit --principal`), confidence is clamped to `cap_self` (default
+  (`hv group admit --principal`), confidence is clamped to `cap_self` (default
   `0.70`): your own machines agreeing isn't independent corroboration.
 
 Governance lives in owner-signed `governance` journal entries
@@ -159,7 +159,7 @@ manifest), and the fingerprint is cached at `.device-id` so resolving `NODE_ID`
 stays a cheap file read. `NODE_ID` resolves to: `HIVE_NODE_ID` override → the
 device fingerprint if a key is present → the hostname (legacy, pre-migration).
 
-A key is minted only by `hv key init` (fresh install) or the migration — importing
+A key is minted only by `hv config identity init` (fresh install) or the migration — importing
 `hv` never creates one, so a legacy hostname node keeps its identity until it is
 deliberately migrated. `hv migrate-device-identity --map` re-stamps an existing
 journal from hostnames to device_ids: a deterministic transform (same map on every
@@ -180,7 +180,7 @@ and probes each device's `GET /hive/info` (metadata + the signed genesis, never 
 journal — so listing stays open even if reads are later gated). A new node either
 **bootstraps** (first node → `owner init`, becomes queen bee) or **joins** (`hv join`
 emits a self-signed `join-request`; the owner sees it in their session-start digest
-and runs `hv admit`). Joining is non-blocking — the joiner syncs immediately; its
+and runs `hv group admit`). Joining is non-blocking — the joiner syncs immediately; its
 writes are stored but count zero until admitted.
 
 ---

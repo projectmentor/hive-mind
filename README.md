@@ -125,7 +125,7 @@ Most of the time your agents call `hv` for you. Full reference:
   **devices** counts most, multiple agents on one device are discounted, only owner-**admitted**
   devices count, and agreement among one principal's own machines is capped. Governance (owner,
   admitted devices, tunable parameters) lives in owner-signed journal entries, so every device
-  computes the same confidence. See `hv owner` / `hv admit` and `docs/INTERNALS.md`.
+  computes the same confidence. See `hv owner` / `hv group admit` and `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/INTERNALS.md`](docs/INTERNALS.md).

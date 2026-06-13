@@ -124,7 +124,7 @@ def _owner_id_for_pub(pub):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.4"   # 1.4: D0-v2 corroboration — journaled governance (`hv owner`/`admit`/`config`), same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.5"   # 1.5: membership lifecycle (`hv group` admit/revoke/deny/change/purge/list) + `hv config` identity/confidence sub-namespaces (key/admit/config-set kept as aliases); 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -461,8 +461,9 @@ def append_foreign_entries(entries):
         if not _verify_entry(e):
             rejected += 1
             continue
-        if has_owner and nid not in admitted:
+        if has_owner and (nid not in admitted or nid in gov["purged"]):
             # Read-only member: its content does not land until the owner admits the device.
+            # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
             rejected += 1
             continue
         existing.add((nid, seq))
@@ -603,6 +604,7 @@ def _governance_state(entries):
     (which converges via the G-Set), every node derives the same governance state, so confidence stays
     identical everywhere. No owner declared yet → empty admitted set + default config (gate off)."""
     gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
+           "denied": set(), "purged": set(),
            "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
     govs = []
     for e in entries:
@@ -630,9 +632,22 @@ def _governance_state(entries):
             continue
         action = p.get("action")
         if action == "admit" and p.get("device_id"):
+            # A later admit re-admits a revoked device and clears a prior deny. Purge is a final
+            # tombstone — admit does NOT clear it (a purged device cannot be resurrected here).
             gov["admitted"].add(p["device_id"])
+            gov["denied"].discard(p["device_id"])
             if p.get("principal"):
                 gov["principals"][p["device_id"]] = p["principal"]
+        elif action == "revoke" and p.get("device_id"):
+            gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
+        elif action == "deny" and p.get("device_id"):
+            gov["denied"].add(p["device_id"])          # drop a pending join-request (admit overrides)
+        elif action == "change" and p.get("device_id") and p.get("principal"):
+            if p["device_id"] in gov["admitted"]:      # re-tag principal without changing admission
+                gov["principals"][p["device_id"]] = p["principal"]
+        elif action == "purge" and p.get("device_id"):
+            gov["admitted"].discard(p["device_id"])    # final tombstone (see _governed_side / ingest)
+            gov["purged"].add(p["device_id"])
         elif action == "set-config" and p.get("key") in ("same_device_lambda", "cap_self"):
             try:
                 gov["config"][p["key"]] = float(p.get("value"))
@@ -736,7 +751,8 @@ def _content_evidence(entries, gov=None):
     return out
 
 
-_DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "principals": {},
+_DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
+                "principals": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
 
 
@@ -746,10 +762,11 @@ def _governed_side(weights, gov):
     DISCOUNT: each device contributes its strongest identity in full plus λ·(its others), since
     agents on one machine are correlated, not independent. Returns (total, set_of_device_ids)."""
     has_owner, admitted = gov["owner_id"] is not None, gov["admitted"]
+    purged = gov.get("purged", set())
     lam = gov["config"]["same_device_lambda"]
     by_dev = {}
     for (dev, _app, _inst), w in weights.items():
-        if has_owner and dev not in admitted:
+        if has_owner and (dev not in admitted or dev in purged):
             continue
         by_dev.setdefault(dev, []).append(w)
     total = 0.0
@@ -1501,7 +1518,7 @@ def _pending_admissions(entries, gov):
         if e.get("type") == "governance" and e.get("payload", {}).get("action") == "join-request":
             p = e["payload"]
             d = p.get("device_id")
-            if d and d not in gov["admitted"]:
+            if d and d not in gov["admitted"] and d not in gov.get("denied", set()):
                 out[d] = p.get("label", "")
     return [{"device_id": d, "label": lbl} for d, lbl in out.items()]
 
@@ -2039,54 +2056,63 @@ def verify_cmd(args):
         print(line)
 
 
-def key_cmd(args):
-    """Show or create this device's Ed25519 device identity (the cryptographic node_id)."""
-    action = getattr(args, "key_action", None) or "show"
-    if action == "show":
-        seed = _device_seed()
-        if seed is None:
-            print("No device key — this device uses its legacy hostname identity.")
-            print(f"  node_id: {NODE_ID}")
-            print("  `hv key init` mints one on a fresh install; migrate an existing device with")
-            print("  `hv migrate-device-identity`.")
-            return
-        pub = _ed25519.pub_from_seed(seed)
-        print(f"device_id: {_device_id_for_pub(pub)}")
-        print(f"pubkey:    {base64.b64encode(pub).decode()}")
-        print(f"label:     {NODE_LABEL}")
+def _identity_show():
+    """Show this device's device_id, pubkey + label (or its legacy hostname identity)."""
+    seed = _device_seed()
+    if seed is None:
+        print("No device key — this device uses its legacy hostname identity.")
+        print(f"  node_id: {NODE_ID}")
+        print("  `hv config identity init` mints one on a fresh install; migrate an existing")
+        print("  device with `hv migrate-device-identity`.")
         return
+    pub = _ed25519.pub_from_seed(seed)
+    print(f"device_id: {_device_id_for_pub(pub)}")
+    print(f"pubkey:    {base64.b64encode(pub).decode()}")
+    print(f"label:     {NODE_LABEL}")
+
+
+def _identity_init(force):
+    """Mint this device's Ed25519 device key (fresh install). Guards a populated journal unless forced."""
+    if _ed25519 is None:
+        print("ed25519 module unavailable; cannot create a device key.")
+        return
+    if DEVICE_KEY_PATH.exists() and not force:
+        print(f"Device key already exists at {DEVICE_KEY_PATH}. Use --force to replace it.")
+        return
+    # Minting a key on a node that already authored entries under its hostname would split
+    # its identity (old entries under the hostname, new ones under the device_id). On a
+    # populated journal the migration is the correct path; only let init run on an empty one.
+    if not force:
+        mine = [e for e in merkle.read_all_entries(JOURNAL_DIR)
+                if e.get("node_id") == socket.gethostname()]
+        if mine:
+            print(f"This device already has {len(mine)} entries under its hostname.")
+            print("Use `hv migrate-device-identity` to re-stamp them (not `hv config identity init`).")
+            print("Pass --force only if the journal is disposable.")
+            return
+    seed = os.urandom(32)
+    HIVE_HOME.mkdir(parents=True, exist_ok=True)
+    DEVICE_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+    pub = _ed25519.pub_from_seed(seed)
+    did = _device_id_for_pub(pub)
+    DEVICE_ID_PATH.write_text(did + "\n")
+    try:
+        os.chmod(DEVICE_KEY_PATH, 0o600)
+    except Exception:
+        pass
+    print(f"Device key created. device_id: {did}")
+    print(f"  pubkey: {base64.b64encode(pub).decode()}")
+    print(f"  seed:   {DEVICE_KEY_PATH} (private — never commit or sync it)")
+    print("  Share the device_id + pubkey with peers (add them to .peers.json).")
+
+
+def key_cmd(args):
+    """[alias of `hv config identity`] Show or create this device's Ed25519 device identity."""
+    action = getattr(args, "key_action", None) or "show"
     if action == "init":
-        if _ed25519 is None:
-            print("ed25519 module unavailable; cannot create a device key.")
-            return
-        if DEVICE_KEY_PATH.exists() and not args.force:
-            print(f"Device key already exists at {DEVICE_KEY_PATH}. Use --force to replace it.")
-            return
-        # Minting a key on a node that already authored entries under its hostname would split
-        # its identity (old entries under the hostname, new ones under the device_id). On a
-        # populated journal the migration is the correct path; only let init run on an empty one.
-        if not args.force:
-            mine = [e for e in merkle.read_all_entries(JOURNAL_DIR)
-                    if e.get("node_id") == socket.gethostname()]
-            if mine:
-                print(f"This device already has {len(mine)} entries under its hostname.")
-                print("Use `hv migrate-device-identity` to re-stamp them (not `hv key init`).")
-                print("Pass --force only if the journal is disposable.")
-                return
-        seed = os.urandom(32)
-        HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        DEVICE_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        pub = _ed25519.pub_from_seed(seed)
-        did = _device_id_for_pub(pub)
-        DEVICE_ID_PATH.write_text(did + "\n")
-        try:
-            os.chmod(DEVICE_KEY_PATH, 0o600)
-        except Exception:
-            pass
-        print(f"Device key created. device_id: {did}")
-        print(f"  pubkey: {base64.b64encode(pub).decode()}")
-        print(f"  seed:   {DEVICE_KEY_PATH} (private — never commit or sync it)")
-        print("  Share the device_id + pubkey with peers (add them to .peers.json).")
+        _identity_init(getattr(args, "force", False))
+    else:
+        _identity_show()
 
 
 def migrate_device_identity_cmd(args):
@@ -2484,7 +2510,8 @@ def _append_governance(action_payload):
 def owner_cmd(args):
     """Show or create the governance owner identity (the root of trust for membership + config)."""
     action = getattr(args, "owner_action", None) or "show"
-    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
     if action == "show":
         if not gov["owner_id"]:
             print("No owner established. Run `hv owner init` to mint the owner key and claim it.")
@@ -2493,7 +2520,9 @@ def owner_cmd(args):
         held = seed is not None and _owner_id_for_pub(_ed25519.pub_from_seed(seed)) == gov["owner_id"]
         print(f"owner: {gov['owner_id']}" + ("  (this device holds the owner key)" if held else ""))
         print(f"  hive_id: {gov['hive_id']}")
-        print(f"  admitted devices: {len(gov['admitted'])}; principals tagged: {len(gov['principals'])}")
+        print(f"  admitted devices: {len(gov['admitted'])}; principals tagged: {len(gov['principals'])}; "
+              f"pending: {len(_pending_admissions(entries, gov))}; "
+              f"denied: {len(gov['denied'])}; purged: {len(gov['purged'])}")
         print(f"  config: same_device_lambda={gov['config']['same_device_lambda']}, "
               f"cap_self={gov['config']['cap_self']}")
         return
@@ -2595,7 +2624,10 @@ def admit_cmd(args):
             return
         print(f"Devices awaiting admission ({len(pend)}):")
         for r in pend:
-            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hv admit {r['device_id']} --principal <name>")
+            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hv group admit {r['device_id']} --principal <name>")
+        return
+    if args.device_id in _governance_state(merkle.read_all_entries(JOURNAL_DIR))["purged"]:
+        print(f"{args.device_id} is purged (tombstoned) — purge is permanent; it cannot be re-admitted.")
         return
     payload = {"action": "admit", "device_id": args.device_id}
     if args.principal:
@@ -2607,21 +2639,106 @@ def admit_cmd(args):
                   "this device too (daemon picks it up next cycle, or `hv sync now`).")
 
 
-def config_cmd(args):
-    """Set a journaled, owner-signed tunable confidence parameter (same on every node). Owner-only."""
-    if getattr(args, "config_action", None) != "set":
-        print("usage: hv config set <same_device_lambda|cap_self> <value>")
+def _group_change(action, device_id, principal=None):
+    """Append an owner-signed membership action (revoke/deny/change/purge) + confirm. Owner-only;
+    `_append_governance` signs and rebuilds so confidence re-derives over the new governance."""
+    payload = {"action": action, "device_id": device_id}
+    if principal:
+        payload["principal"] = principal
+    if not _append_governance(payload):
         return
-    if args.key not in ("same_device_lambda", "cap_self"):
-        print(f"unknown config key {args.key!r} (known: same_device_lambda, cap_self)")
+    msg = {
+        "revoke": f"Revoked {device_id} — returned to STERILE (re-admit to restore).",
+        "deny":   f"Denied {device_id} — dropped from pending join-requests (a later admit overrides).",
+        "change": f"Re-tagged {device_id} → principal: {principal}.",
+        "purge":  f"Purged {device_id} (tombstoned) — its entries stay in the journal but no longer "
+                  f"count; permanent (cannot be re-admitted).",
+    }.get(action, f"{action} {device_id}")
+    print(msg)
+
+
+def _group_list():
+    """Print the full membership roster: owner, admitted (+principals), pending, denied, purged."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    if not gov["owner_id"]:
+        print("No owner established yet — no membership to list. Run `hv owner init`.")
+        return
+    print(f"hive {gov['hive_id']} — owner {gov['owner_id']}")
+    print(f"admitted ({len(gov['admitted'])}):")
+    for d in sorted(gov["admitted"]):
+        prin = gov["principals"].get(d)
+        print(f"  {d}" + (f"  (principal: {prin})" if prin else ""))
+    pend = _pending_admissions(entries, gov)
+    if pend:
+        print(f"pending ({len(pend)}):")
+        for r in pend:
+            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hv group admit {r['device_id']} --principal <name>")
+    if gov["denied"]:
+        print(f"denied ({len(gov['denied'])}):")
+        for d in sorted(gov["denied"]):
+            print(f"  {d}")
+    if gov["purged"]:
+        print(f"purged ({len(gov['purged'])}):")
+        for d in sorted(gov["purged"]):
+            print(f"  {d}")
+
+
+def group_cmd(args):
+    """Membership lifecycle (owner-only): admit / revoke / deny / change / purge / list.
+    admit reuses admit_cmd (no arg → pending list, + reciprocal-peer seeding)."""
+    action = getattr(args, "group_action", None)
+    if action in (None, "list"):
+        _group_list()
+        return
+    if action == "admit":
+        admit_cmd(args)
+        return
+    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    dev = args.device_id
+    if action in ("revoke", "change") and dev not in gov["admitted"]:
+        print(f"{dev} is not an admitted device — nothing to {action}.")
+        return
+    if action == "change":
+        _group_change("change", dev, args.principal)
+    else:
+        _group_change(action, dev)
+
+
+def _config_set(key, value):
+    """Set a journaled, owner-signed tunable confidence parameter (same on every node). Owner-only."""
+    if key not in ("same_device_lambda", "cap_self"):
+        print(f"unknown config key {key!r} (known: same_device_lambda, cap_self)")
         return
     try:
-        val = float(args.value)
+        val = float(value)
     except ValueError:
-        print(f"value must be a number, got {args.value!r}")
+        print(f"value must be a number, got {value!r}")
         return
-    if _append_governance({"action": "set-config", "key": args.key, "value": val}):
-        print(f"set {args.key} = {val}")
+    if _append_governance({"action": "set-config", "key": key, "value": val}):
+        print(f"set {key} = {val}")
+
+
+def config_cmd(args):
+    """Settings: `hv config identity show|init` (this device's key) and
+    `hv config confidence set <param> <value>` (owner-signed hive params).
+    `hv config set …` is kept as a silent alias for `config confidence set`."""
+    action = getattr(args, "config_action", None)
+    if action == "identity":
+        sub = getattr(args, "config_identity_action", None) or "show"
+        if sub == "init":
+            _identity_init(getattr(args, "force", False))
+        else:
+            _identity_show()
+    elif action == "confidence":
+        if getattr(args, "config_confidence_action", None) == "set":
+            _config_set(args.key, args.value)
+        else:
+            print("usage: hv config confidence set <same_device_lambda|cap_self> <value>")
+    elif action == "set":            # silent back-compat alias for `config confidence set`
+        _config_set(args.key, args.value)
+    else:
+        print("usage: hv config identity show|init  |  hv config confidence set <key> <value>")
 
 
 def discover_cmd(args):
@@ -3103,18 +3220,46 @@ def build_parser():
     owner_init = owner_sub.add_parser("init", help="Mint the owner key and claim ownership")
     owner_init.add_argument("--force", action="store_true", help="Replace an existing owner key / override an established owner")
 
-    admit_parser = subparsers.add_parser("admit", help="Admit a device (owner-only); no arg lists pending requests")
+    admit_parser = subparsers.add_parser("admit", help="[alias of `hv group admit`] Admit a device; no arg lists pending")
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
     admit_parser.add_argument("--principal", help="Tag the device's principal (owner of the device), for CAP_self")
+
+    group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list")
+    group_sub = group_parser.add_subparsers(dest="group_action")
+    g_admit = group_sub.add_parser("admit", help="Admit a device; no arg lists pending requests")
+    g_admit.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list pending")
+    g_admit.add_argument("--principal", help="Tag the device's principal, for CAP_self")
+    g_revoke = group_sub.add_parser("revoke", help="Un-admit a device (reversible) → returns to STERILE")
+    g_revoke.add_argument("device_id")
+    g_deny = group_sub.add_parser("deny", help="Reject a pending join-request (a later admit overrides)")
+    g_deny.add_argument("device_id")
+    g_change = group_sub.add_parser("change", help="Re-tag a device's principal (admission unchanged)")
+    g_change.add_argument("device_id")
+    g_change.add_argument("--principal", required=True, help="The new principal tag")
+    g_purge = group_sub.add_parser("purge", help="Tombstone a device (permanent; excluded from corroboration)")
+    g_purge.add_argument("device_id")
+    group_sub.add_parser("list", help="Show the membership roster")
 
     join_parser = subparsers.add_parser("join", help="Request admission to this device's hive (after syncing it)")
     join_parser.add_argument("--principal", help="The principal (you) the device should be tagged with")
 
-    config_parser = subparsers.add_parser("config", help="Set a journaled, owner-signed confidence parameter")
+    config_parser = subparsers.add_parser("config", help="Settings: device identity + owner-signed confidence params")
     config_sub = config_parser.add_subparsers(dest="config_action")
-    config_set = config_sub.add_parser("set", help="Set same_device_lambda or cap_self")
+    # back-compat alias: `hv config set <key> <value>` == `hv config confidence set …`
+    config_set = config_sub.add_parser("set", help="[alias] Set same_device_lambda or cap_self")
     config_set.add_argument("key", help="same_device_lambda | cap_self")
     config_set.add_argument("value", help="numeric value")
+    # canonical: identity (this device's key) + confidence (owner-signed hive params)
+    config_id = config_sub.add_parser("identity", help="Show or mint this device's identity key")
+    config_id_sub = config_id.add_subparsers(dest="config_identity_action")
+    config_id_sub.add_parser("show", help="Show this device's device_id and pubkey")
+    config_id_init = config_id_sub.add_parser("init", help="Mint a device key (fresh install)")
+    config_id_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
+    config_conf = config_sub.add_parser("confidence", help="Set an owner-signed confidence parameter")
+    config_conf_sub = config_conf.add_subparsers(dest="config_confidence_action")
+    config_conf_set = config_conf_sub.add_parser("set", help="Set same_device_lambda or cap_self")
+    config_conf_set.add_argument("key", help="same_device_lambda | cap_self")
+    config_conf_set.add_argument("value", help="numeric value")
 
     discover_parser = subparsers.add_parser("discover", help="Scan the tailnet for hives (Tailscale + /hive/info probe)")
     discover_parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -3194,6 +3339,8 @@ def main():
         owner_cmd(args)
     elif args.command == "admit":
         admit_cmd(args)
+    elif args.command == "group":
+        group_cmd(args)
     elif args.command == "join":
         join_cmd(args)
     elif args.command == "config":

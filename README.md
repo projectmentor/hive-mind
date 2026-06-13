@@ -201,4 +201,4 @@ HiveMind is free and open source. If it helps you, you can help keep it alive:
 
 Built by [ProjectMentor](https://projectmentor.org). HiveMind by ProjectMentor, a project of
 Certified Project Management, LLC. Need custom development or consulting on multi-agent systems?
-Reach out at [david@projectmentor.org](mailto:david@projectmentor.org).
+Reach out at [hello@projectmentor.org](mailto:hello@projectmentor.org).

@@ -32,6 +32,11 @@ HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE_NAME="hive-sync"
 TOTAL=13
 
+# Did the invoking shell already have ~/.local/bin on PATH? Capture NOW, before any
+# PATH munging below — this decides whether the summary needs a `source ~/.bashrc` hint.
+# (A child process can't reload the parent shell; the hint only matters when it's absent.)
+case ":$PATH:" in *":$HOME/.local/bin:"*) BIN_ON_PATH=1 ;; *) BIN_ON_PATH="" ;; esac
+
 # ── colours ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; CYN='\033[0;36m'; BLD='\033[1m'; RST='\033[0m'
 ok()   { echo -e "${GRN}[ok]${RST}  $*"; }
@@ -553,7 +558,9 @@ echo "  IP:      $THIS_IP"
 echo "  Data:    $HIVE_DIR"
 echo "  Daemon:  systemctl --user status $SERVICE_NAME"
 echo "  Logs:    journalctl --user -u $SERVICE_NAME -f"
-echo "  Try:     hv stats   (health check: hv doctor)   — reload your shell first: source ~/.bashrc"
+echo "  Try:     hv stats   (health check: hv doctor)"
+[ -z "$BIN_ON_PATH" ] && \
+  echo "           ↳ new terminals work automatically; for THIS shell once: source ~/.bashrc"
 echo ""
 echo "  SSH to this device from any peer:"
 echo "    tailscale ssh ${USER}@${THIS_IP}"

@@ -14,7 +14,6 @@ memory.
 
 | Command | What it does |
 |---|---|
-| `hv admit` | _(alias of `hv group admit`)_ Admit a device; no arg lists pending |
 | `hv config` | Device identity (`identity`) + owner-signed confidence params (`confidence`) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
@@ -22,7 +21,6 @@ memory.
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv join` | Request admission to a hive you've synced |
-| `hv key` | _(alias of `hv config identity`)_ Show or create this device's identity |
 | `hv merkle` | Diagnose sync state between nodes |
 | `hv migrate-device-identity` | One-time: re-stamp the journal to device identities |
 | `hv owner` | Show or create the governance owner identity |

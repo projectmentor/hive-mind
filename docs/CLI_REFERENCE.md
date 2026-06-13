@@ -14,14 +14,15 @@ memory.
 
 | Command | What it does |
 |---|---|
-| `hv admit` | Admit a device (owner-only); no arg lists pending requests |
-| `hv config` | Set a journaled confidence parameter (owner-only) |
+| `hv admit` | _(alias of `hv group admit`)_ Admit a device; no arg lists pending |
+| `hv config` | Device identity (`identity`) + owner-signed confidence params (`confidence`) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
 | `hv doctor` | Check that your device is healthy |
 | `hv entity` | Track named things (people, projects, concepts) |
+| `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv join` | Request admission to a hive you've synced |
-| `hv key` | Show or create this device's device identity |
+| `hv key` | _(alias of `hv config identity`)_ Show or create this device's identity |
 | `hv merkle` | Diagnose sync state between nodes |
 | `hv migrate-device-identity` | One-time: re-stamp the journal to device identities |
 | `hv owner` | Show or create the governance owner identity |
@@ -48,39 +49,62 @@ cd ~/projects/hive-mind
 
 ---
 
-### `hv admit` — Admit a device (owner-only)
+### `hv group` — Membership lifecycle (owner-only)
 
 By default any device can corroborate. Once you have an owner, only **admitted**
 devices count toward confidence — so someone can't mint a pile of keys and fake a
-crowd (a Sybil attack). Admit your real devices:
+crowd (a Sybil attack). `hv group` is the owner's roster + lifecycle:
 
 ```
-hv admit                                  # list devices awaiting admission
-hv admit k1:597b3e0f5fb92d37 --principal david
+hv group                                       # roster (admitted/pending/denied/purged)
+hv group list                                  # same as above
+hv group admit                                 # list devices awaiting admission
+hv group admit k1:597b3e0f5fb92d37 --principal david
+hv group revoke k1:…                           # un-admit (reversible) → device goes STERILE
+hv group deny k1:…                             # reject a pending join-request (admit overrides)
+hv group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
+hv group purge k1:…                            # tombstone: permanent; its entries stop counting
 ```
 
-With no argument, `hv admit` lists the pending join-requests. (Those also surface
+With no device_id, `hv group admit` lists the pending join-requests. (Those also surface
 in your session-start digest, so your agent can prompt you.) `--principal` tags who
 owns the device; when every device behind a fact belongs to the same principal, its
 confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
-join-request advertised, so the owner syncs *to* the member too (not only the member to the
-owner) — connectivity is seeded by admission but stays editable in `.peers.json`. Admission
-grants only write/fertility, never governance. Get a device's id with `hv key show` on it. A device that isn't admitted
-is a **read-only ("sterile") member**: it reads the whole hive, but its content writes are **not
-accepted into the shared journal** until you admit it (only its join-request propagates). Run
-`hv whoami` on any device to see whether it's sterile, fertile (admitted), or the owner.
+join-request advertised, so the owner syncs *to* the member too — connectivity is seeded by
+admission but stays editable in `.peers.json`. Admission grants only write/fertility, never
+governance. Get a device's id with `hv config identity show` on it. A device that isn't
+admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
+are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.
+
+**revoke vs purge.** `revoke` is reversible — the device returns to STERILE and a later
+`admit` restores it. `purge` is a **final tombstone**: the device's entries stay in the
+append-only journal but are permanently excluded from corroboration and ingest, and it
+**cannot be re-admitted**. `change` re-tags the principal without touching admission; `deny`
+drops a pending join-request (a later `admit` overrides it).
+
+> `hv admit …` is kept as a silent alias for `hv group admit …`.
 
 ---
 
-### `hv config` — Tunable confidence parameters (owner-only)
+### `hv config` — Device identity + confidence parameters
 
-Two knobs are owner-set and journaled (so they're identical on every device, which is
-what keeps confidence converging):
+`hv config identity` manages **this device's** Ed25519 key (the same as the legacy
+`hv key`, kept as an alias):
 
 ```
-hv config set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
-hv config set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
+hv config identity show                # this device's device_id + pubkey
+hv config identity init [--force]      # mint a device key (fresh install)
 ```
+
+`hv config confidence set` tunes the two owner-signed, journaled knobs (identical on every
+device, which is what keeps confidence converging):
+
+```
+hv config confidence set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
+hv config confidence set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
+```
+
+> `hv config set <key> <value>` is kept as a silent alias for `hv config confidence set …`.
 
 `same_device_lambda` is why two agents on one machine count for less than two on
 separate machines: the device contributes its strongest agent in full plus this
@@ -236,16 +260,18 @@ pass it along.
 
 ---
 
-### `hv key` — This device's device identity
+### `hv key` — This device's device identity _(alias of `hv config identity`)_
 
 Each device is identified by an Ed25519 **device key**, not its hostname. The key
 proves which device wrote an entry, so a peer cannot impersonate your device to
 inflate confidence. Your `node_id` is the key's fingerprint, like
-`k1:2a2110f3d8963a9e`.
+`k1:2a2110f3d8963a9e`. The canonical form lives under `hv config identity`; `hv key`
+is kept as a silent alias.
 
 ```
-hv key show          # show this device's device_id and public key
-hv key init          # mint a device key (fresh install only)
+hv config identity show     # show this device's device_id and public key
+hv config identity init     # mint a device key (fresh install only)
+hv key show                 # alias of the above
 ```
 
 A fresh install mints a key automatically. `hv key init` refuses to run on a node

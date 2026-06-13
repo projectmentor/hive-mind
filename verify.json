@@ -1,5 +1,5 @@
 {
-  "digest": "8d28e5eb66b5cc8ba32196dcde88c0586132eeb816095c3043be443806e70ff0",
+  "digest": "cf6b5a8a7e1777322cc1266d5abf3c4b246a67617583c3e8b8e2d81243fbfe0a",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -39,7 +39,7 @@
     "scripts/installer/_install_node.sh": "1e2786b619c410a3614498b8261a01dd0ed00c1d5b634e698637f26dc1d6c8f9",
     "scripts/installer/_status.sh": "d123197979c588e47bbab49a48d1f7c7f7d64a947ab26be3bd5d257f28e24761",
     "scripts/installer/_uninstall.sh": "8f3bd7269de0996d7a372d5c45778455aeb165d84e8d79c85ae14d97a3062805",
-    "scripts/installer/_units.sh": "a3ee79761e5dceeb9ef8e60ef6438e3e9bd7e0c577189df4a08ae0c5e0f5fb84",
+    "scripts/installer/_units.sh": "2b02414fc349a963451aea6ecedbbf585add4bcb4904d45f933f6374b232bd66",
     "scripts/installer/_update.sh": "3d4c79460dced16509f0dc896e447bf610f5634ab6c0d5798f8944c757c9dde1",
     "scripts/installer/cleanup.sh": "f66f4929108fafa28245f5460bc14e6b6f420fc75ec810195453939c220b1f20",
     "scripts/installer/dispatcher.sh": "2aeaee96ec3322e8d9b93e1cee1a378347dd52c3d4c29cbec041f7cbd4b6ceed",

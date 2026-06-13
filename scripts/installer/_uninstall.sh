@@ -26,6 +26,8 @@ HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE_NAME="${SERVICE_NAME:-hive-sync}"
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"
 UNIT_FILE="${UNIT_FILE:-$HOME/.config/systemd/user/$SERVICE_NAME.service}"
+DOCTOR_TIMER="${DOCTOR_TIMER:-$HOME/.config/systemd/user/hive-doctor.timer}"
+DOCTOR_SVC="${DOCTOR_SVC:-$HOME/.config/systemd/user/hive-doctor.service}"
 SETTINGS="${SETTINGS:-$HOME/.claude/settings.json}"
 
 # Reusable identity-preservation primitive (lives in the repo — source before we delete it).
@@ -62,13 +64,17 @@ if [ -z "$ASSUME_YES" ]; then
   case "$ans" in y|Y|yes|YES) ;; *) echo "Aborted."; exit 0 ;; esac
 fi
 
-# ── 1. sync daemon ──────────────────────────────────────────────────────────
+# ── 1. sync daemon + self-heal timer ─────────────────────────────────────────
 info "Stopping and removing the sync daemon..."
+systemctl --user disable --now hive-doctor.timer 2>/dev/null || true
+systemctl --user stop hive-doctor.service        2>/dev/null || true
+rm -f "$DOCTOR_TIMER" "$DOCTOR_SVC"
 systemctl --user stop "$SERVICE_NAME"        2>/dev/null || true
 systemctl --user disable "$SERVICE_NAME"     2>/dev/null || true
 rm -f "$UNIT_FILE"
 systemctl --user daemon-reload               2>/dev/null || true
 systemctl --user reset-failed "$SERVICE_NAME" 2>/dev/null || true
+systemctl --user reset-failed hive-doctor.service 2>/dev/null || true
 if [ -z "${HIVE_UNINSTALL_TEST:-}" ]; then
   pkill -f "sync_daemon.py" 2>/dev/null || true    # any stray/non-systemd daemon
   if crontab -l 2>/dev/null | grep -q "sync_daemon.py"; then

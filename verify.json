@@ -1,5 +1,5 @@
 {
-  "digest": "ecbc69e3d427e4c383128eaab257e1321dd65578afd1fc450e2316f6d40fdcb3",
+  "digest": "740f201fa7ead0577ed29e25a44c89b3b43b145005a67c7f4da6575e664ec1cd",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -12,16 +12,16 @@
     ".peers.json.example": "423edc35587b068ff591fe741225bec845a01f5bc9318ad0820d738452f3f363",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
-    "README.md": "9c97266d4405286be9a2751ef22eb38506ab0e7b0ab0efd7e1b04d597c13735f",
-    "docs/AGENT_INTEGRATION.md": "18f24e381192652a379c6e8533ea235181ae7cfba345d8b5adb2fc3defb1df89",
-    "docs/CLI_REFERENCE.md": "450df45319be74dc11de93959cbbdb0f0621ce7fc526da42f79edaba25a905c6",
-    "docs/INTERNALS.md": "1f6bbdc7de742bc37484252e499d7df8c90f565ab73104613203d80018fd4f54",
+    "README.md": "436b9c35a80f398b95d88761ddcea44f916e20ef5e99710d1c053e169684fc80",
+    "docs/AGENT_INTEGRATION.md": "0afd808a6c8388461fa1f8db1757b5acd2d1470995e615015ad3c03fc306b4ff",
+    "docs/CLI_REFERENCE.md": "ad2092970c6cb92ad0aec3f04901a43dcc2af4dabc4dcfd36bee8b7d1d5bbe2a",
+    "docs/INTERNALS.md": "7d5d959e00f8316a6aaf34237563c10ca0cc30285713099613cd6cc93e1a5475",
     "docs/P2P_DESIGN.md": "57789cb220b61b54c845d3b1f6791980e69d431f0c6353f10bcd6d616dcfa573",
-    "docs/SYNC_API.md": "a490a1b0e6c8ed20df8ed5511596179493ba4582c0f32c66a07c00ec8df12ce2",
+    "docs/SYNC_API.md": "a8fdaf54d3a7472c16fd713323dd456cbbe2b7544028564671a3f812c1656d47",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",
-    "hv": "db9f7f3771c820161ceec90887de17903d2050d51e89339c052f60c7d3baf9d6",
+    "hv": "77ceb6a1b9ebc60fa2c6cd69cadfd3a9a8b6cd29188270cf82eb12b92b4a9e16",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "4c2503bbc1ca40833842a046f8963dc71db022d1f1d131da44b09ec7189d1fae",
@@ -36,7 +36,7 @@
     "scripts/gen_verify.py": "66e39bf8c3eabca7ff770fd28272dc563573c6cb6ac7012b5beded33657489c7",
     "scripts/infer-phrases.py": "0d4ba2590788b02e0b6971c5f7301da245c56fbbf521c01dc03e94b8ff845184",
     "scripts/installer/_identity.sh": "034ef4599c778fddf593544cf5b409a7b37a980e099fee34decaf102aaedf575",
-    "scripts/installer/_install_node.sh": "1e2786b619c410a3614498b8261a01dd0ed00c1d5b634e698637f26dc1d6c8f9",
+    "scripts/installer/_install_node.sh": "1d5abcb91815e350e1099cfc6031657075d93900998969ab21daaaea1626479b",
     "scripts/installer/_status.sh": "d123197979c588e47bbab49a48d1f7c7f7d64a947ab26be3bd5d257f28e24761",
     "scripts/installer/_uninstall.sh": "8f3bd7269de0996d7a372d5c45778455aeb165d84e8d79c85ae14d97a3062805",
     "scripts/installer/_units.sh": "2b02414fc349a963451aea6ecedbbf585add4bcb4904d45f933f6374b232bd66",
@@ -57,6 +57,7 @@
     "tests/test_device_identity.py": "d85d1fb3e508a6820ee6fa2b6c8a2ad653f956c3c33b7bf8a6a8eeb516ef541a",
     "tests/test_doc_sync.py": "4dea8e2c81da32e200cfdc7b9324397827880019a8a472b41fe949d21ad388b3",
     "tests/test_governance.py": "b4cc6c7128281a565a6b19aaf9c40d4ae158a48947e4503775ba0a37eec89f64",
+    "tests/test_group.py": "2cd725336a6328a738ee631267ec1f4cd9a2cdc72512deb9787d9419fff3d93a",
     "tests/test_hermes_plugin.py": "9e824430a960653884ef06dcb6231a84565461086f63882d071d9608445c1d8e",
     "tests/test_hv.py": "23158ed860173215703642f49a35e4ecedc451c1e9a6cd903656979125e44514",
     "tests/test_keep_identity.py": "cd52f58d33e9c431221e2d3534dae26e0fcaa126f33859cc3010a9e9d0a117b4",
@@ -68,5 +69,5 @@
     "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04",
     "tests/test_whoami.py": "1d858fbdc8fd9efd2157f416c1c4d23ecc5ca2bb2d2a9eaafb7bde05dcfb7b22"
   },
-  "version": "1.4"
+  "version": "1.5"
 }

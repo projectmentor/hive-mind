@@ -37,6 +37,10 @@ TOTAL=13
 # (A child process can't reload the parent shell; the hint only matters when it's absent.)
 case ":$PATH:" in *":$HOME/.local/bin:"*) BIN_ON_PATH=1 ;; *) BIN_ON_PATH="" ;; esac
 
+# Shared systemd-unit writer (single source of truth, also used by `hive-mind update`).
+_UNITLIB="$HIVE_DIR/scripts/installer/_units.sh"
+[ -f "$_UNITLIB" ] && . "$_UNITLIB"
+
 # ── colours ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; CYN='\033[0;36m'; BLD='\033[1m'; RST='\033[0m'
 ok()   { echo -e "${GRN}[ok]${RST}  $*"; }
@@ -398,32 +402,9 @@ fi
 step "8/$TOTAL  Systemd service"
 
 if [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
-  UNIT_DIR="$HOME/.config/systemd/user"
-  UNIT_FILE="$UNIT_DIR/$SERVICE_NAME.service"
-  mkdir -p "$UNIT_DIR"
-
-  cat > "$UNIT_FILE" << UNIT
-[Unit]
-Description=Hive Mind sync daemon
-After=network.target
-
-[Service]
-Type=simple
-WorkingDirectory=$HIVE_DIR
-ExecStart=/usr/bin/python3 $HIVE_DIR/sync_daemon.py
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-Environment=HIVE_HOME=$HIVE_DIR
-
-[Install]
-WantedBy=default.target
-UNIT
-
-  systemctl --user daemon-reload
-  systemctl --user enable "$SERVICE_NAME" --quiet
-  ok "systemd unit installed: $UNIT_FILE"
+  # Hardened daemon unit + self-heal timer (see scripts/installer/_units.sh).
+  write_systemd_units "$HIVE_DIR" "$SERVICE_NAME"
+  ok "systemd units installed: hive-sync.service (hardened) + hive-doctor.timer"
 
 elif [[ "$INIT_SYSTEM" == "initd" ]]; then
   INITD_SCRIPT="/etc/init.d/$SERVICE_NAME"

@@ -154,3 +154,19 @@ def test_migration_is_deterministic_across_nodes(tmp_path):
     text = "".join((n1 / "journal" / f).read_text() for f in os.listdir(n1 / "journal"))
     assert "node-a" not in text and "node-b" not in text
     assert "k1:aaaaaaaaaaaaaaaa" in text
+
+
+def test_doctor_subcommands_and_aliases(tmp_path):
+    """`hv merkle` and `hv migrate-device-identity` now live under `hv doctor`; the old
+    top-level forms keep working as silent argv aliases."""
+    home = tmp_path
+    _run(home, "remember", "a fact", node_id="node-a")
+    canon = _run(home, "doctor", "merkle").stdout
+    alias = _run(home, "merkle").stdout
+    assert "Root:" in canon and canon == alias
+    mapping = {"node-a": "k1:aaaaaaaaaaaaaaaa"}
+    mapfile = tmp_path / "m.json"
+    mapfile.write_text(json.dumps(mapping))
+    # canonical and alias both reach the migrate handler (dry-run, nothing written)
+    assert _run(home, "doctor", "migrate-identity", "--map", str(mapfile), "--dry-run").stdout
+    assert _run(home, "migrate-device-identity", "--map", str(mapfile), "--dry-run").stdout

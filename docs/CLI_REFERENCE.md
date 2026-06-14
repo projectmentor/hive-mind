@@ -329,6 +329,9 @@ node agrees on them.
 ```
 hv owner show          # the established owner + admitted devices + config
 hv owner init          # mint the owner key and claim ownership (once)
+hv owner export [--out FILE] [--passphrase]   # back up the owner key (recovery)
+hv owner import FILE [--force]                 # restore it on another device
+hv owner standby <device_id> [--off]          # declare an advisory standby key holder
 ```
 
 You run `hv owner init` once, on whichever machine you want to hold the owner key.
@@ -336,6 +339,21 @@ It mints a **`hive_id`** (a public identifier that keeps your hive separate from
 any other hive on the same tailnet) and writes an owner declaration into the
 journal that the other nodes pick up on sync. Until you do this, the governance
 rules below are simply off (every device counts, nothing is capped) — so it's opt-in.
+
+**The owner key is a single point of failure — back it up.** `hv owner init`
+auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key` (survives uninstall),
+and `hv owner export` writes a portable copy you can store off-device (use
+`--passphrase` to encrypt it; an exported key is total hive authority, so treat it
+like an SSH private key). If the owner device dies, `hv owner import` installs the
+key on a new device and governance resumes under the **same** owner identity — no
+journal change. `import` refuses a key that doesn't match the journal's established
+owner unless you pass `--force`.
+
+`hv owner standby <device_id>` records an advisory note that a device is sanctioned
+to also hold the owner key and act while the primary owner is offline (it must
+actually hold a copy via export/import — the key is the authority; the declaration
+is for visibility in `hv owner show`/`hv whoami`). Planned succession and quorum
+recovery for a permanently-lost owner arrive in later releases.
 
 ---
 

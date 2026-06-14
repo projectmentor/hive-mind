@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.5`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.6`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -190,6 +190,11 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.6` — owner resilience (pt.1). `hv owner export`/`import` back up and restore the owner key
+  (optionally passphrase-encrypted) so a lost owner device can resume the SAME owner identity, and
+  `hv owner standby <device_id>` records an advisory standby that may hold a key copy. Additive,
+  governance-only; adapters are unaffected (they never act as owner). Succession + quorum recovery
+  land in later minors.
 - `1.5` — membership **lifecycle** + a unified settings surface. New owner-only `hv group`
   verb groups the admission lifecycle: `admit / revoke / deny / change / purge / list`
   (revoke is reversible; purge is a final tombstone — its entries stay in the journal but stop

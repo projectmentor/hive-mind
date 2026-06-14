@@ -329,8 +329,10 @@ node agrees on them.
 ```
 hv owner show          # the established owner + admitted devices + config
 hv owner init          # mint the owner key and claim ownership (once)
-hv owner export [--out FILE] [--passphrase]   # back up the owner key (recovery)
-hv owner import FILE [--force]                 # restore it on another device
+hv owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
+hv owner import FILE [--force]                 # restore it from a file on another device
+hv owner escrow                                # store the key (passphrase-encrypted) IN the hive
+hv owner restore                               # recover the key from the hive's escrow
 hv owner standby <device_id> [--off]          # declare an advisory standby key holder
 ```
 
@@ -348,6 +350,15 @@ like an SSH private key). If the owner device dies, `hv owner import` installs t
 key on a new device and governance resumes under the **same** owner identity — no
 journal change. `import` refuses a key that doesn't match the journal's established
 owner unless you pass `--force`.
+
+`hv owner escrow` stores the owner key **inside the hive itself**, passphrase-encrypted,
+so it syncs to every node and any synced device can recover it with `hv owner restore`
+(no file to move). Two cautions, because the journal is shared and append-only: the
+encrypted blob is readable by **every** device that syncs the hive (including read-only
+members) and **can't be un-published**, so the passphrase is effectively your hive master
+key — make it strong (a 12-char minimum is enforced). Escrow and the off-device file cover
+different threats: escrow handles "I lost a device," the file handles "I don't fully trust
+the shared store." Use the one that fits, or both.
 
 `hv owner standby <device_id>` records an advisory note that a device is sanctioned
 to also hold the owner key and act while the primary owner is offline (it must

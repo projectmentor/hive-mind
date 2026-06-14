@@ -13,10 +13,12 @@ sys.path.insert(0, str(PROJECT))
 import subprocess  # noqa: E402
 
 
-def _run(home, *args, node_id=None, check=True):
+def _run(home, *args, node_id=None, passphrase=None, check=True):
     env = dict(os.environ, HIVE_HOME=str(home))
     if node_id:
         env["HIVE_NODE_ID"] = node_id
+    if passphrase is not None:
+        env["HIVE_OWNER_PASSPHRASE"] = passphrase     # non-interactive passphrase for tests
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
                        capture_output=True, text=True)
     if check:
@@ -89,6 +91,41 @@ def test_standby_declaration_visible(tmp_path):
     _run(home, "owner", "standby", "k1:standbydev", "--off")
     _, gov = _gov(home)
     assert "k1:standbydev" not in gov["standbys"]
+
+
+def test_hive_escrow_restore_round_trip(tmp_path):
+    home = tmp_path
+    _run(home, "owner", "init")
+    oid = _owner_id(home)
+    _run(home, "owner", "escrow", passphrase="correct-horse-battery")   # encrypted blob into the journal
+    _, gov = _gov(home)                                                  # it's an owner-signed governance entry
+    import merkle
+    entries = merkle.read_all_entries(str(home / "journal"))
+    assert any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
+    (home / ".owner-key").unlink()                                      # lose the device's key
+    assert "does NOT hold the owner key" in _run(home, "owner", "show").stdout
+    out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
+    assert "recovered from the hive" in out
+    show = _run(home, "owner", "show").stdout
+    assert "holds the owner key" in show and oid in show                # same owner resumes
+
+
+def test_hive_escrow_refuses_short_passphrase(tmp_path):
+    home = tmp_path
+    _run(home, "owner", "init")
+    out = _run(home, "owner", "escrow", passphrase="short").stdout
+    assert "too short" in out
+    import merkle
+    entries = merkle.read_all_entries(str(home / "journal"))
+    assert not any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
+
+
+def test_hive_restore_wrong_passphrase_fails(tmp_path):
+    home = tmp_path
+    _run(home, "owner", "init")
+    _run(home, "owner", "escrow", passphrase="correct-horse-battery")
+    out = _run(home, "owner", "restore", passphrase="wrong-passphrase-xx").stdout
+    assert "Could not decrypt" in out
 
 
 def test_backcompat_no_resilience_entries_equals_today(tmp_path):

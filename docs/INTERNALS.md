@@ -137,8 +137,23 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
    later acts drop, and a live owner can never be unseated (only their own signed
    nominate/transfer, or a nominee's claim, moves ownership). Racing claims against one
    nomination resolve deterministically: the first in sort order wins and closes it.
-3. **Back-compat.** A hive with no succession entries resolves to exactly the term-0
-   owner — identical to the pre-succession projection.
+3. **Quorum election (dead-man switch).** Interleaved in the same pass are two
+   *device-signed* acts (authority is hive membership, not the owner key):
+   `propose-election` carries a content-addressed `proposal_id` (= hash of the proposed
+   `new_owner_pub` + the proposer's `basis_ts`) and `vote-election` references it. Only
+   acts from currently-**admitted** devices count; a vote that sorts before its proposal
+   is buffered and applied when the proposal appears (clock-skew safe). The instant a
+   proposal reaches `quorum_m` distinct voter-units (`quorum_by` = device or principal)
+   **and** the current owner's last activity is older than `dead_man_days` (measured
+   against the proposal's `basis_ts`), the proposal installs its key as the new owner at
+   that log position — exactly like a `transfer`, so the elected owner's later acts are
+   honored from there. The earliest such crossing wins; once it installs, the new owner's
+   activity is fresh, so a racing election can no longer arm. **A live owner is never
+   unseated:** any owner-signed act — including an explicit `heartbeat` — refreshes
+   last-activity and re-shuts the window.
+4. **Back-compat.** A hive with no succession/election entries (and the default
+   `quorum_m=0`) resolves to exactly the term-0 owner — identical to the pre-succession
+   projection.
 
 **Escrow tombstones.** `owner-escrow` entries (the in-hive passphrase-encrypted key)
 are collected during the same walk; an owner-signed `revoke-escrow` (a specific

@@ -110,6 +110,16 @@ def test_hive_escrow_restore_round_trip(tmp_path):
     assert "holds the owner key" in show and oid in show                # same owner resumes
 
 
+def test_hive_escrow_cancels_on_empty_passphrase(tmp_path):
+    home = tmp_path
+    _run(home, "owner", "init")
+    out = _run(home, "owner", "escrow", passphrase="").stdout   # empty = bail out
+    assert "Cancelled" in out and "NOT escrowed" in out
+    import merkle
+    entries = merkle.read_all_entries(str(home / "journal"))
+    assert not any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
+
+
 def test_hive_escrow_refuses_short_passphrase(tmp_path):
     home = tmp_path
     _run(home, "owner", "init")

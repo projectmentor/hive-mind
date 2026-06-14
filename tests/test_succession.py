@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT))
 import subprocess  # noqa: E402
 
 
-def _run(home, *args, node_id=None, passphrase=None, check=True):
+def _run(home, *args, node_id=None, passphrase=None, now=None, check=True):
     # HIVE_IDENTITY_STASH is pinned UNDER the temp home so `owner init/import/restore/claim` never
     # touch the real ~/.config/hive-mind/identity/.owner-key backup on the developer's machine.
     env = dict(os.environ, HIVE_HOME=str(home), HIVE_IDENTITY_STASH=str(Path(home) / "stash"))
@@ -21,6 +21,8 @@ def _run(home, *args, node_id=None, passphrase=None, check=True):
         env["HIVE_NODE_ID"] = node_id
     if passphrase is not None:
         env["HIVE_OWNER_PASSPHRASE"] = passphrase     # non-interactive passphrase for tests
+    if now is not None:
+        env["HIVE_NOW"] = now                         # dates governance entries (dead-man test clock)
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
                        capture_output=True, text=True)
     if check:
@@ -302,3 +304,157 @@ def test_phase2_backcompat_plain_hive_unchanged(tmp_path):
     _, gov = _gov(home)
     assert gov["owner_term"] == 0 and gov["nominations"] == set() and gov["escrows"] == []
     assert "k1:aaa" in gov["admitted"]
+
+
+# ── Phase 3: quorum election + dead-man switch ────────────────────────────────────────────────────
+# Elections are DEVICE-signed (authority = hive membership, not the owner key), so these tests mint a
+# REAL device key per home (`hv key init`) instead of overriding HIVE_NODE_ID — an unsigned election
+# entry is dropped by `_governance_state`. The dead-man clock is driven by $HIVE_NOW (the `now=` arg):
+# governance entries are dated by it, and a proposal carries that instant as its `basis_ts`.
+
+import re  # noqa: E402
+
+
+def _device_id(home):
+    for line in _run(home, "whoami").stdout.splitlines():
+        if line.startswith("device:"):
+            return line.split()[1]
+    raise AssertionError("no device id in whoami")
+
+
+def _merge_into(dst, *srcs):
+    """G-Set merge every src journal into dst (order-independent), rebuilding after each."""
+    for s in srcs:
+        _sync(s, dst)
+
+
+def _election_pids(home):
+    return re.findall(r"e1:[0-9a-f]+", _run(home, "owner", "elections").stdout)
+
+
+def _setup_quorum_hive(tmp_path, quorum_m=2, dead_man_days=30, admit_day="2026-07-01"):
+    """Owner A + two admitted members B, C, each with a real device key. The owner's last activity is
+    `admit_day` (the admits/config), so an election basis_ts more than dead_man_days later is 'dark'."""
+    a, b, c = tmp_path / "A", tmp_path / "B", tmp_path / "C"
+    for h in (a, b, c):
+        _run(h, "key", "init")
+    db, dc = _device_id(b), _device_id(c)
+    now = f"{admit_day}T00:00:00.000+00:00"
+    _run(a, "owner", "init", now=now)
+    _run(a, "group", "admit", db, "--principal", "bob", now=now)
+    _run(a, "group", "admit", dc, "--principal", "carol", now=now)
+    _run(a, "config", "quorum", "set", "quorum_m", str(quorum_m), now=now)
+    _run(a, "config", "quorum", "set", "dead_man_days", str(dead_man_days), now=now)
+    return a, b, c
+
+
+def test_quorum_elects_owner_after_dead_man_inactivity(tmp_path):
+    a, b, c = _setup_quorum_hive(tmp_path)
+    _, gov0 = _gov(a)
+    owner0 = gov0["owner_id"]
+    _merge_into(b, a)                                        # B learns genesis + admits + config
+    basis = "2026-08-15T00:00:00.000+00:00"                  # ~45 days of owner silence (> 30)
+    _run(b, "owner", "propose-election", "--mint", now=basis)
+    pid = _election_pids(b)[0]
+    _merge_into(c, a, b)
+    _run(c, "owner", "vote", pid, now=basis)                 # 2nd endorser → quorum
+    _merge_into(a, b, c)
+    _, gov = _gov(a)
+    assert gov["owner_id"] != owner0                         # the election installed a new owner
+    assert gov["owner_term"] == 1
+    _, gov2 = _gov(a)                                        # deterministic on replay
+    assert gov2["owner_id"] == gov["owner_id"] and gov2["owner_term"] == 1
+
+
+def test_live_owner_heartbeating_is_not_unseated(tmp_path):
+    a, b, c = _setup_quorum_hive(tmp_path)
+    _, gov0 = _gov(a)
+    owner0 = gov0["owner_id"]
+    _run(a, "owner", "heartbeat", now="2026-08-10T00:00:00.000+00:00")   # 5 days before the basis
+    _merge_into(b, a)
+    basis = "2026-08-15T00:00:00.000+00:00"
+    _run(b, "owner", "propose-election", "--mint", now=basis)
+    pid = _election_pids(b)[0]
+    _merge_into(c, a, b)
+    _run(c, "owner", "vote", pid, now=basis)
+    _merge_into(a, b, c)
+    _, gov = _gov(a)
+    assert gov["owner_id"] == owner0 and gov["owner_term"] == 0          # quorum met, but owner alive
+    assert any(e["votes"] >= 2 and not e["armed"] and not e["installed"] for e in gov["elections"])
+
+
+def test_below_quorum_and_non_admitted_do_not_elect(tmp_path):
+    a, b, c = _setup_quorum_hive(tmp_path, quorum_m=2)
+    _, gov0 = _gov(a)
+    owner0 = gov0["owner_id"]
+    d = tmp_path / "D"
+    _run(d, "key", "init")                                   # D is never admitted
+    _merge_into(b, a)
+    basis = "2026-08-15T00:00:00.000+00:00"
+    _run(b, "owner", "propose-election", "--mint", now=basis)
+    pid = _election_pids(b)[0]
+    _merge_into(a, b)                                        # only the proposer endorses (1/2)
+    _, gov1 = _gov(a)
+    assert gov1["owner_id"] == owner0 and not any(e["installed"] for e in gov1["elections"])
+    _merge_into(d, a, b)
+    out = _run(d, "owner", "vote", pid, now=basis, check=False).stdout
+    assert "admitted" in out.lower()                         # a non-admitted device cannot vote
+
+
+def test_racing_elections_resolve_to_one_deterministic_winner(tmp_path):
+    a, b, c = _setup_quorum_hive(tmp_path, quorum_m=2)
+    _merge_into(b, a)
+    _merge_into(c, a)
+    _run(b, "owner", "propose-election", "--mint", now="2026-08-15T00:00:00.000+00:00")
+    _run(c, "owner", "propose-election", "--mint", now="2026-08-15T00:00:01.000+00:00")
+    _merge_into(b, c)
+    _merge_into(c, b)
+    pids = sorted(set(_election_pids(b)))
+    assert len(pids) == 2                                    # two racing proposals exist
+    for pid in pids:                                         # drive BOTH to quorum (2 endorsers each)
+        _run(b, "owner", "vote", pid, now="2026-08-16T00:00:00.000+00:00")
+        _run(c, "owner", "vote", pid, now="2026-08-16T00:00:02.000+00:00")
+    _merge_into(a, b, c)
+    _, g1 = _gov(a)
+    _, g2 = _gov(a)
+    installed = [e for e in g1["elections"] if e["installed"]]
+    assert len(installed) == 1 and g1["owner_term"] == 1     # exactly one election installs
+    assert g1["owner_id"] == g2["owner_id"]                  # same winner on every replay
+
+
+def test_elected_owner_governs_after_election(tmp_path):
+    a, b, c = _setup_quorum_hive(tmp_path, quorum_m=2)
+    _merge_into(b, a)
+    basis = "2026-08-15T00:00:00.000+00:00"
+    _run(b, "owner", "propose-election", "--mint", now=basis)   # B mints the new owner key (held on B)
+    pid = _election_pids(b)[0]
+    _merge_into(c, a, b)
+    _run(c, "owner", "vote", pid, now=basis)
+    _merge_into(b, c)                                           # B learns it won; B holds the owner key
+    _, govb = _gov(b)
+    newid = govb["owner_id"]
+    assert newid != _owner_id(a) and govb["owner_term"] == 1
+    # The elected owner can sign governance from here: its admit is honored (chain advanced to B).
+    _run(b, "group", "admit", "k1:newdev", "--principal", "dave",
+         now="2026-08-20T00:00:00.000+00:00")
+    _, govb2 = _gov(b)
+    assert govb2["owner_id"] == newid and "k1:newdev" in govb2["admitted"]
+
+
+def test_quorum_off_is_backcompat(tmp_path):
+    a, b = tmp_path / "A", tmp_path / "B"
+    _run(a, "key", "init")
+    _run(b, "key", "init")
+    db = _device_id(b)
+    _run(a, "owner", "init")
+    _run(a, "group", "admit", db, "--principal", "bob")
+    _, gov0 = _gov(a)
+    owner0 = gov0["owner_id"]
+    assert gov0["config"]["quorum_m"] == 0 and gov0["elections"] == []   # defaults: elections OFF
+    _merge_into(b, a)
+    out = _run(b, "owner", "propose-election", "--mint",
+               now="2027-01-01T00:00:00.000+00:00", check=False).stdout
+    assert "OFF" in out or "quorum_m=0" in out                # proposing is refused while OFF
+    _merge_into(a, b)
+    _, gov = _gov(a)
+    assert gov["owner_id"] == owner0 and gov["owner_term"] == 0 and gov["elections"] == []

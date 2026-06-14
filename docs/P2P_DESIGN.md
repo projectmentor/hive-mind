@@ -173,6 +173,17 @@ computes the identical current owner regardless of sync arrival order. Two claim
 for one nomination resolve to the first in sort order (the same one on every node); a
 handed-off owner's later acts are ignored, and a live owner cannot be unseated.
 
+**Quorum-election convergence.** When the owner is lost with no backup/nominee, admitted
+devices elect a successor with *device-signed* `propose-election` + `vote-election` acts,
+tallied in the same total-order replay. The election installs only when `quorum_m` distinct
+admitted voter-units endorse one (content-addressed) proposal **and** the owner's last
+activity is older than `dead_man_days` measured against the proposal's signed `basis_ts` —
+a deterministic, journal-only test, so every node installs the same owner at the same log
+position (earliest quorum-crossing wins; later racing elections see a fresh owner and can't
+arm). The dead-man switch is what reconciles "elect when the owner is gone" with "never
+unseat a live owner": any owner-signed act, including `heartbeat`, refreshes last-activity.
+`quorum_m=0` (default) disables elections, leaving the projection identical to succession-only.
+
 **TIE-BREAKER when timestamps identical:**  
 `winner = max(node_id) lexicographically`  
 (Deterministic across all nodes = guaranteed convergence)

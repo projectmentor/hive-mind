@@ -128,8 +128,11 @@ Most of the time your agents call `hv` for you. Full reference:
   computes the same confidence. The owner runs the membership lifecycle with `hv group`
   (admit, revoke, deny, change, purge, list). The owner key is recoverable, not a dead end:
   back it up off-device or escrow it in the hive (`hv owner export`/`escrow`), and hand it off
-  to a new key by nomination or transfer (`hv owner nominate`/`claim`/`transfer`). See `hv owner`
-  and `docs/INTERNALS.md`.
+  to a new key by nomination or transfer (`hv owner nominate`/`claim`/`transfer`). If it is lost
+  outright with no backup, admitted devices can elect a successor by quorum once the owner goes
+  dark (`hv config quorum set`, then `hv owner propose-election`/`vote`); a live owner is never
+  unseated, since any owner act (including `hv owner heartbeat`) resets the dead-man timer. See
+  `hv owner` and `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/INTERNALS.md`](docs/INTERNALS.md).

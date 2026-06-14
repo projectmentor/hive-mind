@@ -14,7 +14,7 @@ memory.
 
 | Command | What it does |
 |---|---|
-| `hv config` | Device identity (`identity`) + owner-signed confidence params (`confidence`) |
+| `hv config` | Device identity (`identity`) + owner-signed confidence (`confidence`) / quorum (`quorum`) params |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
 | `hv doctor` | Check that your device is healthy; `--fix` self-heals; subcommands `rebuild` + `merkle` + `migrate-identity` |
@@ -44,7 +44,7 @@ cd ~/projects/hive-mind
 
 ---
 
-### `hv config` — Device identity + confidence parameters
+### `hv config` — Device identity + confidence/quorum parameters
 
 `hv config identity` manages **this device's** Ed25519 key (the same as the legacy
 `hv key`, kept as an alias):
@@ -60,6 +60,15 @@ device, which is what keeps confidence converging):
 ```
 hv config confidence set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
 hv config confidence set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
+```
+
+`hv config quorum set` tunes the owner-signed quorum-election knobs (the dead-owner recovery
+path; see `hv owner`). All default to elections **off**:
+
+```
+hv config quorum set quorum_m 2          # admitted devices that must agree to elect (0 = OFF, default)
+hv config quorum set quorum_by device    # count quorum by `device` or by `principal` (default device)
+hv config quorum set dead_man_days 30    # owner silence required before an election can install (default 30)
 ```
 
 > `hv config set <key> <value>` is kept as a silent alias for `hv config confidence set …`.
@@ -346,17 +355,21 @@ node agrees on them.
 
 ```
 hv owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
+hv owner elections                             # list open owner-election proposals and their tallies
 hv owner escrow                                # store the key (passphrase-encrypted) IN the hive
 hv owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
+hv owner heartbeat                             # refresh owner liveness (resets the dead-man timer)
 hv owner import FILE [--force]                 # restore it from a file on another device
 hv owner init                                 # mint the owner key and claim ownership (once)
 hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
+hv owner propose-election [--mint | --pub B64] # (admitted device) propose electing a new owner
 hv owner restore                               # recover the key from the hive's escrow
 hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
 hv owner show                                 # the established owner + admitted devices + config
 hv owner standby <device_id> [--off]          # declare an advisory standby key holder
 hv owner transfer <new_owner_pub>            # immediate handoff to a key the target already holds
 hv owner unnominate <successor_pub>           # withdraw a pending nomination
+hv owner vote <proposal_id>                    # (admitted device) vote for an open election proposal
 ```
 
 You run `hv owner init` once, on whichever machine you want to hold the owner key.
@@ -405,8 +418,23 @@ an open nomination, advances ownership.
 or `all`). The ciphertext stays in the append-only journal forever — a tombstone is not
 deletion — so if an escrow *passphrase* leaked, the real fix is to **rotate the owner key**
 via succession/transfer, which makes the old escrow blob unlock a key that is no longer
-the owner. Quorum recovery for a permanently-lost owner with no backup arrives in a later
-release.
+the owner.
+
+**When the owner is gone with no backup — quorum election.** Backup/restore and succession
+both need someone to act *before* the owner is lost. If the owner device dies with no escrow,
+no exported file, and no nominated successor, the admitted devices can still elect a new owner —
+but only by agreement, and only once the old owner has genuinely gone dark. The owner first
+turns this on (it is off by default): `hv config quorum set quorum_m <N>` sets how many admitted
+devices must agree, and `hv config quorum set dead_man_days <D>` sets how long the owner must be
+silent first (default 30). Then, if the owner goes dark, any admitted device runs
+`hv owner propose-election --mint` (mint a fresh owner key here) or `--pub <base64>` (propose a
+key held elsewhere); the others run `hv owner vote <proposal_id>`. Once `quorum_m` devices have
+endorsed one proposal **and** no owner-signed act has appeared for `dead_man_days`, that proposal
+installs its key as the new owner on every node. `hv owner elections` lists open proposals and
+their tallies. The dead-man switch is what keeps this safe: **a live owner can never be unseated**,
+because any owner-signed act — including an explicit `hv owner heartbeat` — refreshes the owner's
+last-activity and re-shuts the window. Votes and proposals are device-signed by admitted members,
+so an outsider cannot stuff the ballot. `quorum_m=0` (the default) disables elections entirely.
 
 ---
 

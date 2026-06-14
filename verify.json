@@ -1,5 +1,5 @@
 {
-  "digest": "6a2b7c4d4390c3f154d503a4bf8979af9dcddc8c10a26a6780a342454e2eaa85",
+  "digest": "c75005e1fd1a03525a9e9a8e9974e789f6c8e15159f741ed213b0f19f495ea82",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -13,15 +13,15 @@
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
     "README.md": "77f86c267d9e1c03a72745fee9ea4ea3825a3cfb6910131c9a8403c742d8f698",
-    "docs/AGENT_INTEGRATION.md": "093117620dce9b3806cd3b337b4a61b2ac538d47f38559f864d0f6c92e8f6cf2",
-    "docs/CLI_REFERENCE.md": "075969ae6a9f9c716a9afa1d48da4995715452dfb679b60bc58811374c9e15e8",
-    "docs/INTERNALS.md": "4f7d78f27426519b961d7dfca2b819fb0be143a145a2dd704b1c7c4120155bba",
-    "docs/P2P_DESIGN.md": "57789cb220b61b54c845d3b1f6791980e69d431f0c6353f10bcd6d616dcfa573",
+    "docs/AGENT_INTEGRATION.md": "669ea45e954640fc4ff5a968d5ed078bd094ad83f3bacab68010f2b25392bcc8",
+    "docs/CLI_REFERENCE.md": "7598e41d7d79804a40604649d7c7624761e9e13f99eae3cb43940fab0a6edc70",
+    "docs/INTERNALS.md": "fe26ed12d0e00608f49a76f43dd93ee741f1ddb81d98135d08a48247b2cd494f",
+    "docs/P2P_DESIGN.md": "425d20e57c07f9237275c98a1a516efe9540f48e989d87fb8e4db8235bf59f38",
     "docs/SYNC_API.md": "a8fdaf54d3a7472c16fd713323dd456cbbe2b7544028564671a3f812c1656d47",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",
-    "hv": "889c4b39076455dc50010fe75ceb12923ebb7fcb0ada6031c7329f5c3257c019",
+    "hv": "7c4d65c0b6ab5e8f54efa7fa413b5b9a8fa57e2dc8e7f787ecce8ef823093be6",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "4c2503bbc1ca40833842a046f8963dc71db022d1f1d131da44b09ec7189d1fae",
@@ -56,7 +56,7 @@
     "tests/test_admit_peering.py": "61094cc2aa48b60b4522b96efc17771c47146d0f6eb3a59a71f0cd6df65fbf7a",
     "tests/test_device_identity.py": "f97ee5b4fc49716dfbe84e0cd84a2014e39c935d9a4876f5bd3b5c2689b9dcb9",
     "tests/test_doc_sync.py": "4dea8e2c81da32e200cfdc7b9324397827880019a8a472b41fe949d21ad388b3",
-    "tests/test_governance.py": "b4cc6c7128281a565a6b19aaf9c40d4ae158a48947e4503775ba0a37eec89f64",
+    "tests/test_governance.py": "012703d6f82270acd222831bd2f0d02352004ea5b7466edc6349e00553726cc7",
     "tests/test_group.py": "2cd725336a6328a738ee631267ec1f4cd9a2cdc72512deb9787d9419fff3d93a",
     "tests/test_hermes_plugin.py": "9e824430a960653884ef06dcb6231a84565461086f63882d071d9608445c1d8e",
     "tests/test_hv.py": "23158ed860173215703642f49a35e4ecedc451c1e9a6cd903656979125e44514",
@@ -64,11 +64,11 @@
     "tests/test_membership_ingest.py": "f345f7ad42673296c759bc0cd2c5669fb6031b0558b57f6241729da155fbb1d9",
     "tests/test_nudge.py": "43a5f25cae60c15642d4c13a3b0478644cc3b08dbad8d5f9b2976c2675df6a40",
     "tests/test_onboarding.py": "7a26f267931f899b5dd21ed137891b164deb0b70e671e362817ba8299f7c982f",
-    "tests/test_succession.py": "26be153d3124567c4cc03787d6a39c20cfad7bff98584c8f112bd48cfc9d19fc",
+    "tests/test_succession.py": "da9aa758c0a8dde3c4468d915a0509fdeaa112150aa06df6d10c19c750e889a8",
     "tests/test_sync.py": "0faa0e72b82a71e3c2f04a550fa6fc12e5b33cdeef9b49d1f5b7da8dbbe40ef9",
     "tests/test_telemetry.py": "685a12ab3470d7a68ed0ca858bfa8dfe40dc53bd6eaf423e17417ac3f17ac427",
     "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04",
     "tests/test_whoami.py": "1d858fbdc8fd9efd2157f416c1c4d23ecc5ca2bb2d2a9eaafb7bde05dcfb7b22"
   },
-  "version": "1.6"
+  "version": "1.7"
 }

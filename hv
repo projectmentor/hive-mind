@@ -159,14 +159,22 @@ def _owner_unseal(env, passphrase):
 
 
 def _read_passphrase(prompt, confirm=False):
-    """Read a passphrase from $HIVE_OWNER_PASSPHRASE if set (automation/tests), else prompt on the
-    tty. Returns the passphrase, or None if a confirmation prompt didn't match."""
+    """Read a passphrase from $HIVE_OWNER_PASSPHRASE if set (automation/tests; empty = cancel), else
+    prompt on the tty. Returns the passphrase, or None to CANCEL — a blank line, Ctrl-C, Ctrl-D, or a
+    confirmation mismatch all bail out (so the user can change their mind at the prompt)."""
     env = os.environ.get("HIVE_OWNER_PASSPHRASE")
     if env is not None:
-        return env
+        return env or None           # set => use it; empty => cancel
     import getpass
-    pw = getpass.getpass(prompt)
-    if confirm and pw != getpass.getpass("Confirm passphrase: "):
+    try:
+        pw = getpass.getpass(prompt)
+        if not pw:                   # blank line = bail out
+            return None
+        if confirm and pw != getpass.getpass("Confirm passphrase: "):
+            print("Passphrases do not match.")
+            return None
+    except (EOFError, KeyboardInterrupt):
+        print()
         return None
     return pw
 
@@ -2630,9 +2638,10 @@ def owner_cmd(args):
         out = Path(getattr(args, "out", None) or f"hive-owner-{oid}.key")
         env = {"hive_id": gov.get("hive_id", ""), "owner_id": oid}
         if getattr(args, "passphrase", False):
-            pw = _read_passphrase("Passphrase to encrypt the owner key: ", confirm=True)
-            if not pw:
-                print("Passphrases do not match.")
+            pw = _read_passphrase("Passphrase to encrypt the owner key (blank line / Ctrl-C to cancel): ",
+                                  confirm=True)
+            if pw is None:
+                print("Cancelled — nothing exported.")
                 return
             env.update(_owner_seal(seed, pw))
         else:
@@ -2657,8 +2666,12 @@ def owner_cmd(args):
         if env.get("enc", "none") == "none":
             seed = base64.b64decode(env.get("seed", ""))
         else:
+            pp = _read_passphrase("Passphrase (blank line / Ctrl-C to cancel): ")
+            if pp is None:
+                print("Cancelled.")
+                return
             try:
-                seed = _owner_unseal(env, _read_passphrase("Passphrase: "))
+                seed = _owner_unseal(env, pp)
             except Exception as e:
                 print(f"Could not decrypt: {e}")
                 return
@@ -2700,9 +2713,10 @@ def owner_cmd(args):
         print("    hive master key: anyone with hive read access can attempt to crack it offline,")
         print("    forever. Use a STRONG passphrase. (Your off-device `hv owner export` file covers")
         print("    the other case — not trusting the shared store.)")
-        pw = _read_passphrase("Strong passphrase to encrypt the owner key: ", confirm=True)
+        pw = _read_passphrase("Strong passphrase to encrypt the owner key (blank line / Ctrl-C to cancel): ",
+                              confirm=True)
         if pw is None:
-            print("Passphrases do not match.")
+            print("Cancelled — the owner key was NOT escrowed.")
             return
         if len(pw) < 12:
             print("Refusing: passphrase too short (need ≥ 12 chars) — it guards a key readable by every node.")
@@ -2725,8 +2739,12 @@ def owner_cmd(args):
             return
         escrows.sort(key=lambda x: (x[0], x[1], x[2]))
         env = escrows[-1][3]["envelope"]    # latest escrow wins
+        pp = _read_passphrase("Passphrase (blank line / Ctrl-C to cancel): ")
+        if pp is None:
+            print("Cancelled.")
+            return
         try:
-            seed = _owner_unseal(env, _read_passphrase("Passphrase: "))
+            seed = _owner_unseal(env, pp)
         except Exception as e:
             print(f"Could not decrypt: {e}")
             return

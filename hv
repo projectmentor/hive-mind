@@ -121,6 +121,17 @@ def _owner_id_for_pub(pub):
     return "o1:" + hashlib.sha256(pub).hexdigest()[:16]
 
 
+def _canon_pub(b64):
+    """Canonical base64 of a 32-byte ed25519 public key, or None if it isn't one. Used so a
+    nomination's `successor_owner_pub` and a claim's embedded `owner_pub` compare as strings
+    regardless of base64 whitespace/padding differences."""
+    try:
+        raw = base64.b64decode(b64)
+        return base64.b64encode(raw).decode() if len(raw) == 32 else None
+    except Exception:
+        return None
+
+
 def _kdf_keystream(key, nbytes):
     """SHA-256 CTR keystream: block_i = sha256(key || be64(counter)). Stdlib-only stream cipher."""
     out = bytearray()
@@ -204,7 +215,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.6"   # 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.7"   # 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -685,6 +696,7 @@ def _governance_state(entries):
     identical everywhere. No owner declared yet → empty admitted set + default config (gate off)."""
     gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
            "denied": set(), "purged": set(), "standbys": set(),
+           "nominations": set(), "escrows": [], "owner_term": 0,
            "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
     govs = []
     for e in entries:
@@ -706,12 +718,65 @@ def _governance_state(entries):
     if gov["owner_id"] is None:
         return gov
 
-    # 2) Apply admits + config, but only from the established owner.
+    # 2) Single deterministic walk: the OWNER SUCCESSION CHAIN (Stage B) interleaved with the
+    #    membership/config/escrow acts. `current` is the owner AT THIS POINT in the log — succession
+    #    advances it, and every other act is honored only when signed by the current owner. So a
+    #    handed-off owner's later acts drop, and a live owner is never unseated (only their own
+    #    signed nominate/transfer, or a nominee's claim against an OPEN nomination, advances it).
+    current = gov["owner_id"]
+    owner_pubs = {current: gov["owner_pub"]}
+    nominations = set()                       # open successor pubs (canonical b64)
+    escrows = []                              # [{ref:(nid,seq), ts, nid, seq, env, revoked}]
     for _ts, _nid, _seq, p, signer in govs:
-        if signer != gov["owner_id"]:
-            continue
         action = p.get("action")
-        if action == "admit" and p.get("device_id"):
+
+        # --- Stage B: advance the owner chain (evaluated BEFORE the current-owner gate) ---
+        if action == "nominate-successor":
+            cp = _canon_pub(p.get("successor_owner_pub", "")) if signer == current else None
+            if cp:
+                nominations.add(cp)
+            continue
+        if action == "revoke-nomination":
+            if signer == current:
+                cp = _canon_pub(p.get("successor_owner_pub", ""))
+                nominations.discard(cp)
+            continue
+        if action == "claim-succession":
+            # Self-signed by the successor's NEW owner key (like genesis): the embedded owner_pub is
+            # what signed it. Valid only against an open matching nomination.
+            cp = _canon_pub(p.get("owner_pub", ""))
+            if signer == p.get("owner_id") and cp and cp in nominations:
+                current = p["owner_id"]
+                owner_pubs[current] = p.get("owner_pub")
+                nominations.clear()           # nominations close on succession
+                gov["owner_term"] += 1
+            continue
+        if action == "transfer":
+            if signer == current and p.get("new_owner_pub"):
+                try:
+                    new_oid = _owner_id_for_pub(base64.b64decode(p["new_owner_pub"]))
+                except Exception:
+                    continue
+                current = new_oid
+                owner_pubs[new_oid] = p["new_owner_pub"]
+                nominations.clear()
+                gov["owner_term"] += 1
+            continue
+
+        # Everything below is authorized only by the owner CURRENT at this log position.
+        if signer != current:
+            continue
+        if action == "owner-escrow" and p.get("envelope"):
+            escrows.append({"ref": (str(_nid), _seq), "ts": _ts, "nid": str(_nid), "seq": _seq,
+                            "env": p["envelope"], "revoked": False})
+        elif action == "revoke-escrow":
+            target = p.get("escrow_ref")
+            for esc in escrows:                # tombstone matching escrows seen SO FAR (positional)
+                if (target == "all"
+                        or (isinstance(target, (list, tuple)) and tuple(target) == esc["ref"])
+                        or target == f"{esc['nid']}:{esc['seq']}"):
+                    esc["revoked"] = True
+        elif action == "admit" and p.get("device_id"):
             # A later admit re-admits a revoked device and clears a prior deny. Purge is a final
             # tombstone — admit does NOT clear it (a purged device cannot be resurrected here).
             gov["admitted"].add(p["device_id"])
@@ -741,6 +806,13 @@ def _governance_state(entries):
                 gov["config"][p["key"]] = float(p.get("value"))
             except (TypeError, ValueError):
                 pass
+
+    # The owner the chain resolved to (term-0 owner if no succession happened). owner_ts/hive_id stay
+    # the term-0 values — they mark when governance BEGAN (used to grandfather pre-owner forgets).
+    gov["owner_id"], gov["owner_pub"] = current, owner_pubs.get(current)
+    gov["nominations"] = nominations
+    gov["escrows"] = sorted(((e["ts"], e["nid"], e["seq"], e["env"]) for e in escrows
+                             if not e["revoked"]), key=lambda x: (x[0], x[1], x[2]))
     return gov
 
 
@@ -840,7 +912,7 @@ def _content_evidence(entries, gov=None):
 
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
-                "standbys": set(), "principals": {},
+                "standbys": set(), "nominations": set(), "escrows": [], "owner_term": 0, "principals": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF}}
 
 
@@ -1683,6 +1755,9 @@ def whoami_cmd(args):
     print(f"status:    {desc}")
     if principal:
         print(f"principal: {principal}")
+    if status == "owner" and gov["nominations"]:
+        sids = sorted(_owner_id_for_pub(base64.b64decode(c)) for c in gov["nominations"])
+        print(f"           open succession nomination(s): {', '.join(sids)} (successor runs `hv owner claim`)")
     if status == "sterile":
         pending = any(r["device_id"] == NODE_ID for r in _pending_admissions(entries, gov))
         print("           " + (f"join request pending — owner runs `hv admit {NODE_ID}`" if pending
@@ -2465,6 +2540,42 @@ def _doctor_status():
         checks.append({"name": "database", "status": "fail",
                        "detail": f"store.db unreadable ({e}) — run `hv rebuild`"})
 
+    # 3b. Owner — can governance still be signed, and is owner-key custody sane? Read-only, offline.
+    #     ok    = this device holds the CURRENT owner key (governance is signable here).
+    #     warn  = key absent (a declared standby may act / nobody can sign), key sprawl (>1 holder),
+    #             or an open succession nomination awaiting a claim. Advisory — never 'fail'.
+    try:
+        gov = _governance_state(entries)
+        if not gov["owner_id"]:
+            checks.append({"name": "owner", "status": "ok", "detail": "no owner established yet (`hv owner init`)"})
+        else:
+            held = (_ed25519 is not None and _owner_seed() is not None
+                    and _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())) == gov["owner_id"])
+            notes = []
+            if gov["owner_term"]:
+                notes.append(f"{gov['owner_term']} handoff(s) from genesis")
+            if gov["nominations"]:
+                notes.append(f"{len(gov['nominations'])} open nomination(s) awaiting claim")
+            # Key sprawl: declared standbys each hold a copy, plus the owner device. >1 is advisory.
+            holders = len(gov["standbys"]) + 1
+            sprawl = holders > 1
+            if held:
+                status = "warn" if (gov["nominations"] or sprawl) else "ok"
+                detail = "this device holds the current owner key"
+                if sprawl:
+                    notes.append(f"{holders} owner-key holders (owner + {len(gov['standbys'])} standby) — key sprawl")
+            else:
+                status = "warn"
+                if gov["standbys"]:
+                    detail = f"owner key absent here — declared standby(s) may act: {', '.join(sorted(gov['standbys']))}"
+                else:
+                    detail = "owner key absent here and no standby declared — governance unsignable until restored"
+            if notes:
+                detail += " (" + "; ".join(notes) + ")"
+            checks.append({"name": "owner", "status": status, "detail": detail})
+    except Exception as e:
+        checks.append({"name": "owner", "status": "warn", "detail": f"owner check error: {e}"})
+
     # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
     try:
         a = _compute_audit(depth="light")
@@ -2623,6 +2734,13 @@ def owner_cmd(args):
               f"cap_self={gov['config']['cap_self']}")
         if gov["standbys"]:
             print(f"  standbys ({len(gov['standbys'])}): {', '.join(sorted(gov['standbys']))}")
+        if gov["owner_term"]:
+            print(f"  handoffs: {gov['owner_term']} (ownership succeeded from the genesis owner)")
+        if gov["nominations"]:
+            sids = sorted(_owner_id_for_pub(base64.b64decode(c)) for c in gov["nominations"])
+            print(f"  open nominations ({len(sids)}): {', '.join(sids)}")
+        if gov["escrows"]:
+            print(f"  live escrows: {len(gov['escrows'])} (recover with `hv owner restore`)")
         if not held:
             extra = (" Declared standbys that hold a key copy may act: "
                      + ", ".join(sorted(gov["standbys"]))) if gov["standbys"] else ""
@@ -2727,18 +2845,13 @@ def owner_cmd(args):
             print("  Recover on any synced device with:  hv owner restore")
         return
     if action == "restore":
-        escrows = []
-        for e in entries:
-            if e.get("type") == "governance":
-                p = e.get("payload", {})
-                if p.get("action") == "owner-escrow" and p.get("envelope") and _verify_governance(p):
-                    escrows.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p))
-        if not escrows:
-            print("No owner-escrow found in the hive. Sync the hive first (`hv sync now`), or recover "
-                  "from a file with `hv owner import <file>`.")
+        # gov["escrows"] is already owner-signed, revocation-filtered, and sorted (see
+        # _governance_state) — a `revoke-escrow` tombstone drops a compromised blob from here.
+        if not gov["escrows"]:
+            print("No (live) owner-escrow found in the hive. Sync the hive first (`hv sync now`), or "
+                  "recover from a file with `hv owner import <file>`.")
             return
-        escrows.sort(key=lambda x: (x[0], x[1], x[2]))
-        env = escrows[-1][3]["envelope"]    # latest escrow wins
+        env = gov["escrows"][-1][3]          # latest live escrow wins
         pp = _read_passphrase("Passphrase (blank line / Ctrl-C to cancel): ")
         if pp is None:
             print("Cancelled.")
@@ -2763,6 +2876,97 @@ def owner_cmd(args):
             pass
         _stash_owner_key(seed)
         print(f"Owner key recovered from the hive ({oid}). This device can now sign governance.")
+        return
+    if action == "nominate":
+        cp = _canon_pub(args.successor_pub)
+        if not cp:
+            print("Not a valid owner pubkey (need base64 of a 32-byte ed25519 key, e.g. from "
+                  "`hv owner claim --mint` on the successor device).")
+            return
+        sid = _owner_id_for_pub(base64.b64decode(cp))
+        if _append_governance({"action": "nominate-successor", "successor_owner_pub": cp}):
+            print(f"Nominated successor {sid}.")
+            print("  The successor claims it with `hv owner claim` on the device that holds that key.")
+        return
+    if action == "unnominate":
+        cp = _canon_pub(args.successor_pub)
+        if not cp:
+            print("Not a valid owner pubkey.")
+            return
+        if _append_governance({"action": "revoke-nomination", "successor_owner_pub": cp}):
+            print(f"Revoked the nomination of {_owner_id_for_pub(base64.b64decode(cp))}.")
+        return
+    if action == "claim":
+        if _ed25519 is None:
+            print("ed25519 unavailable; cannot claim ownership.")
+            return
+        seed = _owner_seed()
+        mint = getattr(args, "mint", False) or seed is None
+        if mint:
+            if seed is not None and not getattr(args, "force", False):
+                # Holding a key already — minting a fresh one would discard it. Only refuse if it is
+                # the live owner key (losing that is the dangerous case); otherwise allow the reuse.
+                held_oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
+                if held_oid == gov["owner_id"]:
+                    print("This device already holds the live owner key. `--force` to mint a NEW key anyway.")
+                    return
+            seed = os.urandom(32)
+        pub = _ed25519.pub_from_seed(seed)
+        oid = _owner_id_for_pub(pub)
+        cp = _canon_pub(base64.b64encode(pub).decode())
+        if oid == gov["owner_id"]:
+            print(f"This device's key is already the established owner ({oid}). Nothing to claim.")
+            return
+        # Install the (possibly freshly minted) key locally so a later claim can reuse it.
+        HIVE_HOME.mkdir(parents=True, exist_ok=True)
+        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+        try:
+            os.chmod(OWNER_KEY_PATH, 0o600)
+        except Exception:
+            pass
+        _stash_owner_key(seed)
+        if cp not in gov["nominations"]:
+            print(f"Prospective owner key ready on this device: {oid}")
+            print(f"  pub: {cp}")
+            print(f"  Have the current owner run:  hv owner nominate {cp}")
+            print( "  then re-run `hv owner claim` here to take ownership.")
+            return
+        if _append_governance({"action": "claim-succession", "owner_id": oid}):
+            print(f"Claimed ownership: {oid} is now the hive owner (term {gov['owner_term'] + 1}).")
+            print("  The previous owner key can no longer sign governance.")
+        return
+    if action == "transfer":
+        cp = _canon_pub(args.new_owner_pub)
+        if not cp:
+            print("Not a valid owner pubkey (base64 of a 32-byte ed25519 key).")
+            return
+        nid = _owner_id_for_pub(base64.b64decode(cp))
+        if nid == gov["owner_id"]:
+            print(f"{nid} is already the owner. Nothing to transfer.")
+            return
+        print(f"Immediate handoff: ownership moves to {nid}.")
+        print("  WARNING: that device must already HOLD this key or governance becomes unsignable.")
+        print("  (Use `hv owner nominate` + `hv owner claim` for the safer claim-based handoff.)")
+        if _append_governance({"action": "transfer", "new_owner_pub": cp}):
+            print(f"Transferred ownership to {nid} (term {gov['owner_term'] + 1}).")
+        return
+    if action == "revoke-escrow":
+        ref = args.ref
+        if ref != "all":
+            ok = any(f"{nid}:{seq}" == ref for _ts, nid, seq, _env in gov["escrows"])
+            if not ok:
+                print(f"No live escrow {ref!r}. Live escrows (node_id:seq):")
+                for _ts, nid, seq, _env in gov["escrows"]:
+                    print(f"  {nid}:{seq}")
+                if not gov["escrows"]:
+                    print("  (none)")
+                print("  Use `all` to tombstone every escrow.")
+                return
+        if _append_governance({"action": "revoke-escrow", "escrow_ref": ref}):
+            print(f"Tombstoned escrow {ref} — `hv owner restore` will skip it.")
+            print("  NOTE: the ciphertext stays in the append-only journal forever. If the passphrase")
+            print("  leaked, ROTATE the owner key (`hv owner nominate`+`claim`, or `transfer`) so the")
+            print("  old escrow blob unlocks a key that is no longer the owner.")
         return
     if action == "init":
         if _ed25519 is None:
@@ -3474,6 +3678,17 @@ def build_parser():
     owner_standby.add_argument("--off", action="store_true", help="Remove the standby declaration")
     owner_sub.add_parser("escrow", help="Store the owner key, passphrase-encrypted, IN the hive (syncs to all nodes)")
     owner_sub.add_parser("restore", help="Recover the owner key from the hive's escrow (needs the passphrase)")
+    owner_nominate = owner_sub.add_parser("nominate", help="Nominate a successor owner key (the successor then `claim`s)")
+    owner_nominate.add_argument("successor_pub", help="The successor's owner pubkey (base64; from `hv owner claim --mint`)")
+    owner_unnominate = owner_sub.add_parser("unnominate", help="Withdraw a pending successor nomination")
+    owner_unnominate.add_argument("successor_pub", help="The nominated successor's owner pubkey (base64)")
+    owner_claim = owner_sub.add_parser("claim", help="Claim ownership on this device against an open nomination (successor side)")
+    owner_claim.add_argument("--mint", action="store_true", help="Mint a fresh owner key for this device first")
+    owner_claim.add_argument("--force", action="store_true", help="With --mint, replace an existing owner key on this device")
+    owner_transfer = owner_sub.add_parser("transfer", help="Immediately hand ownership to a key (the target must already hold it)")
+    owner_transfer.add_argument("new_owner_pub", help="The new owner's pubkey (base64)")
+    owner_revoke_escrow = owner_sub.add_parser("revoke-escrow", help="Tombstone an escrowed key so `restore` skips it")
+    owner_revoke_escrow.add_argument("ref", help="Escrow ref `node_id:seq`, or `all`")
 
     admit_parser = subparsers.add_parser("admit", help="[alias of `hv group admit`] Admit a device; no arg lists pending")
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")

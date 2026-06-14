@@ -18,7 +18,9 @@ sys.path.insert(0, str(PROJECT))
 
 
 def _run(home, *args, node_id=None, check=True):
-    env = dict(os.environ, HIVE_HOME=str(home))
+    # Pin the owner-key stash under the temp home so `owner init` never clobbers the developer's real
+    # ~/.config/hive-mind/identity/.owner-key backup.
+    env = dict(os.environ, HIVE_HOME=str(home), HIVE_IDENTITY_STASH=str(Path(home) / "stash"))
     if node_id:
         env["HIVE_NODE_ID"] = node_id
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,

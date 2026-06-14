@@ -334,6 +334,11 @@ hv owner import FILE [--force]                 # restore it from a file on anoth
 hv owner escrow                                # store the key (passphrase-encrypted) IN the hive
 hv owner restore                               # recover the key from the hive's escrow
 hv owner standby <device_id> [--off]          # declare an advisory standby key holder
+hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
+hv owner unnominate <successor_pub>           # withdraw a pending nomination
+hv owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
+hv owner transfer <new_owner_pub>            # immediate handoff to a key the target already holds
+hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
 ```
 
 You run `hv owner init` once, on whichever machine you want to hold the owner key.
@@ -363,8 +368,27 @@ the shared store." Use the one that fits, or both.
 `hv owner standby <device_id>` records an advisory note that a device is sanctioned
 to also hold the owner key and act while the primary owner is offline (it must
 actually hold a copy via export/import — the key is the authority; the declaration
-is for visibility in `hv owner show`/`hv whoami`). Planned succession and quorum
-recovery for a permanently-lost owner arrive in later releases.
+is for visibility in `hv owner show`/`hv whoami`).
+
+**Changing who the owner is — succession.** Backup/restore recovers the *same* owner
+identity. To hand off to a *new* key (a fresh device, or to rotate away from a leaked
+one), use succession. On the successor device, `hv owner claim --mint` mints a fresh
+owner key and prints its public key. Give that pubkey to the current owner, who runs
+`hv owner nominate <pub>`; once that syncs, the successor re-runs `hv owner claim` to
+take ownership. From then on the old owner key can no longer sign governance — its
+post-handoff acts are simply ignored by every node. `hv owner transfer <pub>` is the
+immediate variant (no claim round-trip), but the target device must *already hold* that
+key or governance becomes unsignable, so prefer nominate+claim. A live owner can never
+be unseated: only the current owner's own nominate/transfer, or a nominee's claim against
+an open nomination, advances ownership.
+
+`hv owner revoke-escrow <node_id:seq|all>` logically tombstones an escrowed key so
+`hv owner restore` skips it (`node_id:seq` from `hv owner show` / the doctor owner check,
+or `all`). The ciphertext stays in the append-only journal forever — a tombstone is not
+deletion — so if an escrow *passphrase* leaked, the real fix is to **rotate the owner key**
+via succession/transfer, which makes the old escrow blob unlock a key that is no longer
+the owner. Quorum recovery for a permanently-lost owner with no backup arrives in a later
+release.
 
 ---
 

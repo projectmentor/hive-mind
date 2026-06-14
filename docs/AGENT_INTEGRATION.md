@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.6`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.7`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -190,6 +190,13 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.7` — owner resilience (pt.2): **succession**. `hv owner nominate <pub>` + the successor's
+  `hv owner claim [--mint]` hand ownership to a NEW key; `hv owner transfer <pub>` is the immediate
+  variant. `_governance_state` now resolves an owner *chain* (term-0 TOFU → owner-signed nominate/
+  transfer + nominee claims), so post-handoff old-owner acts are ignored and a live owner is never
+  unseated. `hv owner revoke-escrow <ref|all>` logically tombstones a compromised escrow (`restore`
+  skips it). `hv doctor` gains an `owner` check (key custody / nominations / sprawl). Additive,
+  governance-only — adapters never act as owner, so they are unaffected. Quorum recovery lands in 1.8.
 - `1.6` — owner resilience (pt.1). `hv owner export`/`import` back up and restore the owner key to
   an off-device file (optionally passphrase-encrypted) so a lost owner device can resume the SAME
   owner identity; `hv owner escrow`/`restore` store the key passphrase-encrypted IN the hive (it

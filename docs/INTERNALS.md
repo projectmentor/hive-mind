@@ -119,6 +119,34 @@ Governance lives in owner-signed `governance` journal entries
 journaled (not per-node config), every device derives the same admitted set,
 principal map, and config. No owner yet → discount applies, gate + CAP_self off.
 
+### Owner resolution + succession
+
+`_governance_state` resolves the owner over a single deterministic pass in
+`(timestamp, node_id, seq)` order — so every node converges on the same owner:
+
+1. **Genesis (TOFU).** The first valid self-signed `owner` declaration wins and
+   becomes the term-0 owner; it also mints the `hive_id` and fixes `owner_ts`
+   (which still anchors the grandfathering of pre-owner forgets, even after a handoff).
+2. **Succession chain.** Walking forward, the *current* owner is carried along and
+   advances when an act is authorized by the then-current owner:
+   `nominate-successor` (owner-signed) opens a nomination over a successor pubkey;
+   the nominee's `claim-succession` (self-signed by the NEW key, like genesis) takes
+   effect only against an *open matching* nomination; `transfer` (owner-signed) is an
+   immediate handoff. Every other act (admit/config/escrow/standby) is applied only
+   when signed by the owner current *at that log position* — so a handed-off owner's
+   later acts drop, and a live owner can never be unseated (only their own signed
+   nominate/transfer, or a nominee's claim, moves ownership). Racing claims against one
+   nomination resolve deterministically: the first in sort order wins and closes it.
+3. **Back-compat.** A hive with no succession entries resolves to exactly the term-0
+   owner — identical to the pre-succession projection.
+
+**Escrow tombstones.** `owner-escrow` entries (the in-hive passphrase-encrypted key)
+are collected during the same walk; an owner-signed `revoke-escrow` (a specific
+`node_id:seq` ref, or `all`) marks earlier escrows revoked. `gov["escrows"]` is the
+live, revocation-filtered, sorted list `hv owner restore` draws from. The tombstone is
+logical only — the ciphertext is permanent in the append-only journal, so a leaked
+escrow passphrase is truly remediated only by rotating the owner key via succession.
+
 ### Retraction effects
 
 - Standard retraction (`hv retract`) → reduces confidence by excluding the
@@ -133,6 +161,8 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 - **Phase B / D0-v2** (shipped): journaled governance, same-device discount,
   admission gate, principal weighting (CAP_self)
 - **Phase C** (shipped): contested flag + decay for contradicted facts
+- **Owner resilience** (shipped): pt.1 backup/restore + escrow + standby; pt.2 nominated
+  succession + transfer + escrow tombstone (the owner chain above); quorum recovery (pt.3) queued
 
 ---
 

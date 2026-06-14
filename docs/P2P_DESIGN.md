@@ -161,6 +161,17 @@ Runs on Tailscale interface only (port 9876).
 | Entities     | Name/tags mutable  | LWW by update timestamp           |
 | Entity_Facts | Link/unlink        | OR-Set (presence wins)            |
 | Journal      | Never modified     | G-Set union (impossible to conflict) |
+| Governance   | Owner-signed acts  | Deterministic projection (`_governance_state`) |
+| Owner        | Succession chain   | Replay `(ts,node_id,seq)`; first valid act wins |
+
+**Owner succession convergence.** Ownership is not LWW — it is a chain replayed in
+`(timestamp, node_id, seq)` order from the term-0 TOFU owner. Each handoff requires a
+signed act by the *then-current* owner (`nominate-successor`/`transfer`) plus, for
+nomination, the nominee's self-signed `claim-succession` against an open nomination.
+Because the inputs are the converged G-Set journal and the order is total, every node
+computes the identical current owner regardless of sync arrival order. Two claims racing
+for one nomination resolve to the first in sort order (the same one on every node); a
+handed-off owner's later acts are ignored, and a live owner cannot be unseated.
 
 **TIE-BREAKER when timestamps identical:**  
 `winner = max(node_id) lexicographically`  

@@ -17,9 +17,9 @@ HiveMind uses a two-layer storage model:
   Every write goes here first. Never modified after being written.
 - **SQLite** (`store.db`) — a derived index built from the journal. Used for
   FTS5 search, JOINs, and fast reads. Can be thrown away and rebuilt at any time
-  with `hv rebuild`.
+  with `hv doctor rebuild`.
 
-The journal is the contract. If `store.db` is corrupt or missing, `hv rebuild`
+The journal is the contract. If `store.db` is corrupt or missing, `hv doctor rebuild`
 restores full functionality. The journal alone is sufficient to recover any node
 from scratch.
 
@@ -66,7 +66,7 @@ ensures links survive cross-node merge correctly.
 ## Confidence model
 
 Confidence is a derived value — never stored directly. It's computed by
-`_recompute_confidence` during `hv rebuild` and after every write.
+`_recompute_confidence` during `hv doctor rebuild` and after every write.
 
 ### Formula
 
@@ -178,7 +178,7 @@ to efficiently identify which entries a peer is missing.
 3. If roots differ → compare per-node chunk hashes
 4. For each differing chunk → fetch missing entries (`GET /sync/chunk`)
 5. Ingest missing entries locally (`POST /sync/ingest`)
-6. Run `hv rebuild` once after all ingestion
+6. Run `hv doctor rebuild` once after all ingestion
 
 ### Device identity
 

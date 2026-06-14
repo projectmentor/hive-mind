@@ -1,5 +1,5 @@
 {
-  "digest": "34dcc9becfbc5a89226242963c50baebcd9858447c8fed9dd297546b95c5d487",
+  "digest": "88e7cbbcbabd58763d8b7625e551a6fd1ae73056f3ecba7d359dfc6f8e40eec8",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -12,16 +12,16 @@
     ".peers.json.example": "423edc35587b068ff591fe741225bec845a01f5bc9318ad0820d738452f3f363",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
-    "README.md": "26428467b85148dc18812c55edfda8624042b14fa358036e7d7c933e9d006db3",
-    "docs/AGENT_INTEGRATION.md": "d20efaa1fd28a7feac89be8f27a9986da6d7f41d22fee4a0376bf4cce96b66d6",
-    "docs/CLI_REFERENCE.md": "d6bb7217b75420aa9b5b840cbc0da5731d69415ee60fe1e8fcf11c5dcd43e380",
-    "docs/INTERNALS.md": "d9f9476527394981eb86897785f39bb216ce6736ae70dac845c94d762e2c2006",
-    "docs/P2P_DESIGN.md": "425d20e57c07f9237275c98a1a516efe9540f48e989d87fb8e4db8235bf59f38",
+    "README.md": "2d9302e3710e88bd0aab4af8441487a4cf68b2cd66831269bf0464f2bd4235f0",
+    "docs/AGENT_INTEGRATION.md": "b04af4345dad5b4acae0965a5a72e98cd56d24f3786b1b4d516f243eae6a8daf",
+    "docs/CLI_REFERENCE.md": "cf8fcb851d52c6d4b58ef4eaa4b3128cc8eb6584048659b44c46bf4a7248320f",
+    "docs/INTERNALS.md": "493b25f8535f187c732ae856103e97b003c6807284ba36a4b91e2b15db60d1fa",
+    "docs/P2P_DESIGN.md": "40b7906cc5dd7e1ed20d1e2cc79fb09cb6c0e7f604d7bf06959e62c2c5133831",
     "docs/SYNC_API.md": "a8fdaf54d3a7472c16fd713323dd456cbbe2b7544028564671a3f812c1656d47",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",
-    "hv": "dbb721bc938966e392052350b2fbd3aa0d0403d168d45e4e49f40c5d6943d640",
+    "hv": "d4eff94c196e56222af98daa40dd622b3fe1edb15c22f2080402345cf3f4b58b",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "bb72e3ecc48f98b2275e928ece60202b7fc693341ca1bc9900804d18a902a849",
     "integrations/mcp/hive_mcp.py": "4c2503bbc1ca40833842a046f8963dc71db022d1f1d131da44b09ec7189d1fae",
@@ -64,11 +64,11 @@
     "tests/test_membership_ingest.py": "f345f7ad42673296c759bc0cd2c5669fb6031b0558b57f6241729da155fbb1d9",
     "tests/test_nudge.py": "43a5f25cae60c15642d4c13a3b0478644cc3b08dbad8d5f9b2976c2675df6a40",
     "tests/test_onboarding.py": "7a26f267931f899b5dd21ed137891b164deb0b70e671e362817ba8299f7c982f",
-    "tests/test_succession.py": "da9aa758c0a8dde3c4468d915a0509fdeaa112150aa06df6d10c19c750e889a8",
+    "tests/test_succession.py": "5cc6b956fd4f6c3d74aacb3968790263e57db7a0676addbee02525db8f62ec5d",
     "tests/test_sync.py": "0faa0e72b82a71e3c2f04a550fa6fc12e5b33cdeef9b49d1f5b7da8dbbe40ef9",
     "tests/test_telemetry.py": "685a12ab3470d7a68ed0ca858bfa8dfe40dc53bd6eaf423e17417ac3f17ac427",
     "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04",
     "tests/test_whoami.py": "1d858fbdc8fd9efd2157f416c1c4d23ecc5ca2bb2d2a9eaafb7bde05dcfb7b22"
   },
-  "version": "1.8"
+  "version": "1.9"
 }

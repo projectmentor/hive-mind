@@ -104,9 +104,9 @@ Most of the time your agents call `hv` for you. Full reference:
 | Command | Description |
 |---|---|
 | `hive-mind install` | Full device setup from scratch |
-| `hive-mind update`  | Pull latest and restart the daemon |
 | `hive-mind status`  | Show device health and peer sync state |
 | `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys; `--yes` skips the confirmation prompt) |
+| `hive-mind update`  | Pull latest and restart the daemon |
 
 ---
 
@@ -126,7 +126,10 @@ Most of the time your agents call `hv` for you. Full reference:
   devices count, and agreement among one principal's own machines is capped. Governance (owner,
   admitted devices, tunable parameters) lives in owner-signed journal entries, so every device
   computes the same confidence. The owner runs the membership lifecycle with `hv group`
-  (admit, revoke, deny, change, purge, list). See `hv owner` and `docs/INTERNALS.md`.
+  (admit, revoke, deny, change, purge, list). The owner key is recoverable, not a dead end:
+  back it up off-device or escrow it in the hive (`hv owner export`/`escrow`), and hand it off
+  to a new key by nomination or transfer (`hv owner nominate`/`claim`/`transfer`). See `hv owner`
+  and `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/INTERNALS.md`](docs/INTERNALS.md).

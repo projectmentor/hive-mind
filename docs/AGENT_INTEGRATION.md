@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.7`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.8`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -190,6 +190,10 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.8` — footprint trim. `hv rebuild` is folded into **`hv doctor rebuild`** (joining `hv doctor
+  merkle`/`migrate-identity`); the top-level `hv rebuild` keeps working as a hidden deprecated alias,
+  so installer/update scripts and existing automation are unaffected. No new capability — purely a
+  surface change; adapters that call `hv rebuild` need no edit.
 - `1.7` — owner resilience (pt.2): **succession**. `hv owner nominate <pub>` + the successor's
   `hv owner claim [--mint]` hand ownership to a NEW key; `hv owner transfer <pub>` is the immediate
   variant. `_governance_state` now resolves an owner *chain* (term-0 TOFU → owner-signed nominate/

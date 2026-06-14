@@ -17,12 +17,11 @@ memory.
 | `hv config` | Device identity (`identity`) + owner-signed confidence params (`confidence`) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy; `--fix` self-heals; subcommands `merkle` + `migrate-identity` |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals; subcommands `rebuild` + `merkle` + `migrate-identity` |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv join` | Request admission to a hive you've synced |
 | `hv owner` | Show or create the governance owner identity |
-| `hv rebuild` | Fix the local database if something looks wrong |
 | `hv remember` | Store a fact |
 | `hv retract` | Correct a fact you got wrong |
 | `hv search` | Search stored facts |
@@ -42,43 +41,6 @@ cd ~/projects/hive-mind
 ---
 
 ## Commands
-
----
-
-### `hv group` — Membership lifecycle (owner-only)
-
-By default any device can corroborate. Once you have an owner, only **admitted**
-devices count toward confidence — so someone can't mint a pile of keys and fake a
-crowd (a Sybil attack). `hv group` is the owner's roster + lifecycle:
-
-```
-hv group                                       # roster (admitted/pending/denied/purged)
-hv group list                                  # same as above
-hv group admit                                 # list devices awaiting admission
-hv group admit k1:597b3e0f5fb92d37 --principal david
-hv group revoke k1:…                           # un-admit (reversible) → device goes STERILE
-hv group deny k1:…                             # reject a pending join-request (admit overrides)
-hv group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
-hv group purge k1:…                            # tombstone: permanent; its entries stop counting
-```
-
-With no device_id, `hv group admit` lists the pending join-requests. (Those also surface
-in your session-start digest, so your agent can prompt you.) `--principal` tags who
-owns the device; when every device behind a fact belongs to the same principal, its
-confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
-join-request advertised, so the owner syncs *to* the member too — connectivity is seeded by
-admission but stays editable in `.peers.json`. Admission grants only write/fertility, never
-governance. Get a device's id with `hv config identity show` on it. A device that isn't
-admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
-are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.
-
-**revoke vs purge.** `revoke` is reversible — the device returns to STERILE and a later
-`admit` restores it. `purge` is a **final tombstone**: the device's entries stay in the
-append-only journal but are permanently excluded from corroboration and ingest, and it
-**cannot be re-admitted**. `change` re-tags the principal without touching admission; `deny`
-drops a pending join-request (a later `admit` overrides it).
-
-> `hv admit …` is kept as a silent alias for `hv group admit …`.
 
 ---
 
@@ -167,11 +129,13 @@ the sync port is not mistaken for a hive (the probe verifies a signed genesis).
 ### `hv doctor` — Check that your device is healthy
 
 Runs a single set of checks over your local device and tells you whether anything
-needs attention. It looks at six things:
+needs attention. It looks at seven things:
 
 - **authenticity** — your copy of HiveMind matches the signed official release
 - **journal** — your device's history is intact and unbroken from the start
 - **database** — the local lookup index is in step with that history
+- **owner** — whether this device can sign governance (holds the owner key), plus any
+  open succession nominations or owner-key sprawl
 - **hygiene** — whether duplicate or obsolete facts have built up
 - **sync-daemon** — whether the background sync service is running
 - **peers** — whether your peer nodes are reachable and in sync
@@ -194,6 +158,62 @@ non-zero only when a check actually fails, so you can wire it into a cron job or
 monitoring probe and get alerted on real breakage, not on a peer being briefly
 offline. A failed `authenticity` check right after an upgrade usually just means
 the signed manifest has not caught up yet; pull the latest and re-run.
+
+---
+
+### `hv doctor merkle` — Diagnose sync problems
+
+Shows a fingerprint of your current data. If two nodes show the same
+fingerprint, they're in sync. If they differ, `hv sync now` will sort it out.
+
+You don't normally need to run this — `hv sync` handles it automatically. It's
+here for when you're troubleshooting and want to see exactly where two nodes
+diverge.
+
+```
+hv doctor merkle
+```
+
+> `hv merkle` is kept as a silent alias.
+
+---
+
+### `hv doctor migrate-identity` — Move an existing node to a device key
+
+A one-time, coordinated step that re-stamps an existing journal from hostname
+`node_id`s to cryptographic `device_id`s.
+
+```
+hv doctor migrate-identity --map map.json --dry-run   # preview
+hv doctor migrate-identity --map map.json             # apply
+```
+
+`map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
+on each. Because the re-stamp is deterministic, running it on every peer with the
+same map produces byte-identical journals, so your devices stay in sync with no
+re-transfer. The runbook, per node: `hv config identity init --force` to mint the key,
+share the resulting `device_id`, build the shared map, stop the sync daemons, run this
+on each device, confirm `hv doctor merkle` roots match, then restart. Your old journal is
+backed up to `journal.bak.device-id.<timestamp>/`.
+
+> `hv migrate-device-identity` is kept as a silent alias.
+
+---
+
+### `hv doctor rebuild` — Fix the local database
+
+If your local database looks wrong or out of date, `rebuild` resets it from
+scratch. It's safe to run any time — your data won't be lost.
+
+Also useful after pulling in entries from a peer node, or if HiveMind exited
+unexpectedly.
+
+```
+hv doctor rebuild
+```
+
+(`hv rebuild` still works as a deprecated alias, kept for the installer/update
+scripts; new use should prefer `hv doctor rebuild`.)
 
 ---
 
@@ -240,6 +260,43 @@ hv entity {add,list,show,link} [options]
 
 ---
 
+### `hv group` — Membership lifecycle (owner-only)
+
+By default any device can corroborate. Once you have an owner, only **admitted**
+devices count toward confidence — so someone can't mint a pile of keys and fake a
+crowd (a Sybil attack). `hv group` is the owner's roster + lifecycle:
+
+```
+hv group                                       # roster (admitted/pending/denied/purged)
+hv group list                                  # same as above
+hv group admit                                 # list devices awaiting admission
+hv group admit k1:597b3e0f5fb92d37 --principal david
+hv group revoke k1:…                           # un-admit (reversible) → device goes STERILE
+hv group deny k1:…                             # reject a pending join-request (admit overrides)
+hv group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
+hv group purge k1:…                            # tombstone: permanent; its entries stop counting
+```
+
+With no device_id, `hv group admit` lists the pending join-requests. (Those also surface
+in your session-start digest, so your agent can prompt you.) `--principal` tags who
+owns the device; when every device behind a fact belongs to the same principal, its
+confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
+join-request advertised, so the owner syncs *to* the member too — connectivity is seeded by
+admission but stays editable in `.peers.json`. Admission grants only write/fertility, never
+governance. Get a device's id with `hv config identity show` on it. A device that isn't
+admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
+are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.
+
+**revoke vs purge.** `revoke` is reversible — the device returns to STERILE and a later
+`admit` restores it. `purge` is a **final tombstone**: the device's entries stay in the
+append-only journal but are permanently excluded from corroboration and ingest, and it
+**cannot be re-admitted**. `change` re-tags the principal without touching admission; `deny`
+drops a pending join-request (a later `admit` overrides it).
+
+> `hv admit …` is kept as a silent alias for `hv group admit …`.
+
+---
+
 ### `hv join` — Request admission to a hive
 
 After your device has synced a hive (its peer is in `.peers.json`), `hv join` asks
@@ -279,45 +336,6 @@ or sync it. Share your `device_id` and public key with peers (they go in
 
 ---
 
-### `hv doctor merkle` — Diagnose sync problems
-
-Shows a fingerprint of your current data. If two nodes show the same
-fingerprint, they're in sync. If they differ, `hv sync now` will sort it out.
-
-You don't normally need to run this — `hv sync` handles it automatically. It's
-here for when you're troubleshooting and want to see exactly where two nodes
-diverge.
-
-```
-hv doctor merkle
-```
-
-> `hv merkle` is kept as a silent alias.
-
----
-
-### `hv doctor migrate-identity` — Move an existing node to a device key
-
-A one-time, coordinated step that re-stamps an existing journal from hostname
-`node_id`s to cryptographic `device_id`s.
-
-```
-hv doctor migrate-identity --map map.json --dry-run   # preview
-hv doctor migrate-identity --map map.json             # apply
-```
-
-`map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
-on each. Because the re-stamp is deterministic, running it on every peer with the
-same map produces byte-identical journals, so your devices stay in sync with no
-re-transfer. The runbook, per node: `hv config identity init --force` to mint the key,
-share the resulting `device_id`, build the shared map, stop the sync daemons, run this
-on each device, confirm `hv doctor merkle` roots match, then restart. Your old journal is
-backed up to `journal.bak.device-id.<timestamp>/`.
-
-> `hv migrate-device-identity` is kept as a silent alias.
-
----
-
 ### `hv owner` — Governance owner identity
 
 Confidence weighs *who* corroborates a fact. A few of those rules need a shared,
@@ -327,18 +345,18 @@ from your device keys) that signs governance decisions into the journal, so ever
 node agrees on them.
 
 ```
-hv owner show          # the established owner + admitted devices + config
-hv owner init          # mint the owner key and claim ownership (once)
+hv owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
+hv owner escrow                                # store the key (passphrase-encrypted) IN the hive
 hv owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
 hv owner import FILE [--force]                 # restore it from a file on another device
-hv owner escrow                                # store the key (passphrase-encrypted) IN the hive
-hv owner restore                               # recover the key from the hive's escrow
-hv owner standby <device_id> [--off]          # declare an advisory standby key holder
+hv owner init                                 # mint the owner key and claim ownership (once)
 hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
-hv owner unnominate <successor_pub>           # withdraw a pending nomination
-hv owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
-hv owner transfer <new_owner_pub>            # immediate handoff to a key the target already holds
+hv owner restore                               # recover the key from the hive's escrow
 hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
+hv owner show                                 # the established owner + admitted devices + config
+hv owner standby <device_id> [--off]          # declare an advisory standby key holder
+hv owner transfer <new_owner_pub>            # immediate handoff to a key the target already holds
+hv owner unnominate <successor_pub>           # withdraw a pending nomination
 ```
 
 You run `hv owner init` once, on whichever machine you want to hold the owner key.
@@ -389,20 +407,6 @@ deletion — so if an escrow *passphrase* leaked, the real fix is to **rotate th
 via succession/transfer, which makes the old escrow blob unlock a key that is no longer
 the owner. Quorum recovery for a permanently-lost owner with no backup arrives in a later
 release.
-
----
-
-### `hv rebuild` — Fix the local database
-
-If your local database looks wrong or out of date, `rebuild` resets it from
-scratch. It's safe to run any time — your data won't be lost.
-
-Also useful after pulling in entries from a peer node, or if HiveMind exited
-unexpectedly.
-
-```
-hv rebuild
-```
 
 ---
 

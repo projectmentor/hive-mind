@@ -4,5 +4,5 @@ contact_links:
     url: https://github.com/projectmentor/hive-mind/discussions
     about: For "how do I…", ideas, and anything that isn't a confirmed bug, please use Discussions.
   - name: Security report
-    url: mailto:security@projectmentor.org
+    url: mailto:netadmin@projectmentor.org
     about: Found a vulnerability? Email it privately (best-effort, no bounty).

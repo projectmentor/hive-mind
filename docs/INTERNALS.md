@@ -44,12 +44,17 @@ Each line in a `.jsonl` file is a JSON object:
 |---|---|
 | `node_id` | The authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)` |
 | `seq` | Per-node monotonic sequence number |
-| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact` |
+| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact`, `governance` |
 | `timestamp` | ISO8601 wall clock at write time |
 | `payload` | Type-specific data |
 | `prev_hash` | Hash of the previous entry — forms a hash chain per node |
 | `pub` | The signer's Ed25519 public key (present on signed entries) |
 | `sig` | Ed25519 signature over the canonical entry minus `sig`; the hash chain commits to it |
+
+The `governance` type carries owner-resilience actions (owner declaration, admit,
+set-config, standby, escrow/revoke-escrow, nominated succession/transfer, quorum
+election proposals/votes, and the dead-man heartbeat); it's projected by
+`_governance_state` (see *Confidence model* below).
 
 `node_id` is an unforgeable device fingerprint, not a hostname (see *Device
 identity* below). Signed entries are verified on ingest: an entry whose `node_id`
@@ -130,7 +135,8 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 2. **Succession chain.** Walking forward, the *current* owner is carried along and
    advances when an act is authorized by the then-current owner:
    `nominate-successor` (owner-signed) opens a nomination over a successor pubkey;
-   the nominee's `claim-succession` (self-signed by the NEW key, like genesis) takes
+   the nominee's `claim-succession` (the CLI verb is `hv owner claim`; self-signed by the
+   NEW key, like genesis) takes
    effect only against an *open matching* nomination; `transfer` (owner-signed) is an
    immediate handoff. Every other act (admit/config/escrow/standby) is applied only
    when signed by the owner current *at that log position* — so a handed-off owner's
@@ -140,7 +146,8 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 3. **Quorum election (dead-man switch).** Interleaved in the same pass are two
    *device-signed* acts (authority is hive membership, not the owner key):
    `propose-election` carries a content-addressed `proposal_id` (= hash of the proposed
-   `new_owner_pub` + the proposer's `basis_ts`) and `vote-election` references it. Only
+   `new_owner_pub` + the proposer's `basis_ts`) and `vote-election` (the CLI verb is
+   `hv owner vote <proposal_id>`) references it. Only
    acts from currently-**admitted** devices count; a vote that sorts before its proposal
    is buffered and applied when the proposal appears (clock-skew safe). The instant a
    proposal reaches `quorum_m` distinct voter-units (`quorum_by` = device or principal)
@@ -177,7 +184,8 @@ escrow passphrase is truly remediated only by rotating the owner key via success
   admission gate, principal weighting (CAP_self)
 - **Phase C** (shipped): contested flag + decay for contradicted facts
 - **Owner resilience** (shipped): pt.1 backup/restore + escrow + standby; pt.2 nominated
-  succession + transfer + escrow tombstone (the owner chain above); quorum recovery (pt.3) queued
+  succession + transfer + escrow tombstone (the owner chain above); pt.3 quorum election +
+  dead-man switch (contract 1.9) — shipped
 
 ---
 
@@ -206,7 +214,8 @@ device fingerprint if a key is present → the hostname (legacy, pre-migration).
 
 A key is minted only by `hv config identity init` (fresh install) or the migration — importing
 `hv` never creates one, so a legacy hostname node keeps its identity until it is
-deliberately migrated. `hv doctor migrate-identity --map` re-stamps an existing
+deliberately migrated. `hv migrate-device-identity --map` (the canonical user command; also reachable as the
+folded `hv doctor migrate-identity --map`) re-stamps an existing
 journal from hostnames to device_ids: a deterministic transform (same map on every
 node → byte-identical journals → peers stay converged). Two instances on one box
 still need distinct `HIVE_NODE_ID` or distinct keys.

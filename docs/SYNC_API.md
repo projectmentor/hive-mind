@@ -23,6 +23,8 @@ step during a sync round.
 ```json
 {
   "node_id": "node-a",
+  "hive_id": "k1:2a2110f3d8963a9e",
+  "protocol_version": 1,
   "journal_summary": {
     "total": 48,
     "by_node": {
@@ -45,6 +47,8 @@ step during a sync round.
 | Field | Description |
 |---|---|
 | `node_id` | This device's identity — its device-key fingerprint (`HIVE_NODE_ID` overrides) |
+| `hive_id` | The hive this node belongs to (the founding owner's device id). A client refuses to merge across differing hive ids |
+| `protocol_version` | Sync wire-protocol version (currently `1`). Bumped for additive handshake changes so they can be negotiated without a journal-schema break |
 | `journal_summary.by_node` | Highest seq seen per source node — used for quick divergence detection |
 | `chunks` | Per-node array of 100-entry chunk hashes (Merkle leaf hashes). Used to localize which windows need syncing |
 
@@ -116,6 +120,7 @@ Deduplicates by `(node_id, seq)`. After accepting entries, triggers
 **Request body:**
 ```json
 {
+  "hive_id": "k1:2a2110f3d8963a9e",
   "entries": [
     {
       "node_id": "node-b",
@@ -129,6 +134,11 @@ Deduplicates by `(node_id, seq)`. After accepting entries, triggers
   ]
 }
 ```
+
+The top-level `hive_id` scopes the push. If both sides carry a `hive_id` and
+they differ, the daemon refuses the merge and returns **409** (see Error
+Responses). An empty `hive_id` on either side is allowed, so the genesis owner
+declaration can propagate during bootstrap.
 
 **Response:**
 ```json
@@ -146,6 +156,35 @@ Deduplicates by `(node_id, seq)`. After accepting entries, triggers
 **Concurrency:** Ingest is serialized by a lock inside the daemon. Concurrent
 CLI writes during an ingest are a theoretical race at this scale — noted
 hardening for a future release.
+
+---
+
+### `GET /hive/info`
+
+Discovery endpoint: minimal hive metadata plus the signed genesis (owner
+declaration) for verification. Never returns journal entries — so listing a
+hive stays open even if reads are gated later.
+
+**Response:**
+```json
+{
+  "hive_id": "k1:2a2110f3d8963a9e",
+  "owner_id": "k1:2a2110f3d8963a9e",
+  "label": "node-a",
+  "node_count": 2,
+  "protocol_version": 1,
+  "genesis": { "node_id": "k1:...", "seq": 1, "type": "governance", "payload": { ... } }
+}
+```
+
+| Field | Description |
+|---|---|
+| `hive_id` | The hive's identity (the founding owner's device id) — scopes all sync; cross-hive merges are refused |
+| `owner_id` | Current owner's device id from governance state |
+| `label` | This node's human-readable label (`HIVE_NODE_LABEL`) |
+| `node_count` | Number of admitted nodes (falls back to the count of distinct authoring nodes if no admit set exists) |
+| `protocol_version` | Sync wire-protocol version (see `/sync/hello`) |
+| `genesis` | The signed owner declaration entry, for independent verification of the hive's origin |
 
 ---
 
@@ -190,7 +229,7 @@ All journal entries share this structure. The journal is the source of truth —
 {
   "node_id": "k1:2a2110f3d8963a9e",
   "seq": 42,
-  "type": "fact | decision | entity | entity_fact | retract | dispute | verify",
+  "type": "fact | decision | entity | entity_fact | retract | governance",
   "timestamp": "2026-06-04T12:00:00Z",
   "payload": { ... },
   "prev_hash": "sha256:...",
@@ -267,6 +306,19 @@ anticipated; identity now travels in the entry itself.
 }
 ```
 
+**`governance`**
+```json
+{
+  "action": "nominate-successor"
+}
+```
+
+Carries owner-resilience actions in `payload.action`. The action is one of:
+`standby`, `owner-escrow`, `revoke-escrow`, `nominate-successor`,
+`revoke-nomination`, `claim-succession`, `transfer`, `heartbeat`,
+`propose-election`, `vote-election`. Additional action-specific fields travel
+alongside `action`.
+
 ---
 
 ## Configuration: `.peers.json`
@@ -315,6 +367,8 @@ All endpoints return JSON on error:
 {"error": "description"}
 ```
 
-HTTP status codes: `200` success, `404` unknown path, `500` internal error.
-The daemon never crashes a handler thread — all exceptions are caught and
-returned as 500.
+HTTP status codes: `200` success, `404` unknown path, `409` cross-hive push
+refused (`POST /sync/ingest` when the sender's `hive_id` differs from this
+node's), `500` internal error. A 409 body carries `{"error": "different hive",
+"hive_id": "<local>", "accepted": 0}`. The daemon never crashes a handler
+thread — all exceptions are caught and returned as 500.

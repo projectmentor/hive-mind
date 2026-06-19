@@ -214,7 +214,7 @@ when it must re-wire.
 - `1.6` — owner resilience (pt.1). `hv owner export`/`import` back up and restore the owner key to
   an off-device file (optionally passphrase-encrypted) so a lost owner device can resume the SAME
   owner identity; `hv owner escrow`/`restore` store the key passphrase-encrypted IN the hive (it
-  syncs to every node, so any synced device can recover it with the passphrase); `hv owner standby
+  syncs to every device, so any synced device can recover it with the passphrase); `hv owner standby
   <device_id>` records an advisory standby. Additive, governance-only; adapters are unaffected (they
   never act as owner). Succession + quorum recovery land in later minors.
 - `1.5` — membership **lifecycle** + a unified settings surface. New owner-only `hv group`

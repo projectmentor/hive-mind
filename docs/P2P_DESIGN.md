@@ -4,11 +4,13 @@
 **Date:** 2026-06-03  
 **Author:** Sonnet 4 (architectural design)
 
+> **Shipped-since note.** This document remains the design narrative; much of it has since shipped. Contracts 1.1 → 1.9 landed, including the P2P sync daemon (Phase 1-4) and an owner-resilience governance arc: owner key backup/escrow/restore, nominated succession + immediate transfer, and quorum election + dead-man switch. These are exposed via `hv owner`, `hv group`, and `hv config` (`quorum_m` / `quorum_by` / `dead_man_days`). The code's current `CONTRACT_VERSION = "1.9"`. For the shipped command surface and internals, see `docs/CLI_REFERENCE.md` and `docs/INTERNALS.md`.
+
 ---
 
 ## 1. Problem Statement
 
-**Current state:** Asymmetric push/pull requires one device to run `php artisan serve`. If the serving node dies, the other loses access to shared memory. Violates "house burns down, one laptop survives" requirement.
+**Current state:** Asymmetric push/pull requires one device to run `php artisan serve`. If the serving node dies, the other loses access to shared memory. Violates "house burns down, one laptop survives" requirement. (Resolved: the stdlib sync daemon shipped in Phase 3 removed this dependency.)
 
 ### Requirements:
 - Full corpus on every device (no sharding)
@@ -81,7 +83,7 @@
 ### Why Any Single Node Suffices:
 - Journal/ directory contains ALL entries from ALL nodes
 - SQLite and Merkle index are derivable from journal
-- `hv rebuild` reconstructs everything from journal alone
+- `hv doctor rebuild` reconstructs everything from journal alone
 - Copy journal/ to a new machine = full restoration
 
 ---
@@ -121,34 +123,47 @@ For 10,000 entries: ~7 levels, 128 chunks. Comparing two trees takes 7 round-tri
 ```json
 {
   "self": "node-a",
+  "bind": "0.0.0.0",
+  "port": 9876,
   "peers": [
-    {"id": "node-b", "ip": "100.64.0.2", "port": 9876}
+    {"id": "node-b", "url": "http://100.64.0.2:9876"}
   ]
 }
 ```
 
 ---
 
-## 5. Sync Protocol (4 endpoints per node)
+## 5. Sync Protocol (5 endpoints per node)
+
+All endpoints advertise `protocol_version` (`PROTOCOL_VERSION = 1`) so additive
+handshake changes can be negotiated without a journal-schema break.
 
 ```
 GET /sync/hello
-  -> {"node_id": "...", "journal_summary": {"total": 250,
-      "by_node": {"node-a": 147, "node-b": 89}}}
+  -> {"node_id": "...", "hive_id": "...", "protocol_version": 1,
+      "journal_summary": {"total": 250,
+        "by_node": {"node-a": 147, "node-b": 89}},
+      "chunks": {"node-a": ["sha256:...", ...], "node-b": [...]}}
+  (chunk hashes are folded into hello — no separate chunks endpoint)
 
 GET /sync/merkle-root
   -> {"root_hash": "sha256:..."}
 
 GET /sync/chunk?node=X&start=1&end=100
-  -> {"hash": "sha256:...", "entries": [...]}
+  -> {"entries": [...], "hash": "sha256:..."}
 
 POST /sync/ingest
   <- {"entries": [...]}
   -> {"accepted": 42, "duplicates": 3}
+
+GET /hive/info   (discovery; never returns the journal)
+  -> {"hive_id": "...", "owner_id": "...", "label": "...",
+      "node_count": 2, "protocol_version": 1, "genesis": {...}}
 ```
 
-**Implementation:** FastAPI (async, 4 endpoints, ~100 lines).  
-Runs on Tailscale interface only (port 9876).
+**Implementation:** Python stdlib `http.server` (`ThreadingHTTPServer` +
+`BaseHTTPRequestHandler`), synchronous, 5 endpoints — no FastAPI dependency.
+Runs on Tailscale interface only (port 9876). See `sync_daemon.py`.
 
 ---
 
@@ -210,7 +225,7 @@ unseat a live owner": any owner-signed act, including `heartbeat`, refreshes las
 
 ### PHASE 3 — Journal-First (Week 3, ~8 hrs):
 - [ ] Make SQLite fully derived (rebuilt from journal)
-- [ ] `hv rebuild` command
+- [ ] `hv doctor rebuild` command
 - [ ] All CLI commands write journal-first, update SQLite async
 - [ ] Remove Laravel sync dependency
 - [ ] Auto-rebuild on ingest
@@ -296,38 +311,26 @@ Bundle Python CLI into single binary.
 
 ## 10. Appendix: Sync Daemon Sketch
 
+The shipped implementation lives in `sync_daemon.py` and uses the Python stdlib
+`http.server` (`ThreadingHTTPServer` + `BaseHTTPRequestHandler`) — synchronous,
+no FastAPI/uvicorn dependency. A `Handler` dispatches on `self.path`:
+
+- `GET /sync/hello` → `node_id`, `hive_id`, `protocol_version`, journal summary
+  (`total` + per-node `by_node` maxima), and per-node `chunks` hashes (chunk
+  hashes are folded into hello; there is no `/sync/chunks` endpoint).
+- `GET /sync/merkle-root` → `{"root_hash": merkle_root(chunk_hashes(entries))}`.
+- `GET /sync/chunk?node=X&start=1&end=100` → `{"entries": [...], "hash": ...}`.
+- `POST /sync/ingest` → append foreign entries (G-Set dedup by `(node_id, seq)`),
+  rebuild SQLite if anything was accepted, return `{"accepted", "duplicates"}`.
+  Refuses a cross-hive push when both sides carry a differing `hive_id` (HTTP 409).
+- `GET /hive/info` → discovery metadata (`hive_id`, `owner_id`, `label`,
+  `node_count`, `protocol_version`, signed `genesis`); never returns the journal.
+
 ```python
-# sync_daemon.py (~100 lines core)
-
-from fastapi import FastAPI
-import hashlib, uvicorn
-
-app = FastAPI()
-
-@app.get("/sync/merkle-root")
-def merkle_root():
-    return {"root_hash": compute_merkle_root()}
-
-@app.get("/sync/chunks")
-def all_chunk_hashes():
-    return {"chunks": compute_chunk_hashes()}
-
-@app.get("/sync/chunk")
-def get_chunk(node: str, start: int, end: int):
-    entries = read_journal_range(node, start, end)
-    return {"entries": entries, "hash": hash_entries(entries)}
-
-@app.post("/sync/ingest")
-def ingest(body: dict):
-    accepted = 0
-    for entry in body["entries"]:
-        key = (entry["node_id"], entry["seq"])
-        if not journal_has_entry(key):
-            append_to_journal(entry)
-            accepted += 1
-    if accepted > 0:
-        rebuild_sqlite_from_journal()
-    return {"accepted": accepted}
+# Ingest core (G-Set union — append + dedup, then rebuild derived state):
+accepted, duplicates = append_foreign_entries(body["entries"])  # dedup on (node_id, seq)
+if accepted:
+    rebuild_db()
 
 # Merkle tree construction:
 leaves = [hash(chunk) for chunk in sorted_chunks]
@@ -632,7 +635,7 @@ Terminal access is NOT unrestricted shell. It's scoped:
 
 ### 14.4 Long-running Commands
 
-Some commands take time (`hv sync now`, `hv rebuild`). The terminal
+Some commands take time (`hv sync now`, `hv doctor rebuild`). The terminal
 must stream partial output incrementally:
 - Progress bars render live (ANSI escape codes passed through xterm.js)
 - Ctrl+C sent from the dashboard sends SIGINT to the child process
@@ -649,7 +652,7 @@ new capabilities. The modular system is a separate stream.
 
 - **Phase 1** Foundation: WAL, journal format, Merkle index, FTS5
 - **Phase 2** Sync Daemon: FastAPI daemon, delta detection, merge
-- **Phase 3** Journal-First: SQLite derived, `hv rebuild`
+- **Phase 3** Journal-First: SQLite derived, `hv doctor rebuild`
 - **Phase 4** Hardening: status, integrity, docs
 
 ### Stream B — Modularity (new, ~40 hrs)

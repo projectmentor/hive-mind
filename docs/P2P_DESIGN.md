@@ -4,7 +4,7 @@
 **Date:** 2026-06-03  
 **Author:** Sonnet 4 (architectural design)
 
-> **Shipped-since note.** This document remains the design narrative; much of it has since shipped. Contracts 1.1 → 1.9 landed, including the P2P sync daemon (Phase 1-4) and an owner-resilience governance arc: owner key backup/escrow/restore, nominated succession + immediate transfer, and quorum election + dead-man switch. These are exposed via `hv owner`, `hv group`, and `hv config` (`quorum_m` / `quorum_by` / `dead_man_days`). The code's current `CONTRACT_VERSION = "1.9"`. For the shipped command surface and internals, see `docs/CLI_REFERENCE.md` and `docs/INTERNALS.md`.
+> **Shipped-since note.** This document remains the design narrative; much of it has since shipped. Contracts 1.1 → 1.10 landed, including the P2P sync daemon (Phase 1-4) and an owner-resilience governance arc: owner key backup/escrow/restore, nominated succession + immediate transfer, and quorum election + dead-man switch. These are exposed via `hv owner`, `hv group`, and `hv config` (`quorum_m` / `quorum_by` / `dead_man_days`). The code's current `CONTRACT_VERSION = "1.10"`. For the shipped command surface and internals, see `docs/CLI_REFERENCE.md` and `docs/INTERNALS.md`.
 
 ---
 
@@ -117,6 +117,13 @@ ordinary comparable strings.
 Chunks of 100 journal entries, each with a SHA-256 hash.  
 Tree depth: `log2(total_entries / 100)`.  
 For 10,000 entries: ~7 levels, 128 chunks. Comparing two trees takes 7 round-trips worst case.
+
+The index is built over the journal **as a G-Set**: entries are de-duped by
+`(node_id, seq)` before chunking, so a physically-repeated journal line (recovery
+artifact) cannot shift a chunk hash and fake a divergence that sync can't heal
+(ingest de-dups by the same key, so the duplicate is never removed by syncing). A
+deterministic tie-break (smallest canonical encoding) keeps the chosen
+representative identical across nodes.
 
 ### 4.3 Peer Registry (.peers.json):
 

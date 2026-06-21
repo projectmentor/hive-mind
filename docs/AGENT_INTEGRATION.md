@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.9`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.10`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -190,6 +190,14 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.10` — sync robustness: the **Merkle index now de-dups the journal by `(node_id, seq)`** before
+  hashing (`merkle.read_all_entries`). A `(node_id, seq)` names one logical entry, so a
+  physically-repeated journal line (a file re-imported or concatenated during recovery) can no longer
+  shift a chunk hash and fake a **permanent peer divergence** that ordinary sync cannot heal (ingest
+  also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is
+  never removed). A deterministic lexicographic tie-break on the canonical encoding keeps the chosen
+  representative identical across nodes. No wire-format or CLI change — purely internal correctness;
+  adapters need no edit.
 - `1.9` — owner resilience (pt.3): **quorum election + dead-man switch**. When the owner is lost with
   no backup, no escrow, and no nominee, admitted devices can elect a new owner: `hv owner
   propose-election [--mint | --pub B64]` + `hv owner vote <proposal_id>` (both **device-signed** —

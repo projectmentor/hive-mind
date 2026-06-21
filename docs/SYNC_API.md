@@ -56,9 +56,11 @@ step during a sync round.
 
 ### `GET /sync/merkle-root`
 
-Global Merkle root over the entire journal. The O(1) fast-path: if two nodes
-have identical root hashes, their journals are byte-identical and no sync work
-is needed.
+Global Merkle root over the entire journal. The root is computed over the journal
+as a **G-Set** — entries are de-duped by `(node_id, seq)` before hashing, so two
+nodes that hold the same logical set produce the same root even if one has a
+physically-repeated journal line. The O(1) fast-path: if two nodes have identical
+root hashes, they hold the same set of entries and no sync work is needed.
 
 **Response:**
 ```json

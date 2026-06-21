@@ -6,8 +6,14 @@ the Phase 2 sync daemon for bandwidth-efficient delta detection.
 
 The journal is a G-Set CRDT: a set of entries keyed by (node_id, seq). To make
 the Merkle root identical across nodes that hold the same set, entries are read
-from every journal file and sorted into a canonical order by (node_id, seq)
-before chunking.
+from every journal file, de-duplicated by (node_id, seq), and sorted into a
+canonical order by (node_id, seq) before chunking. The de-dup matters: a
+(node_id, seq) names ONE logical entry, so a physically-repeated line (a file
+re-imported or concatenated during recovery) must collapse to one — otherwise it
+would shift a chunk hash and make the node look permanently "diverged" from peers
+that hold the same set, and sync could not heal it (append_foreign_entries also
+de-dups by (node_id, seq), so the peer's correct copy is rejected as a duplicate
+and the extra row is never removed).
 """
 
 import hashlib
@@ -23,12 +29,16 @@ def _canonical(obj):
 
 
 def read_all_entries(journal_dir):
-    """Read every new-format entry from all journal files, in canonical
-    (node_id, seq) order. Old-format / malformed lines are skipped."""
+    """Read every new-format entry from all journal files, de-duplicated by
+    (node_id, seq) and returned in canonical (node_id, seq) order. When two rows
+    share a key, the lexicographically-smallest canonical encoding wins — a stable
+    tie-break, so every node picks the SAME representative even in the (unexpected)
+    event the duplicates differ in content. Old-format / malformed lines are
+    skipped."""
     journal_dir = Path(journal_dir)
     if not journal_dir.exists():
         return []
-    entries = []
+    by_key = {}
     for f in sorted(journal_dir.glob("*.jsonl")):
         for line in f.read_text().splitlines():
             line = line.strip()
@@ -38,8 +48,13 @@ def read_all_entries(journal_dir):
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if "node_id" in e and "seq" in e:
-                entries.append(e)
+            if "node_id" not in e or "seq" not in e:
+                continue
+            k = (e["node_id"], e["seq"])
+            prev = by_key.get(k)
+            if prev is None or _canonical(e) < _canonical(prev):
+                by_key[k] = e
+    entries = list(by_key.values())
     entries.sort(key=lambda e: (e["node_id"], e["seq"]))
     return entries
 

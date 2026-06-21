@@ -194,6 +194,17 @@ escrow passphrase is truly remediated only by rotating the owner key via success
 The sync protocol uses a Merkle tree over journal chunks (100 entries per chunk)
 to efficiently identify which entries a peer is missing.
 
+The index is computed over the journal **as a G-Set** — `read_all_entries`
+de-dups by `(node_id, seq)` before chunking. A `(node_id, seq)` names one logical
+entry, so a physically-repeated line (a journal file re-imported or concatenated
+during recovery) collapses to one and cannot shift a chunk hash. This matters
+because such a stray row would otherwise make a node look permanently *diverged*
+from peers that hold the same set, and ordinary sync could not heal it: ingest
+also de-dups by `(node_id, seq)`, so the peer's correct copy is rejected as a
+duplicate and the extra row is never removed. The tie-break (when two rows share
+a key) is the lexicographically-smallest canonical encoding, so every node picks
+the same representative.
+
 ### Flow
 
 1. Client fetches peer's Merkle root (`GET /sync/merkle-root`)

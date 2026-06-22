@@ -51,6 +51,13 @@ if command -v write_systemd_units >/dev/null 2>&1; then
   ok "Units refreshed (hive-sync hardened + hive-doctor self-heal timer)"
 fi
 
+# Re-assert the Claude Code integration so an update from before a hook existed picks it up here,
+# not only on the 15-min self-heal timer. Idempotent; silent + harmless on a node without Claude Code.
+if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
+  info "Re-asserting Claude Code hooks..."
+  "$HIVE_DIR/hv" doctor wire-agent >/dev/null 2>&1 && ok "Claude Code hooks wired" || true
+fi
+
 info "Restarting sync daemon..."
 systemctl --user restart "$SERVICE" 2>/dev/null || true
 sleep 2

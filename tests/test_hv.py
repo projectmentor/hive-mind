@@ -448,6 +448,97 @@ def test_classify_orphans_logic():
     assert f([], 100, True) == []
 
 
+def test_claude_hook_spec_is_a_stable_shim():
+    # The foreign-config footprint must be exactly the stable dispatch shim: one entry per lifecycle
+    # event, all pointing at hive_dispatch.sh — never per-behavior hooks (that set is what drifts).
+    hv = _loadhv()
+    events = [ev for ev, _c, _t in hv._CLAUDE_HOOK_SPEC]
+    assert events == ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreCompact"]
+    assert all("hive_dispatch.sh" in cmd for _ev, cmd, _t in hv._CLAUDE_HOOK_SPEC)
+    # a config carrying exactly the shim reconciles clean (nothing missing, nothing stale)
+    full = {ev: [{"hooks": [{"type": "command", "command": cmd}]}] for ev, cmd, _t in hv._CLAUDE_HOOK_SPEC}
+    missing, stale = hv._claude_hook_reconcile({"hooks": full})
+    assert missing == [] and stale == []
+
+
+def test_reconcile_flags_legacy_direct_hooks_as_stale():
+    # The gregorius/pre-shim case: a node wired with the OLD direct hooks. Reconcile must report the
+    # shims as missing AND the direct hooks as stale (to be pruned so behaviors don't double-fire).
+    hv = _loadhv()
+    base = hv._CLAUDE_HOOKS_BASE
+    cfg = {"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command", "command": f"{base}/session_hook.sh start"}]},
+                         {"hooks": [{"type": "command", "command": f"{base}/nudge_hook.sh session-start"}]}],
+        "SessionEnd":   [{"hooks": [{"type": "command", "command": f"{base}/session_hook.sh end"}]}],
+    }}
+    missing, stale = hv._claude_hook_reconcile(cfg)
+    assert len(missing) == 4                                   # all four shims absent
+    stale_cmds = {cmd for _ev, cmd in stale}
+    assert stale_cmds == {
+        f"{base}/session_hook.sh start",
+        f"{base}/nudge_hook.sh session-start",
+        f"{base}/session_hook.sh end",
+    }
+
+
+def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
+    hv = _loadhv()
+    base = hv._CLAUDE_HOOKS_BASE
+    cdir = tmp_path / ".claude"; cdir.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cdir))
+    # Old-style wiring (telemetry + nudge, inline) PLUS one of the user's OWN unrelated hooks.
+    own = {"type": "command", "command": "/usr/local/bin/my-own-hook.sh"}
+    settings = cdir / "settings.json"
+    settings.write_text(json.dumps({"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command", "command": f"{base}/session_hook.sh start"}]},
+                         {"hooks": [{"type": "command", "command": f"{base}/nudge_hook.sh session-start"}]}],
+        "SessionEnd":   [{"hooks": [{"type": "command", "command": f"{base}/session_hook.sh end"}]}],
+        "UserPromptSubmit": [{"hooks": [own, {"type": "command", "command": f"{base}/nudge_hook.sh user-prompt"}]}],
+    }}, indent=2))
+
+    res = hv._wire_claude_hooks(write=True)
+    assert res["applicable"] and res["wrote"]
+    assert len(res["missing"]) == 4 and len(res["stale"]) == 4
+
+    cfg = json.loads(settings.read_text())
+    all_cmds = [h["command"] for ev in cfg["hooks"].values() for g in ev for h in g["hooks"]]
+    # exactly the four shims are present...
+    for _ev, cmd, _to in hv._CLAUDE_HOOK_SPEC:
+        assert cmd in all_cmds, cmd
+    # ...no legacy direct hooks survive (no double-firing)...
+    assert not any("session_hook.sh" in c or "nudge_hook.sh" in c for c in all_cmds)
+    # ...the user's own hook is untouched...
+    assert own["command"] in all_cmds
+    # ...a backup was taken, and the skill symlink repaired...
+    assert (cdir / "settings.json.bak.doctor").exists()
+    assert (cdir / "skills" / "hive-memory").is_symlink()
+
+    # Idempotent: a second pass changes nothing.
+    res2 = hv._wire_claude_hooks(write=True)
+    assert not res2["wrote"] and res2["missing"] == [] and res2["stale"] == []
+
+
+def test_wire_claude_hooks_not_applicable_without_claude(tmp_path, monkeypatch):
+    hv = _loadhv()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-here"))
+    res = hv._wire_claude_hooks(write=True)
+    assert res["applicable"] is False and res["wrote"] is False
+
+
+def test_doctor_agent_hooks_check(tmp_path, monkeypatch):
+    # A pre-shim node must surface an `agent-hooks` warn (shims unwired + legacy to migrate).
+    hv = _loadhv()
+    base = hv._CLAUDE_HOOKS_BASE
+    cdir = tmp_path / ".claude"; cdir.mkdir()
+    (cdir / "settings.json").write_text(json.dumps({"hooks": {
+        "SessionStart": [{"hooks": [{"type": "command", "command": f"{base}/session_hook.sh start"}]}],
+    }}, indent=2))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cdir))
+    checks = {c["name"]: c for c in hv._doctor_status()}
+    assert "agent-hooks" in checks and checks["agent-hooks"]["status"] == "warn"
+    assert "shim" in checks["agent-hooks"]["detail"]
+
+
 def test_is_daemon_cmdline_excludes_shells():
     hv = _loadhv()
     g = hv._is_daemon_cmdline

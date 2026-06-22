@@ -1,18 +1,19 @@
 #!/usr/bin/env bash
 # Install the Claude Code <-> Hive Mind integration on THIS machine:
 #   1. symlink the `hive-memory` SKILL into ~/.claude/skills/ (user-level, cross-project)
-#   2. additively register the telemetry + capture-and-audit nudge hooks in ~/.claude/settings.json
-#      (SessionStart/End telemetry; SessionStart digest+spec-self-update, UserPromptSubmit save-nudge,
-#       PreCompact/SessionEnd audit-nudge — the reference adapter for docs/AGENT_INTEGRATION.md).
+#   2. register the stable DISPATCH SHIM in ~/.claude/settings.json (one `hive_dispatch.sh <event>`
+#      per lifecycle event) — what each event actually runs (telemetry, digest, save/audit nudge)
+#      lives in source, so behaviors update by `git pull`, never by re-editing ~/.claude. The wiring
+#      is delegated to `hv doctor wire-agent`, the single source of truth shared with the self-heal.
 #
-# Idempotent. A RUNNING Claude Code session live-reloads both (no restart needed) — so after
-# this you can just tell the running CC: "start using the hive-memory skill" (or /hive-memory).
+# Idempotent (migrates any older inline hooks to the shim). A RUNNING Claude Code session live-reloads
+# the skill (no restart) — so after this you can tell the running CC: "start using the hive-memory
+# skill" (or /hive-memory). Hook changes take effect next session.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"          # integrations/claude-code/ -> repo root
 SKILL_SRC="$REPO/integrations/claude-code/hive-memory"
-CLAUDE_DIR="$HOME/.claude"
-SETTINGS="$CLAUDE_DIR/settings.json"
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"   # honor Claude Code's own config-dir override
 
 [ -f "$SKILL_SRC/SKILL.md" ] || { echo "ERROR: $SKILL_SRC/SKILL.md missing"; exit 1; }
 
@@ -22,43 +23,11 @@ ln -sfn "$SKILL_SRC" "$CLAUDE_DIR/skills/hive-memory"
 ls -ld "$CLAUDE_DIR/skills/hive-memory"
 
 echo "== register telemetry + nudge/audit hooks (idempotent, additive) =="
-SETTINGS="$SETTINGS" python3 - <<'PY'
-import json, os
-settings_path = os.environ["SETTINGS"]
-# Literal-$HOME command form so re-runs (and the hand-wired equivalents) dedupe exactly.
-TEL = "$HOME/projects/hive-mind/scripts/session_hook.sh"   # session telemetry
-NUD = "$HOME/projects/hive-mind/scripts/nudge_hook.sh"      # capture-and-audit loop (reference adapter)
-try:
-    with open(settings_path) as f:
-        cfg = json.load(f)
-except FileNotFoundError:
-    cfg = {}
-hooks = cfg.setdefault("hooks", {})
-
-def ensure(event, cmd, timeout=15):
-    entries = hooks.setdefault(event, [])
-    for grp in entries:
-        for h in grp.get("hooks", []):
-            if h.get("type") == "command" and h.get("command") == cmd:
-                return False
-    entries.append({"hooks": [{"type": "command", "command": cmd, "timeout": timeout}]})
-    return True
-
-results = [
-    ("SessionStart telemetry", ensure("SessionStart", f"{TEL} start")),
-    ("SessionEnd telemetry",   ensure("SessionEnd", f"{TEL} end")),
-    ("SessionStart nudge",     ensure("SessionStart", f"{NUD} session-start")),
-    ("SessionEnd nudge",       ensure("SessionEnd", f"{NUD} sessionend", 10)),
-    ("UserPromptSubmit nudge", ensure("UserPromptSubmit", f"{NUD} user-prompt", 10)),
-    ("PreCompact nudge",       ensure("PreCompact", f"{NUD} precompact", 10)),
-]
-os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-with open(settings_path, "w") as f:
-    json.dump(cfg, f, indent=2)
-    f.write("\n")
-for name, added in results:
-    print(f"  {name}: {'added' if added else 'already present'}")
-PY
+# Delegate to hv's canonical hook spec — the SINGLE source of truth shared with `hv doctor`
+# (the check + the 15-min `--fix` self-heal). Keeping the wiring in one place is why a node updated
+# from before a hook existed now self-heals instead of silently drifting. `_wire_claude_hooks` honors
+# CLAUDE_CONFIG_DIR, so point it at the dir we resolved above.
+CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" doctor wire-agent
 
 echo
 echo "== done =="

@@ -130,6 +130,17 @@ def test_audit_resolves_clears_contravened(tmp_path):
     assert not data["contravened"], "a --resolves'd correction must not be flagged"
 
 
+def test_audit_skips_reconciled_referrer(tmp_path):
+    # A correction (#2) names a live fact (#1), then #2 ITSELF gets resolved by #3. Since #2 is no
+    # longer asserted, its dangling reference must not be flagged (a referrer must itself be live).
+    run_hv(tmp_path, "remember", "alpha is broken", "--source", "alice")
+    run_hv(tmp_path, "remember", "alpha fixed, resolves #1", "--source", "alice")
+    run_hv(tmp_path, "remember", "alpha status retired", "--resolves", "2", "--source", "alice")
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
+    assert not any(x["id"] == 2 for x in data["contravened"]), \
+        "a referrer that has itself been reconciled must not be flagged"
+
+
 def test_audit_excludes_owner_forgotten_from_redundant(tmp_path):
     import re as _re
     run_hv(tmp_path, "remember", "the cache halves cold-start latency", "--source", "alice")

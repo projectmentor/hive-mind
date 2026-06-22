@@ -215,7 +215,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.10"   # 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.11"   # 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -311,6 +311,8 @@ def init_db():
         conn.execute("ALTER TABLE facts ADD COLUMN contested INTEGER DEFAULT 0")
     if "last_evidence_at" not in fcols:        # Phase C: most-recent evidence ts (drives decay)
         conn.execute("ALTER TABLE facts ADD COLUMN last_evidence_at TIMESTAMP")
+    if "resolves" not in fcols:                # 1.11: local id of the fact this row resolves/closes
+        conn.execute("ALTER TABLE facts ADD COLUMN resolves INTEGER")
     conn.commit()
     # Index created here (not in the schema script above) so it works on both
     # fresh and migrated DBs — the column is guaranteed to exist by this point.
@@ -1206,6 +1208,22 @@ def resolve_supersedes(conn, entry):
     conn.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?", (new, old))
 
 
+def resolve_resolves(conn, entry):
+    """Pass 2: record on the NEW fact row which prior fact it resolves (`facts.resolves`
+    -> the resolved fact's local id). The actual confidence effect rides on the separate
+    `retract` entry `remember --resolves` emits; this link is provenance ("what did fact X
+    resolve") and lets the audit/search show the chain. New-row direction, unlike decision
+    supersedes which marks the old row."""
+    p = entry["payload"]
+    old = _resolve_ref(conn, p.get("resolves_ref"))
+    if not old:
+        return
+    new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
+    if new is None:
+        return
+    conn.execute("UPDATE facts SET resolves = ? WHERE id = ?", (old, new))
+
+
 def _index_lookup(conn, kind, local_id):
     """Reverse map: local row id -> its journal identity [node_id, seq]."""
     r = conn.execute(
@@ -1266,10 +1284,27 @@ def _detect_volatile(content):
         return False
 
 
+# A fact written as a correction usually names what it contravenes in prose, e.g.
+# "resolves #119" / "CORRECTION to fact #275". The audit parses these so it can flag a
+# correction whose target is still live (the agent appended but never reconciled).
+_REFERENCE_RE = re.compile(r"(?:resolves|supersedes|obsoletes|corrects?|correction to)\s+(?:fact\s+)?#(\d+)",
+                           re.IGNORECASE)
+
+
+def _parse_fact_references(content):
+    """Local fact ids this content claims to resolve/supersede/obsolete/correct (see _REFERENCE_RE)."""
+    try:
+        return [int(m) for m in _REFERENCE_RE.findall(content or "")]
+    except Exception:
+        return []
+
+
 def remember(args):
     """Store a fact. Confidence is DERIVED from the number of distinct sources that
     asserted identical content (not from repetition) — see _recompute_confidence.
-    Transient operational-status claims are auto-tagged `volatile` so the audit re-checks them."""
+    Transient operational-status claims are auto-tagged `volatile` so the audit re-checks them.
+    `--resolves N` links this write to a prior fact it corrects and soft-retracts N (deliberate
+    negative evidence, reversible) so the corpus reconciles instead of asserting both at once."""
     if getattr(args, "gate", False) and not _is_salient(args.content):
         print(f"Skipped (low salience): {args.content[:60]}")
         return
@@ -1283,25 +1318,56 @@ def remember(args):
         tags.append("volatile")
     elif detected and not already and opted_out:
         tags.append("durable")   # record the opt-out so audit-time detection honors it
+
+    source = args.source or os.environ.get("HERMES_AGENT", "manual")
+
+    # --resolves: resolve the target fact's journal identity + content up front (like
+    # `decide --supersedes`). A missing target is a warning, not an error — never lose content.
+    resolves_ref = resolved_content = None
+    if getattr(args, "resolves", None):
+        conn0 = get_conn()
+        resolves_ref = _index_lookup(conn0, "fact", args.resolves)
+        row0 = conn0.execute("SELECT content FROM facts WHERE id = ?", (args.resolves,)).fetchone()
+        conn0.close()
+        if resolves_ref is None or row0 is None:
+            print(f"  ⚠ no fact #{args.resolves} to resolve — writing the fact without a resolve link")
+            resolves_ref = None
+        else:
+            resolved_content = row0["content"]
+
     payload = {
         "content": args.content,
         "tags": tags,
         "importance": args.importance,
-        "source": args.source or os.environ.get("HERMES_AGENT", "manual"),
+        "source": source,
     }
+    if resolves_ref:
+        payload["resolves_ref"] = resolves_ref
     entry = append_journal("fact", payload)
 
     conn = get_conn()
     res = persist_fact(conn, entry)
-    # Derive this content's confidence from its distinct IDENTITIES in the journal
+    if resolves_ref:
+        resolve_resolves(conn, entry)
+        # Soft retract of the resolved fact: deliberate negative evidence, NOT an owner-forget.
+        append_journal("retract", {
+            "retracts_ref": resolves_ref,
+            "reason": f"resolved by fact #{res['id']}",
+            "source": source,
+        })
+
+    # Read the journal ONCE after both appends, then reproject confidence per affected content
     # (keeps the live path consistent with rebuild without a full rebuild).
     all_entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(all_entries)
-    ev = _content_evidence(all_entries, gov).get(
-        args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+    cev = _content_evidence(all_entries, gov)
+    ev = cev.get(args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     n = len(ev["pos"])
     conf = _content_confidence(ev, gov)
     _apply_content_confidence(conn, args.content, ev, gov)
+    if resolved_content is not None:
+        ev2 = cev.get(resolved_content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+        _apply_content_confidence(conn, resolved_content, ev2, gov)
     conn.commit()
     conn.close()
 
@@ -1310,6 +1376,9 @@ def remember(args):
         print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
     else:
         print(f"Corroborated fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+    if resolves_ref:
+        print(f"  ↩ resolved fact #{args.resolves} (soft retract — reversible; "
+              f"`hv retract {args.resolves} --owner` to forget it decisively)")
     if auto_volatile:
         print("  ↻ tagged volatile (transient status — the audit will flag it to re-check; "
               "use --no-volatile to opt out)")
@@ -1549,6 +1618,8 @@ def rebuild_db():
             entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
         ):
             resolve_supersedes(conn, entry)
+        elif entry["type"] == "fact" and entry["payload"].get("resolves_ref"):
+            resolve_resolves(conn, entry)
     conn.commit()
 
     # Phase A: confidence is a derived projection over the journal — recompute it
@@ -2042,7 +2113,7 @@ def _compute_audit(depth=None, session=""):
     ttl_default = _int(cfg, "VOLATILE_TTL_HOURS", 24)
     conn = get_conn()
     frows = conn.execute(
-        "SELECT id, content, confidence, contested, last_evidence_at, tags FROM facts").fetchall()
+        "SELECT id, content, confidence, contested, last_evidence_at, tags, resolves FROM facts").fetchall()
     conn.close()
     forgotten, contested, decayed, recheck = [], [], [], []
     volatile_contents = set()
@@ -2084,6 +2155,31 @@ def _compute_audit(depth=None, session=""):
     paraphrase = [p for p in paraphrase if p[0] not in forgotten_contents and p[1] not in forgotten_contents]
     corroborated = [c for c in corroborated if c not in forgotten_contents]
 
+    # CONTRAVENED: a correction that names (in prose) a fact it resolves/supersedes, where that
+    # target is still LIVE — the agent appended the fix but never reconciled the stale fact.
+    # Reconciled = the target was soft-retracted/owner-forgotten (confidence <= 0), explicitly
+    # `--resolves`'d (another row's `resolves` points at it), or has a retract aimed at its content.
+    id_to_row = {r["id"]: r for r in frows}
+    content_to_id = {r["content"]: r["id"] for r in frows}
+    reconciled_ids = {r["id"] for r in frows if r["confidence"] <= 0}
+    reconciled_ids |= {r["resolves"] for r in frows if r["resolves"]}
+    seq_content = {(e.get("node_id"), e.get("seq")): e.get("payload", {}).get("content")
+                   for e in entries if e.get("type") == "fact"}
+    for e in entries:
+        if e.get("type") == "retract":
+            ref = e.get("payload", {}).get("retracts_ref")
+            cid = content_to_id.get(seq_content.get(tuple(ref))) if ref else None
+            if cid is not None:
+                reconciled_ids.add(cid)
+    contravened = []
+    for r in frows:
+        if r["content"] in forgotten_contents:
+            continue
+        for ref_id in _parse_fact_references(r["content"]):
+            if ref_id != r["id"] and ref_id in id_to_row and ref_id not in reconciled_ids:
+                contravened.append((r, ref_id))
+                break
+
     missing_note = None
     if session:
         st = _read_state(_nudge_state_path(session))
@@ -2095,7 +2191,8 @@ def _compute_audit(depth=None, session=""):
 
     return {"depth": depth, "cap": cap, "redundant": redundant, "paraphrase": paraphrase,
             "corroborated": corroborated, "forgotten": forgotten, "contested": contested,
-            "decayed": decayed, "recheck": recheck, "missing_note": missing_note}
+            "decayed": decayed, "recheck": recheck, "contravened": contravened,
+            "missing_note": missing_note}
 
 
 def audit(args):
@@ -2105,6 +2202,7 @@ def audit(args):
     depth, cap = a["depth"], a["cap"]
     redundant, paraphrase, corroborated = a["redundant"], a["paraphrase"], a["corroborated"]
     forgotten, contested, decayed, recheck = a["forgotten"], a["contested"], a["decayed"], a["recheck"]
+    contravened = a["contravened"]
     missing_note = a["missing_note"]
 
     if args.format == "json":
@@ -2120,6 +2218,8 @@ def audit(args):
             "recheck": [{"id": r["id"], "content": r["content"],
                          "age_hours": (round(a, 1) if a is not None else None), "ttl_hours": t}
                         for r, a, t in recheck[:cap]],
+            "contravened": [{"id": r["id"], "content": r["content"], "references": ref_id}
+                            for r, ref_id in contravened[:cap]],
             "well_corroborated": len(corroborated),
             "missing": missing_note,
         }, indent=2))
@@ -2149,6 +2249,11 @@ def audit(args):
         for r, a, t in recheck[:cap]:
             age = f"{a:.0f}h" if a is not None else "unknown"
             print(f"  #{r['id']} {short(r['content'])} (age {age} > ttl {t}h) → re-verify")
+    if contravened:
+        print(f"\nCONTRAVENED (a correction whose target is still live) — {len(contravened)}")
+        for r, ref_id in contravened[:cap]:
+            print(f"  #{r['id']} {short(r['content'])} → names fact #{ref_id}, still live; "
+                  f"reconcile (`hv remember ... --resolves {ref_id}` or `hv retract {ref_id}`)")
     if missing_note:
         print(f"\nMISSING (session proxy)\n  {missing_note}")
     print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
@@ -2168,6 +2273,8 @@ def _audit_boot_summary():
             parts.append(f"{n_obs} stale/contested")
         if a["redundant"]:
             parts.append(f"{len(a['redundant'])} duplicate")
+        if a["contravened"]:
+            parts.append(f"{len(a['contravened'])} contravened")
         if parts:
             print(f"[hive] audit on boot: {', '.join(parts)}. Run `hv audit` to review and reconcile.")
     except Exception:
@@ -3853,6 +3960,8 @@ def build_parser():
                                  help="Apply the content-neutral salience gate; skip low-salience writes")
     remember_parser.add_argument("--no-volatile", action="store_true",
                                  help="Do not auto-tag transient operational-status claims as volatile")
+    remember_parser.add_argument("--resolves", type=int,
+                                 help="ID of a prior fact this write resolves/closes (soft-retracts it)")
 
     search_parser = subparsers.add_parser("search", help="Search facts")
     search_parser.add_argument("query", help="Search query")

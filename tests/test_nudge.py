@@ -113,6 +113,23 @@ def test_audit_flags_same_source_duplication(tmp_path):
         "same identity asserting identical content twice = redundant"
 
 
+def test_audit_flags_contravened(tmp_path):
+    run_hv(tmp_path, "remember", "the widget is broken", "--source", "alice")
+    # a correction that NAMES the prior fact in prose but never reconciled it
+    run_hv(tmp_path, "remember", "the widget is healed, resolves #1", "--source", "alice")
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
+    assert any(x["references"] == 1 for x in data["contravened"]), \
+        "a correction naming a still-live fact must be flagged CONTRAVENED"
+
+
+def test_audit_resolves_clears_contravened(tmp_path):
+    run_hv(tmp_path, "remember", "the widget is broken", "--source", "alice")
+    # --resolves soft-retracts #1, so nothing is left un-reconciled even though prose names it
+    run_hv(tmp_path, "remember", "the widget is healed, resolves #1", "--resolves", "1", "--source", "alice")
+    data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
+    assert not data["contravened"], "a --resolves'd correction must not be flagged"
+
+
 def test_audit_excludes_owner_forgotten_from_redundant(tmp_path):
     import re as _re
     run_hv(tmp_path, "remember", "the cache halves cold-start latency", "--source", "alice")

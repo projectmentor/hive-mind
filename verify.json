@@ -1,5 +1,5 @@
 {
-  "digest": "ef4044b3e043a5b9a4db5d13c4ce1e534c88629ab4d0a58c21524151b66efe60",
+  "digest": "11d05a8e79854108f281589f58058dd50ae468ec9427b8d20ac669d5d2925375",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -14,7 +14,7 @@
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
     "README.md": "cf1498f5da6ae06cca41fb1230350f87e4769143bf4ae703ff56532901d0e764",
     "docs/AGENT_INTEGRATION.md": "1f2d58b7089195e63b9a947d3f473e428fd84271f640722ac57d41baf3b4987d",
-    "docs/CLI_REFERENCE.md": "c0f27735b8c30ef0dce92d83f3e8800e51e95d42771bc7f371fcad5bd874b45f",
+    "docs/CLI_REFERENCE.md": "6b53fbb421cd7efd2feef2b55c0ed3eecd2f54f0cb3108b38c648d5347b4d9b3",
     "docs/INTERNALS.md": "49ee1ad3a9ae3c6b699a73a740c6be6c05cce62c969fb399a84320d4c134932d",
     "docs/P2P_DESIGN.md": "7ff87989a540f909a1576a5f99cbf85ae1cd9bbde540b29c956c1fdf5cc353e3",
     "docs/SYNC_API.md": "fdb6d295294def65ea322d7ffb7bd12c435ae136a0c88a262f1e196d567eeca2",
@@ -22,7 +22,7 @@
     "glama.json": "324dd61ba65a72154bb599baf92da55d6d9f34a952371681360fd55bf9e12b8d",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hermes_plugin/__init__.py": "307b6fbb5a08d3f636578495ced4a4a89c4367025d2dfc2ee95efb44f195b23e",
-    "hv": "0958d69ddb9c02e3fe02bf24ed330086401a025685125a7282f4a5fa2b3d0332",
+    "hv": "32d3fd22d6b23deffd3329f75ea4a3e5fc051170ebc556cac56514a0d9d6268a",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "e98864566d7ca9cd815d06c17a62569cf0df012d1171b2d2be6682aa394cd634",
     "integrations/mcp/hive_mcp.py": "4c2503bbc1ca40833842a046f8963dc71db022d1f1d131da44b09ec7189d1fae",

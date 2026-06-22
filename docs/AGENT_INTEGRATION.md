@@ -84,7 +84,15 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    them for re-verification instead of trusting them indefinitely. Since 1.2 `hv remember`
    **auto-tags** transient-status claims `volatile` (high-precision, content-neutral; pass
    `--no-volatile` to opt out, or an explicit `ttl:` to set the window) — you can rely on it, but
-   tagging explicitly is still good practice.
+   tagging explicitly is still good practice. **Reconcile, do not just append.** When what you
+   write *contravenes* a fact already in the corpus — an issue you closed, a status that flipped, a
+   claim now shown wrong — name that fact in the new one (`resolves #N`, `supersedes #N`,
+   `obsoletes #N`, `CORRECTION to #N`) and reconcile the stale one. A "resolved" fact written while
+   the "open" fact stays live leaves the corpus asserting both, which is worse than either alone.
+   Forgetting is the owner's call (§4): if you are the owner's agent acting deliberately on the
+   owner's device, retract it (`hv retract <id> --reason "..."`, or `--owner` to close decisively)
+   or supersede it; otherwise surface it for the owner rather than erasing it yourself. The audit
+   does not yet detect contraventions on its own, so at write time this is on you.
 3. **Save-nudge (best-effort, not a guarantee).** Where your runtime has a per-turn pre-prompt
    hook, pipe the user's message to `hv nudge --event=user-prompt --session="<id>"` and inject any
    stdout. Gate cheaply first: skip the call on turns that are neither a phrase hit nor a cadence

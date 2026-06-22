@@ -17,7 +17,7 @@ memory.
 | `hv config` | Device identity (`identity`) + owner-signed confidence (`confidence`) / quorum (`quorum`) params |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `rebuild` + `merkle` + `wire-agent` + `migrate-identity` |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle` + `migrate-identity` + `rebuild` + `wire-agent` |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv join` | Request admission to a hive you've synced |
@@ -198,29 +198,6 @@ hv doctor merkle
 
 ---
 
-### `hv doctor wire-agent` — (Re)wire the Claude Code integration
-
-Wires the Claude Code dispatch shim and the `hive-memory` skill into `~/.claude`,
-migrating any older inline hooks to the shim as it goes. It's idempotent — your own
-hooks are never touched — and it's the same logic `hv doctor --fix` and the
-installer/update all use, so there's one definition that can't drift. You rarely run
-this by hand; the installer wires it, update re-asserts it, and the self-heal timer
-keeps it in place. Reach for it only to wire a node immediately rather than waiting
-for the next self-heal tick.
-
-```
-hv doctor wire-agent
-```
-
-Honors `CLAUDE_CONFIG_DIR` (same as Claude Code). On a node with no Claude Code it's
-a quiet no-op.
-
-Only foreign config files (like Claude Code's `settings.json`) need this shim. Agents
-integrated as our own plugin code — Hermes, OpenClaw, the MCP host — carry their wiring
-in source already, so they have nothing to drift and nothing to re-assert.
-
----
-
 ### `hv doctor migrate-identity` — Move an existing node to a device key
 
 A one-time, coordinated step that re-stamps an existing journal from hostname
@@ -257,6 +234,29 @@ hv doctor rebuild
 
 (`hv rebuild` still works as a deprecated alias, kept for the installer/update
 scripts; new use should prefer `hv doctor rebuild`.)
+
+---
+
+### `hv doctor wire-agent` — (Re)wire the Claude Code integration
+
+Wires the Claude Code dispatch shim and the `hive-memory` skill into `~/.claude`,
+migrating any older inline hooks to the shim as it goes. It's idempotent — your own
+hooks are never touched — and it's the same logic `hv doctor --fix` and the
+installer/update all use, so there's one definition that can't drift. You rarely run
+this by hand; the installer wires it, update re-asserts it, and the self-heal timer
+keeps it in place. Reach for it only to wire a node immediately rather than waiting
+for the next self-heal tick.
+
+```
+hv doctor wire-agent
+```
+
+Honors `CLAUDE_CONFIG_DIR` (same as Claude Code). On a node with no Claude Code it's
+a quiet no-op.
+
+Only foreign config files (like Claude Code's `settings.json`) need this shim. Agents
+integrated as our own plugin code — Hermes, OpenClaw, the MCP host — carry their wiring
+in source already, so they have nothing to drift and nothing to re-assert.
 
 ---
 

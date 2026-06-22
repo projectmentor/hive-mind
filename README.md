@@ -168,6 +168,12 @@ cd ~/projects/hive-mind
 ./hv stats       # confirm the journals converged
 ```
 
+Sync runs over HTTP on port `9876` and needs no SSH. If you also want to administer
+one node from another (run `git`, `systemctl`, or `hv` on a peer), that uses
+Tailscale SSH, which needs an `accept` rule in your tailnet SSH ACL. See
+[Remote administration](docs/INTERNALS.md#remote-administration-tailscale-ssh) for
+the policy and the common failure modes.
+
 ---
 
 ## Roadmap

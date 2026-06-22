@@ -289,6 +289,39 @@ def test_decide_supersede(hive):
     assert hive.query("SELECT count(*) c FROM decisions WHERE superseded_by IS NULL")[0]["c"] == 1
 
 
+def test_remember_resolves_links_and_soft_retracts(hive):
+    hive.run("remember", "issue Z is open", "--source", "alice")
+    old = _fid(hive, "issue Z is open")
+    out = hive.run("remember", "issue Z is fixed", "--resolves", str(old), "--source", "alice").stdout
+    new = _fid(hive, "issue Z is fixed")
+    # link recorded on the NEW row, pointing at the resolved fact
+    assert hive.query("SELECT resolves FROM facts WHERE id=?", (new,))[0]["resolves"] == old
+    # resolved fact soft-retracted: negative evidence, confidence down to ~0, contested, reversible
+    row = hive.query("SELECT confidence, contested FROM facts WHERE id=?", (old,))[0]
+    assert row["confidence"] <= 0 and row["contested"] == 1
+    # a retract entry was journaled against the resolved fact
+    assert any(e["type"] == "retract" for e in hive.entries())
+    assert "resolved fact" in out
+
+
+def test_remember_resolves_survives_rebuild(hive):
+    hive.run("remember", "host parked", "--source", "alice")
+    hive.run("remember", "host live", "--resolves", str(_fid(hive, "host parked")), "--source", "alice")
+    before = hive.query("SELECT confidence FROM facts WHERE content=?", ("host parked",))[0]["confidence"]
+    hive.run("rebuild")
+    new_id, old_id = _fid(hive, "host live"), _fid(hive, "host parked")
+    assert hive.query("SELECT resolves FROM facts WHERE id=?", (new_id,))[0]["resolves"] == old_id
+    after = hive.query("SELECT confidence FROM facts WHERE content=?", ("host parked",))[0]["confidence"]
+    assert abs(before - after) < 1e-9
+
+
+def test_remember_resolves_missing_target_is_a_warning(hive):
+    out = hive.run("remember", "standalone fact", "--resolves", "999", "--source", "alice").stdout
+    assert _fid(hive, "standalone fact")            # the fact is still written
+    assert "no fact #999" in out.lower()
+    assert hive.query("SELECT resolves FROM facts WHERE content=?", ("standalone fact",))[0]["resolves"] is None
+
+
 def test_entity_add_and_link_are_journaled(hive):
     hive.run("remember", "a linkable fact")
     hive.run("entity", "add", "--name", "Acme", "--type", "project")

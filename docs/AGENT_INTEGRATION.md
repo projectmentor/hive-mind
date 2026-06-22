@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.10`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.11`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -85,14 +85,15 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    **auto-tags** transient-status claims `volatile` (high-precision, content-neutral; pass
    `--no-volatile` to opt out, or an explicit `ttl:` to set the window) — you can rely on it, but
    tagging explicitly is still good practice. **Reconcile, do not just append.** When what you
-   write *contravenes* a fact already in the corpus — an issue you closed, a status that flipped, a
-   claim now shown wrong — name that fact in the new one (`resolves #N`, `supersedes #N`,
-   `obsoletes #N`, `CORRECTION to #N`) and reconcile the stale one. A "resolved" fact written while
-   the "open" fact stays live leaves the corpus asserting both, which is worse than either alone.
-   Forgetting is the owner's call (§4): if you are the owner's agent acting deliberately on the
-   owner's device, retract it (`hv retract <id> --reason "..."`, or `--owner` to close decisively)
-   or supersede it; otherwise surface it for the owner rather than erasing it yourself. The audit
-   does not yet detect contraventions on its own, so at write time this is on you.
+   write *contravenes* a live fact — an issue you closed, a status that flipped, a claim now shown
+   wrong — reconcile it rather than leaving both. The clean way is one command:
+   `hv remember "<correction>" --resolves <id>`, which writes the correction, links it on the new
+   row, and soft-retracts the old fact (deliberate negative evidence, reversible). If you instead
+   name the target in prose (`resolves #N`, `supersedes #N`, `obsoletes #N`, `CORRECTION to #N`)
+   without `--resolves`, the audit's **CONTRAVENED** check flags it while the target is still live,
+   so a missed reconcile surfaces at the next session start. A "resolved" fact written while the
+   "open" fact stays live asserts both at once, which is worse than either alone. `--resolves` and a
+   bare `hv retract` are soft and reversible; a decisive `--owner` forget stays the owner's call (§4).
 3. **Save-nudge (best-effort, not a guarantee).** Where your runtime has a per-turn pre-prompt
    hook, pipe the user's message to `hv nudge --event=user-prompt --session="<id>"` and inject any
    stdout. Gate cheaply first: skip the call on turns that are neither a phrase hit nor a cadence
@@ -198,6 +199,12 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.11` — reconciliation verbs. `hv remember --resolves <id>` writes a correction, links it on the
+  new fact row (`facts.resolves`), and **soft-retracts** the prior fact (deliberate negative evidence,
+  reversible — never an owner-forget). A new `hv audit` category **CONTRAVENED** parses prose
+  references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live,
+  surfaced in the session-start boot summary. Closes the gap where a "resolved" fact landed while the
+  stale one stayed live. Additive, no wire-format change — adapters need no edit.
 - `1.10` — sync robustness: the **Merkle index now de-dups the journal by `(node_id, seq)`** before
   hashing (`merkle.read_all_entries`). A `(node_id, seq)` names one logical entry, so a
   physically-repeated journal line (a file re-imported or concatenated during recovery) can no longer

@@ -445,7 +445,7 @@ Facts are searchable, tagged, and automatically gain credibility when multiple
 independent sources agree on the same thing.
 
 ```
-hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
+hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] [--resolves ID]
 ```
 
 **Arguments:**
@@ -457,6 +457,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate]
 | `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
 | `--importance` | A numeric hint for how significant this fact is. Recorded for future use but not currently applied to search ranking. |
 | `--gate` | Filter this write through the **salience gate** — a quality check that silently drops low-value entries (too short, no meaningful content, likely noise). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
+| `--resolves ID` | Mark this write as the correction of an earlier fact. It records the link and **soft-retracts** fact `ID` (registers negative evidence so it stops surfacing as canonical), keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract ID --owner`. The audit's **CONTRAVENED** check flags a correction that names a fact in prose (`resolves #N`, `supersedes #N`) but never reconciled it. |
 
 **What you get back:**
 

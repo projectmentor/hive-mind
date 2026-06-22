@@ -91,9 +91,12 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    row, and soft-retracts the old fact (deliberate negative evidence, reversible). If you instead
    name the target in prose (`resolves #N`, `supersedes #N`, `obsoletes #N`, `CORRECTION to #N`)
    without `--resolves`, the audit's **CONTRAVENED** check flags it while the target is still live,
-   so a missed reconcile surfaces at the next session start. A "resolved" fact written while the
-   "open" fact stays live asserts both at once, which is worse than either alone. `--resolves` and a
-   bare `hv retract` are soft and reversible; a decisive `--owner` forget stays the owner's call (§4).
+   so a missed reconcile surfaces at the next session start. Prefer `--resolves`: a prose `#N` is a
+   **local id** that drifts across rebuilds and nodes (so a flagged target id is best-effort), while
+   `--resolves` records the resolved fact's `(node_id, seq)` journal identity, which never drifts. A
+   "resolved" fact written while the "open" fact stays live asserts both at once, which is worse than
+   either alone. `--resolves` and a bare `hv retract` are soft and reversible; a decisive `--owner`
+   forget stays the owner's call (§4).
 3. **Save-nudge (best-effort, not a guarantee).** Where your runtime has a per-turn pre-prompt
    hook, pipe the user's message to `hv nudge --event=user-prompt --session="<id>"` and inject any
    stdout. Gate cheaply first: skip the call on turns that are neither a phrase hit nor a cadence

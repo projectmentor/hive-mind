@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.11`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.12`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -123,9 +123,16 @@ Find your runtime's lifecycle hooks — **session-start, per-turn pre-prompt, pr
 session-end** — and bind the §2 behaviors to them. The reference implementation for Claude Code
 is real, working code in this repo — **study it, then write the equivalent for your runtime:**
 
-- **Claude Code (reference):** `~/.claude/settings.json` hooks (`SessionStart`,
-  `UserPromptSubmit`, `PreCompact`, `SessionEnd`) → `command` runs
-  `scripts/nudge_hook.sh <event>`. See `scripts/nudge_hook.sh` (best-effort stdin parsing → `hv`).
+- **Claude Code (reference):** `~/.claude/settings.json` registers ONE stable shim per lifecycle
+  event (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`) → `command` runs
+  `scripts/hive_dispatch.sh <event>`. The shim consumes the hook's stdin once, replays it to each
+  behavior for that event (session telemetry, then the nudge/digest in `scripts/nudge_hook.sh`), and
+  passes their stdout through so context injection still works. Because the foreign config holds only
+  the shim, **what** runs per event is a source-controlled decision, not a `~/.claude` edit — you
+  don't hand-wire it: `hv` owns the shim spec, the installer/update wire it via `hv doctor wire-agent`,
+  and `hv doctor --fix` (the 15-min self-heal timer) re-asserts/migrates it. Build the same
+  shim-then-reconcile pattern into any foreign-config adapter rather than wiring once and hoping it
+  stays; an adapter that *is* plugin code (below) already has its wiring in source and needs no shim.
 - **Hermes:** plugin lifecycle (`initialize`, `system_prompt_block`, `prefetch`,
   `on_session_switch`, `shutdown`). No per-turn pre-prompt hook exists → wire the save-nudge into
   `prefetch`, reorient into `system_prompt_block` (it already searches the hive), and the
@@ -202,6 +209,21 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.12` — **self-healing agent integration via a stable shim**. The Claude Code hooks live in a
+  foreign config (`~/.claude/settings.json`) the daemon self-heal never owned, so a node updated from
+  before a hook existed could pass every health check yet silently miss half its hooks. The fix is to
+  register only a **stable dispatch shim** there — `scripts/hive_dispatch.sh <event>`, one per
+  lifecycle event — and decide *which* behaviors run for each event inside that script, which lives in
+  source control (and so under `hv verify`'s signature). New behaviors then ship by update, never by
+  re-wiring `~/.claude`; only a new event TYPE changes the registered set. `hv` holds the one shim
+  spec; `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min self-heal timer)
+  reconciles — adds the shim, **migrates** any older inline hooks to it (so behaviors never
+  double-fire), relinks the `hive-memory` skill — surgically (your own hooks untouched, `.bak.doctor`
+  backup first). `hv doctor wire-agent` exposes it; the installer/update delegate to it, no second
+  definition to drift. This applies to foreign-config integrations only (Claude Code today, Codex
+  later via the same dispatcher); plugin agents (Hermes/OpenClaw/MCP) carry their wiring in our signed
+  code and need no shim. Additive, no wire change — adapters unaffected, but a foreign-config adapter
+  should adopt the same shim + reconcile pattern.
 - `1.11` — reconciliation verbs. `hv remember --resolves <id>` writes a correction, links it on the
   new fact row (`facts.resolves`), and **soft-retracts** the prior fact (deliberate negative evidence,
   reversible — never an owner-forget). A new `hv audit` category **CONTRAVENED** parses prose

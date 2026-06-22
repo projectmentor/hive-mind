@@ -17,7 +17,7 @@ memory.
 | `hv config` | Device identity (`identity`) + owner-signed confidence (`confidence`) / quorum (`quorum`) params |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy; `--fix` self-heals; subcommands `rebuild` + `merkle` + `migrate-identity` |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `rebuild` + `merkle` + `wire-agent` + `migrate-identity` |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv join` | Request admission to a hive you've synced |
@@ -138,7 +138,7 @@ the sync port is not mistaken for a hive (the probe verifies a signed genesis).
 ### `hv doctor` — Check that your device is healthy
 
 Runs a single set of checks over your local device and tells you whether anything
-needs attention. It looks at seven things:
+needs attention. It looks at eight things:
 
 - **authenticity** — your copy of HiveMind matches the signed official release
 - **journal** — your device's history is intact and unbroken from the start
@@ -146,21 +146,32 @@ needs attention. It looks at seven things:
 - **owner** — whether this device can sign governance (holds the owner key), plus any
   open succession nominations or owner-key sprawl
 - **hygiene** — whether duplicate or obsolete facts have built up
+- **agent-hooks** — whether the Claude Code dispatch shim and the `hive-memory` skill are
+  wired (skipped silently on a node with no Claude Code)
 - **sync-daemon** — whether the background sync service is running
 - **peers** — whether your peer nodes are reachable and in sync
 
 ```
 hv doctor
 hv doctor --format json    # machine-readable, for scripts and monitoring
-hv doctor --fix            # take the one safe remedial action (clear orphan daemons)
+hv doctor --fix            # take the safe remedial actions (see below)
 ```
 
 The `sync-daemon` check also flags **orphan daemons** — a stale `hv sync daemon`
 left running outside systemd (for example, the unit died but an old process still
 holds the port and serves stale code, so the port answers while nothing is
 actually managed). `hv doctor --fix` kills those orphans and restarts the managed
-unit. Without `--fix`, doctor only reports — it never kills anything, so it stays
-safe to run from cron.
+unit. It also **re-asserts the agent integration**: Claude Code is wired with a single
+stable *dispatch shim* (`hive_dispatch.sh <event>`, one per lifecycle event) rather
+than a hook per behavior — what runs for each event is decided inside that script, in
+source control, so new behaviors arrive by update, not by editing `~/.claude`. If the
+shim or the `hive-memory` skill is missing, or an older node still carries the previous
+inline hooks, `--fix` wires the shim, migrates the old hooks away (so nothing fires
+twice), and relinks the skill — leaving your own hooks untouched and taking a
+`.bak.doctor` backup first. Because the 15-minute `hive-doctor.timer` runs `hv doctor
+--fix`, a node that drifts heals itself with no one re-running the installer. Without
+`--fix`, doctor only reports — it never kills or writes anything, so it stays safe to
+run from cron.
 
 Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
 non-zero only when a check actually fails, so you can wire it into a cron job or a
@@ -184,6 +195,29 @@ hv doctor merkle
 ```
 
 > `hv merkle` is kept as a silent alias.
+
+---
+
+### `hv doctor wire-agent` — (Re)wire the Claude Code integration
+
+Wires the Claude Code dispatch shim and the `hive-memory` skill into `~/.claude`,
+migrating any older inline hooks to the shim as it goes. It's idempotent — your own
+hooks are never touched — and it's the same logic `hv doctor --fix` and the
+installer/update all use, so there's one definition that can't drift. You rarely run
+this by hand; the installer wires it, update re-asserts it, and the self-heal timer
+keeps it in place. Reach for it only to wire a node immediately rather than waiting
+for the next self-heal tick.
+
+```
+hv doctor wire-agent
+```
+
+Honors `CLAUDE_CONFIG_DIR` (same as Claude Code). On a node with no Claude Code it's
+a quiet no-op.
+
+Only foreign config files (like Claude Code's `settings.json`) need this shim. Agents
+integrated as our own plugin code — Hermes, OpenClaw, the MCP host — carry their wiring
+in source already, so they have nothing to drift and nothing to re-assert.
 
 ---
 

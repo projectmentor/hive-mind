@@ -250,6 +250,82 @@ writes are stored but count zero until admitted.
 
 ---
 
+## Remote administration (Tailscale SSH)
+
+Sync and remote administration are **separate channels**. Sync between nodes is
+HTTP on `:9876` (the Merkle delta protocol above) and needs no SSH at all. SSH is
+only for *administering* one node from another (running `git`, `systemctl`, or `hv`
+on a peer), which the fleet uses for deploys and health checks. A node can sync
+perfectly while SSH is completely broken, so diagnose the two independently.
+
+The fleet standard is **Tailscale SSH** (`tailscale up --ssh`), not a stand-alone
+`openssh-server`. Authentication and authorization are decided by the tailnet SSH
+ACL, so there are no `authorized_keys` to manage, and host identity is verified
+through the control plane.
+
+### ACL: `accept` vs `check`
+
+The tailnet SSH policy decides each connection with one of two actions:
+
+| Action | Behavior | Use |
+| --- | --- | --- |
+| `accept` | Connection is allowed with no human step. | Production, and any headless server-to-server admin (the fleet). |
+| `check` | Connection is held while the user approves it by opening a URL in a browser; approval grants a time-limited session. | Interactive devices (a laptop or tablet) where a human is present. |
+
+`check` mode **cannot complete on a headless node** (no browser to open the URL),
+so the connection hangs until it times out. The grant a `check` approval issues is
+also time-limited, which is why an interactive session that worked yesterday can
+stop working today once the grant lapses. For server-to-server admin, scope an
+`accept` rule to your own devices:
+
+```jsonc
+"ssh": [
+  { "action": "accept",
+    "src":    ["autogroup:member"],
+    "dst":    ["autogroup:self"],
+    "users":  ["autogroup:nonroot", "root"] }
+]
+```
+
+`autogroup:self` means devices owned by the connecting user, so it covers any of
+your own nodes reaching each other without affecting other users on the tailnet.
+
+### Failure modes
+
+Three independent things can break Tailscale SSH. The symptoms overlap, so check
+in this order:
+
+1. **A stand-alone `sshd` squats port 22.** An `openssh-server` that was stopped
+   but left *enabled* comes back on reboot and binds `:22` before Tailscale can
+   serve it. The connection then reaches openssh (which has no `authorized_keys`
+   entry for the caller) instead of Tailscale SSH. Symptom: TCP connects, then a
+   slow or no banner, or a publickey rejection. Fix on the target:
+   ```bash
+   sudo systemctl disable --now ssh ssh.socket
+   sudo apt-get purge -y openssh-server
+   sudo tailscale up --ssh
+   ```
+
+2. **The ACL is in `check` mode for a headless caller.** Symptom: the connection
+   establishes and the host key appears, then it hangs with no prompt until
+   timeout. Confirm from a working node with `sudo tailscale debug netmap` and look
+   at `SSHPolicy.rules`: a rule whose action is `holdAndDelegate` (its URL host is
+   the placeholder `unused`) covering your source and destination node IPs is
+   `check`. Fix: switch that rule to `accept` (above).
+
+3. **Stale advertised host key after removing openssh.** Once openssh is purged,
+   the node serves SSH with Tailscale's own host key, but until `tailscaled`
+   re-advertises, peers still hold the old openssh host key from the netmap and
+   reject the new one. Symptom: `Host key verification failed` / "REMOTE HOST
+   IDENTIFICATION HAS CHANGED". Fix: `sudo systemctl restart tailscaled` on the
+   target, then clear the stale entries on the caller:
+   ```bash
+   ssh-keygen -R <peer-ip>                                      # ~/.ssh/known_hosts
+   ssh-keygen -f ~/.config/tailscale/ssh_known_hosts -R <peer-ip>
+   ```
+
+---
+
 ## SQLite schema
 
 Key tables in `store.db`:

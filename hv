@@ -2173,7 +2173,9 @@ def _compute_audit(depth=None, session=""):
                 reconciled_ids.add(cid)
     contravened = []
     for r in frows:
-        if r["content"] in forgotten_contents:
+        # Skip a referrer that is itself reconciled (soft-retracted / owner-forgotten / resolved):
+        # it no longer asserts the correction, so a dangling reference in its text needs no action.
+        if r["id"] in reconciled_ids:
             continue
         for ref_id in _parse_fact_references(r["content"]):
             if ref_id != r["id"] and ref_id in id_to_row and ref_id not in reconciled_ids:

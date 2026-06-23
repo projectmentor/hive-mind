@@ -85,7 +85,7 @@ def test_export_import_round_trip_resumes_same_owner(tmp_path):
     _run(home, "owner", "export", "--out", str(keyfile))
     assert keyfile.exists()
     (home / ".owner-key").unlink()                          # lose the owner device's key
-    assert "does NOT hold the owner key" in _run(home, "owner", "show").stdout
+    assert "This is a member node" in _run(home, "owner", "show").stdout
     _run(home, "owner", "import", str(keyfile))             # restore on (this stand-in for) a new device
     show = _run(home, "owner", "show").stdout
     assert "holds the owner key" in show and oid in show    # same owner_id resumes
@@ -142,7 +142,7 @@ def test_hive_escrow_restore_round_trip(tmp_path):
     entries = merkle.read_all_entries(str(home / "journal"))
     assert any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
     (home / ".owner-key").unlink()                                      # lose the device's key
-    assert "does NOT hold the owner key" in _run(home, "owner", "show").stdout
+    assert "This is a member node" in _run(home, "owner", "show").stdout
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "recovered from the hive" in out
     show = _run(home, "owner", "show").stdout

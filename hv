@@ -2925,12 +2925,16 @@ def _doctor_status():
                 detail = "this device holds the current owner key"
                 if sprawl:
                     notes.append(f"{holders} owner-key holders (owner + {len(gov['standbys'])} standby) — key sprawl")
-            else:
+            elif NODE_ID in gov["standbys"]:
+                # A declared owner-key backup whose local copy is missing — a real problem.
                 status = "warn"
-                if gov["standbys"]:
-                    detail = f"owner key absent here — declared standby(s) may act: {', '.join(sorted(gov['standbys']))}"
-                else:
-                    detail = "owner key absent here and no standby declared — governance unsignable until restored"
+                detail = ("this device is a declared owner-key backup but its key copy is missing "
+                          "— re-import or re-escrow")
+            else:
+                # Plain member node: not holding the owner key is the normal, healthy state.
+                status = "ok"
+                detail = ("owner key not on this device (normal for a member node; "
+                          "the owner device handles membership and config)")
             if notes:
                 detail += " (" + "; ".join(notes) + ")"
             checks.append({"name": "owner", "status": status, "detail": detail})
@@ -3195,10 +3199,7 @@ def owner_cmd(args):
         if gov["escrows"]:
             print(f"  live escrows: {len(gov['escrows'])} (recover with `hv owner restore`)")
         if not held:
-            extra = (" Declared standbys that hold a key copy may act: "
-                     + ", ".join(sorted(gov["standbys"]))) if gov["standbys"] else ""
-            print("  NOTE: this device does NOT hold the owner key — governance must run on the "
-                  "owner device or a key holder." + extra)
+            print("  This is a member node; membership and config changes run on the owner device.")
         return
     if action == "export":
         seed = _owner_seed()
@@ -4250,26 +4251,26 @@ def build_parser():
 
     admit_parser = subparsers.add_parser("admit", help="[alias of `hv group admit`] Admit a device; no arg lists pending")
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
-    admit_parser.add_argument("--principal", help="Tag the device's principal (owner of the device), for CAP_self")
+    admit_parser.add_argument("--principal", help="Tag the person or agent who owns this device")
 
     group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list")
     group_sub = group_parser.add_subparsers(dest="group_action")
     g_admit = group_sub.add_parser("admit", help="Admit a device; no arg lists pending requests")
     g_admit.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list pending")
-    g_admit.add_argument("--principal", help="Tag the device's principal, for CAP_self")
+    g_admit.add_argument("--principal", help="Tag the person or agent who owns this device")
     g_revoke = group_sub.add_parser("revoke", help="Un-admit a device (reversible) → returns to STERILE")
     g_revoke.add_argument("device_id")
     g_deny = group_sub.add_parser("deny", help="Reject a pending join-request (a later admit overrides)")
     g_deny.add_argument("device_id")
     g_change = group_sub.add_parser("change", help="Re-tag a device's principal (admission unchanged)")
     g_change.add_argument("device_id")
-    g_change.add_argument("--principal", required=True, help="The new principal tag")
+    g_change.add_argument("--principal", required=True, help="The new owner tag (person or agent)")
     g_purge = group_sub.add_parser("purge", help="Tombstone a device (permanent; excluded from corroboration)")
     g_purge.add_argument("device_id")
     group_sub.add_parser("list", help="Show the membership roster")
 
     join_parser = subparsers.add_parser("join", help="Request admission to this device's hive (after syncing it)")
-    join_parser.add_argument("--principal", help="The principal (you) the device should be tagged with")
+    join_parser.add_argument("--principal", help="The person or agent this device should be tagged with (you)")
 
     config_parser = subparsers.add_parser("config", help="Settings: device identity + owner-signed confidence/quorum params")
     config_sub = config_parser.add_subparsers(dest="config_action")

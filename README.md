@@ -10,6 +10,15 @@ agent on every machine can use it too. Local-first, no cloud, no central server.
 Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
 Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/)
 
+<p align="center">
+  <video src="https://hivemind.projectmentor.org/assets/hivemind-video-splash.mp4"
+         poster="https://hivemind.projectmentor.org/assets/og-image.png"
+         controls muted loop playsinline width="680"></video>
+</p>
+
+> If the video does not play inline, watch it at
+> **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)**.
+
 HiveMind is a shared, append-only memory that your AI agents read and write as they work.
 Facts, decisions, and outcomes accumulate over time and earn trust through **independent
 corroboration**, not by an agent asserting it. Each machine holds the full memory and syncs

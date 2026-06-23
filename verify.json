@@ -1,5 +1,5 @@
 {
-  "digest": "30778d3ce5efa733dfad8184d7121922d421df02ec562825283f42ac1d326f9d",
+  "digest": "45b68737d1011c709f0555527324b56244a475c5da520b71493a59141b940d0a",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -12,7 +12,7 @@
     ".peers.json.example": "423edc35587b068ff591fe741225bec845a01f5bc9318ad0820d738452f3f363",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
-    "README.md": "cf1498f5da6ae06cca41fb1230350f87e4769143bf4ae703ff56532901d0e764",
+    "README.md": "8513972cf90c1bc1e07eb92642e184c782b45f62a0075b1f627ed515314e686a",
     "docs/AGENT_INTEGRATION.md": "1f2d58b7089195e63b9a947d3f473e428fd84271f640722ac57d41baf3b4987d",
     "docs/CLI_REFERENCE.md": "6b53fbb421cd7efd2feef2b55c0ed3eecd2f54f0cb3108b38c648d5347b4d9b3",
     "docs/INTERNALS.md": "49ee1ad3a9ae3c6b699a73a740c6be6c05cce62c969fb399a84320d4c134932d",
@@ -67,7 +67,7 @@
     "tests/test_merkle_dedup.py": "be232d5c8466f1f470c98099c620093e0b3031aaa5bc4c9271caf47dcb53cb28",
     "tests/test_nudge.py": "075ad55162f866316d4e756ae5d5dc51116c55b5d50f17aaf284aa5f1f6988b5",
     "tests/test_onboarding.py": "7a26f267931f899b5dd21ed137891b164deb0b70e671e362817ba8299f7c982f",
-    "tests/test_succession.py": "5cc6b956fd4f6c3d74aacb3968790263e57db7a0676addbee02525db8f62ec5d",
+    "tests/test_succession.py": "c32a65b981fe400074f9a42152d5535dd2d21844c0cf8d32957a877e1622d99c",
     "tests/test_sync.py": "0faa0e72b82a71e3c2f04a550fa6fc12e5b33cdeef9b49d1f5b7da8dbbe40ef9",
     "tests/test_telemetry.py": "685a12ab3470d7a68ed0ca858bfa8dfe40dc53bd6eaf423e17417ac3f17ac427",
     "tests/test_verify.py": "3f24d5dfc9459788831cf99d2c004977e6d06e5202e926bdba753326ba3f6b04",

@@ -701,6 +701,42 @@ def _confidence_for(net):
 HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence
 
 
+def _projection_latest(entries, want_type):
+    """Pure, deterministic projection over content entries of `want_type` → {name: latest payload}.
+    Mirrors `_governance_state`'s discipline: read only the journal (which converges via the G-Set),
+    skip entries that fail their device signature, and break ties identically on every node, so all
+    nodes derive the same view. "Latest" = highest `version`, then (timestamp, node_id, seq) — a total
+    order, deterministic across nodes. Admission is already enforced at ingest (`append_foreign_entries`
+    Pass 2 rejects content from non-admitted devices), so the projection just folds what landed."""
+    rows = []
+    for e in entries:
+        if e.get("type") != want_type:
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload", {}) or {}
+        name = p.get("name")
+        if not name:
+            continue
+        rows.append((int(p.get("version", 0) or 0), e.get("timestamp", ""),
+                     str(e.get("node_id", "")), e.get("seq", 0), name, p))
+    rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))   # earliest→latest; last write per name wins
+    out = {}
+    for _v, _ts, _nid, _seq, name, p in rows:
+        out[name] = p
+    return out
+
+
+def _cell_state(entries):
+    """name → latest `cell` payload. A cell is an executable unit with a `kind` (`tool`|`agent`)."""
+    return _projection_latest(entries, "cell")
+
+
+def _comb_state(entries):
+    """name → latest `comb` payload. A comb is a named, ordered collection of cell names."""
+    return _projection_latest(entries, "comb")
+
+
 def _governance_state(entries):
     """Pure, deterministic projection over owner-signed `governance` entries → the established owner,
     the admitted device set, the principal map, and tunable config. Because it reads only the journal

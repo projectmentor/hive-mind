@@ -3414,6 +3414,36 @@ def _doctor_status():
     except Exception as e:
         checks.append({"name": "authenticity", "status": "warn", "detail": f"check error: {e}"})
 
+    # 1b. Crypto self-test — known-answer tests for the bundled crypto (x25519/ed25519/ed↔curve +
+    #     the capsule key-agreement), run on every doctor pass (and the 15-min `--fix` timer). A
+    #     broken primitive is a HARD failure (a corrupt/tampered module would silently weaken every
+    #     sealed capsule), so it sets doctor's non-zero exit like authenticity does.
+    try:
+        import crypto_selftest
+        res = crypto_selftest.run_all()
+        bad = [k for k, ok in res.items() if not ok]
+        if bad:
+            checks.append({"name": "crypto", "status": "fail",
+                           "detail": f"self-test FAILED: {', '.join(bad)} — `hv verify`/reinstall"})
+        else:
+            adv = []
+            try:
+                ap = Path(__file__).resolve().parent / "advisories.json"
+                if ap.exists():
+                    adv = [a for a in json.loads(ap.read_text()).get("crypto", [])
+                           if a.get("severity") == "high"]
+            except Exception:
+                adv = []
+            if adv:
+                checks.append({"name": "crypto", "status": "warn",
+                               "detail": f"KATs pass; {len(adv)} HIGH crypto advisory(ies): "
+                                         + "; ".join(a.get("summary", "") for a in adv)})
+            else:
+                checks.append({"name": "crypto", "status": "ok",
+                               "detail": "x25519/ed25519/ed↔curve/sealed-box KATs pass"})
+    except Exception as e:
+        checks.append({"name": "crypto", "status": "fail", "detail": f"self-test error: {e}"})
+
     # 2. Journal — THIS node's hash chain is contiguous from genesis and each prev_hash links.
     #    A break means local corruption or tampering (foreign nodes may be partial, so only ours).
     try:

@@ -59,6 +59,36 @@ def read_all_entries(journal_dir):
     return entries
 
 
+def corrupt_lines(journal_dir):
+    """Count (and sample the files of) non-empty journal lines that read_all_entries SILENTLY skips —
+    unparseable JSON or entries missing node_id/seq (e.g. a truncated/garbled .jsonl from a crash mid-
+    write). Surfaced by `hv doctor` so silent data loss becomes visible. Returns (count, [filenames])."""
+    journal_dir = Path(journal_dir)
+    if not journal_dir.exists():
+        return 0, []
+    count, sample = 0, []
+
+    def _flag(name):
+        nonlocal count
+        count += 1
+        if name not in sample and len(sample) < 5:
+            sample.append(name)
+
+    for f in sorted(journal_dir.glob("*.jsonl")):
+        for line in f.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                _flag(f.name)
+                continue
+            if not isinstance(e, dict) or "node_id" not in e or "seq" not in e:
+                _flag(f.name)
+    return count, sample
+
+
 def chunk_hashes(entries, size=CHUNK_SIZE):
     """SHA-256 over each contiguous chunk of `size` entries (canonical bytes)."""
     hashes = []

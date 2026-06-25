@@ -33,6 +33,46 @@ PROTOCOL_VERSION = 1
 # outbound sync (M5) don't rebuild SQLite concurrently.
 _ingest_lock = threading.Lock()
 
+# ── DoS / abuse hardening ────────────────────────────────────────────────────────────────────
+# The tailnet (Tailscale) is the trust perimeter, but a SINGLE misbehaving/compromised peer must
+# not be able to OOM the node (huge body), thread-exhaust it (connection flood), wedge it (slow
+# read), or flood it (request storm). These guards are best-effort and NOT consensus-bearing.
+MAX_BODY_BYTES = 32 * 1024 * 1024          # reject /sync/ingest bodies larger than this (413)
+SOCKET_TIMEOUT = 30                        # per-connection read timeout, seconds (slow-loris guard)
+MAX_CONCURRENT_REQUESTS = 32               # in-flight handlers; excess → 503 (thread-exhaustion guard)
+RATE_BUCKET_CAPACITY = 256                 # per-peer token bucket burst (generous: a full chunked
+RATE_REFILL_PER_SEC = 64                   #   sync is bursty — these throttle abuse, not real sync)
+
+_request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
+
+
+class _RateLimiter:
+    """Best-effort in-memory token bucket per peer-IP. Blunts a chatty/abusive peer without
+    throttling a legitimate (bursty) sync. Buckets are pruned lazily so the map stays bounded."""
+
+    def __init__(self, capacity, refill_per_sec):
+        self.capacity = float(capacity)
+        self.refill = float(refill_per_sec)
+        self._buckets = {}                 # ip -> (tokens, last_monotonic)
+        self._lock = threading.Lock()
+
+    def allow(self, ip):
+        now = time.monotonic()
+        with self._lock:
+            tokens, last = self._buckets.get(ip, (self.capacity, now))
+            tokens = min(self.capacity, tokens + (now - last) * self.refill)
+            if tokens < 1.0:
+                self._buckets[ip] = (tokens, now)
+                return False
+            self._buckets[ip] = (tokens - 1.0, now)
+            if len(self._buckets) > 4096:  # lazy prune: drop buckets idle > 1h
+                self._buckets = {k: (t, ts) for k, (t, ts) in self._buckets.items()
+                                 if ts >= now - 3600}
+            return True
+
+
+_rate_limiter = _RateLimiter(RATE_BUCKET_CAPACITY, RATE_REFILL_PER_SEC)
+
 
 def _entries():
     return merkle.read_all_entries(hv.JOURNAL_DIR)
@@ -40,6 +80,14 @@ def _entries():
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "hive-sync/2.0"
+    timeout = SOCKET_TIMEOUT             # honored by socketserver setup() → socket read timeout
+
+    def setup(self):
+        super().setup()
+        try:                             # belt-and-suspenders: bound slow reads even if `timeout` is ignored
+            self.connection.settimeout(SOCKET_TIMEOUT)
+        except Exception:
+            pass
 
     def log_message(self, fmt, *args):  # keep the daemon quiet; errors go to do_*
         pass
@@ -52,7 +100,27 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _enter(self):
+        """Rate-limit + concurrency gate. Returns True if the request may proceed (caller MUST then
+        call _leave() in a finally); otherwise sends 429/503 and returns False."""
+        ip = self.client_address[0] if self.client_address else "?"
+        if not _rate_limiter.allow(ip):
+            self._send(429, {"error": "rate limited"})
+            return False
+        if not _request_slots.acquire(blocking=False):
+            self._send(503, {"error": "server busy"})
+            return False
+        return True
+
+    def _leave(self):
+        try:
+            _request_slots.release()
+        except Exception:
+            pass
+
     def do_GET(self):
+        if not self._enter():
+            return
         u = urlparse(self.path)
         q = parse_qs(u.query)
         try:
@@ -91,15 +159,28 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, {"error": "not found"})
         except Exception as e:  # never crash the handler thread
             self._send(500, {"error": str(e)})
+        finally:
+            self._leave()
 
     def do_POST(self):
-        u = urlparse(self.path)
-        if u.path != "/sync/ingest":
-            self._send(404, {"error": "not found"})
+        if not self._enter():
             return
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length) or b"{}")
+            u = urlparse(self.path)
+            if u.path != "/sync/ingest":
+                self._send(404, {"error": "not found"})
+                return
+            # Bound the request body BEFORE reading it: a missing/garbage Content-Length is a 400,
+            # an over-cap one is a 413 — so no peer can stream an unbounded body into memory.
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+            except (TypeError, ValueError):
+                self._send(400, {"error": "bad Content-Length"})
+                return
+            if length < 0 or length > MAX_BODY_BYTES:
+                self._send(413, {"error": "request too large", "max_bytes": MAX_BODY_BYTES})
+                return
+            body = json.loads((self.rfile.read(length) if length else b"{}") or b"{}")
             # Refuse a cross-hive push: if both sides have a hive_id and they differ, this is a
             # different hive's journal and must not merge into ours.
             local_hive, sender_hive = hv._local_hive_id(), body.get("hive_id", "")
@@ -114,6 +195,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"accepted": accepted, "duplicates": duplicates})
         except Exception as e:
             self._send(500, {"error": str(e)})
+        finally:
+            self._leave()
 
 
 class AlreadyRunning(Exception):

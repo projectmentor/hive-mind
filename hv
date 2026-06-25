@@ -2920,7 +2920,117 @@ def _resolve_cell(name, entries=None):
     return _cell_state(entries).get(name)
 
 
-def _wire_one(cell, name):
+def _detect_platform():
+    """Coarse platform key for selecting a cell's `spec.platforms` block: wsl|linux|darwin|windows."""
+    if sys.platform == "darwin":
+        return "darwin"
+    if sys.platform.startswith("linux"):
+        try:
+            if "microsoft" in Path("/proc/version").read_text().lower():
+                return "wsl"
+        except Exception:
+            pass
+        return "linux"
+    if sys.platform.startswith("win"):
+        return "windows"
+    return sys.platform
+
+
+def _load_env_file(path):
+    """Parse a dotenv file → {KEY: value}. Tolerant of `export`, quotes, comments; never shell-evals.
+    This is the Phase-1 credential source for tool cells; Phase 2 reads from sealed capsules instead."""
+    out = {}
+    try:
+        text = Path(path).expanduser().read_text()
+    except Exception:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        if k:
+            out[k] = v
+    return out
+
+
+def _subst(s, mapping):
+    """Replace {VAR} placeholders in a verify URL/header/cmd from `mapping` (unknown vars left as-is)."""
+    for k, v in mapping.items():
+        s = s.replace("{" + k + "}", v)
+    return s
+
+
+def _run_verify(cell, secrets):
+    """Run a cell's `verify` (http or cmd) → True iff it passes. No `verify` block → trivially True.
+    http: GET the url (with optional {VAR}-substituted headers); pass = `expect` substring present, or
+    a 2xx when no expect. cmd: run under bash; pass = exit 0 and (expect substring present, if given)."""
+    v = cell.get("verify") or {}
+    if not v:
+        return True
+    if v.get("http"):
+        try:
+            req = urllib.request.Request(_subst(v["http"], secrets),
+                                         headers={hk: _subst(hx, secrets)
+                                                  for hk, hx in (v.get("headers") or {}).items()})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read().decode("utf-8", "replace")
+                code = getattr(r, "status", 200)
+            exp = v.get("expect")
+            return (exp in body) if exp else (200 <= code < 300)
+        except Exception:
+            return False
+    if v.get("cmd"):
+        r = subprocess.run(["bash", "-lc", _subst(v["cmd"], secrets)],
+                           env=dict(os.environ, **secrets), capture_output=True, text=True)
+        exp = v.get("expect")
+        return r.returncode == 0 and (exp in (r.stdout + r.stderr) if exp else True)
+    return True
+
+
+def _wire_tool(cell, env_file=None):
+    """Provision a `kind:tool` cell: ensure required credentials (from the per-device `.env` for now),
+    run the steps for THIS platform, then verify. Idempotent — if `verify` already passes, do nothing.
+    Returns a process-style int (0 ok)."""
+    name = cell.get("name", "?")
+    ef = env_file or "~/.claude/.env"
+    secrets = _load_env_file(ef)
+    requires = cell.get("requires") or []
+    missing = [k for k in requires if not secrets.get(k)]
+    if missing:
+        print(f"{name}: missing credential(s) {missing} — add them to {ef} and re-run "
+              f"(Phase 2 will seal these into a capsule).")
+        return 1
+    if _run_verify(cell, secrets):
+        print(f"{name}: already provisioned (verify passed).")
+        return 0
+    plat = _detect_platform()
+    plats = (cell.get("spec", {}) or {}).get("platforms", {}) or {}
+    steps = (plats.get(plat) or plats.get("linux") or {}).get("steps", []) or []
+    if not steps:
+        print(f"{name}: no steps for platform {plat!r} (and verify not yet passing).")
+        return 1
+    env = dict(os.environ, **{k: secrets[k] for k in requires})
+    for step in steps:
+        r = subprocess.run(["bash", "-lc", step], env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"{name}: step failed ({plat}): {step}\n  {(r.stderr or r.stdout).strip()[:400]}")
+            return 1
+    if _run_verify(cell, secrets):
+        print(f"{name}: provisioned + verified ✓ ({plat})")
+        return 0
+    print(f"{name}: steps ran but verify did not pass.")
+    return 1
+
+
+def _wire_one(cell, name, env_file=None):
     """Provision a single resolved cell, dispatching on its `kind`."""
     if not cell:
         print(f"No cell named {name!r}. (`hv wire --list` to see cells, "
@@ -2942,9 +3052,7 @@ def _wire_one(cell, name):
         print(f"{name}: " + ("; ".join(acts) if acts else "already wired") + ".")
         return 0
     if kind == "tool":
-        print(f"{name}: tool executor lands in Phase 1 — cell resolved "
-              f"(requires={cell.get('requires', [])}).")
-        return 0
+        return _wire_tool(cell, env_file)
     print(f"{name}: unknown cell kind {kind!r}.")
     return 1
 
@@ -3001,14 +3109,14 @@ def wire_cmd(args):
         names = comb.get("cells", []) or []
         print(f"comb {comb_name!r}: wiring {len(names)} cell(s): {', '.join(names)}")
         for n in names:
-            _wire_one(_resolve_cell(n, entries), n)
+            _wire_one(_resolve_cell(n, entries), n, getattr(args, "env_file", None))
         return
 
     name = getattr(args, "name", None)
     if not name:
         print("usage: hv wire <name> | --comb <name> | --list | --show <name> | --add <file.json>")
         return
-    _wire_one(_resolve_cell(name, entries), name)
+    _wire_one(_resolve_cell(name, entries), name, getattr(args, "env_file", None))
 
 
 def _doctor_status():
@@ -4390,6 +4498,8 @@ def build_parser():
     wire_parser.add_argument("--kind", help="(with --list) filter by kind: tool|agent")
     wire_parser.add_argument("--show", metavar="NAME", help="Show a cell/comb definition")
     wire_parser.add_argument("--add", metavar="FILE", help="Publish a cell/comb from a JSON file")
+    wire_parser.add_argument("--env-file", dest="env_file", metavar="PATH",
+                             help="Dotenv file to read tool credentials from (default ~/.claude/.env)")
 
     key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")

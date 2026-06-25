@@ -1,0 +1,12 @@
+{
+  "name": "lofty-idx", "kind": "tool", "version": 1, "requires": [],
+  "spec": {
+    "obtain": "No credential — the public IDX listing API is cookie/PoW-gated and same-origin on a Lofty/Chime site. Full runbook in hive #300.",
+    "platforms": {"linux": {"steps": []}, "wsl": {"steps": []}, "darwin": {"steps": []}},
+    "gotchas": [
+      "GET https://<site>/api-site/search/realTimeListings?siteId=<id>&condition=<urlencoded JSON>&listingSort=RELEVANCE&pageSize=N&page=N ; headers currentsiteid + site-search-listings:true.",
+      "Returns {listings:[~250 fields/rec], counts, totalPage}. &quickSearch=true -> {counts}; &aggType=aggCityState -> map clusters. No bearer token; site session + cf_pow cookies gate it.",
+      "TBHH: siteId 108868, MLS Stellar 586; also a GraphQL endpoint /api-graphql."
+    ]
+  }
+}

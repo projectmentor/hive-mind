@@ -37,7 +37,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: '3.12'        # match ci.yml — the sign gate runs the same suite
+
+      - name: Install test deps
+        run: pip install -r requirements.txt pytest   # sign_release.py's gate runs `python3 -m pytest`
 
       - name: Regenerate manifest
         run: python3 scripts/gen_verify.py

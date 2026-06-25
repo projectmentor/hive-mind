@@ -27,7 +27,7 @@ echo "== register telemetry + nudge/audit hooks (idempotent, additive) =="
 # (the check + the 15-min `--fix` self-heal). Keeping the wiring in one place is why a node updated
 # from before a hook existed now self-heals instead of silently drifting. `_wire_claude_hooks` honors
 # CLAUDE_CONFIG_DIR, so point it at the dir we resolved above.
-CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" doctor wire-agent
+CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" wire claude
 
 echo
 echo "== done =="

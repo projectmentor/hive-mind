@@ -43,6 +43,14 @@ try:
     import ed25519 as _ed25519  # bundled pure-Python signature verifier
 except Exception:
     _ed25519 = None
+try:
+    import x25519 as _x25519     # bundled pure-Python X25519 (capsule encrypt-to-device)
+except Exception:
+    _x25519 = None
+try:
+    import chacha20poly1305 as _chacha   # bundled pure-Python RFC 8439 AEAD (owner-seal + capsules)
+except Exception:
+    _chacha = None
 
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
@@ -133,41 +141,57 @@ def _canon_pub(b64):
         return None
 
 
-def _kdf_keystream(key, nbytes):
-    """SHA-256 CTR keystream: block_i = sha256(key || be64(counter)). Stdlib-only stream cipher."""
-    out = bytearray()
-    counter = 0
-    while len(out) < nbytes:
-        out += hashlib.sha256(key + counter.to_bytes(8, "big")).digest()
-        counter += 1
-    return bytes(out[:nbytes])
+def _hkdf_sha256(ikm, salt, info, n):
+    """HKDF-SHA256 (RFC 5869) → n bytes. Derives INDEPENDENT enc/MAC subkeys from a CEK or an X25519
+    shared secret, so one raw key never directly keys both the cipher and the MAC (key separation)."""
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()           # extract
+    out, t, i = b"", b"", 0                                        # expand
+    while len(out) < n:
+        i += 1
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        out += t
+    return out[:n]
+
+
+_OWNER_SEAL_ALG = "scrypt-chacha20poly1305-v2"
 
 
 def _owner_seal(seed, passphrase):
-    """Encrypt the 32-byte owner seed under a passphrase: scrypt KDF → SHA-256-CTR keystream,
-    encrypt-then-MAC (HMAC-SHA256). No block cipher needed (none in stdlib). Returns the envelope."""
+    """Encrypt the 32-byte owner seed under a passphrase: scrypt (memory-hard) derives a key, then ONE
+    ChaCha20-Poly1305 (RFC 8439) seal. The scrypt params n/r/p are bound as the AEAD AAD, so tampering
+    with the stored cost parameters is detected (not just self-healed by a derived-key mismatch).
+    Returns the envelope. (v2 — replaced the hand-rolled SHA-256-CTR+HMAC v1.)"""
+    if _chacha is None:
+        raise RuntimeError("chacha20poly1305 module unavailable")
     salt = os.urandom(16)
-    n, r, p = 1 << 15, 8, 1
-    dk = hashlib.scrypt(passphrase.encode(), salt=salt, n=n, r=r, p=p, dklen=64, maxmem=128 * 1024 * 1024)
-    kenc, kmac = dk[:32], dk[32:]
-    ct = bytes(a ^ b for a, b in zip(seed, _kdf_keystream(kenc, len(seed))))
-    tag = hmac.new(kmac, salt + ct, hashlib.sha256).digest()
-    return {"enc": "scrypt-ctr-hmac-v1", "n": n, "r": r, "p": p,
+    n, r, p = 1 << 16, 8, 1                                   # 64 MiB — within the 128 MiB maxmem ceiling
+    key = hashlib.scrypt(passphrase.encode(), salt=salt, n=n, r=r, p=p, dklen=32, maxmem=128 * 1024 * 1024)
+    nonce = os.urandom(12)
+    aad = f"{_OWNER_SEAL_ALG}|{n}|{r}|{p}".encode()
+    ct, tag = _chacha.encrypt(key, nonce, seed, aad)
+    return {"enc": _OWNER_SEAL_ALG, "n": n, "r": r, "p": p,
             "salt": base64.b64encode(salt).decode(),
+            "nonce": base64.b64encode(nonce).decode(),
             "ct": base64.b64encode(ct).decode(),
             "tag": base64.b64encode(tag).decode()}
 
 
 def _owner_unseal(env, passphrase):
-    """Decrypt an owner-seed envelope; verify the HMAC tag (constant-time) before releasing the
-    seed. Raises ValueError on a wrong passphrase / tampering."""
-    salt, ct, tag = (base64.b64decode(env[k]) for k in ("salt", "ct", "tag"))
-    dk = hashlib.scrypt(passphrase.encode(), salt=salt, n=int(env["n"]), r=int(env["r"]),
-                        p=int(env["p"]), dklen=64, maxmem=128 * 1024 * 1024)
-    kenc, kmac = dk[:32], dk[32:]
-    if not hmac.compare_digest(tag, hmac.new(kmac, salt + ct, hashlib.sha256).digest()):
+    """Decrypt an owner-seed envelope (v2 only — the hand-rolled v1 scheme is gone). ChaCha20-Poly1305
+    authenticates before releasing the seed. Raises ValueError on a wrong passphrase / tampering, or on
+    a legacy/unknown `enc` scheme (re-mint with `hv owner escrow`)."""
+    if _chacha is None:
+        raise RuntimeError("chacha20poly1305 module unavailable")
+    if env.get("enc") != _OWNER_SEAL_ALG:
+        raise ValueError(f"unsupported owner-seal scheme {env.get('enc')!r} — re-run `hv owner escrow`")
+    salt, nonce, ct, tag = (base64.b64decode(env[k]) for k in ("salt", "nonce", "ct", "tag"))
+    n, r, p = int(env["n"]), int(env["r"]), int(env["p"])
+    key = hashlib.scrypt(passphrase.encode(), salt=salt, n=n, r=r, p=p, dklen=32, maxmem=128 * 1024 * 1024)
+    aad = f"{_OWNER_SEAL_ALG}|{n}|{r}|{p}".encode()
+    try:
+        return _chacha.decrypt(key, nonce, ct, tag, aad)
+    except ValueError:
         raise ValueError("wrong passphrase or corrupted file")
-    return bytes(a ^ b for a, b in zip(ct, _kdf_keystream(kenc, len(ct))))
 
 
 def _read_passphrase(prompt, confirm=False):
@@ -216,7 +240,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.12"   # 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.14"   # 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -701,6 +725,48 @@ def _confidence_for(net):
 HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence
 
 
+def _projection_latest(entries, want_type):
+    """Pure, deterministic projection over content entries of `want_type` → {name: latest payload}.
+    Mirrors `_governance_state`'s discipline: read only the journal (which converges via the G-Set),
+    skip entries that fail their device signature, and break ties identically on every node, so all
+    nodes derive the same view. "Latest" = highest `version`, then (timestamp, node_id, seq) — a total
+    order, deterministic across nodes. Admission is already enforced at ingest (`append_foreign_entries`
+    Pass 2 rejects content from non-admitted devices), so the projection just folds what landed."""
+    rows = []
+    for e in entries:
+        if e.get("type") != want_type:
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload", {}) or {}
+        name = p.get("name")
+        if not name:
+            continue
+        rows.append((int(p.get("version", 0) or 0), e.get("timestamp", ""),
+                     str(e.get("node_id", "")), e.get("seq", 0), name, p))
+    rows.sort(key=lambda r: (r[0], r[1], r[2], r[3]))   # earliest→latest; last write per name wins
+    out = {}
+    for _v, _ts, _nid, _seq, name, p in rows:
+        out[name] = p
+    return out
+
+
+def _cell_state(entries):
+    """name → latest `cell` payload. A cell is an executable unit with a `kind` (`tool`|`agent`)."""
+    return _projection_latest(entries, "cell")
+
+
+def _comb_state(entries):
+    """name → latest `comb` payload. A comb is a named, ordered collection of cell names."""
+    return _projection_latest(entries, "comb")
+
+
+def _capsule_state(entries):
+    """name → latest `capsule` payload (an encrypt-to-device sealed secret). Latest version wins, so
+    a rotation supersedes an old seal and a tombstone (alg='tombstone-v1') supersedes the secret."""
+    return _projection_latest(entries, "capsule")
+
+
 def _governance_state(entries):
     """Pure, deterministic projection over owner-signed `governance` entries → the established owner,
     the admitted device set, the principal map, and tunable config. Because it reads only the journal
@@ -886,6 +952,8 @@ def _governance_state(entries):
                 elif key == "quorum_m":
                     gov["config"][key] = int(raw)
                 elif key == "quorum_by" and raw in ("device", "principal"):
+                    gov["config"][key] = raw
+                elif key == "capsule_putters" and raw in ("owner", "fertile"):
                     gov["config"][key] = raw
             except (TypeError, ValueError):
                 pass
@@ -2746,20 +2814,23 @@ def _is_hive_hook_command(cmd):
             or "/scripts/nudge_hook.sh" in c or "hive-mind/scripts" in c)
 
 
-def _claude_hook_reconcile(cfg):
-    """READ-ONLY diff of a parsed settings.json against the canonical shim spec → (missing, stale):
+def _agent_hook_reconcile(cfg, hook_spec):
+    """READ-ONLY diff of a parsed settings.json against an agent's canonical shim spec →
+    (missing, stale):
       missing — spec shims not yet present (dedupe on (event, command));
       stale   — Hive-owned hooks present that are NOT in the current spec (legacy direct hooks left
-                from before the dispatcher shim, to be pruned so behaviors don't double-fire)."""
+                from before the dispatcher shim, to be pruned so behaviors don't double-fire).
+    `hook_spec` is the cell's [(event, command, timeout), …] (the built-in Claude cell wraps
+    `_CLAUDE_HOOK_SPEC`, so behavior is identical to the pre-refactor `_claude_hook_reconcile`)."""
     hooks = (cfg or {}).get("hooks", {}) or {}
-    spec_cmds = {(ev, cmd) for ev, cmd, _ in _CLAUDE_HOOK_SPEC}
+    spec_cmds = {(ev, cmd) for ev, cmd, _ in hook_spec}
     def present(event, command):
         for grp in hooks.get(event, []) or []:
             for h in (grp.get("hooks", []) or []):
                 if h.get("type") == "command" and h.get("command") == command:
                     return True
         return False
-    missing = [(ev, cmd, to) for (ev, cmd, to) in _CLAUDE_HOOK_SPEC if not present(ev, cmd)]
+    missing = [(ev, cmd, to) for (ev, cmd, to) in hook_spec if not present(ev, cmd)]
     stale = []
     for ev, grps in hooks.items():
         for grp in (grps or []):
@@ -2771,30 +2842,53 @@ def _claude_hook_reconcile(cfg):
     return missing, stale
 
 
-def _wire_claude_hooks(write=False):
-    """Reconcile the Claude Code integration (the dispatch shim + the hive-memory skill symlink)
-    against the canonical spec. READ-ONLY unless write=True, in which case missing shims are added and
-    legacy direct hooks are PRUNED (so behaviors never double-fire) — both surgically, leaving the
-    user's own hooks untouched, after a one-time .bak.doctor backup; an absent/stale skill symlink is
-    repaired too. Returns {applicable, missing, stale, skill_ok, wrote, skill_fixed}. Silent + no-op
-    where there is no Claude Code on the node (integration not applicable)."""
+def _claude_hook_reconcile(cfg):
+    """Back-compat alias: reconcile against the built-in Claude hook spec."""
+    return _agent_hook_reconcile(cfg, _CLAUDE_HOOK_SPEC)
+
+
+def _builtin_claude_cell():
+    """The built-in `kind:agent` cell for Claude Code: wraps the canonical hook spec + the
+    hive-memory skill link. Defined in signed source (not journaled), so it's covered by `hv verify`
+    and resolves before any journaled cell of the same name. `hv wire claude`, the `agent-hooks`
+    doctor check, and `--fix` all dispatch through this."""
+    return {"kind": "agent", "name": "claude", "builtin": True,
+            "spec": {"hooks": _CLAUDE_HOOK_SPEC,
+                     "skill": {"name": "hive-memory",
+                               "src_subpath": "integrations/claude-code/hive-memory"}}}
+
+
+def _wire_agent(cell, write=False):
+    """Reconcile a `kind:agent` cell's foreign-config wiring (its dispatch-shim hooks + an optional
+    skill symlink) against the canonical spec. READ-ONLY unless write=True, in which case missing
+    shims are added and legacy direct hooks are PRUNED (so behaviors never double-fire) — both
+    surgically, leaving the user's own hooks untouched, after a one-time .bak.doctor backup; an
+    absent/stale skill symlink is repaired too. Returns {applicable, missing, stale, skill_ok, wrote,
+    skill_fixed}. Silent + no-op where there is no Claude Code on the node (integration not
+    applicable). The built-in Claude cell wraps `_CLAUDE_HOOK_SPEC`, so this is byte-for-byte the
+    former `_wire_claude_hooks`."""
+    spec = (cell or {}).get("spec", {}) or {}
+    hook_spec = spec.get("hooks", []) or []
+    skill = spec.get("skill")
     claude_dir = _claude_dir()
     result = {"applicable": claude_dir.exists(), "missing": [], "stale": [],
               "skill_ok": True, "wrote": False, "skill_fixed": False}
     if not result["applicable"]:
         return result
-    skill_link = claude_dir / "skills" / "hive-memory"
-    skill_src = Path(__file__).resolve().parent / "integrations" / "claude-code" / "hive-memory"
-    try:
-        result["skill_ok"] = skill_link.is_symlink() and skill_link.resolve() == skill_src.resolve()
-    except Exception:
-        result["skill_ok"] = False
+    skill_link = skill_src = None
+    if skill:
+        skill_link = claude_dir / "skills" / skill["name"]
+        skill_src = Path(__file__).resolve().parent / skill["src_subpath"]
+        try:
+            result["skill_ok"] = skill_link.is_symlink() and skill_link.resolve() == skill_src.resolve()
+        except Exception:
+            result["skill_ok"] = False
     path = claude_dir / "settings.json"
     try:
         cfg = json.loads(path.read_text()) if path.exists() else {}
     except Exception:
         cfg = {}
-    result["missing"], result["stale"] = _claude_hook_reconcile(cfg)
+    result["missing"], result["stale"] = _agent_hook_reconcile(cfg, hook_spec)
     if not write or (not result["missing"] and not result["stale"] and result["skill_ok"]):
         return result
     if path.exists():
@@ -2802,7 +2896,7 @@ def _wire_claude_hooks(write=False):
             shutil.copy2(str(path), str(path) + ".bak.doctor")
         except Exception:
             pass
-    if not result["skill_ok"] and skill_src.exists():
+    if skill and not result["skill_ok"] and skill_src.exists():
         try:
             (claude_dir / "skills").mkdir(parents=True, exist_ok=True)
             if skill_link.is_symlink() or skill_link.exists():
@@ -2836,6 +2930,510 @@ def _wire_claude_hooks(write=False):
     return result
 
 
+def _wire_claude_hooks(write=False):
+    """Back-compat shim → wire the built-in Claude agent cell. Keeps the `agent-hooks` doctor check,
+    `doctor --fix`, and `doctor wire-agent` working byte-for-byte after the `_wire_agent` refactor."""
+    return _wire_agent(_builtin_claude_cell(), write=write)
+
+
+def _builtin_cells():
+    """Cells defined in signed source. They resolve BEFORE any journaled cell of the same name, so a
+    core integration (the Claude agent) can never be shadowed by a synced journal entry."""
+    return [_builtin_claude_cell()]
+
+
+def _resolve_cell(name, entries=None):
+    """Resolve a cell by name: built-ins first, then the journal projection (`_cell_state`)."""
+    for c in _builtin_cells():
+        if c.get("name") == name:
+            return c
+    if entries is None:
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+    return _cell_state(entries).get(name)
+
+
+def _detect_platform():
+    """Coarse platform key for selecting a cell's `spec.platforms` block: wsl|linux|darwin|windows."""
+    if sys.platform == "darwin":
+        return "darwin"
+    if sys.platform.startswith("linux"):
+        try:
+            if "microsoft" in Path("/proc/version").read_text().lower():
+                return "wsl"
+        except Exception:
+            pass
+        return "linux"
+    if sys.platform.startswith("win"):
+        return "windows"
+    return sys.platform
+
+
+def _load_env_file(path):
+    """Parse a dotenv file → {KEY: value}. Tolerant of `export`, quotes, comments; never shell-evals.
+    This is the Phase-1 credential source for tool cells; Phase 2 reads from sealed capsules instead."""
+    out = {}
+    try:
+        text = Path(path).expanduser().read_text()
+    except Exception:
+        return out
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k, v = k.strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        if k:
+            out[k] = v
+    return out
+
+
+def _subst(s, mapping):
+    """Replace {VAR} placeholders in a verify URL/header/cmd from `mapping` (unknown vars left as-is)."""
+    for k, v in mapping.items():
+        s = s.replace("{" + k + "}", v)
+    return s
+
+
+def _run_verify(cell, secrets):
+    """Run a cell's `verify` (http or cmd) → True iff it passes. No `verify` block → trivially True.
+    http: GET the url (with optional {VAR}-substituted headers); pass = `expect` substring present, or
+    a 2xx when no expect. cmd: run under bash; pass = exit 0 and (expect substring present, if given)."""
+    v = cell.get("verify") or {}
+    if not v:
+        return True
+    if v.get("http"):
+        try:
+            req = urllib.request.Request(_subst(v["http"], secrets),
+                                         headers={hk: _subst(hx, secrets)
+                                                  for hk, hx in (v.get("headers") or {}).items()})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                body = r.read().decode("utf-8", "replace")
+                code = getattr(r, "status", 200)
+            exp = v.get("expect")
+            return (exp in body) if exp else (200 <= code < 300)
+        except Exception:
+            return False
+    if v.get("cmd"):
+        r = subprocess.run(["bash", "-lc", _subst(v["cmd"], secrets)],
+                           env=dict(os.environ, **secrets), capture_output=True, text=True)
+        exp = v.get("expect")
+        return r.returncode == 0 and (exp in (r.stdout + r.stderr) if exp else True)
+    return True
+
+
+def _wire_tool(cell, env_file=None):
+    """Provision a `kind:tool` cell: ensure required credentials (from the per-device `.env` for now),
+    run the steps for THIS platform, then verify. Idempotent — if `verify` already passes, do nothing.
+    Returns a process-style int (0 ok)."""
+    name = cell.get("name", "?")
+    ef = env_file or "~/.claude/.env"
+    requires = cell.get("requires") or []
+    # Prefer sealed CAPSULES (encrypt-to-device); fall back to the per-device .env for un-sealed creds.
+    secrets = {}
+    if requires:
+        caps = _capsule_state(merkle.read_all_entries(JOURNAL_DIR))
+        sc = _my_curve_scalar()
+        for k in requires:
+            c = caps.get(k)
+            if c and c.get("alg") != "tombstone-v1" and sc is not None:
+                try:
+                    secrets[k] = _capsule_open(c, sc, NODE_ID).decode("utf-8", "replace")
+                except Exception:
+                    pass
+        env = _load_env_file(ef)
+        for k in requires:
+            if not secrets.get(k) and env.get(k):
+                secrets[k] = env[k]
+    missing = [k for k in requires if not secrets.get(k)]
+    if missing:
+        print(f"{name}: missing credential(s) {missing} — seal them with `hv capsule put <NAME>` "
+              f"or add them to {ef}, then re-run.")
+        return 1
+    if _run_verify(cell, secrets):
+        print(f"{name}: already provisioned (verify passed).")
+        return 0
+    plat = _detect_platform()
+    plats = (cell.get("spec", {}) or {}).get("platforms", {}) or {}
+    steps = (plats.get(plat) or plats.get("linux") or {}).get("steps", []) or []
+    if not steps:
+        print(f"{name}: no steps for platform {plat!r} (and verify not yet passing).")
+        return 1
+    env = dict(os.environ, **{k: secrets[k] for k in requires})
+    for step in steps:
+        r = subprocess.run(["bash", "-lc", step], env=env, capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"{name}: step failed ({plat}): {step}\n  {(r.stderr or r.stdout).strip()[:400]}")
+            return 1
+    if _run_verify(cell, secrets):
+        print(f"{name}: provisioned + verified ✓ ({plat})")
+        return 0
+    print(f"{name}: steps ran but verify did not pass.")
+    return 1
+
+
+def _wire_one(cell, name, env_file=None):
+    """Provision a single resolved cell, dispatching on its `kind`."""
+    if not cell:
+        print(f"No cell named {name!r}. (`hv wire --list` to see cells, "
+              f"`hv wire --add <file.json>` to publish one.)")
+        return 1
+    kind = cell.get("kind")
+    if kind == "agent":
+        w = _wire_agent(cell, write=True)
+        if not w["applicable"]:
+            print(f"{name}: agent config (~/.claude) not present on this node — nothing to wire.")
+            return 0
+        acts = []
+        if w["missing"]:
+            acts.append(f"wired {len(w['missing'])} dispatch shim(s)")
+        if w["stale"]:
+            acts.append(f"migrated {len(w['stale'])} legacy hook(s)")
+        if w["skill_fixed"]:
+            acts.append("relinked skill")
+        print(f"{name}: " + ("; ".join(acts) if acts else "already wired") + ".")
+        return 0
+    if kind == "tool":
+        return _wire_tool(cell, env_file)
+    print(f"{name}: unknown cell kind {kind!r}.")
+    return 1
+
+
+def wire_cmd(args):
+    """`hv wire <name>` provisions a cell, auto-dispatching by its `kind` (`agent`→reconcile foreign
+    config; `tool`→run its recipe). `--comb <name>` runs every member cell; `--list`/`--show`/`--add`
+    manage the registry. Absorbs the former `hv doctor wire-agent` (kept as a hidden alias)."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+
+    if getattr(args, "list", False):
+        kind_f = getattr(args, "kind", None)
+        cells = {c["name"]: c for c in _builtin_cells()}
+        cells.update(_cell_state(entries))                       # journaled overrides built-in
+        print("cells:")
+        for n, c in sorted(cells.items()):
+            if kind_f and c.get("kind") != kind_f:
+                continue
+            tag = "  (built-in)" if c.get("builtin") else ""
+            print(f"  {n:<26} kind={c.get('kind','?')}{tag}")
+        combs = _comb_state(entries)
+        if combs and not kind_f:
+            print("combs:")
+            for n, c in sorted(combs.items()):
+                print(f"  {n:<26} cells={c.get('cells', [])}")
+        return
+
+    if getattr(args, "show", None):
+        c = _resolve_cell(args.show, entries) or _comb_state(entries).get(args.show)
+        print(json.dumps(c, indent=2) if c else f"No cell or comb named {args.show!r}.")
+        return
+
+    if getattr(args, "add", None):
+        try:
+            payload = json.loads(Path(args.add).read_text())
+        except Exception as e:
+            print(f"Could not read cell/comb JSON from {args.add}: {e}")
+            return
+        t = payload.pop("type", None) or ("comb" if "cells" in payload else "cell")
+        if t not in ("cell", "comb") or not payload.get("name"):
+            print("JSON must be a cell/comb with a 'name' (type 'cell' or 'comb').")
+            return
+        payload.setdefault("version", 1)
+        append_journal(t, payload)
+        print(f"Published {t} {payload['name']!r} (version {payload['version']}).")
+        return
+
+    comb_name = getattr(args, "comb", None)
+    if comb_name:
+        comb = _comb_state(entries).get(comb_name)
+        if not comb:
+            print(f"No comb named {comb_name!r}.")
+            return
+        names = comb.get("cells", []) or []
+        print(f"comb {comb_name!r}: wiring {len(names)} cell(s): {', '.join(names)}")
+        for n in names:
+            _wire_one(_resolve_cell(n, entries), n, getattr(args, "env_file", None))
+        return
+
+    name = getattr(args, "name", None)
+    if not name:
+        print("usage: hv wire <name> | --comb <name> | --list | --show <name> | --add <file.json>")
+        return
+    _wire_one(_resolve_cell(name, entries), name, getattr(args, "env_file", None))
+
+
+# ── Capsules: encrypt-to-device secrets (Phase 2) ────────────────────────────────────────────────
+_CAPSULE_ALG = "x25519-hkdf-chacha20poly1305-v1"
+
+
+def _recipient_pubkeys(entries, gov):
+    """{device_id: curve_pub bytes} for the current authorized set (admitted − purged). A device's
+    Ed25519 pubkey is harvested from its OWN signed entries (pub bound to node_id via the
+    fingerprint) and converted to Curve25519; a curve_pub carried on its join-request/admit is a
+    fallback. Returns (recipients, missing) — `missing` = admitted device_ids with no usable key yet."""
+    if _x25519 is None:
+        return {}, sorted(gov.get("admitted", set()) - gov.get("purged", set()))
+    admitted = gov.get("admitted", set()) - gov.get("purged", set())
+    ed_pub_by_dev, carried = {}, {}
+    for e in entries:
+        pub_b64, nid = e.get("pub"), e.get("node_id")
+        if pub_b64 and nid and nid not in ed_pub_by_dev:
+            try:
+                pub = base64.b64decode(pub_b64)
+                if len(pub) == 32 and _device_id_for_pub(pub) == nid:
+                    ed_pub_by_dev[nid] = pub
+            except Exception:
+                pass
+        if e.get("type") == "governance":
+            p = e.get("payload", {})
+            if p.get("action") in ("join-request", "admit") and p.get("curve_pub") and p.get("device_id"):
+                carried[p["device_id"]] = p["curve_pub"]
+    recips, missing = {}, []
+    for dev in sorted(admitted):
+        cp = None
+        if dev in ed_pub_by_dev:
+            try:
+                cp = _x25519.ed_pub_to_curve_pub(ed_pub_by_dev[dev])
+            except Exception:
+                cp = None
+        if cp is None and dev in carried:
+            try:
+                raw = base64.b64decode(carried[dev])
+                cp = raw if len(raw) == 32 else None
+            except Exception:
+                cp = None
+        (recips.__setitem__(dev, cp) if cp is not None else missing.append(dev))
+    return recips, missing
+
+
+def _capsule_build(name, kind, value, recipients, version, hive_id, signer):
+    """Seal `value` (bytes) so only `recipients` (device_id→curve_pub) can open it. A random CEK
+    keys ONE ChaCha20-Poly1305 (RFC 8439) seal of the payload; the CEK is wrapped per recipient via an
+    EPHEMERAL X25519 ECDH (forward-secret per capsule), the ECDH output run through HKDF-SHA256 to a
+    clean wrap key. name+version+hive_id+alg are bound as the payload AAD (no replay under another
+    name); eph_pub is bound as the wrap AAD. Every key here is used for exactly one encryption, so the
+    fixed-size random nonce can never collide under a repeated key."""
+    if _x25519 is None or _chacha is None:
+        raise RuntimeError("x25519/chacha20poly1305 module unavailable")
+    cek, nonce = os.urandom(32), os.urandom(12)
+    aad = f"{_CAPSULE_ALG}|{hive_id}|{name}|{version}".encode()
+    ct, tag = _chacha.encrypt(cek, nonce, value, aad)
+    wraps = []
+    for dev, cpub in sorted(recipients.items()):
+        eph = os.urandom(32)
+        eph_pub = _x25519.scalarmult_base(eph)
+        shared = _x25519.shared_secret(eph, cpub)                # raises on a low-order recipient key
+        wk = _hkdf_sha256(shared, eph_pub + cpub, b"hive-capsule-wrap", 32)
+        wnonce = os.urandom(12)
+        wct, wtag = _chacha.encrypt(wk, wnonce, cek, _CAPSULE_ALG.encode() + b"|wrap|" + eph_pub)
+        wraps.append({"device_id": dev, "eph_pub": base64.b64encode(eph_pub).decode(),
+                      "wrap_nonce": base64.b64encode(wnonce).decode(),
+                      "wrapped_cek": base64.b64encode(wct).decode(),
+                      "wrap_tag": base64.b64encode(wtag).decode()})
+    return {"capsule_id": hashlib.sha256(name.encode()).hexdigest()[:16], "name": name, "kind": kind,
+            "version": version, "alg": _CAPSULE_ALG, "hive_id": hive_id,
+            "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode(),
+            "tag": base64.b64encode(tag).decode(), "wraps": wraps, "signer": signer}
+
+
+def _capsule_open(cap, my_scalar, my_device_id):
+    """Open a capsule on this device. Whitelists `alg`, then ChaCha20-Poly1305 authenticates the wrap
+    (releasing the CEK) and the payload BEFORE any plaintext is returned. Raises ValueError otherwise."""
+    if cap.get("alg") != _CAPSULE_ALG:
+        raise ValueError(f"unsupported capsule alg {cap.get('alg')!r} — refusing")
+    if _x25519 is None or _chacha is None:
+        raise RuntimeError("x25519/chacha20poly1305 module unavailable")
+    mine = next((w for w in cap.get("wraps", []) if w.get("device_id") == my_device_id), None)
+    if not mine:
+        raise ValueError("this device is not a recipient (ask the owner to rotate after admitting it)")
+    eph_pub = base64.b64decode(mine["eph_pub"])
+    wnonce = base64.b64decode(mine["wrap_nonce"])
+    wct = base64.b64decode(mine["wrapped_cek"])
+    wtag = base64.b64decode(mine["wrap_tag"])
+    shared = _x25519.shared_secret(my_scalar, eph_pub)
+    my_pub = _x25519.scalarmult_base(my_scalar)
+    wk = _hkdf_sha256(shared, eph_pub + my_pub, b"hive-capsule-wrap", 32)
+    try:
+        cek = _chacha.decrypt(wk, wnonce, wct, wtag, _CAPSULE_ALG.encode() + b"|wrap|" + eph_pub)
+    except ValueError:
+        raise ValueError("wrap auth failed (tampered or corrupt)")
+    nonce, ct, tag = (base64.b64decode(cap[k]) for k in ("nonce", "ct", "tag"))
+    aad = f"{_CAPSULE_ALG}|{cap.get('hive_id','')}|{cap.get('name','')}|{cap.get('version',0)}".encode()
+    try:
+        return _chacha.decrypt(cek, nonce, ct, tag, aad)
+    except ValueError:
+        raise ValueError("payload auth failed (tampered or corrupt)")
+
+
+def _read_secret_value(args, name):
+    """Resolve a secret value for `hv capsule put` WITHOUT it transiting argv/chat: --stdin, --file,
+    --env-file [--name VAR] (default ~/.claude/.env), else an interactive getpass. bytes or None."""
+    if getattr(args, "stdin", False):
+        data = sys.stdin.buffer.read()
+        return data.rstrip(b"\n") if data else None
+    if getattr(args, "file", None):
+        try:
+            return Path(args.file).expanduser().read_bytes()
+        except Exception as e:
+            print(f"could not read {args.file}: {e}"); return None
+    if getattr(args, "env_file", None) is not None or getattr(args, "var", None):
+        ef = getattr(args, "env_file", None) or "~/.claude/.env"
+        var = getattr(args, "var", None) or name
+        val = _load_env_file(ef).get(var)
+        if val is None:
+            print(f"{var} not found in {ef}"); return None
+        return val.encode()
+    import getpass
+    try:
+        v = getpass.getpass(f"Enter value for {name} (hidden): ")
+    except (EOFError, KeyboardInterrupt):
+        print(); return None
+    return v.encode() if v else None
+
+
+def _my_curve_scalar():
+    seed = _device_seed()
+    if seed is None or _x25519 is None:
+        return None
+    return _x25519.ed_seed_to_curve_scalar(seed)
+
+
+def capsule_cmd(args):
+    """Encrypt-to-device secrets: `hv capsule put|get|ls|rm|rotate`. A capsule is sealed to the
+    current authorized device set; only those devices can open it. Secrets enter via file/stdin/env/
+    getpass — never argv/chat."""
+    action = getattr(args, "capsule_action", None)
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    caps = _capsule_state(entries)
+    live = {n: c for n, c in caps.items() if c.get("alg") != "tombstone-v1"}
+
+    if action == "ls":
+        if not live:
+            print("(no capsules)"); return 0
+        for name, c in sorted(live.items()):
+            mine = any(w.get("device_id") == NODE_ID for w in c.get("wraps", []))
+            print(f"  {name:<28} v{c.get('version')}  recipients={len(c.get('wraps', []))}  "
+                  f"openable_here={'yes' if mine else 'no'}")
+        return 0
+
+    if action == "get":
+        c = live.get(args.name)
+        if not c:
+            print(f"No capsule named {args.name!r}."); return 1
+        if c.get("hive_id") and gov.get("hive_id") and c["hive_id"] != gov["hive_id"]:
+            print("This capsule belongs to a different hive — refusing."); return 1
+        sc = _my_curve_scalar()
+        if sc is None:
+            print("No device key on this node — cannot open capsules (`hv key init`)."); return 1
+        try:
+            val = _capsule_open(c, sc, NODE_ID)
+        except ValueError as e:
+            print(f"{args.name}: {e}"); return 1
+        sys.stdout.buffer.write(val if getattr(args, "raw", False) else val + b"\n")
+        return 0
+
+    if action == "rm":
+        cur = caps.get(args.name)
+        nextv = (int(cur.get("version", 0)) + 1) if cur else 1
+        append_journal("capsule", {"capsule_id": hashlib.sha256(args.name.encode()).hexdigest()[:16],
+                                    "name": args.name, "kind": "tombstone", "version": nextv,
+                                    "alg": "tombstone-v1", "wraps": []})
+        print(f"Tombstoned capsule {args.name!r} (v{nextv}). The OLD ciphertext stays in the "
+              f"append-only journal — ROTATE THE UPSTREAM SECRET to truly cut access.")
+        return 0
+
+    if action in ("put", "rotate"):
+        putters = gov.get("config", {}).get("capsule_putters", "owner")
+        if gov.get("owner_id"):
+            if putters == "owner" and _owner_seed() is None:
+                print("Storing capsules is owner-only here (config capsule_putters=owner). Run on the "
+                      "owner device, or `hv config governance set capsule_putters fertile`."); return 1
+            if putters == "fertile" and NODE_ID not in gov.get("admitted", set()):
+                print("Only admitted devices may store capsules on this hive."); return 1
+        recips, missing = _recipient_pubkeys(entries, gov)
+        if not recips:                                  # pre-owner / solo: seal to THIS device
+            sc = _my_curve_scalar()
+            if sc is not None:
+                recips = {NODE_ID: _x25519.scalarmult_base(sc)}
+        if not recips:
+            print("No recipient device key available — run `hv key init` first."); return 1
+
+        if action == "rotate":
+            names = [args.name] if getattr(args, "name", None) else list(live)
+            sc = _my_curve_scalar()
+            for nm in names:
+                cur = live.get(nm)
+                if not cur:
+                    continue
+                try:
+                    val = _capsule_open(cur, sc, NODE_ID)
+                except Exception as e:
+                    print(f"{nm}: cannot rotate (this device can't open it: {e})"); continue
+                nextv = int(cur.get("version", 0)) + 1
+                append_journal("capsule", _capsule_build(nm, cur.get("kind", "credential"), val,
+                                                         recips, nextv, gov.get("hive_id", ""), NODE_ID))
+                print(f"Rotated {nm!r} → v{nextv} ({len(recips)} recipient(s)).")
+            print("Reminder: rotation does NOT revoke a removed device's access to OLD ciphertext it "
+                  "already synced — rotate the upstream token to truly cut access.")
+            return 0
+
+        val = _read_secret_value(args, args.name)
+        if val is None:
+            print("No value provided (cancelled)."); return 1
+        cur = caps.get(args.name)
+        nextv = (int(cur.get("version", 0)) + 1) if cur else 1
+        append_journal("capsule", _capsule_build(args.name, "credential", val, recips, nextv,
+                                                 gov.get("hive_id", ""), NODE_ID))
+        msg = f"Sealed capsule {args.name!r} v{nextv} to {len(recips)} device(s)."
+        if missing:
+            msg += (f" WARNING: {len(missing)} admitted device(s) have no published pubkey yet and "
+                    f"cannot open it until you rotate after they sync.")
+        print(msg)
+        print("Note: a device removed later can still open an OLD version it already synced — rotate "
+              "the upstream secret to truly cut access.")
+        return 0
+
+    print("usage: hv capsule put|get|ls|rm|rotate <name>")
+
+
+def _secret_key_files():
+    """The raw private-key files this device may hold (device + owner seeds). Stash copies live under
+    other candidate homes too, but these canonical paths are what governance/identity actually read."""
+    return [("device-key", DEVICE_KEY_PATH), ("owner-key", OWNER_KEY_PATH)]
+
+
+def _leaky_key_files():
+    """Existing secret key files whose POSIX mode grants ANY group/other access. Returns
+    [(label, path, mode)]; empty when all are 0600-or-tighter (or absent). POSIX-only."""
+    out = []
+    for label, pth in _secret_key_files():
+        try:
+            if pth.exists():
+                mode = pth.stat().st_mode & 0o777
+                if mode & 0o077:
+                    out.append((label, pth, mode))
+        except Exception:
+            pass
+    return out
+
+
+def _fix_key_perms():
+    """Re-tighten any leaky secret key file to 0600. Returns the labels it fixed (for `--fix` output)."""
+    fixed = []
+    for label, pth, _mode in _leaky_key_files():
+        try:
+            os.chmod(pth, 0o600)
+            fixed.append(label)
+        except Exception:
+            pass
+    return fixed
+
+
 def _doctor_status():
     """Run the local health checks (READ-ONLY) and return a list of
     {name, status: 'ok'|'warn'|'fail', detail}. Shared by `hv doctor` text + json output.
@@ -2854,6 +3452,52 @@ def _doctor_status():
         checks.append({"name": "authenticity", "status": "ok" if v["ok"] else "fail", "detail": headline})
     except Exception as e:
         checks.append({"name": "authenticity", "status": "warn", "detail": f"check error: {e}"})
+
+    # 1b. Crypto self-test — known-answer tests for the bundled crypto (x25519/ed25519/ed↔curve +
+    #     the capsule key-agreement), run on every doctor pass (and the 15-min `--fix` timer). A
+    #     broken primitive is a HARD failure (a corrupt/tampered module would silently weaken every
+    #     sealed capsule), so it sets doctor's non-zero exit like authenticity does.
+    try:
+        import crypto_selftest
+        res = crypto_selftest.run_all()
+        bad = [k for k, ok in res.items() if not ok]
+        if bad:
+            checks.append({"name": "crypto", "status": "fail",
+                           "detail": f"self-test FAILED: {', '.join(bad)} — `hv verify`/reinstall"})
+        else:
+            adv = []
+            try:
+                ap = Path(__file__).resolve().parent / "advisories.json"
+                if ap.exists():
+                    adv = [a for a in json.loads(ap.read_text()).get("crypto", [])
+                           if a.get("severity") == "high"]
+            except Exception:
+                adv = []
+            if adv:
+                checks.append({"name": "crypto", "status": "warn",
+                               "detail": f"KATs pass; {len(adv)} HIGH crypto advisory(ies): "
+                                         + "; ".join(a.get("summary", "") for a in adv)})
+            else:
+                checks.append({"name": "crypto", "status": "ok",
+                               "detail": "x25519/ed25519/ed↔curve/chacha20-poly1305(RFC8439)/sealed-box KATs pass"})
+    except Exception as e:
+        checks.append({"name": "crypto", "status": "fail", "detail": f"self-test error: {e}"})
+
+    # 1b. Key file permissions — the device/owner seeds are stored RAW at 0600; the whole threat model
+    #     ("defense rests on 0600 local keys") collapses if a private key is group/other-readable. So a
+    #     leaky key is a HARD failure (`hv doctor --fix` re-tightens it). POSIX-only; n/a on Windows.
+    if os.name == "nt":
+        checks.append({"name": "keyperm", "status": "ok", "detail": "n/a on Windows (no POSIX mode)"})
+    else:
+        leaky = _leaky_key_files()
+        if leaky:
+            checks.append({"name": "keyperm", "status": "fail",
+                           "detail": "private key group/other-accessible: "
+                                     + "; ".join(f"{lbl} {oct(m)}" for lbl, _p, m in leaky)
+                                     + " — run `hv doctor --fix` (or `chmod 600`)"})
+        else:
+            checks.append({"name": "keyperm", "status": "ok",
+                           "detail": "device/owner key files are 0600 (or absent)"})
 
     # 2. Journal — THIS node's hash chain is contiguous from genesis and each prev_hash links.
     #    A break means local corruption or tampering (foreign nodes may be partial, so only ours).
@@ -3096,6 +3740,11 @@ def doctor_cmd(args):
             print("\nall checks passed.")
 
     if getattr(args, "fix", False):
+        if os.name != "nt":
+            fixed = _fix_key_perms()
+            if fixed:
+                print(f"\n--fix: re-tightened {', '.join(fixed)} to 0600.")
+
         orphans = [p for c in checks for p in (c.get("orphans") or [])]
         if not orphans:
             print("\n--fix: no orphan daemons to clear.")
@@ -3305,7 +3954,14 @@ def owner_cmd(args):
             print("No (live) owner-escrow found in the hive. Sync the hive first (`hv sync now`), or "
                   "recover from a file with `hv owner import <file>`.")
             return
-        env = gov["escrows"][-1][3]          # latest live escrow wins
+        # latest live escrow wins, but only a scheme this build can open (v1 was retired in 1.14).
+        openable = [e for e in gov["escrows"] if e[3].get("enc") == _OWNER_SEAL_ALG]
+        if not openable:
+            print(f"The only live escrow(s) use a retired scheme ({gov['escrows'][-1][3].get('enc')!r}). "
+                  "Re-escrow from a device that still holds the owner key (`hv owner escrow`), or recover "
+                  "from a file with `hv owner import <file>`.")
+            return
+        env = openable[-1][3]
         pp = _read_passphrase("Passphrase (blank line / Ctrl-C to cancel): ")
         if pp is None:
             print("Cancelled.")
@@ -3686,7 +4342,8 @@ def _config_set(key, value):
     confidence knobs (same_device_lambda, cap_self) and the quorum-election knobs (quorum_m,
     quorum_by, dead_man_days)."""
     coercers = {"same_device_lambda": float, "cap_self": float,
-                "quorum_m": int, "quorum_by": str, "dead_man_days": float}
+                "quorum_m": int, "quorum_by": str, "dead_man_days": float,
+                "capsule_putters": str}
     if key not in coercers:
         print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
         return
@@ -3697,6 +4354,9 @@ def _config_set(key, value):
         return
     if key == "quorum_by" and val not in ("device", "principal"):
         print("quorum_by must be 'device' or 'principal'")
+        return
+    if key == "capsule_putters" and val not in ("owner", "fertile"):
+        print("capsule_putters must be 'owner' (default) or 'fertile' (any admitted device)")
         return
     if key == "quorum_m" and val < 0:
         print("quorum_m must be >= 0 (0 disables elections)")
@@ -4205,7 +4865,36 @@ def build_parser():
     doctor_mig.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
     doctor_sub.add_parser("rebuild", help="Rebuild store.db from the journal (was `hv rebuild`)")
     doctor_sub.add_parser("wire-agent",
-                          help="(Re)wire the Claude Code hooks + skill into ~/.claude (idempotent; the installer/update delegate here, `--fix` runs it)")
+                          help="[deprecated alias of `hv wire claude`] (re)wire the Claude Code hooks + skill")
+
+    wire_parser = subparsers.add_parser("wire",
+                                        help="Wire an agent/tool from its cell (auto-dispatch by kind), or a comb of cells")
+    wire_parser.add_argument("name", nargs="?", help="Cell name to wire")
+    wire_parser.add_argument("--comb", metavar="NAME", help="Wire every cell in this comb")
+    wire_parser.add_argument("--list", action="store_true", help="List cells (and combs)")
+    wire_parser.add_argument("--kind", help="(with --list) filter by kind: tool|agent")
+    wire_parser.add_argument("--show", metavar="NAME", help="Show a cell/comb definition")
+    wire_parser.add_argument("--add", metavar="FILE", help="Publish a cell/comb from a JSON file")
+    wire_parser.add_argument("--env-file", dest="env_file", metavar="PATH",
+                             help="Dotenv file to read tool credentials from (default ~/.claude/.env)")
+
+    capsule_parser = subparsers.add_parser("capsule",
+                                           help="Encrypt-to-device secrets (sealed to the authorized device set)")
+    capsule_sub = capsule_parser.add_subparsers(dest="capsule_action")
+    cap_put = capsule_sub.add_parser("put", help="Seal a secret into a capsule (value via --env-file/--file/--stdin/prompt — never argv)")
+    cap_put.add_argument("name")
+    cap_put.add_argument("--env-file", dest="env_file", metavar="PATH", help="Dotenv file to read the value from (default ~/.claude/.env)")
+    cap_put.add_argument("--name", dest="var", metavar="VAR", help="Variable name within the env file (default the capsule name)")
+    cap_put.add_argument("--file", metavar="PATH", help="Read the raw value from this file")
+    cap_put.add_argument("--stdin", action="store_true", help="Read the value from stdin")
+    cap_get = capsule_sub.add_parser("get", help="Open a capsule on this device (prints the value)")
+    cap_get.add_argument("name")
+    cap_get.add_argument("--raw", action="store_true", help="No trailing newline")
+    capsule_sub.add_parser("ls", help="List capsules + whether this device can open each")
+    cap_rm = capsule_sub.add_parser("rm", help="Tombstone a capsule (logical delete; ciphertext stays in the append-only journal)")
+    cap_rm.add_argument("name")
+    cap_rot = capsule_sub.add_parser("rotate", help="Re-seal to the current device set (run after admit/revoke/purge)")
+    cap_rot.add_argument("name", nargs="?", help="Capsule to rotate (omit = all openable capsules)")
 
     key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")
@@ -4369,6 +5058,10 @@ def main():
         verify_cmd(args)
     elif args.command == "doctor":
         doctor_cmd(args)
+    elif args.command == "wire":
+        wire_cmd(args)
+    elif args.command == "capsule":
+        capsule_cmd(args)
     elif args.command == "key":
         key_cmd(args)
     elif args.command == "owner":

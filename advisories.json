@@ -1,0 +1,7 @@
+{
+  "_comment": "Bundled, offline-first security advisories. Ships in the repo so it is hashed by verify.json (signed) and synced as source. `hv doctor` surfaces a HIGH-severity advisory that applies to the bundled crypto or to an installed tool referenced by a cell. Owner-signed sync of advisories over the journal + an optional Ed25519-verified online feed are a planned extension; for now this file is the single offline source.",
+  "version": 1,
+  "updated": "2026-06-25",
+  "crypto": [],
+  "tools": []
+}

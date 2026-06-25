@@ -20,6 +20,8 @@ memory.
 | `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle` + `migrate-identity` + `rebuild` + `wire-agent` |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
+| `hv wire` | Self-wire a tool/agent from a cell or comb; `--list`/`--show`/`--add` manage cell definitions |
+| `hv capsule` | Seal a secret to the authorized device set: `put`/`get`/`ls`/`rm`/`rotate` |
 | `hv join` | Request admission to a hive you've synced |
 | `hv owner` | Show or create the governance owner identity |
 | `hv remember` | Store a fact |
@@ -257,6 +259,56 @@ a quiet no-op.
 Only foreign config files (like Claude Code's `settings.json`) need this shim. Agents
 integrated as our own plugin code — Hermes, OpenClaw, the MCP host — carry their wiring
 in source already, so they have nothing to drift and nothing to re-assert.
+
+---
+
+### `hv wire` — Self-wire a tool or agent from a cell
+
+A **cell** is an executable unit recorded in the journal (or shipped built-in): a `kind:tool` cell is
+a platform-aware self-wiring recipe (obtain steps + a `verify` check), a `kind:agent` cell wires a
+foreign config like the Claude Code hooks. A **comb** is an ordered collection of cells. `hv wire`
+resolves a cell (built-ins first, then the journal projection) and dispatches by kind — agents wire
+their config, tools run their steps and then the verify check (idempotent: a re-run is a no-op when
+verify already passes).
+
+```
+hv wire <name>                 # wire a single cell by name
+hv wire --comb <name>          # wire every cell in a comb
+hv wire --list [--kind tool|agent]   # list cells (and combs); optionally filter by kind
+hv wire --show <name>          # print a cell/comb definition
+hv wire --add <file>           # publish a cell/comb from a JSON file (admission-gated)
+hv wire <name> --env-file <path>     # tool credentials source (default ~/.claude/.env)
+```
+
+For `kind:tool` cells, required credentials are read from an opened **capsule** when one exists,
+falling back to the `--env-file` dotenv for smooth migration. `hv wire <claude-agent-cell>` replaces
+the deprecated `hv doctor wire-agent` (still available as a hidden alias, byte-identical output).
+
+---
+
+### `hv capsule` — Seal a secret to the authorized device set
+
+A **capsule** encrypts a secret so that **only the hive's currently-authorized devices**
+(`admitted − purged`) can open it — a random content key seals the payload with ChaCha20-Poly1305
+(RFC 8439), and that key is wrapped to each device via an ephemeral X25519 ECDH. Secrets are ingested
+**securely only**: from a dotenv file, a raw
+file, stdin, or an interactive prompt — **never** through chat or the command line (`argv`), so the
+value never lands in a transcript or process list. Who may publish is gated by the owner-signed
+`capsule_putters` config (`owner` default, or `fertile`).
+
+```
+hv capsule put <name> --env-file <path> [--name VAR]   # seal from a dotenv var (default ~/.claude/.env)
+hv capsule put <name> --file <path>                    # seal the raw contents of a file
+hv capsule put <name> --stdin                          # seal a value piped on stdin
+hv capsule put <name>                                  # no source flag → secure interactive getpass
+hv capsule get <name> [--raw]                          # open on this device (--raw = no trailing newline)
+hv capsule ls                                          # list capsules + whether this device can open each
+hv capsule rm <name>                                   # tombstone (logical delete; ciphertext stays in the journal)
+hv capsule rotate <name>                               # re-seal to the current device set after admit/revoke/purge
+```
+
+**Rotation caveat:** a revoked device still holds the *old* ciphertext, so `rotate` cuts it off the
+new version only — to truly revoke access, rotate the upstream token/secret too.
 
 ---
 

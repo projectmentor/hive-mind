@@ -17,17 +17,18 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"   # honor Claude Code's own con
 
 [ -f "$SKILL_SRC/SKILL.md" ] || { echo "ERROR: $SKILL_SRC/SKILL.md missing"; exit 1; }
 
-echo "== symlink skill -> $CLAUDE_DIR/skills/hive-memory =="
+echo "== symlink skills -> $CLAUDE_DIR/skills/{hive-memory,wire-up} =="
 mkdir -p "$CLAUDE_DIR/skills"
 ln -sfn "$SKILL_SRC" "$CLAUDE_DIR/skills/hive-memory"
-ls -ld "$CLAUDE_DIR/skills/hive-memory"
+ln -sfn "$REPO/integrations/claude-code/wire-up" "$CLAUDE_DIR/skills/wire-up"
+ls -ld "$CLAUDE_DIR/skills/hive-memory" "$CLAUDE_DIR/skills/wire-up"
 
 echo "== register telemetry + nudge/audit hooks (idempotent, additive) =="
 # Delegate to hv's canonical hook spec — the SINGLE source of truth shared with `hv doctor`
 # (the check + the 15-min `--fix` self-heal). Keeping the wiring in one place is why a node updated
 # from before a hook existed now self-heals instead of silently drifting. `_wire_claude_hooks` honors
 # CLAUDE_CONFIG_DIR, so point it at the dir we resolved above.
-CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" doctor wire-agent
+CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" wire claude
 
 echo
 echo "== done =="

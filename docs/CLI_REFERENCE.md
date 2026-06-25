@@ -140,23 +140,33 @@ the sync port is not mistaken for a hive (the probe verifies a signed genesis).
 ### `hv doctor` — Check that your device is healthy
 
 Runs a single set of checks over your local device and tells you whether anything
-needs attention. It looks at eight things:
+needs attention. It looks at:
 
 - **authenticity** — your copy of HiveMind matches the signed official release
+- **crypto** — the bundled cryptography passes its known-answer self-tests
+- **keyperm** — your private key files are `0600` (not group/other-readable)
 - **journal** — your device's history is intact and unbroken from the start
 - **database** — the local lookup index is in step with that history
 - **owner** — whether this device can sign governance (holds the owner key), plus any
   open succession nominations or owner-key sprawl
+- **device-keys** — whether every admitted device has a usable capsule key, and whether any
+  device carried a public key that disagrees with its identity-derived one (a tamper signal)
 - **hygiene** — whether duplicate or obsolete facts have built up
 - **agent-hooks** — whether the Claude Code dispatch shim and the `hive-memory` skill are
   wired (skipped silently on a node with no Claude Code)
 - **sync-daemon** — whether the background sync service is running
 - **peers** — whether your peer nodes are reachable and in sync
 
+A few checks appear only when there is something to report: **crypto-modules** (a bundled
+cryptography module failed to load, so signature checking is degraded), **journal-integrity**
+(garbled or truncated journal lines were skipped on read), and **capsule-conflicts** (two
+devices sealed the same capsule version before syncing, so one value lost a deterministic tie).
+
 ```
 hv doctor
-hv doctor --format json    # machine-readable, for scripts and monitoring
-hv doctor --fix            # take the safe remedial actions (see below)
+hv doctor --format json      # machine-readable, for scripts and monitoring
+hv doctor --fix              # take the safe remedial actions (see below)
+hv doctor --fix --dry-run    # preview every remedial action without making any change
 ```
 
 The `sync-daemon` check also flags **orphan daemons** — a stale `hv sync daemon`
@@ -173,7 +183,9 @@ twice), and relinks the skill — leaving your own hooks untouched and taking a
 `.bak.doctor` backup first. Because the 15-minute `hive-doctor.timer` runs `hv doctor
 --fix`, a node that drifts heals itself with no one re-running the installer. Without
 `--fix`, doctor only reports — it never kills or writes anything, so it stays safe to
-run from cron.
+run from cron. `--fix --dry-run` sits in between: it prints every action `--fix` would
+take — which key files it would re-tighten, which orphan daemons it would kill, and
+whether it would rewrite the Claude Code config — without performing any of them.
 
 Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
 non-zero only when a check actually fails, so you can wire it into a cron job or a
@@ -307,6 +319,15 @@ hv capsule rm <name>                                   # tombstone (logical dele
 hv capsule rotate <name>                               # re-seal to the current device set after admit/revoke/purge
 ```
 
+Each recipient's encryption key is **derived from that device's own signed identity**, so a
+capsule can only ever be sealed to a key a device has cryptographically proven it holds — a public
+key merely *carried* on a join-request or admit is never trusted as a recipient key. `put` and
+`rotate` tell you who they could and couldn't seal to: **missing** (an admitted device with no
+synced key yet), **skipped/unusable** (a recipient key that failed validation — that one device is
+left out rather than failing the whole seal), and a **security** warning for any carried key that
+disagrees with the identity-derived one. On a fresh device with no key, `hv capsule put` mints the
+device key for you before sealing.
+
 **Rotation caveat:** a revoked device still holds the *old* ciphertext, so `rotate` cuts it off the
 new version only — to truly revoke access, rotate the upstream token/secret too.
 
@@ -388,6 +409,13 @@ append-only journal but are permanently excluded from corroboration and ingest, 
 **cannot be re-admitted**. `change` re-tags the principal without touching admission; `deny`
 drops a pending join-request (a later `admit` overrides it).
 
+`hv group list` also calls out two key-coverage conditions when they apply: **missing keys**
+(an admitted device that hasn't synced its signed identity yet, so it can't receive capsules
+until it does) and a **security** line for any device that carried a public key disagreeing
+with its identity-derived one — that carried key is ignored, never trusted, and the mismatch is
+surfaced as a tamper signal. The same two conditions appear in `hv doctor` as the `device-keys`
+check.
+
 > `hv admit …` is kept as a silent alias for `hv group admit …`.
 
 ---
@@ -405,6 +433,11 @@ This is **non-blocking**: you're already reading the hive, and you can write, bu
 your writes don't count toward confidence until you're admitted. The request shows
 up for the owner to approve; you don't wait. It prints your `device_id` so you can
 pass it along.
+
+On a brand-new device that has no key yet, `hv join` **mints the device key for you**
+first (you need one to be admitted and to open capsules), so there's no separate
+`hv key init` step. Running `hv join` again while a request is already pending is a
+no-op — it won't pile up duplicate requests.
 
 ---
 

@@ -8,9 +8,11 @@ import binascii
 try:
     import x25519
     import ed25519
+    import chacha20poly1305
 except Exception:                       # pragma: no cover - import guard
     x25519 = None
     ed25519 = None
+    chacha20poly1305 = None
 
 _h = binascii.unhexlify
 _b2h = lambda b: binascii.hexlify(b).decode()
@@ -24,6 +26,18 @@ _X_VECS = [
      "e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493",
      "95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957"),
 ]
+
+# RFC 8439 §2.8.2 ChaCha20-Poly1305 AEAD known-answer vector (the authoritative published vector).
+_AEAD_KEY = "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f"
+_AEAD_NONCE = "070000004041424344454647"
+_AEAD_AAD = "50515253c0c1c2c3c4c5c6c7"
+_AEAD_PT = (b"Ladies and Gentlemen of the class of '99: If I could offer you only one "
+            b"tip for the future, sunscreen would be it.")
+_AEAD_CT = ("d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d6"
+            "3dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b36"
+            "92ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc"
+            "3ff4def08e4b7a9de576d26586cec64b6116")
+_AEAD_TAG = "1ae10b594f09e26a7e902ecbd0600691"
 
 # Ed25519 pin: deterministic sign over a fixed seed+message (catches any drift in the bundled impl).
 _ED_SEED = bytes(range(32))
@@ -72,6 +86,32 @@ def _edcurve_ok():
         return False
 
 
+def _aead_ok():
+    """ChaCha20-Poly1305: matches the RFC 8439 §2.8.2 published vector, round-trips, and rejects a
+    tampered ciphertext and a tampered AAD. This is the symmetric KAT the bundled crypto previously
+    lacked — it anchors the capsule/owner-seal cipher to an external authority, not a self-minted byte
+    string."""
+    if chacha20poly1305 is None:
+        return False
+    try:
+        key, nonce, aad = _h(_AEAD_KEY), _h(_AEAD_NONCE), _h(_AEAD_AAD)
+        ct, tag = chacha20poly1305.encrypt(key, nonce, _AEAD_PT, aad)
+        if _b2h(ct) != _AEAD_CT or _b2h(tag) != _AEAD_TAG:
+            return False
+        if chacha20poly1305.decrypt(key, nonce, ct, tag, aad) != _AEAD_PT:
+            return False
+        bad = bytes([ct[0] ^ 1]) + ct[1:]
+        for args in ((key, nonce, bad, tag, aad), (key, nonce, ct, tag, aad + b"x")):
+            try:
+                chacha20poly1305.decrypt(*args)
+                return False                           # tamper MUST raise
+            except ValueError:
+                pass
+        return True
+    except Exception:
+        return False
+
+
 def _sealed_box_ok():
     """The capsule key-agreement: ephemeral×recipient_pub == recipient_scalar×ephemeral_pub, and a
     low-order recipient key is rejected."""
@@ -95,8 +135,8 @@ def _sealed_box_ok():
 
 def run_all():
     """Run every suite → {name: ok_bool}. All True == crypto is correct on this node."""
-    return {"x25519": _x25519_ok(), "ed25519": _ed25519_ok(),
-            "edcurve": _edcurve_ok(), "sealed_box": _sealed_box_ok()}
+    return {"x25519": _x25519_ok(), "ed25519": _ed25519_ok(), "edcurve": _edcurve_ok(),
+            "aead": _aead_ok(), "sealed_box": _sealed_box_ok()}
 
 
 if __name__ == "__main__":

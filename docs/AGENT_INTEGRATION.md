@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.13`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.14`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -209,12 +209,27 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.14` — **standards-anchored crypto**. The bundled symmetric layer moved off a hand-rolled
+  SHA-256-CTR keystream + HMAC encrypt-then-MAC onto pure-Python **ChaCha20-Poly1305 (RFC 8439,
+  `chacha20poly1305.py`)** — so the crypto self-test pins the RFC's *published* known-answer vector
+  instead of a self-minted byte string, and a human auditor reviews one analyzed AEAD rather than a
+  bespoke generic composition. `_kdf_keystream` is **deleted**. Capsule `alg` →
+  `x25519-hkdf-chacha20poly1305-v1` (the HKDF-SHA256 over the X25519 ECDH is unchanged; only the
+  cipher moved). Owner-seal `enc` → `scrypt-chacha20poly1305-v2` (scrypt cost 2¹⁵→2¹⁶; the scrypt
+  params are now bound as AEAD associated data); **the v1 read path is removed** — breaking for any
+  pre-1.14 escrow or passphrase-export, so `hv owner restore` now *skips* a retired-scheme escrow with
+  a re-`escrow` hint rather than failing. New hard-fail **`keyperm`** doctor check: the raw device and
+  owner seeds at rest must be `0600` (the whole threat model rests on it); `hv doctor --fix`
+  re-tightens. The crypto self-test gains the RFC 8439 AEAD KAT — the symmetric layer previously had
+  *no* pinned vector at all. Owner-seal/capsule formats changed: a node holding a pre-1.14 escrow
+  re-mints it with `hv owner escrow` from a device that still holds the owner key.
 - `1.13` — **first-class `cell`/`comb`/`capsule` primitives + unified `hv wire`**. Three new
   `kind`-discriminated journal types ride the existing G-Set/sync/admission machinery unchanged: a
   **cell** is an executable unit with a spec (`kind:tool` = a self-wiring recipe; `kind:agent` = a
   foreign-config wiring like the Claude hooks), a **comb** is an ordered collection of cells, and a
-  **capsule** is a payload **sealed to the authorized device set** (pure-Python X25519 ECDH +
-  encrypt-then-MAC, recipients = `admitted − purged`). They project deterministically
+  **capsule** is a payload **sealed to the authorized device set** (pure-Python X25519 ECDH wrapping
+  an authenticated-cipher payload key, recipients = `admitted − purged`; see 1.14 for the cipher).
+  They project deterministically
   (`_cell_state`/`_comb_state`/`_capsule_state`) rather than indexing into `store.db`. Wiring is
   unified under **`hv wire <name>|--comb <name>|--list|--show <name>|--add`**: `kind:agent` dispatches
   to the generalized `_wire_agent` (the old `hv doctor wire-agent` is now a hidden deprecated alias

@@ -289,8 +289,9 @@ the deprecated `hv doctor wire-agent` (still available as a hidden alias, byte-i
 ### `hv capsule` — Seal a secret to the authorized device set
 
 A **capsule** encrypts a secret so that **only the hive's currently-authorized devices**
-(`admitted − purged`) can open it — sealed via X25519 ECDH to each device's published key, with
-encrypt-then-MAC over the payload. Secrets are ingested **securely only**: from a dotenv file, a raw
+(`admitted − purged`) can open it — a random content key seals the payload with ChaCha20-Poly1305
+(RFC 8439), and that key is wrapped to each device via an ephemeral X25519 ECDH. Secrets are ingested
+**securely only**: from a dotenv file, a raw
 file, stdin, or an interactive prompt — **never** through chat or the command line (`argv`), so the
 value never lands in a transcript or process list. Who may publish is gated by the owner-signed
 `capsule_putters` config (`owner` default, or `fertile`).

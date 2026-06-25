@@ -111,11 +111,17 @@ def test_passphrase_seal_unseal_roundtrip_and_wrong_pass():
     loader.exec_module(m)
     seed = os.urandom(32)
     env = m._owner_seal(seed, "correct horse")
-    assert env["enc"] == "scrypt-ctr-hmac-v1"
+    assert env["enc"] == "scrypt-chacha20poly1305-v2"
     assert m._owner_unseal(env, "correct horse") == seed
     try:
         m._owner_unseal(env, "wrong")
         assert False, "wrong passphrase should raise"
+    except ValueError:
+        pass
+    # the retired v1 scheme is refused outright (no silent downgrade)
+    try:
+        m._owner_unseal({"enc": "scrypt-ctr-hmac-v1"}, "correct horse")
+        assert False, "legacy v1 scheme should be refused"
     except ValueError:
         pass
 

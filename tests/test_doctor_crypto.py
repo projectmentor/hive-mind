@@ -19,7 +19,8 @@ import x25519            # noqa: E402
 
 def test_selftest_all_pass():
     res = crypto_selftest.run_all()
-    assert res == {"x25519": True, "ed25519": True, "edcurve": True, "sealed_box": True}
+    assert res == {"x25519": True, "ed25519": True, "edcurve": True,
+                   "aead": True, "sealed_box": True}
 
 
 def test_selftest_catches_a_broken_primitive(monkeypatch):

@@ -43,6 +43,10 @@ try:
     import ed25519 as _ed25519  # bundled pure-Python signature verifier
 except Exception:
     _ed25519 = None
+try:
+    import x25519 as _x25519     # bundled pure-Python X25519 (capsule encrypt-to-device)
+except Exception:
+    _x25519 = None
 
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
@@ -141,6 +145,18 @@ def _kdf_keystream(key, nbytes):
         out += hashlib.sha256(key + counter.to_bytes(8, "big")).digest()
         counter += 1
     return bytes(out[:nbytes])
+
+
+def _hkdf_sha256(ikm, salt, info, n):
+    """HKDF-SHA256 (RFC 5869) → n bytes. Derives INDEPENDENT enc/MAC subkeys from a CEK or an X25519
+    shared secret, so one raw key never directly keys both the cipher and the MAC (key separation)."""
+    prk = hmac.new(salt, ikm, hashlib.sha256).digest()           # extract
+    out, t, i = b"", b"", 0                                        # expand
+    while len(out) < n:
+        i += 1
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        out += t
+    return out[:n]
 
 
 def _owner_seal(seed, passphrase):
@@ -737,6 +753,12 @@ def _comb_state(entries):
     return _projection_latest(entries, "comb")
 
 
+def _capsule_state(entries):
+    """name → latest `capsule` payload (an encrypt-to-device sealed secret). Latest version wins, so
+    a rotation supersedes an old seal and a tombstone (alg='tombstone-v1') supersedes the secret."""
+    return _projection_latest(entries, "capsule")
+
+
 def _governance_state(entries):
     """Pure, deterministic projection over owner-signed `governance` entries → the established owner,
     the admitted device set, the principal map, and tunable config. Because it reads only the journal
@@ -922,6 +944,8 @@ def _governance_state(entries):
                 elif key == "quorum_m":
                     gov["config"][key] = int(raw)
                 elif key == "quorum_by" and raw in ("device", "principal"):
+                    gov["config"][key] = raw
+                elif key == "capsule_putters" and raw in ("owner", "fertile"):
                     gov["config"][key] = raw
             except (TypeError, ValueError):
                 pass
@@ -3001,12 +3025,27 @@ def _wire_tool(cell, env_file=None):
     Returns a process-style int (0 ok)."""
     name = cell.get("name", "?")
     ef = env_file or "~/.claude/.env"
-    secrets = _load_env_file(ef)
     requires = cell.get("requires") or []
+    # Prefer sealed CAPSULES (encrypt-to-device); fall back to the per-device .env for un-sealed creds.
+    secrets = {}
+    if requires:
+        caps = _capsule_state(merkle.read_all_entries(JOURNAL_DIR))
+        sc = _my_curve_scalar()
+        for k in requires:
+            c = caps.get(k)
+            if c and c.get("alg") != "tombstone-v1" and sc is not None:
+                try:
+                    secrets[k] = _capsule_open(c, sc, NODE_ID).decode("utf-8", "replace")
+                except Exception:
+                    pass
+        env = _load_env_file(ef)
+        for k in requires:
+            if not secrets.get(k) and env.get(k):
+                secrets[k] = env[k]
     missing = [k for k in requires if not secrets.get(k)]
     if missing:
-        print(f"{name}: missing credential(s) {missing} — add them to {ef} and re-run "
-              f"(Phase 2 will seal these into a capsule).")
+        print(f"{name}: missing credential(s) {missing} — seal them with `hv capsule put <NAME>` "
+              f"or add them to {ef}, then re-run.")
         return 1
     if _run_verify(cell, secrets):
         print(f"{name}: already provisioned (verify passed).")
@@ -3117,6 +3156,243 @@ def wire_cmd(args):
         print("usage: hv wire <name> | --comb <name> | --list | --show <name> | --add <file.json>")
         return
     _wire_one(_resolve_cell(name, entries), name, getattr(args, "env_file", None))
+
+
+# ── Capsules: encrypt-to-device secrets (Phase 2) ────────────────────────────────────────────────
+_CAPSULE_ALG = "x25519-hkdf-sha256-ctr-hmac-v1"
+
+
+def _recipient_pubkeys(entries, gov):
+    """{device_id: curve_pub bytes} for the current authorized set (admitted − purged). A device's
+    Ed25519 pubkey is harvested from its OWN signed entries (pub bound to node_id via the
+    fingerprint) and converted to Curve25519; a curve_pub carried on its join-request/admit is a
+    fallback. Returns (recipients, missing) — `missing` = admitted device_ids with no usable key yet."""
+    if _x25519 is None:
+        return {}, sorted(gov.get("admitted", set()) - gov.get("purged", set()))
+    admitted = gov.get("admitted", set()) - gov.get("purged", set())
+    ed_pub_by_dev, carried = {}, {}
+    for e in entries:
+        pub_b64, nid = e.get("pub"), e.get("node_id")
+        if pub_b64 and nid and nid not in ed_pub_by_dev:
+            try:
+                pub = base64.b64decode(pub_b64)
+                if len(pub) == 32 and _device_id_for_pub(pub) == nid:
+                    ed_pub_by_dev[nid] = pub
+            except Exception:
+                pass
+        if e.get("type") == "governance":
+            p = e.get("payload", {})
+            if p.get("action") in ("join-request", "admit") and p.get("curve_pub") and p.get("device_id"):
+                carried[p["device_id"]] = p["curve_pub"]
+    recips, missing = {}, []
+    for dev in sorted(admitted):
+        cp = None
+        if dev in ed_pub_by_dev:
+            try:
+                cp = _x25519.ed_pub_to_curve_pub(ed_pub_by_dev[dev])
+            except Exception:
+                cp = None
+        if cp is None and dev in carried:
+            try:
+                raw = base64.b64decode(carried[dev])
+                cp = raw if len(raw) == 32 else None
+            except Exception:
+                cp = None
+        (recips.__setitem__(dev, cp) if cp is not None else missing.append(dev))
+    return recips, missing
+
+
+def _capsule_build(name, kind, value, recipients, version, hive_id, signer):
+    """Seal `value` (bytes) so only `recipients` (device_id→curve_pub) can open it. A random CEK
+    encrypts the payload (CTR via _kdf_keystream + HMAC-SHA256 encrypt-then-MAC, like _owner_seal);
+    the CEK is wrapped per recipient via an EPHEMERAL X25519 ECDH (forward-secret per capsule).
+    name+version+hive_id+alg are bound into the payload tag (no replay under a different name)."""
+    if _x25519 is None:
+        raise RuntimeError("x25519 module unavailable")
+    cek, nonce = os.urandom(32), os.urandom(16)
+    kenc = _hkdf_sha256(cek, nonce, b"hive-capsule-enc", 32)
+    kmac = _hkdf_sha256(cek, nonce, b"hive-capsule-mac", 32)
+    ct = bytes(a ^ b for a, b in zip(value, _kdf_keystream(kenc, len(value))))
+    aad = f"{_CAPSULE_ALG}|{hive_id}|{name}|{version}".encode()
+    tag = hmac.new(kmac, aad + nonce + ct, hashlib.sha256).digest()
+    wraps = []
+    for dev, cpub in sorted(recipients.items()):
+        eph = os.urandom(32)
+        eph_pub = _x25519.scalarmult_base(eph)
+        shared = _x25519.shared_secret(eph, cpub)                # raises on a low-order recipient key
+        wk = _hkdf_sha256(shared, eph_pub + cpub, b"hive-capsule-wrap", 32)
+        wnonce = os.urandom(16)
+        wrapped = bytes(a ^ b for a, b in zip(cek, _kdf_keystream(_hkdf_sha256(wk, wnonce, b"wrap-enc", 32), 32)))
+        wtag = hmac.new(_hkdf_sha256(wk, wnonce, b"wrap-mac", 32),
+                        eph_pub + wnonce + wrapped, hashlib.sha256).digest()
+        wraps.append({"device_id": dev, "eph_pub": base64.b64encode(eph_pub).decode(),
+                      "wrap_nonce": base64.b64encode(wnonce).decode(),
+                      "wrapped_cek": base64.b64encode(wrapped).decode(),
+                      "wrap_tag": base64.b64encode(wtag).decode()})
+    return {"capsule_id": hashlib.sha256(name.encode()).hexdigest()[:16], "name": name, "kind": kind,
+            "version": version, "alg": _CAPSULE_ALG, "hive_id": hive_id,
+            "nonce": base64.b64encode(nonce).decode(), "ct": base64.b64encode(ct).decode(),
+            "tag": base64.b64encode(tag).decode(), "wraps": wraps, "signer": signer}
+
+
+def _capsule_open(cap, my_scalar, my_device_id):
+    """Open a capsule on this device. Whitelists `alg`, verifies the wrap tag AND payload tag
+    (constant-time) BEFORE releasing plaintext. Returns bytes; raises ValueError otherwise."""
+    if cap.get("alg") != _CAPSULE_ALG:
+        raise ValueError(f"unsupported capsule alg {cap.get('alg')!r} — refusing")
+    mine = next((w for w in cap.get("wraps", []) if w.get("device_id") == my_device_id), None)
+    if not mine:
+        raise ValueError("this device is not a recipient (ask the owner to rotate after admitting it)")
+    eph_pub = base64.b64decode(mine["eph_pub"])
+    wnonce = base64.b64decode(mine["wrap_nonce"])
+    wrapped = base64.b64decode(mine["wrapped_cek"])
+    shared = _x25519.shared_secret(my_scalar, eph_pub)
+    my_pub = _x25519.scalarmult_base(my_scalar)
+    wk = _hkdf_sha256(shared, eph_pub + my_pub, b"hive-capsule-wrap", 32)
+    if not hmac.compare_digest(base64.b64decode(mine["wrap_tag"]),
+                               hmac.new(_hkdf_sha256(wk, wnonce, b"wrap-mac", 32),
+                                        eph_pub + wnonce + wrapped, hashlib.sha256).digest()):
+        raise ValueError("wrap tag mismatch (tampered or corrupt)")
+    cek = bytes(a ^ b for a, b in zip(wrapped, _kdf_keystream(_hkdf_sha256(wk, wnonce, b"wrap-enc", 32), 32)))
+    nonce, ct = base64.b64decode(cap["nonce"]), base64.b64decode(cap["ct"])
+    aad = f"{_CAPSULE_ALG}|{cap.get('hive_id','')}|{cap.get('name','')}|{cap.get('version',0)}".encode()
+    if not hmac.compare_digest(base64.b64decode(cap["tag"]),
+                               hmac.new(_hkdf_sha256(cek, nonce, b"hive-capsule-mac", 32),
+                                        aad + nonce + ct, hashlib.sha256).digest()):
+        raise ValueError("payload tag mismatch (tampered or corrupt)")
+    return bytes(a ^ b for a, b in zip(ct, _kdf_keystream(_hkdf_sha256(cek, nonce, b"hive-capsule-enc", 32), len(ct))))
+
+
+def _read_secret_value(args, name):
+    """Resolve a secret value for `hv capsule put` WITHOUT it transiting argv/chat: --stdin, --file,
+    --env-file [--name VAR] (default ~/.claude/.env), else an interactive getpass. bytes or None."""
+    if getattr(args, "stdin", False):
+        data = sys.stdin.buffer.read()
+        return data.rstrip(b"\n") if data else None
+    if getattr(args, "file", None):
+        try:
+            return Path(args.file).expanduser().read_bytes()
+        except Exception as e:
+            print(f"could not read {args.file}: {e}"); return None
+    if getattr(args, "env_file", None) is not None or getattr(args, "var", None):
+        ef = getattr(args, "env_file", None) or "~/.claude/.env"
+        var = getattr(args, "var", None) or name
+        val = _load_env_file(ef).get(var)
+        if val is None:
+            print(f"{var} not found in {ef}"); return None
+        return val.encode()
+    import getpass
+    try:
+        v = getpass.getpass(f"Enter value for {name} (hidden): ")
+    except (EOFError, KeyboardInterrupt):
+        print(); return None
+    return v.encode() if v else None
+
+
+def _my_curve_scalar():
+    seed = _device_seed()
+    if seed is None or _x25519 is None:
+        return None
+    return _x25519.ed_seed_to_curve_scalar(seed)
+
+
+def capsule_cmd(args):
+    """Encrypt-to-device secrets: `hv capsule put|get|ls|rm|rotate`. A capsule is sealed to the
+    current authorized device set; only those devices can open it. Secrets enter via file/stdin/env/
+    getpass — never argv/chat."""
+    action = getattr(args, "capsule_action", None)
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    caps = _capsule_state(entries)
+    live = {n: c for n, c in caps.items() if c.get("alg") != "tombstone-v1"}
+
+    if action == "ls":
+        if not live:
+            print("(no capsules)"); return 0
+        for name, c in sorted(live.items()):
+            mine = any(w.get("device_id") == NODE_ID for w in c.get("wraps", []))
+            print(f"  {name:<28} v{c.get('version')}  recipients={len(c.get('wraps', []))}  "
+                  f"openable_here={'yes' if mine else 'no'}")
+        return 0
+
+    if action == "get":
+        c = live.get(args.name)
+        if not c:
+            print(f"No capsule named {args.name!r}."); return 1
+        if c.get("hive_id") and gov.get("hive_id") and c["hive_id"] != gov["hive_id"]:
+            print("This capsule belongs to a different hive — refusing."); return 1
+        sc = _my_curve_scalar()
+        if sc is None:
+            print("No device key on this node — cannot open capsules (`hv key init`)."); return 1
+        try:
+            val = _capsule_open(c, sc, NODE_ID)
+        except ValueError as e:
+            print(f"{args.name}: {e}"); return 1
+        sys.stdout.buffer.write(val if getattr(args, "raw", False) else val + b"\n")
+        return 0
+
+    if action == "rm":
+        cur = caps.get(args.name)
+        nextv = (int(cur.get("version", 0)) + 1) if cur else 1
+        append_journal("capsule", {"capsule_id": hashlib.sha256(args.name.encode()).hexdigest()[:16],
+                                    "name": args.name, "kind": "tombstone", "version": nextv,
+                                    "alg": "tombstone-v1", "wraps": []})
+        print(f"Tombstoned capsule {args.name!r} (v{nextv}). The OLD ciphertext stays in the "
+              f"append-only journal — ROTATE THE UPSTREAM SECRET to truly cut access.")
+        return 0
+
+    if action in ("put", "rotate"):
+        putters = gov.get("config", {}).get("capsule_putters", "owner")
+        if gov.get("owner_id"):
+            if putters == "owner" and _owner_seed() is None:
+                print("Storing capsules is owner-only here (config capsule_putters=owner). Run on the "
+                      "owner device, or `hv config governance set capsule_putters fertile`."); return 1
+            if putters == "fertile" and NODE_ID not in gov.get("admitted", set()):
+                print("Only admitted devices may store capsules on this hive."); return 1
+        recips, missing = _recipient_pubkeys(entries, gov)
+        if not recips:                                  # pre-owner / solo: seal to THIS device
+            sc = _my_curve_scalar()
+            if sc is not None:
+                recips = {NODE_ID: _x25519.scalarmult_base(sc)}
+        if not recips:
+            print("No recipient device key available — run `hv key init` first."); return 1
+
+        if action == "rotate":
+            names = [args.name] if getattr(args, "name", None) else list(live)
+            sc = _my_curve_scalar()
+            for nm in names:
+                cur = live.get(nm)
+                if not cur:
+                    continue
+                try:
+                    val = _capsule_open(cur, sc, NODE_ID)
+                except Exception as e:
+                    print(f"{nm}: cannot rotate (this device can't open it: {e})"); continue
+                nextv = int(cur.get("version", 0)) + 1
+                append_journal("capsule", _capsule_build(nm, cur.get("kind", "credential"), val,
+                                                         recips, nextv, gov.get("hive_id", ""), NODE_ID))
+                print(f"Rotated {nm!r} → v{nextv} ({len(recips)} recipient(s)).")
+            print("Reminder: rotation does NOT revoke a removed device's access to OLD ciphertext it "
+                  "already synced — rotate the upstream token to truly cut access.")
+            return 0
+
+        val = _read_secret_value(args, args.name)
+        if val is None:
+            print("No value provided (cancelled)."); return 1
+        cur = caps.get(args.name)
+        nextv = (int(cur.get("version", 0)) + 1) if cur else 1
+        append_journal("capsule", _capsule_build(args.name, "credential", val, recips, nextv,
+                                                 gov.get("hive_id", ""), NODE_ID))
+        msg = f"Sealed capsule {args.name!r} v{nextv} to {len(recips)} device(s)."
+        if missing:
+            msg += (f" WARNING: {len(missing)} admitted device(s) have no published pubkey yet and "
+                    f"cannot open it until you rotate after they sync.")
+        print(msg)
+        print("Note: a device removed later can still open an OLD version it already synced — rotate "
+              "the upstream secret to truly cut access.")
+        return 0
+
+    print("usage: hv capsule put|get|ls|rm|rotate <name>")
 
 
 def _doctor_status():
@@ -3969,7 +4245,8 @@ def _config_set(key, value):
     confidence knobs (same_device_lambda, cap_self) and the quorum-election knobs (quorum_m,
     quorum_by, dead_man_days)."""
     coercers = {"same_device_lambda": float, "cap_self": float,
-                "quorum_m": int, "quorum_by": str, "dead_man_days": float}
+                "quorum_m": int, "quorum_by": str, "dead_man_days": float,
+                "capsule_putters": str}
     if key not in coercers:
         print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
         return
@@ -3980,6 +4257,9 @@ def _config_set(key, value):
         return
     if key == "quorum_by" and val not in ("device", "principal"):
         print("quorum_by must be 'device' or 'principal'")
+        return
+    if key == "capsule_putters" and val not in ("owner", "fertile"):
+        print("capsule_putters must be 'owner' (default) or 'fertile' (any admitted device)")
         return
     if key == "quorum_m" and val < 0:
         print("quorum_m must be >= 0 (0 disables elections)")
@@ -4501,6 +4781,24 @@ def build_parser():
     wire_parser.add_argument("--env-file", dest="env_file", metavar="PATH",
                              help="Dotenv file to read tool credentials from (default ~/.claude/.env)")
 
+    capsule_parser = subparsers.add_parser("capsule",
+                                           help="Encrypt-to-device secrets (sealed to the authorized device set)")
+    capsule_sub = capsule_parser.add_subparsers(dest="capsule_action")
+    cap_put = capsule_sub.add_parser("put", help="Seal a secret into a capsule (value via --env-file/--file/--stdin/prompt — never argv)")
+    cap_put.add_argument("name")
+    cap_put.add_argument("--env-file", dest="env_file", metavar="PATH", help="Dotenv file to read the value from (default ~/.claude/.env)")
+    cap_put.add_argument("--name", dest="var", metavar="VAR", help="Variable name within the env file (default the capsule name)")
+    cap_put.add_argument("--file", metavar="PATH", help="Read the raw value from this file")
+    cap_put.add_argument("--stdin", action="store_true", help="Read the value from stdin")
+    cap_get = capsule_sub.add_parser("get", help="Open a capsule on this device (prints the value)")
+    cap_get.add_argument("name")
+    cap_get.add_argument("--raw", action="store_true", help="No trailing newline")
+    capsule_sub.add_parser("ls", help="List capsules + whether this device can open each")
+    cap_rm = capsule_sub.add_parser("rm", help="Tombstone a capsule (logical delete; ciphertext stays in the append-only journal)")
+    cap_rm.add_argument("name")
+    cap_rot = capsule_sub.add_parser("rotate", help="Re-seal to the current device set (run after admit/revoke/purge)")
+    cap_rot.add_argument("name", nargs="?", help="Capsule to rotate (omit = all openable capsules)")
+
     key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")
     key_sub.add_parser("show", help="Show this device's device_id and pubkey")
@@ -4665,6 +4963,8 @@ def main():
         doctor_cmd(args)
     elif args.command == "wire":
         wire_cmd(args)
+    elif args.command == "capsule":
+        capsule_cmd(args)
     elif args.command == "key":
         key_cmd(args)
     elif args.command == "owner":

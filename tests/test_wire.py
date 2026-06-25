@@ -64,7 +64,9 @@ def test_cell_add_list_show_and_tool_stub(tmp_path):
     assert "claude" in lst and "cloudflare" in lst and "kind=tool" in lst and "(built-in)" in lst
     show = run(home, "wire", "--show", "cloudflare").stdout
     assert "CLOUDFLARE_API_TOKEN" in show
-    assert "Phase 1" in run(home, "wire", "cloudflare").stdout          # tool stub
+    # a kind:tool cell dispatches to the executor; an empty env file makes the path deterministic
+    empty = tmp_path / "empty.env"; empty.write_text("")
+    assert "missing credential" in run(home, "wire", "cloudflare", "--env-file", str(empty)).stdout
     assert "No cell named" in run(home, "wire", "does-not-exist").stdout
 
 
@@ -76,3 +78,33 @@ def test_cell_latest_version_wins_over_journal(tmp_path):
     run(home, "wire", "--add", str(v1))
     run(home, "wire", "--add", str(v2))
     assert '"note": "new"' in run(home, "wire", "--show", "vultr").stdout
+
+
+def test_tool_executor_runs_steps_then_verifies_idempotently(tmp_path):
+    """kind:tool: first run fails verify → runs the platform steps → verify passes; second run is a
+    no-op because verify already passes. Hermetic (uses a local marker file + cmd verify, no net)."""
+    home = tmp_path / "h"
+    marker = tmp_path / "marker"
+    envf = tmp_path / "dot.env"; envf.write_text("MYSECRET=present\n")
+    cell = tmp_path / "echotool.json"
+    cell.write_text(json.dumps({
+        "name": "echotool", "kind": "tool", "version": 1, "requires": ["MYSECRET"],
+        "spec": {"platforms": {p: {"steps": [f"echo ran > {marker}"]}
+                               for p in ("linux", "wsl", "darwin")}},
+        "verify": {"cmd": f"test -f {marker} && echo OK", "expect": "OK"}}))
+    run(home, "wire", "--add", str(cell))
+    r1 = run(home, "wire", "echotool", "--env-file", str(envf))
+    assert "provisioned + verified" in r1.stdout and marker.exists()
+    r2 = run(home, "wire", "echotool", "--env-file", str(envf))
+    assert "already provisioned" in r2.stdout            # idempotent
+
+
+def test_tool_executor_reports_missing_credential(tmp_path):
+    home = tmp_path / "h"
+    cell = tmp_path / "needy.json"
+    cell.write_text(json.dumps({"name": "needy", "kind": "tool", "version": 1,
+                                "requires": ["NOPE_TOKEN"], "spec": {}, "verify": {}}))
+    run(home, "wire", "--add", str(cell))
+    empty = tmp_path / "empty.env"; empty.write_text("")
+    r = run(home, "wire", "needy", "--env-file", str(empty))
+    assert "missing credential" in r.stdout and "NOPE_TOKEN" in r.stdout

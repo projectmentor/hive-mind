@@ -21,6 +21,7 @@ Cross-node identity (Phase 2):
 import argparse
 import base64
 import collections
+import copy
 import hashlib
 import hmac
 import json
@@ -486,6 +487,28 @@ def _journal_path_for(timestamp):
     return JOURNAL_DIR / f"{timestamp[:10]}.jsonl"
 
 
+try:
+    import fcntl as _fcntl
+except Exception:                       # non-POSIX (e.g. Windows) — no flock available
+    _fcntl = None
+
+
+def _append_line(path, line):
+    """Append one serialized JSON line to a daily journal file under an EXCLUSIVE advisory lock, so a
+    concurrent daemon+CLI write (normal operation) can't interleave mid-line and corrupt the .jsonl.
+    A line can exceed PIPE_BUF (4096B), so O_APPEND alone is NOT atomic for our records — the lock is.
+    Released on close. flock is POSIX-only; without it we fall back to a plain append (single-writer
+    is the common case there, and the best-effort corrupt-line skip in merkle.read_all_entries remains
+    the second line of defense)."""
+    with open(path, "a") as f:
+        if _fcntl is not None:
+            try:
+                _fcntl.flock(f.fileno(), _fcntl.LOCK_EX)
+            except Exception:
+                pass
+        f.write(line + "\n")
+
+
 def append_journal(entry_type, payload, timestamp=None):
     """Mint and append a LOCAL journal entry. This is the core append API —
     every local write goes through here. Returns the full entry dict."""
@@ -502,8 +525,7 @@ def append_journal(entry_type, payload, timestamp=None):
     seed = _device_seed()
     if seed is not None:
         _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
-    with open(_journal_path_for(timestamp), "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    _append_line(_journal_path_for(timestamp), json.dumps(entry))
     return entry
 
 
@@ -537,8 +559,7 @@ def append_foreign_entries(entries):
     accepted = duplicates = rejected = 0
 
     def _persist(e):
-        with open(_journal_path_for(e.get("timestamp", _now_iso())), "a") as f:
-            f.write(json.dumps(e) + "\n")
+        _append_line(_journal_path_for(e.get("timestamp", _now_iso())), json.dumps(e))
 
     # ── Pass 1: governance (owner-signed acts + authority-less join-requests) ────────────────────
     for e in entries:
@@ -683,6 +704,8 @@ CONF_CAP_SELF = 0.70            # ceiling when all corroboration traces to ONE p
 GOV_QUORUM_M = 0                # admitted voter-units needed to elect a new owner (0 = elections OFF)
 GOV_QUORUM_BY = "device"       # count quorum by "device" or by "principal"
 GOV_DEAD_MAN_DAYS = 30.0       # owner inactivity (no owner-signed act, incl. heartbeat) before an election can install
+GOV_ELECTION_SKEW_DAYS = 1.0 / 24.0   # max a proposal's basis_ts may lead its OWN entry timestamp (clock-skew
+                               # allowance); a further-future basis_ts is a forged inactivity anchor → rejected
 
 
 def _parse_source(source):
@@ -767,7 +790,50 @@ def _capsule_state(entries):
     return _projection_latest(entries, "capsule")
 
 
+def _capsule_version_conflicts(entries):
+    """Capsule names where the SAME version was sealed by MORE THAN ONE device — a concurrent
+    put/rotate that happened before the writers synced. The projection still resolves deterministically
+    by (version, timestamp, node_id, seq), so the hive stays converged, but it means one writer's value
+    silently lost the tie. Returns sorted [name] so `hv doctor` can surface it (version is a local
+    increment, not owner-signed — this is the visibility the design otherwise lacks)."""
+    seen = {}      # (name, version) -> set(node_id)
+    for e in entries:
+        if e.get("type") != "capsule":
+            continue
+        p = e.get("payload", {}) or {}
+        name, ver = p.get("name"), p.get("version")
+        if name is None or ver is None:
+            continue
+        seen.setdefault((name, ver), set()).add(e.get("node_id"))
+    return sorted({name for (name, _ver), nodes in seen.items() if len(nodes) > 1})
+
+
+_GOV_CACHE = {}     # signature(governance entries) -> projected gov dict (master copy, never handed out)
+
+
 def _governance_state(entries):
+    """Memoized wrapper over the (pure, deterministic) governance projection. The projection reads
+    ONLY governance entries, so the cache key is a content signature of just those — a plain `fact`
+    write (the common case) does not bust it, and the heavy work (sort + multi-stage election walk +
+    per-entry Ed25519 verification) is skipped on the long-lived daemon's repeated calls. The cached
+    value is the master; every caller gets a deep COPY so a caller mutating its result can never
+    corrupt the cache. Output is byte-identical to the uncached projection for the same journal."""
+    govs_raw = [e for e in entries if e.get("type") == "governance"]
+    sig = hashlib.sha256(
+        "\x01".join(
+            json.dumps([e.get("node_id"), e.get("seq"), e.get("timestamp"),
+                        e.get("sig"), e.get("payload")], sort_keys=True, separators=(",", ":"))
+            for e in govs_raw).encode()
+    ).hexdigest()
+    master = _GOV_CACHE.get(sig)
+    if master is None:
+        master = _governance_state_uncached(entries)
+        _GOV_CACHE.clear()              # journal grows monotonically; only the latest sig is ever reused
+        _GOV_CACHE[sig] = master
+    return copy.deepcopy(master)
+
+
+def _governance_state_uncached(entries):
     """Pure, deterministic projection over owner-signed `governance` entries → the established owner,
     the admitted device set, the principal map, and tunable config. Because it reads only the journal
     (which converges via the G-Set), every node derives the same governance state, so confidence stays
@@ -839,6 +905,13 @@ def _governance_state(entries):
                 basis_ts = p.get("basis_ts", "")
                 if not new_pub or not basis_ts or pid != _election_id(new_pub, basis_ts):
                     continue                   # malformed or not content-addressed to its body
+                # Deterministic clock-skew bound: basis_ts anchors the owner-inactivity measurement,
+                # so a FUTURE-dated basis_ts pre-arms the dead-man switch. It cannot legitimately lead
+                # the proposal's OWN entry timestamp (_ts) — both are stamped at propose time — so
+                # reject one that does, beyond a small skew allowance. Entry-time vs entry-time only:
+                # every node decides identically and the journal stays convergent (no wall-clock).
+                if _days_between(_ts, basis_ts) > GOV_ELECTION_SKEW_DAYS:
+                    continue
                 pr = proposals.get(pid)
                 if pr is None:
                     try:
@@ -2566,6 +2639,35 @@ def _identity_init(force):
     print("  Share the device_id + pubkey with peers (add them to .peers.json).")
 
 
+def _ensure_device_key():
+    """Auto-mint a device key on first use if this is a FRESH node, so joining/capsules work without a
+    manual `hv key init`. Returns True iff it just minted one (caller can notify). Safe by construction:
+    it NEVER splits identity — it refuses when a key already exists, when HIVE_NODE_ID overrides the
+    identity (tests / two instances on one box), or when the journal already has entries under this
+    hostname (that case is the coordinated migration path, not a silent re-mint)."""
+    global NODE_ID
+    if _ed25519 is None or DEVICE_KEY_PATH.exists() or os.environ.get("HIVE_NODE_ID"):
+        return False
+    try:
+        if any(e.get("node_id") == socket.gethostname()
+               for e in merkle.read_all_entries(JOURNAL_DIR)):
+            return False
+    except Exception:
+        return False
+    seed = os.urandom(32)
+    HIVE_HOME.mkdir(parents=True, exist_ok=True)
+    DEVICE_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+    pub = _ed25519.pub_from_seed(seed)
+    did = _device_id_for_pub(pub)
+    DEVICE_ID_PATH.write_text(did + "\n")
+    try:
+        os.chmod(DEVICE_KEY_PATH, 0o600)
+    except Exception:
+        pass
+    NODE_ID = did                          # adopt the freshly minted identity for the rest of this run
+    return True
+
+
 def key_cmd(args):
     """[alias of `hv config identity`] Show or create this device's Ed25519 device identity."""
     action = getattr(args, "key_action", None) or "show"
@@ -2709,7 +2811,14 @@ def _sync_daemon_pids():
     try:
         out = subprocess.run(["pgrep", "-af", "sync daemon"],
                              capture_output=True, text=True, timeout=5).stdout
-    except Exception:
+    except FileNotFoundError:
+        # `pgrep` missing → we CANNOT enumerate orphans. Surface it instead of silently returning
+        # [] (which reads as "no orphans" and lets `--fix` skip cleanup without telling anyone).
+        print("doctor: `pgrep` not found — cannot detect orphan sync daemons on this host.",
+              file=sys.stderr)
+        return []
+    except Exception as e:
+        print(f"doctor: orphan-daemon scan failed ({e}).", file=sys.stderr)
         return []
     me = os.getpid()
     pids = []
@@ -3232,9 +3341,17 @@ def _capsule_build(name, kind, value, recipients, version, hive_id, signer):
     ct, tag = _chacha.encrypt(cek, nonce, value, aad)
     wraps = []
     for dev, cpub in sorted(recipients.items()):
-        eph = os.urandom(32)
-        eph_pub = _x25519.scalarmult_base(eph)
-        shared = _x25519.shared_secret(eph, cpub)                # raises on a low-order recipient key
+        # Per-recipient isolation: a single bad/low-order recipient key must NOT deny the secret to
+        # everyone else. Skip that recipient; the caller diffs `recipients` against the produced wraps
+        # to report which devices were unsealable (folded into the missing/suspect reporting).
+        try:
+            if not isinstance(cpub, (bytes, bytearray)) or len(cpub) != 32:
+                raise ValueError("recipient curve_pub is not 32 bytes")
+            eph = os.urandom(32)
+            eph_pub = _x25519.scalarmult_base(eph)
+            shared = _x25519.shared_secret(eph, cpub)            # raises on a low-order recipient key
+        except Exception:
+            continue
         wk = _hkdf_sha256(shared, eph_pub + cpub, b"hive-capsule-wrap", 32)
         wnonce = os.urandom(12)
         wct, wtag = _chacha.encrypt(wk, wnonce, cek, _CAPSULE_ALG.encode() + b"|wrap|" + eph_pub)
@@ -3268,13 +3385,15 @@ def _capsule_open(cap, my_scalar, my_device_id):
     try:
         cek = _chacha.decrypt(wk, wnonce, wct, wtag, _CAPSULE_ALG.encode() + b"|wrap|" + eph_pub)
     except ValueError:
-        raise ValueError("wrap auth failed (tampered or corrupt)")
+        raise ValueError("wrap auth failed (this capsule is tampered or corrupt) — re-sync from a "
+                         "healthy peer (`hv sync now`); if it persists, the owner should rotate it")
     nonce, ct, tag = (base64.b64decode(cap[k]) for k in ("nonce", "ct", "tag"))
     aad = f"{_CAPSULE_ALG}|{cap.get('hive_id','')}|{cap.get('name','')}|{cap.get('version',0)}".encode()
     try:
         return _chacha.decrypt(cek, nonce, ct, tag, aad)
     except ValueError:
-        raise ValueError("payload auth failed (tampered or corrupt)")
+        raise ValueError("payload auth failed (this capsule is tampered or corrupt) — re-sync from a "
+                         "healthy peer (`hv sync now`); if it persists, the owner should rotate it")
 
 
 def _read_secret_value(args, name):
@@ -3366,6 +3485,9 @@ def capsule_cmd(args):
         recips, missing, suspect = _recipient_pubkeys(entries, gov)
         if not recips:                                  # pre-owner / solo: seal to THIS device
             sc = _my_curve_scalar()
+            if sc is None and _ensure_device_key():     # fresh node: mint a key so solo capsules work
+                print(f"Minted this device's key (device_id: {NODE_ID}).")
+                sc = _my_curve_scalar()
             if sc is not None:
                 recips = {NODE_ID: _x25519.scalarmult_base(sc)}
         if not recips:
@@ -3383,9 +3505,16 @@ def capsule_cmd(args):
                 except Exception as e:
                     print(f"{nm}: cannot rotate (this device can't open it: {e})"); continue
                 nextv = int(cur.get("version", 0)) + 1
-                append_journal("capsule", _capsule_build(nm, cur.get("kind", "credential"), val,
-                                                         recips, nextv, gov.get("hive_id", ""), NODE_ID))
-                print(f"Rotated {nm!r} → v{nextv} ({len(recips)} recipient(s)).")
+                cap = _capsule_build(nm, cur.get("kind", "credential"), val,
+                                     recips, nextv, gov.get("hive_id", ""), NODE_ID)
+                append_journal("capsule", cap)
+                sealed = {w["device_id"] for w in cap.get("wraps", [])}
+                unsealable = sorted(set(recips) - sealed)
+                line = f"Rotated {nm!r} → v{nextv} ({len(sealed)} recipient(s))."
+                if unsealable:
+                    line += (f" SKIPPED {len(unsealable)} device(s) with an unusable key: "
+                             f"{', '.join(unsealable)}.")
+                print(line)
             print("Reminder: rotation does NOT revoke a removed device's access to OLD ciphertext it "
                   "already synced — rotate the upstream token to truly cut access.")
             return 0
@@ -3395,12 +3524,18 @@ def capsule_cmd(args):
             print("No value provided (cancelled)."); return 1
         cur = caps.get(args.name)
         nextv = (int(cur.get("version", 0)) + 1) if cur else 1
-        append_journal("capsule", _capsule_build(args.name, "credential", val, recips, nextv,
-                                                 gov.get("hive_id", ""), NODE_ID))
-        msg = f"Sealed capsule {args.name!r} v{nextv} to {len(recips)} device(s)."
+        cap = _capsule_build(args.name, "credential", val, recips, nextv,
+                             gov.get("hive_id", ""), NODE_ID)
+        append_journal("capsule", cap)
+        sealed = {w["device_id"] for w in cap.get("wraps", [])}
+        unsealable = sorted(set(recips) - sealed)
+        msg = f"Sealed capsule {args.name!r} v{nextv} to {len(sealed)} device(s)."
         if missing:
             msg += (f" WARNING: {len(missing)} admitted device(s) have no published pubkey yet and "
                     f"cannot open it until you rotate after they sync.")
+        if unsealable:
+            msg += (f" SKIPPED {len(unsealable)} device(s) with an unusable key (not sealed to): "
+                    f"{', '.join(unsealable)}.")
         if suspect:
             msg += (f" SECURITY: {len(suspect)} device(s) carried a curve_pub that disagrees with "
                     f"their identity-derived key — IGNORED (not trusted): {', '.join(sorted(suspect))}.")
@@ -3434,15 +3569,17 @@ def _leaky_key_files():
 
 
 def _fix_key_perms():
-    """Re-tighten any leaky secret key file to 0600. Returns the labels it fixed (for `--fix` output)."""
-    fixed = []
+    """Re-tighten any leaky secret key file to 0600. Returns (fixed, failed): a chmod that FAILS must
+    NOT be swallowed — a private key left group/other-readable collapses the whole threat model, so
+    the caller surfaces `failed` loudly rather than reporting a clean fix."""
+    fixed, failed = [], []
     for label, pth, _mode in _leaky_key_files():
         try:
             os.chmod(pth, 0o600)
             fixed.append(label)
-        except Exception:
-            pass
-    return fixed
+        except Exception as e:
+            failed.append(f"{label} ({e})")
+    return fixed, failed
 
 
 def _doctor_status():
@@ -3463,6 +3600,20 @@ def _doctor_status():
         checks.append({"name": "authenticity", "status": "ok" if v["ok"] else "fail", "detail": headline})
     except Exception as e:
         checks.append({"name": "authenticity", "status": "warn", "detail": f"check error: {e}"})
+
+    # 1a-bis. Crypto MODULE bindings — if hv's own _ed25519 import is None, `_verify_entry` falls
+    #     through to accepting EVERY entry unverified (the legacy grandfather path), i.e. signature
+    #     checking is silently OFF. That must be a loud HARD failure, not a hidden degradation.
+    _crypto_missing = [n for n, mod in (("ed25519", _ed25519), ("x25519", _x25519),
+                                        ("chacha20poly1305", _chacha)) if mod is None]
+    if "ed25519" in _crypto_missing:
+        checks.append({"name": "crypto-modules", "status": "fail",
+                       "detail": "ed25519 module unavailable — entry/governance signatures are NOT "
+                                 "being verified (all entries accepted unsigned). Reinstall/repair."})
+    elif _crypto_missing:
+        checks.append({"name": "crypto-modules", "status": "fail",
+                       "detail": f"crypto module(s) unavailable: {', '.join(_crypto_missing)} — "
+                                 f"capsules cannot be sealed/opened here. Reinstall/repair."})
 
     # 1b. Crypto self-test — known-answer tests for the bundled crypto (x25519/ed25519/ed↔curve +
     #     the capsule key-agreement), run on every doctor pass (and the 15-min `--fix` timer). A
@@ -3531,6 +3682,13 @@ def _doctor_status():
         else:
             checks.append({"name": "journal", "status": "ok",
                            "detail": f"{len(mine)} own entries chained from genesis, {len(entries)} total, root {root_hash[7:23]}"})
+        # Surface lines that read_all_entries silently dropped (truncated/garbled .jsonl) instead of
+        # letting that data loss pass unnoticed — advisory, since recovery is best-effort by design.
+        corrupt, where = merkle.corrupt_lines(JOURNAL_DIR)
+        if corrupt:
+            checks.append({"name": "journal-integrity", "status": "warn",
+                           "detail": f"{corrupt} unreadable/garbled journal line(s) skipped "
+                                     f"(in {', '.join(where)}) — possible truncated write; the rest is intact"})
     except Exception as e:
         checks.append({"name": "journal", "status": "fail", "detail": f"unreadable: {e}"})
 
@@ -3621,6 +3779,18 @@ def _doctor_status():
                                "detail": "all admitted devices have an identity-derived capsule key"})
         except Exception as e:
             checks.append({"name": "device-keys", "status": "warn", "detail": f"check error: {e}"})
+
+    # 3c. Capsule version conflicts — two devices sealed the same capsule version before syncing. The
+    #     projection resolves it deterministically, but one value silently lost; surface it (advisory).
+    try:
+        conflicts = _capsule_version_conflicts(entries)
+        if conflicts:
+            checks.append({"name": "capsule-conflicts", "status": "warn",
+                           "detail": f"{len(conflicts)} capsule(s) had a concurrent same-version seal "
+                                     f"(one writer's value lost the deterministic tie): {', '.join(conflicts)}"
+                                     f" — re-`hv capsule put` the intended value to supersede"})
+    except Exception:
+        pass
 
     # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
     try:
@@ -3777,14 +3947,31 @@ def doctor_cmd(args):
             print("\nall checks passed.")
 
     if getattr(args, "fix", False):
+        # --dry-run previews EVERY mutating action (chmod, kill-by-cmdline, systemd restart, foreign
+        # Claude-config rewrite) without performing it — so an operator can see the blast radius of
+        # doctor's broad self-heal before letting it touch processes or another tool's config.
+        dry = getattr(args, "dry_run", False)
+        if dry:
+            print("\n--fix --dry-run: PREVIEW only — nothing below will actually be changed.")
         if os.name != "nt":
-            fixed = _fix_key_perms()
-            if fixed:
-                print(f"\n--fix: re-tightened {', '.join(fixed)} to 0600.")
+            if dry:
+                leaky = _leaky_key_files()
+                if leaky:
+                    print(f"  would re-tighten to 0600: {', '.join(lbl for lbl, _p, _m in leaky)}")
+            else:
+                fixed, failed = _fix_key_perms()
+                if fixed:
+                    print(f"\n--fix: re-tightened {', '.join(fixed)} to 0600.")
+                if failed:
+                    print(f"\n--fix: FAILED to tighten {', '.join(failed)} — these private key(s) are "
+                          f"STILL group/other-readable; fix manually (`chmod 600`) NOW.")
 
         orphans = [p for c in checks for p in (c.get("orphans") or [])]
         if not orphans:
             print("\n--fix: no orphan daemons to clear.")
+        elif dry:
+            print(f"\n  would kill {len(orphans)} orphan daemon(s): {', '.join(map(str, orphans))}"
+                  f" and restart the systemd hive-sync unit (if present)")
         else:
             print(f"\n--fix: killing {len(orphans)} orphan daemon(s): {', '.join(map(str, orphans))}")
             _kill_orphans(orphans)
@@ -3801,8 +3988,18 @@ def doctor_cmd(args):
         # re-asserted with no one re-running the installer — the self-heal promise, extended to the
         # one component that lives outside the daemon's control.
         try:
-            w = _wire_claude_hooks(write=True)
-            if not w["applicable"]:
+            w = _wire_claude_hooks(write=not dry)   # dry-run → preview the diff without writing config
+            if dry:
+                if w["applicable"] and (w["missing"] or w["stale"] or not w["skill_ok"]):
+                    acts = []
+                    if w["missing"]:
+                        acts.append(f"wire {len(w['missing'])} dispatch shim(s)")
+                    if w["stale"]:
+                        acts.append(f"migrate {len(w['stale'])} legacy hook(s) to the shim")
+                    if not w["skill_ok"]:
+                        acts.append("relink the hive-memory skill")
+                    print("\n  would rewrite ~/.claude/settings.json to: " + "; ".join(acts) + ".")
+            elif not w["applicable"]:
                 pass  # no Claude Code on this node — nothing to wire
             elif w["wrote"] or w["skill_fixed"]:
                 acts = []
@@ -4466,7 +4663,8 @@ def discover_cmd(args):
     candidates = [(ip, p) for ip in ips for p in range(port, port + 5)]
     found = {}
     if candidates:
-        print(f"  probing {len(ips)} tailnet device(s)…", file=sys.stderr)
+        if getattr(args, "format", "text") != "json":   # keep --format json clean for scripts
+            print(f"  probing {len(ips)} tailnet device(s)…", file=sys.stderr)
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(candidates))) as ex:
             for ip, p, info in ex.map(lambda c: (c[0], c[1], _probe_hive(c[0], c[1], timeout=3)), candidates):
                 if info and info["hive_id"] not in found:
@@ -4494,6 +4692,8 @@ def join_cmd(args):
     Non-blocking — you're already syncing the hive; your writes simply do not count toward
     confidence until the owner admits you. The request is device-signed (not owner-signed), so it
     carries no authority — it's only a visible, pending ask."""
+    if _ensure_device_key():
+        print(f"Minted this device's key first (device_id: {NODE_ID}) — needed to join and receive capsules.")
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     if not gov["owner_id"]:
@@ -4913,6 +5113,8 @@ def build_parser():
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
     doctor_parser.add_argument("--fix", action="store_true",
                                help="Take safe remedial action: kill orphan sync daemons + restart the managed unit, and re-assert the Claude Code hooks/skill")
+    doctor_parser.add_argument("--dry-run", action="store_true",
+                               help="With --fix: PREVIEW the remedial actions (kill/restart/rewire) without making any change")
     doctor_sub = doctor_parser.add_subparsers(dest="doctor_action")
     doctor_sub.add_parser("merkle", help="Show the Merkle index over the journal (sync diagnostic)")
     doctor_mig = doctor_sub.add_parser("migrate-identity",

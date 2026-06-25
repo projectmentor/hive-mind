@@ -3173,10 +3173,14 @@ _CAPSULE_ALG = "x25519-hkdf-chacha20poly1305-v1"
 def _recipient_pubkeys(entries, gov):
     """{device_id: curve_pub bytes} for the current authorized set (admitted − purged). A device's
     Ed25519 pubkey is harvested from its OWN signed entries (pub bound to node_id via the
-    fingerprint) and converted to Curve25519; a curve_pub carried on its join-request/admit is a
-    fallback. Returns (recipients, missing) — `missing` = admitted device_ids with no usable key yet."""
+    fingerprint) and converted to Curve25519 — this identity-derived key is the ONLY trusted key
+    source, since it is cryptographically bound to the device's signing identity. A curve_pub
+    merely *carried* on a join-request/admit payload has NO proof-of-possession, so it is never
+    used as a key; it is only checked for disagreement with the derived value (a tamper signal).
+    Returns (recipients, missing, suspect): `missing` = admitted device_ids with no derivable key
+    yet; `suspect` = device_ids that carried a curve_pub absent-or-unequal to the derived one."""
     if _x25519 is None:
-        return {}, sorted(gov.get("admitted", set()) - gov.get("purged", set()))
+        return {}, sorted(gov.get("admitted", set()) - gov.get("purged", set())), set()
     admitted = gov.get("admitted", set()) - gov.get("purged", set())
     ed_pub_by_dev, carried = {}, {}
     for e in entries:
@@ -3192,7 +3196,7 @@ def _recipient_pubkeys(entries, gov):
             p = e.get("payload", {})
             if p.get("action") in ("join-request", "admit") and p.get("curve_pub") and p.get("device_id"):
                 carried[p["device_id"]] = p["curve_pub"]
-    recips, missing = {}, []
+    recips, missing, suspect = {}, [], set()
     for dev in sorted(admitted):
         cp = None
         if dev in ed_pub_by_dev:
@@ -3200,14 +3204,18 @@ def _recipient_pubkeys(entries, gov):
                 cp = _x25519.ed_pub_to_curve_pub(ed_pub_by_dev[dev])
             except Exception:
                 cp = None
-        if cp is None and dev in carried:
+        if dev in carried:
+            # A carried curve_pub is never a key source (no proof-of-possession). Flag it as
+            # suspect unless it exactly matches the identity-derived key — a planted, contradictory
+            # value is the signal that someone tried to redirect this device's capsules.
             try:
                 raw = base64.b64decode(carried[dev])
-                cp = raw if len(raw) == 32 else None
             except Exception:
-                cp = None
+                raw = None
+            if cp is None or raw != cp:
+                suspect.add(dev)
         (recips.__setitem__(dev, cp) if cp is not None else missing.append(dev))
-    return recips, missing
+    return recips, missing, suspect
 
 
 def _capsule_build(name, kind, value, recipients, version, hive_id, signer):
@@ -3355,7 +3363,7 @@ def capsule_cmd(args):
                       "owner device, or `hv config governance set capsule_putters fertile`."); return 1
             if putters == "fertile" and NODE_ID not in gov.get("admitted", set()):
                 print("Only admitted devices may store capsules on this hive."); return 1
-        recips, missing = _recipient_pubkeys(entries, gov)
+        recips, missing, suspect = _recipient_pubkeys(entries, gov)
         if not recips:                                  # pre-owner / solo: seal to THIS device
             sc = _my_curve_scalar()
             if sc is not None:
@@ -3393,6 +3401,9 @@ def capsule_cmd(args):
         if missing:
             msg += (f" WARNING: {len(missing)} admitted device(s) have no published pubkey yet and "
                     f"cannot open it until you rotate after they sync.")
+        if suspect:
+            msg += (f" SECURITY: {len(suspect)} device(s) carried a curve_pub that disagrees with "
+                    f"their identity-derived key — IGNORED (not trusted): {', '.join(sorted(suspect))}.")
         print(msg)
         print("Note: a device removed later can still open an OLD version it already synced — rotate "
               "the upstream secret to truly cut access.")
@@ -3584,6 +3595,32 @@ def _doctor_status():
             checks.append({"name": "owner", "status": status, "detail": detail})
     except Exception as e:
         checks.append({"name": "owner", "status": "warn", "detail": f"owner check error: {e}"})
+
+    # 3b. Device keys — every admitted device must have a usable Curve25519 key derived from its
+    #     OWN signed identity (capsules seal to that). `missing` = admitted but hasn't synced a
+    #     signed entry yet (normal/transient → warn, never fail). `suspect` = a curve_pub was
+    #     carried on its join/admit that disagrees with the identity-derived key; it is IGNORED
+    #     (never trusted), but a disagreement is a tamper signal worth surfacing.
+    if _x25519 is None:
+        checks.append({"name": "device-keys", "status": "ok", "detail": "n/a (crypto lib absent)"})
+    else:
+        try:
+            dgov = _governance_state(entries)
+            _, missing, suspect = _recipient_pubkeys(entries, dgov)
+            if suspect:
+                checks.append({"name": "device-keys", "status": "warn",
+                               "detail": f"{len(suspect)} device(s) carried a curve_pub that disagrees with "
+                                         f"their identity-derived key — IGNORED: {', '.join(sorted(suspect))}"
+                                         + (f"; {len(missing)} admitted device(s) have no synced key yet" if missing else "")})
+            elif missing:
+                checks.append({"name": "device-keys", "status": "warn",
+                               "detail": f"{len(missing)} admitted device(s) have no synced device key yet "
+                                         f"(can't receive capsules until they sync): {', '.join(missing)}"})
+            else:
+                checks.append({"name": "device-keys", "status": "ok",
+                               "detail": "all admitted devices have an identity-derived capsule key"})
+        except Exception as e:
+            checks.append({"name": "device-keys", "status": "warn", "detail": f"check error: {e}"})
 
     # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
     try:
@@ -4314,6 +4351,18 @@ def _group_list():
         print(f"purged ({len(gov['purged'])}):")
         for d in sorted(gov["purged"]):
             print(f"  {d}")
+    if _x25519 is None:
+        print("device keys: n/a (crypto lib absent)")
+    else:
+        _, missing, suspect = _recipient_pubkeys(entries, gov)
+        if missing:
+            print(f"missing keys ({len(missing)}):  # admitted but no synced device key yet — can't receive capsules")
+            for d in missing:
+                print(f"  {d}")
+        if suspect:
+            print(f"SECURITY — carried curve_pub disagrees with identity-derived key, ignored ({len(suspect)}):")
+            for d in sorted(suspect):
+                print(f"  {d}")
 
 
 def group_cmd(args):
@@ -4445,12 +4494,19 @@ def join_cmd(args):
     Non-blocking — you're already syncing the hive; your writes simply do not count toward
     confidence until the owner admits you. The request is device-signed (not owner-signed), so it
     carries no authority — it's only a visible, pending ask."""
-    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
     if not gov["owner_id"]:
         print("No owner is established in this hive yet (have you synced it?). Nothing to join.")
         return
     if NODE_ID in gov["admitted"]:
         print(f"This device ({NODE_ID}) is already admitted.")
+        return
+    # Idempotent: don't pile up duplicate join-requests (journal hygiene, and it denies an
+    # attacker the ability to churn fresh payloads pre-admission). A DENIED device is excluded
+    # from _pending_admissions, so it can still re-ask after a denial.
+    if any(r["device_id"] == NODE_ID for r in _pending_admissions(entries, gov)):
+        print(f"Join request for {NODE_ID} is already pending — ask the owner to `hv admit {NODE_ID}`.")
         return
     payload = {"action": "join-request", "device_id": NODE_ID, "label": NODE_LABEL}
     if args.principal:

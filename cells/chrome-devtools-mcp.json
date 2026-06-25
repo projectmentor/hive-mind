@@ -1,0 +1,18 @@
+{
+  "name": "chrome-devtools-mcp", "kind": "tool", "version": 1,
+  "requires": [],
+  "spec": {
+    "obtain": "No credential. Launch a debuggable Chrome FIRST (non-admin): on Windows/WSL run `& \"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe\" --remote-debugging-port=9222 --user-data-dir=$env:TEMP\\cdp \"--remote-allow-origins=*\"` and open your target site. WSL reaches Windows Chrome at 127.0.0.1:9222 under mirrored networking.",
+    "platforms": {
+      "wsl":    {"steps": ["claude mcp remove chrome-devtools >/dev/null 2>&1 || true", "claude mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --browserUrl=http://127.0.0.1:9222"]},
+      "linux":  {"steps": ["claude mcp remove chrome-devtools >/dev/null 2>&1 || true", "claude mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --browserUrl=http://127.0.0.1:9222"]},
+      "darwin": {"steps": ["claude mcp remove chrome-devtools >/dev/null 2>&1 || true", "claude mcp add chrome-devtools -- npx -y chrome-devtools-mcp@latest --browserUrl=http://127.0.0.1:9222"]}
+    },
+    "gotchas": [
+      "Tools from a newly-added MCP load on the NEXT Claude Code session (or `claude --continue`), not mid-session.",
+      "Run Chrome NON-admin; an elevated instance often won't open a window.",
+      "Capture any secret from DevTools to a FILE (responseFilePath / evaluate filePath), never inline to the chat."
+    ]
+  },
+  "verify": {"cmd": "claude mcp get chrome-devtools >/dev/null 2>&1 && echo OK", "expect": "OK"}
+}

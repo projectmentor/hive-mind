@@ -1,0 +1,14 @@
+{
+  "name": "vultr", "kind": "tool", "version": 1,
+  "requires": ["VULTR_API_TOKEN"],
+  "spec": {
+    "obtain": "Vultr dashboard -> Account -> API: enable the Personal Access Token and copy it. Add your egress IP to the token's Access Control allowlist (a single host is /32).",
+    "platforms": {"linux": {"steps": []}, "wsl": {"steps": []}, "darwin": {"steps": []}},
+    "gotchas": [
+      "The token has an IP ACCESS-CONTROL allowlist; a call from a non-listed IP returns 401 'Unauthorized IP address' (hive #296). Residential IPs are dynamic and may need re-adding.",
+      "Stale allowlist entries are often leftover GridPane (Google Cloud) management IPs."
+    ]
+  },
+  "verify": {"http": "https://api.vultr.com/v2/account",
+             "headers": {"Authorization": "Bearer {VULTR_API_TOKEN}"}, "expect": "\"account\""}
+}

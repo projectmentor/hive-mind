@@ -1,5 +1,5 @@
 {
-  "digest": "2fe5b0d0e633cea8bf090a2f4df349b982788f244323588defb8e720f89b0139",
+  "digest": "955fbb797608e0619ebc1359babc11d7bc86e18fa722807acf027df9f9dae1f9",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -12,7 +12,7 @@
     ".peers.json.example": "423edc35587b068ff591fe741225bec845a01f5bc9318ad0820d738452f3f363",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "dc5456a16759968a705309930af549b52a4fc140c6053dd49e2b659c19551d35",
-    "README.md": "8513972cf90c1bc1e07eb92642e184c782b45f62a0075b1f627ed515314e686a",
+    "README.md": "9cecc4d3c6dfe0f96d3588c72f27277ced407b488a0d633eea25ac098657f13b",
     "advisories.json": "856f4f1aef39905b9ec7450a718e6a21bcfb729d279c19e5f7642091f40d47fa",
     "cells/chrome-devtools-mcp.json": "7463826f804bd1d96057eba937b3b7ead09844b523d936ce4055007c0e41e070",
     "cells/cloudflare.json": "19d543fa52d90fd40e89215abdd421849094848234cb4e8d34a43eedb2a3159a",
@@ -22,7 +22,7 @@
     "chacha20poly1305.py": "6c3bb50dc126dab128184280b4d11cb1494800651e97aea941a821f31ff012fd",
     "crypto_selftest.py": "5cfacd5a3ca4936f1d5a15c2ec088accf576b78d736365860c8163902ad98be4",
     "docs/AGENT_INTEGRATION.md": "cf3f995b6e98f8dcf52774880a3edbc987f19e5a290d733c3d8ef5100008459f",
-    "docs/CLI_REFERENCE.md": "652b34f5a26f44c07ff7fe0d4dc6b6851d05a79111eea172e2adf981a8b0ce38",
+    "docs/CLI_REFERENCE.md": "d917599be048d5cd44765a11e06264b3f9603b16dcc056a320780ca572bf2e53",
     "docs/INTERNALS.md": "49ee1ad3a9ae3c6b699a73a740c6be6c05cce62c969fb399a84320d4c134932d",
     "docs/P2P_DESIGN.md": "7ff87989a540f909a1576a5f99cbf85ae1cd9bbde540b29c956c1fdf5cc353e3",
     "docs/SYNC_API.md": "fdb6d295294def65ea322d7ffb7bd12c435ae136a0c88a262f1e196d567eeca2",

@@ -55,7 +55,7 @@ fi
 # not only on the 15-min self-heal timer. Idempotent; silent + harmless on a node without Claude Code.
 if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
   info "Re-asserting Claude Code hooks..."
-  "$HIVE_DIR/hv" doctor wire-agent >/dev/null 2>&1 && ok "Claude Code hooks wired" || true
+  "$HIVE_DIR/hv" wire claude >/dev/null 2>&1 && ok "Claude Code hooks wired" || true
 fi
 
 info "Restarting sync daemon..."

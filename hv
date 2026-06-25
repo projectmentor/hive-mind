@@ -216,7 +216,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.12"   # 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.13"   # 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -2782,20 +2782,23 @@ def _is_hive_hook_command(cmd):
             or "/scripts/nudge_hook.sh" in c or "hive-mind/scripts" in c)
 
 
-def _claude_hook_reconcile(cfg):
-    """READ-ONLY diff of a parsed settings.json against the canonical shim spec → (missing, stale):
+def _agent_hook_reconcile(cfg, hook_spec):
+    """READ-ONLY diff of a parsed settings.json against an agent's canonical shim spec →
+    (missing, stale):
       missing — spec shims not yet present (dedupe on (event, command));
       stale   — Hive-owned hooks present that are NOT in the current spec (legacy direct hooks left
-                from before the dispatcher shim, to be pruned so behaviors don't double-fire)."""
+                from before the dispatcher shim, to be pruned so behaviors don't double-fire).
+    `hook_spec` is the cell's [(event, command, timeout), …] (the built-in Claude cell wraps
+    `_CLAUDE_HOOK_SPEC`, so behavior is identical to the pre-refactor `_claude_hook_reconcile`)."""
     hooks = (cfg or {}).get("hooks", {}) or {}
-    spec_cmds = {(ev, cmd) for ev, cmd, _ in _CLAUDE_HOOK_SPEC}
+    spec_cmds = {(ev, cmd) for ev, cmd, _ in hook_spec}
     def present(event, command):
         for grp in hooks.get(event, []) or []:
             for h in (grp.get("hooks", []) or []):
                 if h.get("type") == "command" and h.get("command") == command:
                     return True
         return False
-    missing = [(ev, cmd, to) for (ev, cmd, to) in _CLAUDE_HOOK_SPEC if not present(ev, cmd)]
+    missing = [(ev, cmd, to) for (ev, cmd, to) in hook_spec if not present(ev, cmd)]
     stale = []
     for ev, grps in hooks.items():
         for grp in (grps or []):
@@ -2807,30 +2810,53 @@ def _claude_hook_reconcile(cfg):
     return missing, stale
 
 
-def _wire_claude_hooks(write=False):
-    """Reconcile the Claude Code integration (the dispatch shim + the hive-memory skill symlink)
-    against the canonical spec. READ-ONLY unless write=True, in which case missing shims are added and
-    legacy direct hooks are PRUNED (so behaviors never double-fire) — both surgically, leaving the
-    user's own hooks untouched, after a one-time .bak.doctor backup; an absent/stale skill symlink is
-    repaired too. Returns {applicable, missing, stale, skill_ok, wrote, skill_fixed}. Silent + no-op
-    where there is no Claude Code on the node (integration not applicable)."""
+def _claude_hook_reconcile(cfg):
+    """Back-compat alias: reconcile against the built-in Claude hook spec."""
+    return _agent_hook_reconcile(cfg, _CLAUDE_HOOK_SPEC)
+
+
+def _builtin_claude_cell():
+    """The built-in `kind:agent` cell for Claude Code: wraps the canonical hook spec + the
+    hive-memory skill link. Defined in signed source (not journaled), so it's covered by `hv verify`
+    and resolves before any journaled cell of the same name. `hv wire claude`, the `agent-hooks`
+    doctor check, and `--fix` all dispatch through this."""
+    return {"kind": "agent", "name": "claude", "builtin": True,
+            "spec": {"hooks": _CLAUDE_HOOK_SPEC,
+                     "skill": {"name": "hive-memory",
+                               "src_subpath": "integrations/claude-code/hive-memory"}}}
+
+
+def _wire_agent(cell, write=False):
+    """Reconcile a `kind:agent` cell's foreign-config wiring (its dispatch-shim hooks + an optional
+    skill symlink) against the canonical spec. READ-ONLY unless write=True, in which case missing
+    shims are added and legacy direct hooks are PRUNED (so behaviors never double-fire) — both
+    surgically, leaving the user's own hooks untouched, after a one-time .bak.doctor backup; an
+    absent/stale skill symlink is repaired too. Returns {applicable, missing, stale, skill_ok, wrote,
+    skill_fixed}. Silent + no-op where there is no Claude Code on the node (integration not
+    applicable). The built-in Claude cell wraps `_CLAUDE_HOOK_SPEC`, so this is byte-for-byte the
+    former `_wire_claude_hooks`."""
+    spec = (cell or {}).get("spec", {}) or {}
+    hook_spec = spec.get("hooks", []) or []
+    skill = spec.get("skill")
     claude_dir = _claude_dir()
     result = {"applicable": claude_dir.exists(), "missing": [], "stale": [],
               "skill_ok": True, "wrote": False, "skill_fixed": False}
     if not result["applicable"]:
         return result
-    skill_link = claude_dir / "skills" / "hive-memory"
-    skill_src = Path(__file__).resolve().parent / "integrations" / "claude-code" / "hive-memory"
-    try:
-        result["skill_ok"] = skill_link.is_symlink() and skill_link.resolve() == skill_src.resolve()
-    except Exception:
-        result["skill_ok"] = False
+    skill_link = skill_src = None
+    if skill:
+        skill_link = claude_dir / "skills" / skill["name"]
+        skill_src = Path(__file__).resolve().parent / skill["src_subpath"]
+        try:
+            result["skill_ok"] = skill_link.is_symlink() and skill_link.resolve() == skill_src.resolve()
+        except Exception:
+            result["skill_ok"] = False
     path = claude_dir / "settings.json"
     try:
         cfg = json.loads(path.read_text()) if path.exists() else {}
     except Exception:
         cfg = {}
-    result["missing"], result["stale"] = _claude_hook_reconcile(cfg)
+    result["missing"], result["stale"] = _agent_hook_reconcile(cfg, hook_spec)
     if not write or (not result["missing"] and not result["stale"] and result["skill_ok"]):
         return result
     if path.exists():
@@ -2838,7 +2864,7 @@ def _wire_claude_hooks(write=False):
             shutil.copy2(str(path), str(path) + ".bak.doctor")
         except Exception:
             pass
-    if not result["skill_ok"] and skill_src.exists():
+    if skill and not result["skill_ok"] and skill_src.exists():
         try:
             (claude_dir / "skills").mkdir(parents=True, exist_ok=True)
             if skill_link.is_symlink() or skill_link.exists():
@@ -2870,6 +2896,119 @@ def _wire_claude_hooks(write=False):
         path.write_text(json.dumps(cfg, indent=2) + "\n")
         result["wrote"] = True
     return result
+
+
+def _wire_claude_hooks(write=False):
+    """Back-compat shim → wire the built-in Claude agent cell. Keeps the `agent-hooks` doctor check,
+    `doctor --fix`, and `doctor wire-agent` working byte-for-byte after the `_wire_agent` refactor."""
+    return _wire_agent(_builtin_claude_cell(), write=write)
+
+
+def _builtin_cells():
+    """Cells defined in signed source. They resolve BEFORE any journaled cell of the same name, so a
+    core integration (the Claude agent) can never be shadowed by a synced journal entry."""
+    return [_builtin_claude_cell()]
+
+
+def _resolve_cell(name, entries=None):
+    """Resolve a cell by name: built-ins first, then the journal projection (`_cell_state`)."""
+    for c in _builtin_cells():
+        if c.get("name") == name:
+            return c
+    if entries is None:
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+    return _cell_state(entries).get(name)
+
+
+def _wire_one(cell, name):
+    """Provision a single resolved cell, dispatching on its `kind`."""
+    if not cell:
+        print(f"No cell named {name!r}. (`hv wire --list` to see cells, "
+              f"`hv wire --add <file.json>` to publish one.)")
+        return 1
+    kind = cell.get("kind")
+    if kind == "agent":
+        w = _wire_agent(cell, write=True)
+        if not w["applicable"]:
+            print(f"{name}: agent config (~/.claude) not present on this node — nothing to wire.")
+            return 0
+        acts = []
+        if w["missing"]:
+            acts.append(f"wired {len(w['missing'])} dispatch shim(s)")
+        if w["stale"]:
+            acts.append(f"migrated {len(w['stale'])} legacy hook(s)")
+        if w["skill_fixed"]:
+            acts.append("relinked skill")
+        print(f"{name}: " + ("; ".join(acts) if acts else "already wired") + ".")
+        return 0
+    if kind == "tool":
+        print(f"{name}: tool executor lands in Phase 1 — cell resolved "
+              f"(requires={cell.get('requires', [])}).")
+        return 0
+    print(f"{name}: unknown cell kind {kind!r}.")
+    return 1
+
+
+def wire_cmd(args):
+    """`hv wire <name>` provisions a cell, auto-dispatching by its `kind` (`agent`→reconcile foreign
+    config; `tool`→run its recipe). `--comb <name>` runs every member cell; `--list`/`--show`/`--add`
+    manage the registry. Absorbs the former `hv doctor wire-agent` (kept as a hidden alias)."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+
+    if getattr(args, "list", False):
+        kind_f = getattr(args, "kind", None)
+        cells = {c["name"]: c for c in _builtin_cells()}
+        cells.update(_cell_state(entries))                       # journaled overrides built-in
+        print("cells:")
+        for n, c in sorted(cells.items()):
+            if kind_f and c.get("kind") != kind_f:
+                continue
+            tag = "  (built-in)" if c.get("builtin") else ""
+            print(f"  {n:<26} kind={c.get('kind','?')}{tag}")
+        combs = _comb_state(entries)
+        if combs and not kind_f:
+            print("combs:")
+            for n, c in sorted(combs.items()):
+                print(f"  {n:<26} cells={c.get('cells', [])}")
+        return
+
+    if getattr(args, "show", None):
+        c = _resolve_cell(args.show, entries) or _comb_state(entries).get(args.show)
+        print(json.dumps(c, indent=2) if c else f"No cell or comb named {args.show!r}.")
+        return
+
+    if getattr(args, "add", None):
+        try:
+            payload = json.loads(Path(args.add).read_text())
+        except Exception as e:
+            print(f"Could not read cell/comb JSON from {args.add}: {e}")
+            return
+        t = payload.pop("type", None) or ("comb" if "cells" in payload else "cell")
+        if t not in ("cell", "comb") or not payload.get("name"):
+            print("JSON must be a cell/comb with a 'name' (type 'cell' or 'comb').")
+            return
+        payload.setdefault("version", 1)
+        append_journal(t, payload)
+        print(f"Published {t} {payload['name']!r} (version {payload['version']}).")
+        return
+
+    comb_name = getattr(args, "comb", None)
+    if comb_name:
+        comb = _comb_state(entries).get(comb_name)
+        if not comb:
+            print(f"No comb named {comb_name!r}.")
+            return
+        names = comb.get("cells", []) or []
+        print(f"comb {comb_name!r}: wiring {len(names)} cell(s): {', '.join(names)}")
+        for n in names:
+            _wire_one(_resolve_cell(n, entries), n)
+        return
+
+    name = getattr(args, "name", None)
+    if not name:
+        print("usage: hv wire <name> | --comb <name> | --list | --show <name> | --add <file.json>")
+        return
+    _wire_one(_resolve_cell(name, entries), name)
 
 
 def _doctor_status():
@@ -4241,7 +4380,16 @@ def build_parser():
     doctor_mig.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
     doctor_sub.add_parser("rebuild", help="Rebuild store.db from the journal (was `hv rebuild`)")
     doctor_sub.add_parser("wire-agent",
-                          help="(Re)wire the Claude Code hooks + skill into ~/.claude (idempotent; the installer/update delegate here, `--fix` runs it)")
+                          help="[deprecated alias of `hv wire claude`] (re)wire the Claude Code hooks + skill")
+
+    wire_parser = subparsers.add_parser("wire",
+                                        help="Wire an agent/tool from its cell (auto-dispatch by kind), or a comb of cells")
+    wire_parser.add_argument("name", nargs="?", help="Cell name to wire")
+    wire_parser.add_argument("--comb", metavar="NAME", help="Wire every cell in this comb")
+    wire_parser.add_argument("--list", action="store_true", help="List cells (and combs)")
+    wire_parser.add_argument("--kind", help="(with --list) filter by kind: tool|agent")
+    wire_parser.add_argument("--show", metavar="NAME", help="Show a cell/comb definition")
+    wire_parser.add_argument("--add", metavar="FILE", help="Publish a cell/comb from a JSON file")
 
     key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")
@@ -4405,6 +4553,8 @@ def main():
         verify_cmd(args)
     elif args.command == "doctor":
         doctor_cmd(args)
+    elif args.command == "wire":
+        wire_cmd(args)
     elif args.command == "key":
         key_cmd(args)
     elif args.command == "owner":

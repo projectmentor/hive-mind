@@ -36,7 +36,9 @@ def _free_port():
     return port
 
 
-def _wait_until_serving(port, timeout=15):
+def _wait_until_serving(port, timeout=45):
+    # Generous budget: cold daemon startup imports hv + crypto and binds the port, which
+    # can take >15s on a loaded, slow CI runner (e.g. GitHub macos-latest, ~2x slower).
     deadline = time.time() + timeout
     url = f"http://127.0.0.1:{port}/sync/merkle-root"
     while time.time() < deadline:

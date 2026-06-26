@@ -2852,6 +2852,23 @@ def _systemd_hive_sync():
         return False, None
 
 
+def _launchd_hive_sync():
+    """(loaded, None) for the macOS launchd hive-sync agent in the per-user GUI domain;
+    (False, None) off-darwin or when launchctl can't see it. The macOS analogue of
+    _systemd_hive_sync — lets `hv doctor --fix` restart a crashed launchd-managed daemon
+    (orphan DETECTION already works cross-platform via _classify_orphans; only the restart
+    ACTION needs this sibling). No MainPID equivalent is needed at the restart site."""
+    if sys.platform != "darwin":
+        return False, None
+    try:
+        r = subprocess.run(
+            ["launchctl", "print", f"gui/{os.getuid()}/com.projectmentor.hive-sync"],
+            capture_output=True, text=True, timeout=5)
+        return (r.returncode == 0), None
+    except Exception:
+        return False, None
+
+
 def _classify_orphans(pids, main_pid, unit_exists):
     """Which daemon PIDs are orphans, i.e. NOT the one systemd is supposed to manage. Pure (testable).
     - managed daemon present: any OTHER daemon process is an orphan (a second one outside systemd).
@@ -3971,15 +3988,25 @@ def doctor_cmd(args):
             print("\n--fix: no orphan daemons to clear.")
         elif dry:
             print(f"\n  would kill {len(orphans)} orphan daemon(s): {', '.join(map(str, orphans))}"
-                  f" and restart the systemd hive-sync unit (if present)")
+                  f" and restart the managed hive-sync service (if present)")
         else:
             print(f"\n--fix: killing {len(orphans)} orphan daemon(s): {', '.join(map(str, orphans))}")
             _kill_orphans(orphans)
-            unit_exists, _ = _systemd_hive_sync()
-            if unit_exists:
-                subprocess.run(["systemctl", "--user", "restart", "hive-sync"], capture_output=True)
-                time.sleep(2)
-                print("  restarted the systemd hive-sync unit.")
+            # Restart the supervisor-managed daemon so the just-cleared port is reclaimed by the
+            # canonical instance: systemd on Linux/WSL, launchd on macOS.
+            if sys.platform == "darwin":
+                if _launchd_hive_sync()[0]:
+                    subprocess.run(["launchctl", "kickstart", "-k",
+                                    f"gui/{os.getuid()}/com.projectmentor.hive-sync"],
+                                   capture_output=True)
+                    time.sleep(2)
+                    print("  restarted the launchd hive-sync agent.")
+            else:
+                unit_exists, _ = _systemd_hive_sync()
+                if unit_exists:
+                    subprocess.run(["systemctl", "--user", "restart", "hive-sync"], capture_output=True)
+                    time.sleep(2)
+                    print("  restarted the systemd hive-sync unit.")
             after = next((c for c in _doctor_status() if c["name"] == "sync-daemon"), None)
             print(f"  sync-daemon now: {after['detail'] if after else 'unknown'}")
 

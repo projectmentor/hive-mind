@@ -7,7 +7,21 @@
 # current — new subcommands show up with no reinstall. It resolves its own repo
 # location, so it works regardless of where the repo lives.
 # =============================================================================
-SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+# Resolve this script's real path, following symlinks (the installer symlinks
+# ~/.local/bin/hive-mind here). BSD `readlink` on macOS lacks `-f`, so resolve
+# the symlink chain portably instead of relying on the GNU extension.
+_resolve_self() {
+  local p="${BASH_SOURCE[0]}" t
+  while [ -L "$p" ]; do
+    t="$(readlink "$p")"
+    case "$t" in
+      /*) p="$t" ;;
+      *)  p="$(cd "$(dirname "$p")" && pwd)/$t" ;;
+    esac
+  done
+  printf '%s\n' "$(cd "$(dirname "$p")" && pwd -P)/$(basename "$p")"
+}
+SELF="$(_resolve_self)"
 HIVE_DIR="${HIVE_DIR:-$(cd "$(dirname "$SELF")/../.." && pwd)}"
 INSTALLER="$HIVE_DIR/scripts/installer"
 CMD="${1:-help}"

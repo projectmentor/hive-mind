@@ -6,7 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -16,3 +20,42 @@ jobs:
         run: pip install -r requirements.txt pytest
       - name: Run offline test suite
         run: python3 -m pytest -q
+
+  # macOS-only: exercise the installer/launchd path as far as an ephemeral, headless
+  # runner allows. Branch protection requires no check, so a soft step here never blocks
+  # merges. What it CANNOT prove (needs a real Mac): that `launchctl bootstrap gui/$UID`
+  # actually loads under a login session, reboot persistence, and real Tailscale auth.
+  macos-installer-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: dispatcher resolves through a symlink (readlink -f shim)
+        run: |
+          ln -s "$PWD/scripts/installer/dispatcher.sh" /tmp/hive-mind
+          /tmp/hive-mind help | grep -q 'Subcommands'
+      - name: launchd plists render + plutil -lint
+        run: bash scripts/installer/_launchd.sh --render-test
+      - name: sync daemon answers on :9876 natively
+        run: |
+          HIVE_HOME="$PWD" python3 ./hv rebuild >/dev/null 2>&1 || true
+          HIVE_HOME="$PWD" nohup python3 sync_daemon.py >/tmp/d.log 2>&1 &
+          ok=
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:9876/sync/hello >/dev/null && { ok=1; break; }
+            sleep 1
+          done
+          [ -n "$ok" ] || { echo "daemon did not answer on :9876"; cat /tmp/d.log; exit 1; }
+          echo "daemon answered /sync/hello"
+      - name: launchctl bootstrap (best-effort; GUI domain may be absent in headless CI)
+        continue-on-error: true
+        run: |
+          bash -c '. scripts/installer/_service.sh; service_install "$PWD" hive-sync'
+          launchctl print "gui/$(id -u)/com.projectmentor.hive-sync" \
+            || echo "gui domain unavailable in headless CI — bootstrap unverifiable here (needs a real Mac)"
+      - name: service uninstall is idempotent
+        run: bash -c '. scripts/installer/_service.sh; launchd_uninstall hive-sync; launchd_uninstall hive-sync'

@@ -46,10 +46,12 @@ echo -e "${BLD}hive-mind installer${RST}"
 echo "────────────────────────────────────────────"
 echo ""
 
-# ── guard: must be WSL ─────────────────────────────────────────────────────
-if ! grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null; then
-  die "This installer is for WSL2 on Windows 11. Not detected."
-fi
+# ── guard: supported OS (Linux native, WSL2 on Windows 11, or macOS) ────────
+case "$(uname -s)" in
+  Linux)  : ;;   # native Linux, or WSL2 on Windows 11 — both fine
+  Darwin) : ;;   # macOS
+  *)      die "Unsupported OS: $(uname -s). HiveMind supports Linux, WSL2, and macOS." ;;
+esac
 
 # ── 1. ensure ~/.local/bin exists and is on PATH ───────────────────────────
 mkdir -p "$BIN_DIR"

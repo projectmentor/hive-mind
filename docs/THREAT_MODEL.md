@@ -86,5 +86,6 @@ at once). Concretely:
 - **Best-effort recovery.** A truncated/garbled journal line (e.g. a crash mid-write) is skipped on
   read; `hv doctor` now surfaces the count so silent data loss is visible (`journal-integrity`).
 - **`hv doctor --fix` blast radius.** `--fix` kills orphan daemons (by argv match), restarts the
-  managed systemd unit, and rewrites the foreign Claude Code config (with a backup). Run
+  managed daemon (systemd unit on Linux/WSL, launchd agent on macOS), and rewrites the foreign
+  Claude Code config (with a backup). Run
   `hv doctor --fix --dry-run` to preview every mutating action before letting it run.

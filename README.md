@@ -54,7 +54,7 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
 
 ## Install
 
-On Linux (or a WSL terminal on Windows 11), run:
+On macOS, Linux, or a WSL terminal on Windows 11, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/projectmentor/hive-mind/main/scripts/installer/install.sh | bash
@@ -69,17 +69,19 @@ The installer will:
 4. Ask for one input: your peer's Tailscale IP. **First machine with no peers yet? Just press
    Enter** — you can add peers later by editing `.peers.json`.
 5. Initialise the local database
-6. Install and start the sync daemon as a systemd service
+6. Install and start the sync daemon under your OS's service manager (systemd on Linux/WSL,
+   launchd on macOS)
 7. Wire the Hermes memory plugin (if Hermes is installed)
 
 ### Requirements
 
-- **Linux** (native) or **Windows 11 with WSL2**, with systemd enabled (Mac and Android
-  support are in progress)
+- **macOS**, **Linux** (native), or **Windows 11 with WSL2** (with systemd enabled). Android
+  support is in progress. On macOS the daemon runs as a launchd LaunchAgent.
 - **Internet access** (for the install and git clone)
 - **Tailscale** *only if you want multiple machines to sync.* The installer sets it up for
-  you (inside WSL on Windows; it is **not** needed on the Windows host). A single-machine
-  setup needs no Tailscale at all — there are no peers to reach.
+  you (inside WSL on Windows; on macOS install the app or `brew install tailscale`; it is
+  **not** needed on the Windows host). A single-machine setup needs no Tailscale at all —
+  there are no peers to reach.
 
 <details>
 <summary>Enable systemd in WSL (if it isn't already)</summary>
@@ -196,7 +198,7 @@ the policy and the common failure modes.
 
 - **Federated hives (a colony)** — separate hives (personal, team, project) that selectively share
   what matters, so groups pool knowledge without merging into one pool. Multiple hives form a colony.
-- **More platforms** — Mac and Android.
+- **More platforms** — Android (macOS, Linux, and WSL2 are supported today).
 - **Hosted relay** — an optional managed tier for nodes that can't reach each other directly.
 
 ---

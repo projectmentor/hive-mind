@@ -5,10 +5,11 @@ set -euo pipefail
 HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE="hive-sync"
 
-# Shared systemd-unit writer — lets `update` re-apply the hardened unit + the
-# self-heal timer to already-installed nodes (not just fresh installs).
-_UNITLIB="$HIVE_DIR/scripts/installer/_units.sh"
-[ -f "$_UNITLIB" ] && . "$_UNITLIB"
+# Cross-platform supervisor seam — lets `update` re-apply the hardened daemon
+# units (systemd on Linux/WSL, launchd on macOS) to already-installed nodes, not
+# just fresh installs. Exposes service_install / service_restart.
+_SVCLIB="$HIVE_DIR/scripts/installer/_service.sh"
+if [ -f "$_SVCLIB" ]; then . "$_SVCLIB"; fi
 
 GRN='\033[0;32m'; BLD='\033[1m'; RST='\033[0m'
 ok()   { echo -e "${GRN}[ok]${RST}  $*"; }
@@ -45,10 +46,10 @@ info "Rebuilding database..."
 cd "$HIVE_DIR" && ./hv rebuild
 ok "DB rebuilt"
 
-info "Refreshing systemd units..."
-if command -v write_systemd_units >/dev/null 2>&1; then
-  write_systemd_units "$HIVE_DIR" "$SERVICE"
-  ok "Units refreshed (hive-sync hardened + hive-doctor self-heal timer)"
+info "Refreshing supervisor units..."
+if command -v service_install >/dev/null 2>&1; then
+  service_install "$HIVE_DIR" "$SERVICE"
+  ok "Units refreshed (hive-sync + hive-doctor self-heal)"
 fi
 
 # Re-assert the Claude Code integration so an update from before a hook existed picks it up here,
@@ -59,10 +60,14 @@ if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
 fi
 
 info "Restarting sync daemon..."
-systemctl --user restart "$SERVICE" 2>/dev/null || true
+if command -v service_restart >/dev/null 2>&1; then
+  service_restart "$SERVICE"
+else
+  systemctl --user restart "$SERVICE" 2>/dev/null || true
+fi
 sleep 2
 curl -sf http://127.0.0.1:9876/sync/hello >/dev/null && ok "Daemon responding" \
-  || echo "  Daemon may still be starting — check: journalctl --user -u $SERVICE -f"
+  || echo "  Daemon may still be starting — check the daemon logs."
 
 echo ""
 ok "Update complete"

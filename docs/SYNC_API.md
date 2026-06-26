@@ -359,6 +359,12 @@ as a separate machine on the tailnet, e.g. `node-a-1`). The sync daemon
 binds `0.0.0.0:9876` and is reachable directly at the WSL Tailscale IP. No
 portproxy or mirrored networking needed. Get the WSL IP with `tailscale ip`.
 
+**macOS note:** Install Tailscale via the app (App Store / standalone) or
+`brew install tailscale`; the app or `brew services` owns `tailscaled` (the
+installer never `sudo systemctl`-starts it on macOS). The daemon runs as a
+launchd LaunchAgent (`com.projectmentor.hive-sync`), logging to
+`~/Library/Logs/hive-mind/`. Get the node's IP with `tailscale ip`.
+
 ---
 
 ## Error Responses

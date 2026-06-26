@@ -37,9 +37,11 @@ TOTAL=13
 # (A child process can't reload the parent shell; the hint only matters when it's absent.)
 case ":$PATH:" in *":$HOME/.local/bin:"*) BIN_ON_PATH=1 ;; *) BIN_ON_PATH="" ;; esac
 
-# Shared systemd-unit writer (single source of truth, also used by `hive-mind update`).
-_UNITLIB="$HIVE_DIR/scripts/installer/_units.sh"
-[ -f "$_UNITLIB" ] && . "$_UNITLIB"
+# Cross-platform supervisor seam: systemd units on Linux/WSL, launchd on macOS.
+# Sources _units.sh (the systemd writer) and, on macOS, _launchd.sh — and exposes
+# service_install / service_restart / service_is_active + the launchd_* backend.
+_SVCLIB="$HIVE_DIR/scripts/installer/_service.sh"
+if [ -f "$_SVCLIB" ]; then . "$_SVCLIB"; fi
 
 # ── colours ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; CYN='\033[0;36m'; BLD='\033[1m'; RST='\033[0m'
@@ -61,17 +63,21 @@ echo ""
 # ════════════════════════════════════════════════════════════════════════════
 step "1/$TOTAL  Pre-flight checks"
 
-# HiveMind runs on Linux. WSL2 is a Linux kernel, so native Linux works the same;
-# we only branch on the handful of Windows-interop steps below (gated on IS_WSL).
-if [ "$(uname -s)" != "Linux" ]; then
-  die "HiveMind installs on Linux (native, or WSL2 on Windows 11). This system is not Linux."
-fi
-IS_WSL=""
-grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null && IS_WSL=1
+# HiveMind runs on Linux (native or WSL2) and macOS. WSL2 is a Linux kernel, so
+# native Linux works the same; macOS uses launchd instead of systemd. We branch
+# on the handful of Windows-interop steps (gated on IS_WSL) and the supervisor.
+IS_WSL=""; IS_MAC=""
+case "$(uname -s)" in
+  Linux)  grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null && IS_WSL=1 ;;
+  Darwin) IS_MAC=1 ;;
+  *)      die "HiveMind installs on Linux (native or WSL2) or macOS. This system ($(uname -s)) is neither." ;;
+esac
 
-# ── detect init system ──────────────────────────────────────────────────────
+# ── detect supervisor / init system ─────────────────────────────────────────
 INIT_SYSTEM="none"
-if command -v systemctl &>/dev/null; then
+if [ -n "$IS_MAC" ]; then
+  INIT_SYSTEM="launchd"
+elif command -v systemctl &>/dev/null; then
   INIT_SYSTEM="systemctl"
   loginctl enable-linger "$USER" 2>/dev/null || true
 elif [[ "$(ps -p 1 -o comm= 2>/dev/null | tr -d '[:space:]')" == "systemd" ]]; then
@@ -82,6 +88,7 @@ elif [ -d /etc/init.d ]; then
 fi
 
 case "$INIT_SYSTEM" in
+  launchd)   ok "Init system: launchd (macOS)" ;;
   systemctl) ok "Init system: systemctl" ;;
   systemd)   ok "Init system: systemd (no systemctl)" ;;
   initd)     ok "Init system: init.d" ;;
@@ -95,7 +102,7 @@ case "$INIT_SYSTEM" in
     ;;
 esac
 
-ok "Pre-flight OK ($([ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'))"
+ok "Pre-flight OK ($([ -n "$IS_MAC" ] && echo 'macOS' || { [ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'; }))"
 
 # ── Already installed AND running? Offer the lighter path before redoing the work. ──────────
 # Re-running install is safe and idempotent — it KEEPS this device's identity (STEP 5 reuses an
@@ -107,7 +114,7 @@ if [ -x "$HIVE_DIR/hv" ]; then
   _existing_device="$(cd "$HIVE_DIR" && ./hv config identity show 2>/dev/null | awk '/^device_id:/{print $2}')"
 fi
 _daemon_live=""
-if [ "$INIT_SYSTEM" = "systemctl" ] && systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+if command -v service_is_active >/dev/null 2>&1 && service_is_active "$SERVICE_NAME" 2>/dev/null; then
   _daemon_live=1
 fi
 if [ -n "$_existing_device" ] && [ -n "$_daemon_live" ]; then
@@ -176,10 +183,32 @@ fi
 fi  # end IS_WSL portproxy check
 
 # ════════════════════════════════════════════════════════════════════════════
-# STEP 2 — Tailscale in WSL
+# STEP 2 — Tailscale
 # ════════════════════════════════════════════════════════════════════════════
-step "2/$TOTAL  Tailscale (WSL)"
+step "2/$TOTAL  Tailscale"
 
+if [ -n "$IS_MAC" ]; then
+  # macOS: Tailscale ships as a GUI app (App Store / standalone) OR the brew CLI.
+  # Either way the app/`brew services` owns tailscaled — never `sudo systemctl` it.
+  TS_BIN="$(_resolve_tailscale || true)"
+  if [ -z "$TS_BIN" ] && command -v brew &>/dev/null; then
+    info "Installing Tailscale via Homebrew..."
+    brew install tailscale && TS_BIN="$(_resolve_tailscale || true)"
+  fi
+  if [ -z "$TS_BIN" ]; then
+    warn "Tailscale not found. Install the app from https://tailscale.com/download/mac"
+    warn "(or: brew install tailscale), authenticate, then re-run 'hive-mind install'."
+    TS_IP=""
+  else
+    ok "Tailscale present: $TS_BIN"
+    "$TS_BIN" up --ssh --accept-routes 2>/dev/null \
+      || warn "Run '$TS_BIN up --ssh' and authenticate if the daemon is not yet up."
+    TS_IP=$("$TS_BIN" ip 2>/dev/null | grep '^100\.' | head -1 | tr -d '[:space:]')
+    [ -n "$TS_IP" ] && ok "Tailscale IP: $TS_IP" || warn "No 100.x IP yet — authenticate Tailscale, then re-run."
+  fi
+
+else
+# ── Linux / WSL ──────────────────────────────────────────────────────────────
 # Install if not present
 if ! command -v tailscale &>/dev/null; then
   info "Installing Tailscale inside WSL..."
@@ -222,6 +251,7 @@ else
   ok "Authenticated: $TS_IP"
   ok "Tailscale SSH enabled"
 fi
+fi  # end Linux/WSL Tailscale branch
 
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 3 — python3 + uv + requests
@@ -230,7 +260,12 @@ step "3/$TOTAL  Python dependencies"
 
 command -v python3 &>/dev/null || {
   info "Installing python3..."
-  sudo apt-get update -qq && sudo apt-get install -y -qq python3
+  if [ -n "$IS_MAC" ]; then
+    command -v brew &>/dev/null && brew install python \
+      || die "Python 3 not found. Install it (brew install python) and re-run."
+  else
+    sudo apt-get update -qq && sudo apt-get install -y -qq python3
+  fi
 }
 ok "python3 $(python3 --version)"
 
@@ -399,9 +434,15 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 8 — Service / daemon persistence
 # ════════════════════════════════════════════════════════════════════════════
-step "8/$TOTAL  Systemd service"
+step "8/$TOTAL  Daemon supervision"
 
-if [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
+if [[ "$INIT_SYSTEM" == "launchd" ]]; then
+  # macOS launchd agents: hive-sync (KeepAlive) + hive-doctor (15-min self-heal).
+  launchd_install "$HIVE_DIR" "$SERVICE_NAME" \
+    && ok "launchd agents installed: hive-sync (KeepAlive) + hive-doctor (15-min self-heal)" \
+    || warn "launchd install reported a problem — check 'launchctl print gui/\$(id -u)/com.projectmentor.hive-sync'."
+
+elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
   # Hardened daemon unit + self-heal timer (see scripts/installer/_units.sh).
   write_systemd_units "$HIVE_DIR" "$SERVICE_NAME"
   ok "systemd units installed: hive-sync.service (hardened) + hive-doctor.timer"
@@ -439,7 +480,9 @@ fi
 # ════════════════════════════════════════════════════════════════════════════
 step "9/$TOTAL  Start sync daemon"
 
-if [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
+if [[ "$INIT_SYSTEM" == "launchd" ]]; then
+  launchd_restart "$SERVICE_NAME"
+elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
   systemctl --user restart "$SERVICE_NAME"
 elif [[ "$INIT_SYSTEM" == "initd" ]]; then
   sudo /etc/init.d/$SERVICE_NAME restart
@@ -452,7 +495,11 @@ sleep 2
 HELLO=$(curl -sf "http://127.0.0.1:9876/sync/hello" 2>/dev/null) && {
   ok "Daemon responding: $(echo "$HELLO" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("node_id","?"), "—", d.get("journal_entries","?"), "entries")')"
 } || {
-  warn "Daemon not yet responding on :9876. Check: journalctl --user -u $SERVICE_NAME -n 20"
+  if [[ "$INIT_SYSTEM" == "launchd" ]]; then
+    warn "Daemon not yet responding on :9876. Check: ~/Library/Logs/hive-mind/hive-sync.log"
+  else
+    warn "Daemon not yet responding on :9876. Check: journalctl --user -u $SERVICE_NAME -n 20"
+  fi
 }
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -501,6 +548,10 @@ mkdir -p "$BIN_DIR"
 if ! grep -q 'local/bin' "$HOME/.bashrc" 2>/dev/null; then
   echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
 fi
+# macOS defaults to zsh — also persist PATH there so `hv`/`hive-mind` resolve in new shells.
+if [ -n "$IS_MAC" ] && ! grep -q 'local/bin' "$HOME/.zshrc" 2>/dev/null; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+fi
 # Put `hv` on PATH so the CLI works from anywhere. hv resolves its own real directory
 # (Path(__file__).resolve()) for imports, so a symlink is fine.
 ln -sf "$HIVE_DIR/hv" "$BIN_DIR/hv"
@@ -537,8 +588,13 @@ echo ""
 echo "  Device:  $THIS_NODE"
 echo "  IP:      $THIS_IP"
 echo "  Data:    $HIVE_DIR"
-echo "  Daemon:  systemctl --user status $SERVICE_NAME"
-echo "  Logs:    journalctl --user -u $SERVICE_NAME -f"
+if [[ "$INIT_SYSTEM" == "launchd" ]]; then
+  echo "  Daemon:  launchctl print gui/\$(id -u)/com.projectmentor.hive-sync"
+  echo "  Logs:    ~/Library/Logs/hive-mind/hive-sync.log"
+else
+  echo "  Daemon:  systemctl --user status $SERVICE_NAME"
+  echo "  Logs:    journalctl --user -u $SERVICE_NAME -f"
+fi
 echo "  Try:     hv stats   (health check: hv doctor)"
 [ -z "$BIN_ON_PATH" ] && \
   echo "           ↳ new terminals work automatically; for THIS shell once: source ~/.bashrc"

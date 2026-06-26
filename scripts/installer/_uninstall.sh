@@ -66,19 +66,28 @@ fi
 
 # ── 1. sync daemon + self-heal timer ─────────────────────────────────────────
 info "Stopping and removing the sync daemon..."
-systemctl --user disable --now hive-doctor.timer 2>/dev/null || true
-systemctl --user stop hive-doctor.service        2>/dev/null || true
-rm -f "$DOCTOR_TIMER" "$DOCTOR_SVC"
-systemctl --user stop "$SERVICE_NAME"        2>/dev/null || true
-systemctl --user disable "$SERVICE_NAME"     2>/dev/null || true
-rm -f "$UNIT_FILE"
-systemctl --user daemon-reload               2>/dev/null || true
-systemctl --user reset-failed "$SERVICE_NAME" 2>/dev/null || true
-systemctl --user reset-failed hive-doctor.service 2>/dev/null || true
-if [ -z "${HIVE_UNINSTALL_TEST:-}" ]; then
-  pkill -f "sync_daemon.py" 2>/dev/null || true    # any stray/non-systemd daemon
-  if crontab -l 2>/dev/null | grep -q "sync_daemon.py"; then
-    crontab -l 2>/dev/null | grep -v "sync_daemon.py" | crontab - 2>/dev/null || true
+if [ "$(uname -s)" = "Darwin" ]; then
+  # macOS launchd: bootout both agents from the per-user GUI domain + remove the plists.
+  for _l in hive-sync hive-doctor; do
+    launchctl bootout "gui/$(id -u)/com.projectmentor.$_l" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/com.projectmentor.$_l.plist"
+  done
+  [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "sync_daemon.py" 2>/dev/null || true
+else
+  systemctl --user disable --now hive-doctor.timer 2>/dev/null || true
+  systemctl --user stop hive-doctor.service        2>/dev/null || true
+  rm -f "$DOCTOR_TIMER" "$DOCTOR_SVC"
+  systemctl --user stop "$SERVICE_NAME"        2>/dev/null || true
+  systemctl --user disable "$SERVICE_NAME"     2>/dev/null || true
+  rm -f "$UNIT_FILE"
+  systemctl --user daemon-reload               2>/dev/null || true
+  systemctl --user reset-failed "$SERVICE_NAME" 2>/dev/null || true
+  systemctl --user reset-failed hive-doctor.service 2>/dev/null || true
+  if [ -z "${HIVE_UNINSTALL_TEST:-}" ]; then
+    pkill -f "sync_daemon.py" 2>/dev/null || true    # any stray/non-systemd daemon
+    if crontab -l 2>/dev/null | grep -q "sync_daemon.py"; then
+      crontab -l 2>/dev/null | grep -v "sync_daemon.py" | crontab - 2>/dev/null || true
+    fi
   fi
 fi
 ok "Daemon stopped and removed."

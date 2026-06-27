@@ -28,6 +28,52 @@ def test_two_node_convergence():
     assert r.returncode == 0, f"sync_smoke.sh failed:\n{r.stdout}\n{r.stderr}"
 
 
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
+def test_two_node_convergence_under_aggressive_pagination():
+    # Path-MTU resilience: force 1-entry PULL/PUSH pages and a tiny TCP MSS clamp. These change only
+    # the transport granularity (smaller requests, smaller segments) — the G-Set union result must be
+    # byte-identical, so the same harness must still converge. Guards against pagination or the clamp
+    # accidentally dropping/duplicating entries. Runs on macos-latest too (where the clamp no-ops and
+    # pagination alone carries it).
+    env = dict(os.environ, HIVE_SYNC_PULL_PAGE="1", HIVE_SYNC_PUSH_PAGE="1", HIVE_SYNC_MAXSEG="600")
+    r = subprocess.run([str(SMOKE)], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, f"sync_smoke.sh under pagination/clamp failed:\n{r.stdout}\n{r.stderr}"
+
+
+def test_mss_clamp_lowers_segment_size_where_supported():
+    """The MTU fix relies on TCP_MAXSEG genuinely lowering the negotiated MSS where it's settable.
+    On platforms that reject it (macOS [Errno 22]) the clamp must DEGRADE GRACEFULLY — sync_common
+    probes this into MAXSEG_OK and the client/daemon skip the clamp there, so connections never break
+    and pagination carries sync (see the convergence test above, which runs on macos-latest)."""
+    import sync_common
+    if not sync_common.MAXSEG_OK:
+        pytest.skip(f"TCP_MAXSEG not settable on {sys.platform}; pagination is the fallback")
+    clamp = 600
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, clamp)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    import threading
+    acc = []
+    t = threading.Thread(target=lambda: acc.append(srv.accept()[0]))
+    t.start()
+    cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    cli.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, clamp)
+    cli.connect(("127.0.0.1", port))
+    t.join(5)
+    try:
+        cm = cli.getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)
+        sm = acc[0].getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)
+        assert cm <= clamp and sm <= clamp, f"TCP_MAXSEG did not clamp MSS: client={cm} server={sm}"
+    finally:
+        cli.close()
+        if acc:
+            acc[0].close()
+        srv.close()
+
+
 def _free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

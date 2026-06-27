@@ -11,7 +11,11 @@ Runs a bidirectional round with each configured peer:
   4. PUSH the windows the peer lacks/differs on to its /sync/ingest.
 """
 
+import os
+import socket
+
 import requests
+from requests.adapters import HTTPAdapter
 
 import merkle
 import sync_common
@@ -19,19 +23,60 @@ import sync_common
 hv = sync_common.load_hv()
 SIZE = merkle.CHUNK_SIZE
 
+# ── path-MTU resilience (see sync_common.SYNC_MAX_SEG) ────────────────────────────────────────────
+# Two defenses against a sub-1280-MTU tailnet path, both keeping Tailscale at its DEFAULTS:
+#   1. Clamp the outgoing TCP segment size on our connections (covers the PUSH/POST body). Only
+#      where the platform actually allows it — macOS rejects TCP_MAXSEG, and a urllib3 socket_option
+#      that errors would break EVERY connection, so we gate on sync_common.MAXSEG_OK.
+#   2. Paginate PULL and PUSH into small batches so each transfer "catches its breath" — this carries
+#      sync even on platforms where the clamp can't apply.
+PULL_PAGE = max(1, int(os.environ.get("HIVE_SYNC_PULL_PAGE", "25")))   # entries per /sync/chunk GET
+PUSH_PAGE = max(1, int(os.environ.get("HIVE_SYNC_PUSH_PAGE", "25")))   # entries per /sync/ingest POST
+
+
+class _ClampMSSAdapter(HTTPAdapter):
+    """Cap the outgoing TCP segment size on sync connections so multi-KB bodies survive a
+    sub-1280-MTU tailnet path. Adds the socket option ONLY where TCP_MAXSEG is settable
+    (sync_common.MAXSEG_OK) — never on macOS, where it would raise and break the connection."""
+    def init_poolmanager(self, *args, **kwargs):
+        try:
+            from urllib3.connection import HTTPConnection
+            opts = list(HTTPConnection.default_socket_options or [])
+        except Exception:
+            opts = []
+        if sync_common.MAXSEG_OK:
+            opts.append((socket.IPPROTO_TCP, socket.TCP_MAXSEG, sync_common.SYNC_MAX_SEG))
+        kwargs["socket_options"] = opts
+        return super().init_poolmanager(*args, **kwargs)
+
+
+_session = None
+
+
+def _sess():
+    """A shared requests.Session whose connections clamp the TCP segment size where supported."""
+    global _session
+    if _session is None:
+        s = requests.Session()
+        adapter = _ClampMSSAdapter()
+        s.mount("http://", adapter)
+        s.mount("https://", adapter)
+        _session = s
+    return _session
+
 
 def _local_entries():
     return merkle.read_all_entries(hv.JOURNAL_DIR)
 
 
 def _get(base, path, **params):
-    r = requests.get(f"{base}{path}", params=params or None, timeout=15)
+    r = _sess().get(f"{base}{path}", params=params or None, timeout=15)
     r.raise_for_status()
     return r.json()
 
 
 def _post(base, path, payload):
-    r = requests.post(f"{base}{path}", json=payload, timeout=60)
+    r = _sess().post(f"{base}{path}", json=payload, timeout=60)
     r.raise_for_status()
     return r.json()
 
@@ -66,11 +111,19 @@ def _sync_with_peer(peer):
         return
     remote_chunks = hello.get("chunks", {})
 
-    # PULL differing/missing windows from the peer.
+    # PULL differing/missing windows, paginated into PULL_PAGE-seq sub-windows so each /sync/chunk
+    # response stays small (the window is ours to size; the peer chooses nothing). A new entry written
+    # mid-round is simply caught this round if ahead of our cursor, or next round if behind — append
+    # is a G-Set union keyed by (node_id, seq), so re-pulls are no-ops and the Merkle re-check runs
+    # until both sides match. Safe under concurrent writes.
     pulled = []
     for node, start, end in _differing_windows(merkle.node_chunk_hashes(local), remote_chunks):
-        data = _get(base, "/sync/chunk", node=node, start=start, end=end)
-        pulled.extend(data.get("entries", []))
+        s = start
+        while s <= end:
+            e = min(s + PULL_PAGE - 1, end)
+            data = _get(base, "/sync/chunk", node=node, start=s, end=e)
+            pulled.extend(data.get("entries", []))
+            s = e + 1
 
     accepted = duplicates = 0
     if pulled:
@@ -85,8 +138,11 @@ def _sync_with_peer(peer):
         push.extend(merkle.entries_in_range(local, node, start, end))
 
     pushed = 0
-    if push:
-        pushed = _post(base, "/sync/ingest", {"entries": push, "hive_id": local_hive}).get("accepted", 0)
+    # Paginate the push so each /sync/ingest body stays small; the daemon de-dups by (node_id, seq),
+    # so a batch that partially overlaps prior state is idempotent.
+    for i in range(0, len(push), PUSH_PAGE):
+        pushed += _post(base, "/sync/ingest",
+                        {"entries": push[i:i + PUSH_PAGE], "hive_id": local_hive}).get("accepted", 0)
 
     print(f"  {pid}: pulled {accepted} (dup {duplicates}), pushed {pushed}")
 

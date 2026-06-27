@@ -54,7 +54,7 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
 
 ## Install
 
-On macOS, Linux, or a WSL terminal on Windows 11, run:
+On Android (Termux), Linux, macOS, or a WSL terminal on Windows 11, run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/projectmentor/hive-mind/main/scripts/installer/install.sh | bash
@@ -70,18 +70,39 @@ The installer will:
    Enter** — you can add peers later by editing `.peers.json`.
 5. Initialise the local database
 6. Install and start the sync daemon under your OS's service manager (systemd on Linux/WSL,
-   launchd on macOS)
+   launchd on macOS, termux-services/runit on Android)
 7. Wire the Hermes memory plugin (if Hermes is installed)
 
 ### Requirements
 
-- **macOS**, **Linux** (native), or **Windows 11 with WSL2** (with systemd enabled). Android
-  support is in progress. On macOS the daemon runs as a launchd LaunchAgent.
+- **Android** (Termux), **Linux** (native), **macOS**, or **Windows 11 with WSL2** (with
+  systemd enabled). The daemon runs under each platform's supervisor: systemd on Linux/WSL,
+  launchd on macOS, termux-services/runit on Android (plus Termux:Boot for start-on-reboot).
 - **Internet access** (for the install and git clone)
 - **Tailscale** *only if you want multiple machines to sync.* The installer sets it up for
-  you (inside WSL on Windows; on macOS install the app or `brew install tailscale`; it is
-  **not** needed on the Windows host). A single-machine setup needs no Tailscale at all —
-  there are no peers to reach.
+  you (inside WSL on Windows; on macOS install the app or `brew install tailscale`). On
+  **Android** Tailscale is the VPN app — install and connect it from the Play Store/F-Droid;
+  the installer can't manage it from Termux. It is **not** needed on the Windows host. A
+  single-machine setup needs no Tailscale at all — there are no peers to reach.
+
+<details>
+<summary>Android (Termux) setup notes</summary>
+
+```bash
+# In Termux (install it from F-Droid, not the Play Store build):
+pkg install python git
+curl -fsSL https://raw.githubusercontent.com/projectmentor/hive-mind/main/scripts/installer/install.sh | bash
+hive-mind install
+```
+
+The installer adds `termux-services` (runit) to keep the daemon alive while Termux runs. For
+start-on-reboot, install the **Termux:Boot** app from F-Droid, open it once, and disable
+battery optimisation for Termux + Termux:Boot so Android Doze doesn't freeze the daemon.
+Connect the Tailscale Android app before syncing. A phone behind Tailscale's userspace VPN
+can't accept inbound connections, but it doesn't need to: it converges by syncing outbound
+every 5 minutes.
+
+</details>
 
 <details>
 <summary>Enable systemd in WSL (if it isn't already)</summary>
@@ -198,7 +219,7 @@ the policy and the common failure modes.
 
 - **Federated hives (a colony)** — separate hives (personal, team, project) that selectively share
   what matters, so groups pool knowledge without merging into one pool. Multiple hives form a colony.
-- **More platforms** — Android (macOS, Linux, and WSL2 are supported today).
+- **More platforms** — iOS / thin-client nodes (Android, Linux, macOS, and WSL2 are supported today).
 - **Hosted relay** — an optional managed tier for nodes that can't reach each other directly.
 
 ---

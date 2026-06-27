@@ -63,19 +63,31 @@ echo ""
 # ════════════════════════════════════════════════════════════════════════════
 step "1/$TOTAL  Pre-flight checks"
 
-# HiveMind runs on Linux (native or WSL2) and macOS. WSL2 is a Linux kernel, so
-# native Linux works the same; macOS uses launchd instead of systemd. We branch
-# on the handful of Windows-interop steps (gated on IS_WSL) and the supervisor.
-IS_WSL=""; IS_MAC=""
+# HiveMind runs on Linux (native or WSL2), macOS, and Android (Termux). WSL2 is a
+# Linux kernel, so native Linux works the same; macOS uses launchd; Android uses
+# termux-services/runit. Termux reports `uname -s`=Linux, so it is matched FIRST
+# (via `uname -o`=Android / $TERMUX_VERSION / the Termux data dir) before the WSL
+# probe. We branch on the Windows-interop steps (IS_WSL) and the supervisor.
+IS_WSL=""; IS_MAC=""; IS_ANDROID=""
 case "$(uname -s)" in
-  Linux)  grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null && IS_WSL=1 ;;
+  Linux)
+    if [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ] \
+       || [ -d /data/data/com.termux ]; then
+      IS_ANDROID=1
+    elif grep -qi 'microsoft\|wsl' /proc/version 2>/dev/null; then
+      IS_WSL=1
+    fi ;;
   Darwin) IS_MAC=1 ;;
-  *)      die "HiveMind installs on Linux (native or WSL2) or macOS. This system ($(uname -s)) is neither." ;;
+  *)      die "HiveMind installs on Linux (native or WSL2), macOS, or Android (Termux). This system ($(uname -s)) is none." ;;
 esac
 
 # ── detect supervisor / init system ─────────────────────────────────────────
+# Android FIRST: Termux has no systemctl / systemd PID 1 / loginctl, so the probes
+# below would error or mis-fire there.
 INIT_SYSTEM="none"
-if [ -n "$IS_MAC" ]; then
+if [ -n "$IS_ANDROID" ]; then
+  INIT_SYSTEM="runit"
+elif [ -n "$IS_MAC" ]; then
   INIT_SYSTEM="launchd"
 elif command -v systemctl &>/dev/null; then
   INIT_SYSTEM="systemctl"
@@ -89,6 +101,7 @@ fi
 
 case "$INIT_SYSTEM" in
   launchd)   ok "Init system: launchd (macOS)" ;;
+  runit)     ok "Init system: termux-services / runit (Android)" ;;
   systemctl) ok "Init system: systemctl" ;;
   systemd)   ok "Init system: systemd (no systemctl)" ;;
   initd)     ok "Init system: init.d" ;;
@@ -102,7 +115,24 @@ case "$INIT_SYSTEM" in
     ;;
 esac
 
-ok "Pre-flight OK ($([ -n "$IS_MAC" ] && echo 'macOS' || { [ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'; }))"
+ok "Pre-flight OK ($([ -n "$IS_MAC" ] && echo 'macOS' || { [ -n "$IS_ANDROID" ] && echo 'Android (Termux)' || { [ -n "$IS_WSL" ] && echo 'WSL2' || echo 'native Linux'; }; }))"
+
+# ── Android: ensure termux-services (runit) is present + nudge Termux:Boot ───
+# Termux has no systemd; termux-services provides `sv`/runsvdir. Termux:Boot (a
+# separate F-Droid app) gives start-on-reboot — the CLI can only prompt for it.
+if [ -n "$IS_ANDROID" ]; then
+  if ! command -v sv &>/dev/null; then
+    info "Installing termux-services (runit supervisor)..."
+    pkg install -y termux-services 2>/dev/null || warn "pkg install termux-services failed — will fall back to a nohup keep-alive."
+  fi
+  # Bring the supervisor tree up for THIS session if a login shell hasn't already.
+  if ! pgrep -x runsvdir >/dev/null 2>&1; then
+    . "$PREFIX/etc/profile.d/start-services.sh" 2>/dev/null || true
+  fi
+  warn "For start-on-reboot: install the Termux:Boot app from F-Droid, open it once,"
+  warn "then disable battery optimisation for Termux + Termux:Boot. (Keep-alive while"
+  warn "running works without it.)"
+fi
 
 # ── Already installed AND running? Offer the lighter path before redoing the work. ──────────
 # Re-running install is safe and idempotent — it KEEPS this device's identity (STEP 5 reuses an
@@ -187,7 +217,28 @@ fi  # end IS_WSL portproxy check
 # ════════════════════════════════════════════════════════════════════════════
 step "2/$TOTAL  Tailscale"
 
-if [ -n "$IS_MAC" ]; then
+if [ -n "$IS_ANDROID" ]; then
+  # Android: Tailscale is the VPN APP (userspace), not a Termux CLI — the installer
+  # cannot run `tailscale up`. The 100.x address lives on an app-owned tun that may
+  # not even be visible inside Termux, so discovery is best-effort. TS_IP is only
+  # used for display + the `self` label; joining points at the PEER and sync is
+  # outbound, so a missing IP is non-fatal.
+  TS_IP="$( { command -v ip >/dev/null 2>&1 && ip -4 addr 2>/dev/null; \
+              command -v ifconfig >/dev/null 2>&1 && ifconfig 2>/dev/null; } \
+            | grep -oE '100\.[0-9]+\.[0-9]+\.[0-9]+' | head -1 )"
+  if [ -n "$TS_IP" ]; then
+    ok "Tailscale IP (from VPN tun): $TS_IP"
+  else
+    warn "Can't read the Tailscale IP from Termux (the VPN tun is owned by the app)."
+    warn "Open the Tailscale app and confirm it shows Connected."
+    if [ -t 0 ]; then
+      ask "Paste this device's Tailscale 100.x IP (optional, Enter to skip): "
+      read -r TS_IP
+    fi
+    TS_IP="${TS_IP:-}"
+  fi
+
+elif [ -n "$IS_MAC" ]; then
   # macOS: Tailscale ships as a GUI app (App Store / standalone) OR the brew CLI.
   # Either way the app/`brew services` owns tailscaled — never `sudo systemctl` it.
   TS_BIN="$(_resolve_tailscale || true)"
@@ -258,31 +309,45 @@ fi  # end Linux/WSL Tailscale branch
 # ════════════════════════════════════════════════════════════════════════════
 step "3/$TOTAL  Python dependencies"
 
-command -v python3 &>/dev/null || {
-  info "Installing python3..."
-  if [ -n "$IS_MAC" ]; then
-    command -v brew &>/dev/null && brew install python \
-      || die "Python 3 not found. Install it (brew install python) and re-run."
-  else
-    sudo apt-get update -qq && sudo apt-get install -y -qq python3
+if [ -n "$IS_ANDROID" ]; then
+  # Termux: `pkg` not apt, no sudo, no root. The core only needs `requests`, and
+  # `uv` has no reliable Termux/aarch64 wheel — so install python/git via pkg and
+  # requests via plain pip, skipping uv entirely.
+  command -v python3 &>/dev/null || { info "Installing python (pkg)..."; pkg install -y python; }
+  command -v git     &>/dev/null || { info "Installing git (pkg)...";    pkg install -y git; }
+  ok "python3 $(python3 --version)"
+  python3 -c "import requests" 2>/dev/null || {
+    info "Installing requests (pip)..."
+    pip install requests
+  }
+  ok "requests available (Termux, no uv)"
+else
+  command -v python3 &>/dev/null || {
+    info "Installing python3..."
+    if [ -n "$IS_MAC" ]; then
+      command -v brew &>/dev/null && brew install python \
+        || die "Python 3 not found. Install it (brew install python) and re-run."
+    else
+      sudo apt-get update -qq && sudo apt-get install -y -qq python3
+    fi
+  }
+  ok "python3 $(python3 --version)"
+
+  if ! command -v uv &>/dev/null; then
+    info "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    source "$HOME/.local/bin/env" 2>/dev/null \
+      || source "$HOME/.cargo/env" 2>/dev/null \
+      || export PATH="$HOME/.local/bin:$PATH"
   fi
-}
-ok "python3 $(python3 --version)"
+  ok "uv $(uv --version)"
 
-if ! command -v uv &>/dev/null; then
-  info "Installing uv..."
-  curl -LsSf https://astral.sh/uv/install.sh | sh
-  source "$HOME/.local/bin/env" 2>/dev/null \
-    || source "$HOME/.cargo/env" 2>/dev/null \
-    || export PATH="$HOME/.local/bin:$PATH"
+  python3 -c "import requests" 2>/dev/null || {
+    info "Installing requests..."
+    uv pip install --system requests
+  }
+  ok "requests available"
 fi
-ok "uv $(uv --version)"
-
-python3 -c "import requests" 2>/dev/null || {
-  info "Installing requests..."
-  uv pip install --system requests
-}
-ok "requests available"
 
 # ════════════════════════════════════════════════════════════════════════════
 # STEP 4 — Clone / update repo
@@ -442,6 +507,22 @@ if [[ "$INIT_SYSTEM" == "launchd" ]]; then
     && ok "launchd agents installed: hive-sync (KeepAlive) + hive-doctor (15-min self-heal)" \
     || warn "launchd install reported a problem — check 'launchctl print gui/\$(id -u)/com.projectmentor.hive-sync'."
 
+elif [[ "$INIT_SYSTEM" == "runit" ]]; then
+  # Android/Termux: runit services hive-sync (runsvdir respawn) + hive-doctor
+  # (15-min loop), plus a Termux:Boot entrypoint. See scripts/installer/_runit.sh.
+  if command -v runit_install >/dev/null 2>&1 && command -v sv >/dev/null 2>&1; then
+    runit_install "$HIVE_DIR" "$SERVICE_NAME" \
+      && ok "runit services installed: hive-sync (keep-alive) + hive-doctor (15-min loop)" \
+      || warn "runit install reported a problem — check 'sv status hive-sync'."
+  else
+    # No termux-services available — keep-alive the daemon by hand so the node
+    # still syncs; Termux:Boot (if installed) re-launches it on reboot.
+    warn "termux-services (sv) unavailable — falling back to a nohup keep-alive (no auto-respawn)."
+    mkdir -p "$HOME/.hive-mind/logs"
+    pkill -f sync_daemon.py 2>/dev/null || true
+    nohup python3 "$HIVE_DIR/sync_daemon.py" >> "$HOME/.hive-mind/logs/hive-sync.log" 2>&1 &
+  fi
+
 elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
   # Hardened daemon unit + self-heal timer (see scripts/installer/_units.sh).
   write_systemd_units "$HIVE_DIR" "$SERVICE_NAME"
@@ -482,6 +563,10 @@ step "9/$TOTAL  Start sync daemon"
 
 if [[ "$INIT_SYSTEM" == "launchd" ]]; then
   launchd_restart "$SERVICE_NAME"
+elif [[ "$INIT_SYSTEM" == "runit" ]]; then
+  if command -v sv >/dev/null 2>&1; then
+    runit_restart "$SERVICE_NAME"
+  fi   # else: the step-8 nohup fallback already started it
 elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
   systemctl --user restart "$SERVICE_NAME"
 elif [[ "$INIT_SYSTEM" == "initd" ]]; then
@@ -497,6 +582,8 @@ HELLO=$(curl -sf "http://127.0.0.1:9876/sync/hello" 2>/dev/null) && {
 } || {
   if [[ "$INIT_SYSTEM" == "launchd" ]]; then
     warn "Daemon not yet responding on :9876. Check: ~/Library/Logs/hive-mind/hive-sync.log"
+  elif [[ "$INIT_SYSTEM" == "runit" ]]; then
+    warn "Daemon not yet responding on :9876. Check: ~/.hive-mind/logs/hive-sync.log  (and: sv status hive-sync)"
   else
     warn "Daemon not yet responding on :9876. Check: journalctl --user -u $SERVICE_NAME -n 20"
   fi
@@ -591,6 +678,9 @@ echo "  Data:    $HIVE_DIR"
 if [[ "$INIT_SYSTEM" == "launchd" ]]; then
   echo "  Daemon:  launchctl print gui/\$(id -u)/com.projectmentor.hive-sync"
   echo "  Logs:    ~/Library/Logs/hive-mind/hive-sync.log"
+elif [[ "$INIT_SYSTEM" == "runit" ]]; then
+  echo "  Daemon:  sv status hive-sync"
+  echo "  Logs:    ~/.hive-mind/logs/hive-sync.log"
 else
   echo "  Daemon:  systemctl --user status $SERVICE_NAME"
   echo "  Logs:    journalctl --user -u $SERVICE_NAME -f"

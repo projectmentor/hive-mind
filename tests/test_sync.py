@@ -22,6 +22,48 @@ SMOKE = PROJECT / "scripts" / "sync_smoke.sh"
 HV = PROJECT / "hv"
 
 
+def _negotiated_mss(clamp):
+    """Open a loopback TCP connection with TCP_MAXSEG=clamp set on BOTH ends the way the daemon and
+    sync client do (server: on the listening socket; client: before connect), and return the
+    (client_mss, server_side_mss) the kernel actually negotiated."""
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, clamp)   # on listen socket (inherited on accept)
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    acc = []
+    import threading
+    t = threading.Thread(target=lambda: acc.append(srv.accept()[0]))
+    t.start()
+    cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    cli.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, clamp)   # before connect (advertised in SYN)
+    cli.connect(("127.0.0.1", port))
+    t.join(5)
+    try:
+        cm = cli.getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)
+        sm = acc[0].getsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG)
+        return cm, sm
+    finally:
+        cli.close()
+        if acc:
+            acc[0].close()
+        srv.close()
+
+
+@pytest.mark.skipif(not hasattr(socket, "TCP_MAXSEG"), reason="no TCP_MAXSEG on this platform")
+def test_tcp_maxseg_actually_clamps_the_mss():
+    """The MTU-blackhole fix depends on TCP_MAXSEG genuinely lowering the negotiated MSS, not just
+    being accepted by setsockopt. Assert it on EVERY CI platform (ubuntu + macos) so a Mac user's
+    first sync over a constrained tailnet path never silently stalls. If this fails on a platform,
+    that platform needs a different clamp mechanism before we claim it's covered."""
+    cm, sm = _negotiated_mss(600)
+    assert cm <= 600 and sm <= 600, (
+        f"TCP_MAXSEG did NOT clamp the MSS on {sys.platform}: client={cm}, server={sm} "
+        f"(expected <=600). This platform needs a different path-MTU fix."
+    )
+
+
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
 def test_two_node_convergence():
     r = subprocess.run([str(SMOKE)], capture_output=True, text=True)

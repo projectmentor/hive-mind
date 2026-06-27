@@ -43,7 +43,7 @@ jobs:
       - name: sync daemon answers on :9876 natively
         run: |
           HIVE_HOME="$PWD" python3 ./hv rebuild >/dev/null 2>&1 || true
-          HIVE_HOME="$PWD" nohup python3 sync_daemon.py >/tmp/d.log 2>&1 &
+          HIVE_HOME="$PWD" nohup python3 hive_sync_daemon.py >/tmp/d.log 2>&1 &
           ok=
           for i in $(seq 1 20); do
             curl -sf http://127.0.0.1:9876/sync/hello >/dev/null && { ok=1; break; }

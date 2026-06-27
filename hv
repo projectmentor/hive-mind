@@ -1896,13 +1896,13 @@ def stats(args):
 
 
 def sync_cmd(args):
-    """Sync with peers (Phase 2 — implemented in sync_client / sync_daemon)."""
+    """Sync with peers (Phase 2 — implemented in sync_client / hive_sync_daemon)."""
     if args.sync_action == "now":
         import sync_client
         sync_client.sync_now()
     elif args.sync_action == "daemon":
-        import sync_daemon
-        sync_daemon.run_daemon()
+        import hive_sync_daemon
+        hive_sync_daemon.run_daemon()
     else:
         print("usage: hv sync {now|daemon}")
 

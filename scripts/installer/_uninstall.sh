@@ -72,7 +72,7 @@ if [ "$(uname -s)" = "Darwin" ]; then
     launchctl bootout "gui/$(id -u)/com.projectmentor.$_l" 2>/dev/null || true
     rm -f "$HOME/Library/LaunchAgents/com.projectmentor.$_l.plist"
   done
-  [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "sync_daemon.py" 2>/dev/null || true
+  [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "hive_sync_daemon.py" 2>/dev/null || true
 elif [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ] || [ -d /data/data/com.termux ]; then
   # Android/Termux runit: stop + disable both services, remove their dirs + the
   # Termux:Boot entrypoint. Inlined (like the macOS arm) so uninstall stays
@@ -84,7 +84,7 @@ elif [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ] |
     rm -rf "$_RUNIT_SVC_DIR/$_l"
   done
   rm -f "$HOME/.termux/boot/start-hive-mind"
-  [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "sync_daemon.py" 2>/dev/null || true
+  [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "hive_sync_daemon.py" 2>/dev/null || true
 else
   systemctl --user disable --now hive-doctor.timer 2>/dev/null || true
   systemctl --user stop hive-doctor.service        2>/dev/null || true
@@ -96,9 +96,9 @@ else
   systemctl --user reset-failed "$SERVICE_NAME" 2>/dev/null || true
   systemctl --user reset-failed hive-doctor.service 2>/dev/null || true
   if [ -z "${HIVE_UNINSTALL_TEST:-}" ]; then
-    pkill -f "sync_daemon.py" 2>/dev/null || true    # any stray/non-systemd daemon
-    if crontab -l 2>/dev/null | grep -q "sync_daemon.py"; then
-      crontab -l 2>/dev/null | grep -v "sync_daemon.py" | crontab - 2>/dev/null || true
+    pkill -f "hive_sync_daemon.py" 2>/dev/null || true    # any stray/non-systemd daemon
+    if crontab -l 2>/dev/null | grep -q "hive_sync_daemon.py"; then
+      crontab -l 2>/dev/null | grep -v "hive_sync_daemon.py" | crontab - 2>/dev/null || true
     fi
   fi
 fi

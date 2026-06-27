@@ -197,7 +197,7 @@ def _load_nudge_cfg() -> dict[str, str]:
         "SAVE_ON_PHRASE": "1",
         "HIVE_NUDGE_PHRASES": "we need,we should,i want,idea,wait,before we,keep,remember,decision,the issue,lesson,wrong",
     }
-    repo_root = Path(__file__).resolve().parent.parent
+    repo_root = Path(__file__).resolve().parent.parent.parent  # integrations/hermes/ → repo root
     candidates = [
         Path(os.environ.get("HIVE_HOME", repo_root)) / "nudge.env",
         repo_root / "nudge.env",

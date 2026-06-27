@@ -1,6 +1,6 @@
 ---
 name: wire-up
-description: Self-provision a tool or agent from its Hive-Mind "cell" via the `hv wire` CLI — look up the recipe + credential, run the platform-correct setup, and verify. Use when you (or the user) need to wire this device up to a tool/service (Cloudflare, Vultr, chrome-devtools-mcp, the Lofty API, …) hands-off, or to list/inspect/publish wiring recipes.
+description: Self-provision a tool or agent from its Hive-Mind "cell" via the `hv wire` CLI — look up the recipe + credential, run the platform-correct setup, and verify. Use when you (or the user) need to wire this device up to a tool/service (an MCP server, a cloud/CDN API, a CRM, …) hands-off, or to list/inspect/publish wiring recipes.
 when_to_use: You need a tool/service wired up on this device and a cell may already describe it; the user says "wire up X" / "set up X" / "connect to X"; you want to see what wiring recipes exist; or you're authoring a new recipe.
 ---
 

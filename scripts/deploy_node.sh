@@ -14,7 +14,7 @@ echo "== git pull =="
 git pull --ff-only
 
 echo "== journal v2 migration (idempotent; backs up journal/ if it changes anything) =="
-python3 migrate_journal_v2.py
+python3 utilities/migrate_journal.py
 
 echo "== rebuild store.db from the journal =="
 ./hv rebuild
@@ -29,6 +29,6 @@ echo -n "  merkle  : "; ./hv doctor merkle | awk '/^Root:/{print $2}'
 if [ -f .peers.json ]; then
   echo "== .peers.json present =="
 else
-  echo "== NEXT: create .peers.json (see .peers.json.example) — this node's peer is the OTHER box's Tailscale URL =="
+  echo "== NEXT: create .peers.json (see config/.peers.json.example) — this node's peer is the OTHER box's Tailscale URL =="
 fi
 echo "== ready. Start the daemon with: ./hv sync daemon =="

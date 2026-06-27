@@ -64,7 +64,6 @@ JOURNAL_DIR = HIVE_HOME / "journal"
 # another node's identity to launder corroboration. A key is minted only by `hv key init` or the
 # migration — importing hv NEVER creates one, so a legacy hostname node keeps its identity until
 # it is deliberately migrated. HIVE_NODE_ID still overrides (tests / two instances on one box).
-NODE_LABEL = os.environ.get("HIVE_NODE_LABEL", socket.gethostname())
 DEVICE_KEY_PATH = HIVE_HOME / ".device-key"
 DEVICE_ID_PATH = HIVE_HOME / ".device-id"
 
@@ -104,7 +103,57 @@ def _resolve_node_id():
     return socket.gethostname()
 
 
+# Hostnames that are NOT unique enough to be a node label on their own. Containers, fresh WSL2
+# installs, and minimal images routinely report one of these, so two unrelated boxes would both
+# show up as "linux" in the hive (the label rides in the join-request an owner approves).
+_GENERIC_HOSTNAMES = {
+    "", "linux", "localhost", "localhost.localdomain",
+    "ubuntu", "debian", "kali", "raspberrypi", "archlinux",
+}
+
+
+def _machine_suffix():
+    """A short, stable per-machine suffix for disambiguating a generic hostname. Prefers the device
+    fingerprint (already collision-safe), else /etc/machine-id; returns None if neither is available."""
+    did = None
+    try:
+        if DEVICE_ID_PATH.exists():
+            did = DEVICE_ID_PATH.read_text().strip()
+    except Exception:
+        did = None
+    if not did:
+        seed = _device_seed()
+        if seed is not None and _ed25519 is not None:
+            did = _device_id_for_pub(_ed25519.pub_from_seed(seed))
+    if did:
+        return did.split(":")[-1][:6]            # last 6 hex of the fingerprint
+    for p in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            mid = Path(p).read_text().strip()
+            if mid:
+                return mid[:6]
+        except Exception:
+            continue
+    return None
+
+
+def _human_label():
+    """Human-readable node label. HIVE_NODE_LABEL wins; otherwise the hostname — but a GENERIC
+    hostname (linux/localhost/blank, common on containers/WSL) is suffixed with a short stable
+    per-machine id so two such nodes don't both surface as 'linux' in the hive."""
+    env = os.environ.get("HIVE_NODE_LABEL")
+    if env:
+        return env
+    host = (socket.gethostname() or "").strip()
+    if host.lower() in _GENERIC_HOSTNAMES:
+        suf = _machine_suffix()
+        base = host or "node"
+        return f"{base}-{suf}" if suf else base
+    return host
+
+
 NODE_ID = _resolve_node_id()
+NODE_LABEL = _human_label()
 
 
 # Owner identity (governance root). A separate Ed25519 key, distinct from the device key, is the
@@ -2738,7 +2787,7 @@ def migrate_device_identity_cmd(args):
         e.pop("pub", None)
         migrated.append(e)
 
-    # Recompute each device's prev_hash chain from genesis (migrate_journal_v2 pattern).
+    # Recompute each device's prev_hash chain from genesis (utilities/migrate_journal pattern).
     by_node = {}
     for e in migrated:
         by_node.setdefault(e["node_id"], []).append(e)

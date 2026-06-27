@@ -352,7 +352,7 @@ alongside `action`.
 Get a node's device id and public key with `hv config identity show` on that machine.
 
 `.peers.json` is gitignored (contains Tailscale IPs). Copy from
-`.peers.json.example` and edit per node.
+`config/.peers.json.example` and edit per node.
 
 **WSL + Tailscale note:** Each WSL2 instance gets its own Tailscale IP (appears
 as a separate machine on the tailnet, e.g. `node-a-1`). The sync daemon

@@ -385,7 +385,20 @@ step "5/$TOTAL  Node identity"
 
 cd "$HIVE_DIR"
 THIS_IP="$TS_IP"
-THIS_NODE=$(hostname)
+# Human label for this node. A GENERIC hostname (linux/localhost/blank — common on containers and
+# fresh WSL2) is not unique, so two such boxes would both register as "linux" in the hive. Suffix
+# it with a short stable machine id. (hv's NODE_LABEL applies the same guard at runtime, preferring
+# the device fingerprint once a key is minted — this early value is for the installer's display.)
+THIS_NODE=$(hostname 2>/dev/null || echo node)
+case "$(printf '%s' "$THIS_NODE" | tr '[:upper:]' '[:lower:]')" in
+  ""|linux|localhost|localhost.localdomain|ubuntu|debian|kali|raspberrypi|archlinux)
+    _mid=""
+    for _f in /etc/machine-id /var/lib/dbus/machine-id; do
+      [ -r "$_f" ] && _mid="$(cut -c1-6 < "$_f" 2>/dev/null)" && [ -n "$_mid" ] && break
+    done
+    [ -n "$_mid" ] && THIS_NODE="${THIS_NODE:-node}-$_mid"
+    ;;
+esac
 
 # Resume a preserved identity (from a prior `uninstall --keep-identity` / `--keep-hive`) BEFORE
 # minting, so a reinstall keeps the same device_id — and the owner's prior admission (keyed by
@@ -598,7 +611,7 @@ if command -v hermes &>/dev/null; then
   HERMES_PLUGINS="${HERMES_HOME:-$HOME/.hermes}/plugins"
   mkdir -p "$HERMES_PLUGINS"
   rm -rf "$HERMES_PLUGINS/hive-mind"
-  ln -s "$HIVE_DIR/hermes_plugin" "$HERMES_PLUGINS/hive-mind"
+  ln -s "$HIVE_DIR/integrations/hermes" "$HERMES_PLUGINS/hive-mind"
   hermes config set memory.provider hive-mind 2>/dev/null && \
     ok "Hermes memory plugin linked and activated" || \
     warn "Hermes plugin linked but config set failed — run manually: hermes config set memory.provider hive-mind"

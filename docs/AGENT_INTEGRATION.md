@@ -182,7 +182,7 @@ Only record the new `Spec-Version` to your marker file if all pass:
 
 ## 6. Config
 
-Per-node tuning lives in `nudge.env` (copy from `nudge.env.example`; mirrors the `.peers.json`
+Per-node tuning lives in `nudge.env` (copy from `config/nudge.env.example`; mirrors the `.peers.json`
 convention): `SAVE_EVERY`, `MIN_GAP`, `SAVE_ON_PHRASE`, `AUDIT_ON`, `AUDIT_DEPTH`,
 `HIVE_NUDGE_PHRASES`. `hv` reads it for you — your adapter does not need to parse it. Honor it by
 simply routing text through `hv nudge`/`hv audit`.

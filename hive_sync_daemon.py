@@ -88,6 +88,7 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(SOCKET_TIMEOUT)
         except Exception:
             pass
+        sync_common.clamp_mss(self.connection)   # keep responses under a sub-1280-MTU tailnet ceiling
 
     def log_message(self, fmt, *args):  # keep the daemon quiet; errors go to do_*
         pass
@@ -248,6 +249,7 @@ def make_server(bind=None, port=None):
     for p in range(base, base + 5):
         try:
             srv = ThreadingHTTPServer((bind, p), Handler)
+            sync_common.clamp_mss(srv.socket)   # accepted connections inherit the clamped MSS (Linux)
             if p != base:
                 print(f"sync daemon: :{base} is held by a non-hive service; using :{p}")
                 _persist_port(p)

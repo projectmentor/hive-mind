@@ -1881,7 +1881,8 @@ def stats(args):
         by_node[e["node_id"]] = by_node.get(e["node_id"], 0) + 1
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
-    print(f"  Device:             {NODE_ID}")
+    _self_addr = _self_address()
+    print(f"  Device:             {NODE_ID}" + (f"  @ {_self_addr}" if _self_addr else ""))
     facts_line = f"{live_facts} live  (avg confidence: {avg_conf})"
     if forgotten_facts:
         facts_line += f"  +{forgotten_facts} forgotten"
@@ -2115,6 +2116,9 @@ def whoami_cmd(args):
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     print(f"device:    {NODE_ID}  ({NODE_LABEL})")
+    _addr = _self_address()
+    if _addr:
+        print(f"address:   {_addr}   (share via `hive-mind invite`)")
     if not gov["owner_id"]:
         print("hive:      (none — no owner established yet)")
         print("status:    UNAFFILIATED  (`hv owner init` to start a hive, or sync one then `hv join`)")
@@ -3934,7 +3938,10 @@ def _doctor_status():
         up, down, diverged = [], [], []
         for p in peers:
             base = str(p.get("url", "")).rstrip("/")
-            pid = p.get("id", base)
+            # Label by the peer's ADDRESS, not the .peers.json `id` (which may be a principal like
+            # "david" — ambiguous, since many devices share a principal). `hv peers` maps each
+            # address to its authoritative device_id + principal.
+            pid = base.replace("http://", "") or p.get("id", "?")
             try:
                 rr = requests.get(f"{base}/sync/merkle-root", timeout=5)
                 rr.raise_for_status()
@@ -3949,6 +3956,7 @@ def _doctor_status():
                 bits.append(f"diverged: {', '.join(diverged)} (run `hv sync now`)")
             if down:
                 bits.append(f"unreachable: {', '.join(down)}")
+            bits.append("`hv peers` for device + principal")
             checks.append({"name": "peers", "status": "warn", "detail": "; ".join(bits)})
         else:
             checks.append({"name": "peers", "status": "ok", "detail": f"{len(up)} peer(s) reachable and in sync"})
@@ -4507,20 +4515,66 @@ def owner_cmd(args):
         print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
 
 
-def _self_sync_url():
-    """This device's reachable sync URL (Tailscale IPv4 : configured port) — carried in a
-    join-request so the owner can peer back on admit. Best-effort; '' if the IP is unknown."""
+def _self_tailnet_ip():
+    """This device's Tailscale IPv4, best-effort (''). The `tailscale` CLI is authoritative, so try
+    it FIRST — the 100.64.0.0/10 range is shared with carrier-grade NAT and some WSL/virtual
+    interfaces, so a bare interface grep can return a non-tailnet 100.x. The interface scan is the
+    Android/Termux fallback (no CLI there), preferring a tailscale-looking interface."""
+    import re
+    pat = re.compile(r"\b(100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3})\b")
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3).stdout
+        ip = (out.strip().splitlines() or [""])[0].strip()
+        if pat.fullmatch(ip):
+            return ip
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr"], capture_output=True, text=True, timeout=2).stdout
+        fallback = ""
+        for line in out.splitlines():
+            m = pat.search(line)
+            if not m:
+                continue
+            if re.search(r"\b(tailscale\d*|ts\d+|tun\d*|utun\d*)\b", line):
+                return m.group(1)
+            fallback = fallback or m.group(1)
+        if fallback:
+            return fallback
+    except Exception:
+        pass
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=2).stdout
+        m = pat.search(out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def _self_sync_port():
     try:
         import sync_common
-        port = sync_common.load_peers().get("port", 9876)
+        return sync_common.load_peers().get("port", 9876)
     except Exception:
-        port = 9876
-    try:
-        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout
-        ip = (out.strip().splitlines() or [""])[0].strip()
-    except Exception:
-        ip = ""
-    return f"http://{ip}:{port}" if ip else ""
+        return 9876
+
+
+def _self_address():
+    """'ip:port' this device is reachable at on the tailnet, or '' if unknown. For display
+    (whoami/stats/peers) and as the basis of the join-request URL."""
+    ip = _self_tailnet_ip()
+    return f"{ip}:{_self_sync_port()}" if ip else ""
+
+
+def _self_sync_url():
+    """This device's reachable sync URL (Tailscale IPv4 : configured port) — carried in a
+    join-request so the owner can peer back on admit. Best-effort; '' if the IP is unknown.
+    Resolves the IP CLI-first with an interface fallback, so it also works on Android/Termux
+    (where `tailscale ip` does not exist)."""
+    addr = _self_address()
+    return f"http://{addr}" if addr else ""
 
 
 def _join_request_url(device_id):
@@ -4720,6 +4774,52 @@ def config_cmd(args):
     else:
         print("usage: hv config identity show|init  |  hv config confidence set <key> <value>  |  "
               "hv config quorum set <key> <value>")
+
+
+def _peer_status(url, local_root):
+    """Probe a peer's reachability + sync state via /sync/merkle-root. Returns a short label."""
+    if not url:
+        return "no advertised address"
+    try:
+        import requests
+    except Exception:
+        return "unknown (no 'requests')"
+    try:
+        rr = requests.get(url.rstrip("/") + "/sync/merkle-root", timeout=5)
+        rr.raise_for_status()
+        return "reachable · in sync" if rr.json().get("root_hash") == local_root else "reachable · diverged"
+    except Exception:
+        return "unreachable"
+
+
+def peers_cmd(args):
+    """List the hive's MEMBERS by device + principal + address + reachability. Authoritative: the
+    roster comes from the governance journal (admitted device_ids + their principals), and each
+    device's address from the join-request URL it advertised — NOT from the local .peers.json labels
+    (which can mislabel a peer by principal). Read-only; probes each peer's /sync/merkle-root."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    if not gov["owner_id"]:
+        print("No owner established yet — no hive members to list. (`hv owner init`, or sync a hive then `hv join`.)")
+        return
+    local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
+    rows = []
+    for d in sorted(gov["admitted"]):
+        prin = gov["principals"].get(d) or "?"
+        if d == NODE_ID:
+            addr, status = (_self_address() or "—"), "this device"
+        else:
+            url = _join_request_url(d)
+            addr = url.rstrip("/").replace("http://", "") if url else "(no advertised address)"
+            status = _peer_status(url, local_root)
+        rows.append((d, prin, addr, status))
+    wd = max((len(r[0]) for r in rows), default=6)
+    wp = max([len(str(r[1])) for r in rows] + [len("PRINCIPAL")])
+    wa = max([len(r[2]) for r in rows] + [len("ADDRESS")])
+    print(f"hive {gov['hive_id']} — owner {gov['owner_id']}  ({len(rows)} admitted device(s))")
+    print(f"  {'DEVICE'.ljust(wd)}  {'PRINCIPAL'.ljust(wp)}  {'ADDRESS'.ljust(wa)}  STATUS")
+    for d, prin, addr, status in rows:
+        print(f"  {d.ljust(wd)}  {str(prin).ljust(wp)}  {addr.ljust(wa)}  {status}")
 
 
 def discover_cmd(args):
@@ -5191,6 +5291,7 @@ def build_parser():
     subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
     subparsers.add_parser("whoami", help="Show this device's identity + membership status (sterile/fertile/owner)")
+    subparsers.add_parser("peers", help="List hive members by device + principal + address + reachability")
 
     doctor_parser = subparsers.add_parser("doctor", help="Health checks + device maintenance (rebuild, merkle, migrate-identity)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -5427,6 +5528,8 @@ def main():
         telemetry_cmd(args)
     elif args.command == "whoami":
         whoami_cmd(args)
+    elif args.command == "peers":
+        peers_cmd(args)
     else:
         parser.print_help()
 

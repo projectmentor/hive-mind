@@ -43,6 +43,11 @@ case ":$PATH:" in *":$HOME/.local/bin:"*) BIN_ON_PATH=1 ;; *) BIN_ON_PATH="" ;; 
 _SVCLIB="$HIVE_DIR/scripts/installer/_service.sh"
 if [ -f "$_SVCLIB" ]; then . "$_SVCLIB"; fi
 
+# Safe username. Termux does NOT export $USER, and this script runs `set -u`, so a
+# bare $USER (principal default, the SSH summary line) aborts with "unbound variable".
+# Resolve it once, with fallbacks that exist on Termux too.
+THIS_USER="${USER:-$(id -un 2>/dev/null || whoami 2>/dev/null || echo user)}"
+
 # ── colours ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[1;33m'; CYN='\033[0;36m'; BLD='\033[1m'; RST='\033[0m'
 ok()   { echo -e "${GRN}[ok]${RST}  $*"; }
@@ -91,10 +96,10 @@ elif [ -n "$IS_MAC" ]; then
   INIT_SYSTEM="launchd"
 elif command -v systemctl &>/dev/null; then
   INIT_SYSTEM="systemctl"
-  loginctl enable-linger "$USER" 2>/dev/null || true
+  loginctl enable-linger "$THIS_USER" 2>/dev/null || true
 elif [[ "$(ps -p 1 -o comm= 2>/dev/null | tr -d '[:space:]')" == "systemd" ]]; then
   INIT_SYSTEM="systemd"
-  loginctl enable-linger "$USER" 2>/dev/null || true
+  loginctl enable-linger "$THIS_USER" 2>/dev/null || true
 elif [ -d /etc/init.d ]; then
   INIT_SYSTEM="initd"
 fi
@@ -454,7 +459,7 @@ else
   [ -n "$HIVES_JSON" ] || HIVES_JSON='[]'
   HIVE_COUNT=$(printf '%s' "$HIVES_JSON" | python3 -c "import sys,json;print(len(json.loads(sys.stdin.read() or '[]')))" 2>/dev/null || echo 0)
 
-  CHOICE="n"
+  CHOICE="n"; SEED_HOST=""; SEED_PORT="9876"; JOIN_ATTEMPTED=""
   if [ "${HIVE_COUNT:-0}" -gt 0 ]; then
     echo ""
     echo "  Found $HIVE_COUNT hive(s) on your tailnet:"
@@ -466,28 +471,93 @@ for i,h in enumerate(json.loads(sys.stdin.read())):
     ask "Join which hive? (number, or 'n' for a new hive): "
     read -r CHOICE
   else
-    ok "No existing hive found on the tailnet."
+    # Nothing auto-discovered. On Android this is EXPECTED and permanent: `hv discover`
+    # enumerates the tailnet via the `tailscale` CLI, which Termux doesn't have (Tailscale
+    # is the phone's VPN app). Rather than silently start a brand-new hive (the wrong
+    # default for someone who meant to JOIN), offer to join by pasting an address — you
+    # only need ONE node of an existing hive to get in.
+    if [ -n "$IS_ANDROID" ]; then
+      info "No hive auto-discovered. (On Android, discovery can't scan the tailnet — Tailscale is the app, with no CLI in Termux.)"
+    else
+      info "No hive auto-discovered on the tailnet."
+    fi
+    if [ -t 0 ]; then
+      echo "  To JOIN your existing hive, paste its address below."
+      echo -e "  Get it by running  ${BLD}hive-mind invite${RST}  on a device that's already in the hive."
+      echo "  (Or just press Enter to start a NEW hive on this device.)"
+      _tries=0
+      while [ "$_tries" -lt 3 ]; do
+        ask "Hive address to join (paste, or Enter for a new hive): "
+        read -r _ADDR
+        [ -z "$_ADDR" ] && break        # explicit Enter → bootstrap a new hive
+        JOIN_ATTEMPTED=1
+        # Forgiving parse: accept IP, ip:port, name@ip:port, http://ip:port/..., or a host.
+        _PARSED=$(python3 -c "
+import sys,re
+s=sys.argv[1].strip()
+s=re.sub(r'^[a-zA-Z][a-zA-Z0-9+.-]*://','',s)   # strip scheme
+if '@' in s: s=s.split('@',1)[1]                # strip user@
+s=s.split('/',1)[0]                             # strip path
+host,port=s,'9876'
+if ':' in s: host,port=s.rsplit(':',1)
+host=host.strip(); port=(port.strip() or '9876')
+print(f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port.isdigit() else '')
+" "$_ADDR" 2>/dev/null)
+        SEED_HOST=$(echo "$_PARSED" | awk '{print $1}'); SEED_PORT=$(echo "$_PARSED" | awk '{print $2}')
+        SEED_PORT="${SEED_PORT:-9876}"
+        if [ -z "$SEED_HOST" ]; then
+          warn "Couldn't read an address from that. Paste just the line that 'hive-mind invite' prints."
+          _tries=$((_tries + 1)); continue
+        fi
+        info "Checking for a hive at $SEED_HOST:$SEED_PORT ..."
+        if curl -sf -m 8 "http://$SEED_HOST:${SEED_PORT}/hive/info" >/dev/null 2>&1; then
+          ok "Found a hive at $SEED_HOST:$SEED_PORT."
+          break
+        fi
+        warn "No hive answered at $SEED_HOST:$SEED_PORT — that device may be off, or it's a typo. Try again."
+        _tries=$((_tries + 1))   # keep SEED_HOST as the last candidate in case it's just temporarily down
+      done
+    fi
   fi
 
-  if [ "$CHOICE" = "n" ] || [ "$CHOICE" = "N" ] || [ -z "$CHOICE" ]; then
+  # Resolve the JOIN target: a pasted seed address wins; else a numbered discover choice.
+  PEER_IP=""; PEER_PORT="9876"
+  if [ -n "$SEED_HOST" ]; then
+    PEER_IP="$SEED_HOST"; PEER_PORT="$SEED_PORT"
+  elif [ "$CHOICE" != "n" ] && [ "$CHOICE" != "N" ] && [ -n "$CHOICE" ]; then
+    PEER=$(printf '%s' "$HIVES_JSON" | python3 -c "import sys,json;hs=json.loads(sys.stdin.read());i=int('$CHOICE')-1;h=hs[i];print(h['ip'],h['port'])" 2>/dev/null)
+    PEER_IP=$(echo "$PEER" | awk '{print $1}'); PEER_PORT=$(echo "$PEER" | awk '{print $2}')
+    [ -n "$PEER_IP" ] || die "Invalid choice '$CHOICE'."
+  fi
+
+  # A failed join attempt must NOT silently fall through to creating a new hive — that's
+  # exactly the trap that put a phone on its own island. Only an explicit Enter bootstraps.
+  if [ -z "$PEER_IP" ] && [ -n "$JOIN_ATTEMPTED" ]; then
+    die "Couldn't read a hive address to join. Run 'hive-mind invite' on a device already in your hive to get the exact line to paste, then re-run 'hive-mind install'. (Not starting a new hive, since you meant to join one.)"
+  fi
+
+  if [ -z "$PEER_IP" ]; then
     # ── Bootstrap: become the owner (queen bee) ──
     ask "Your name (principal tag for your devices): "
-    read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
+    read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$THIS_USER}"
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
     ./hv owner init >/dev/null && ok "New hive created — you are the queen bee!"
     ./hv group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
     ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
+    # Surface the invite right where a hive is born, so the owner knows exactly what to
+    # paste on their other devices to add them — no "how do I get the address?" round-trip.
+    if [ -f "$HIVE_DIR/scripts/installer/_invite.sh" ]; then
+      echo ""
+      HIVE_DIR="$HIVE_DIR" bash "$HIVE_DIR/scripts/installer/_invite.sh" 2>/dev/null || true
+    fi
   else
-    # ── Join: configure the chosen hive's node as a peer, sync, request admission ──
-    PEER=$(printf '%s' "$HIVES_JSON" | python3 -c "import sys,json;hs=json.loads(sys.stdin.read());i=int('$CHOICE')-1;h=hs[i];print(h['ip'],h['port'])" 2>/dev/null)
-    PEER_IP=$(echo "$PEER" | awk '{print $1}'); PEER_PORT=$(echo "$PEER" | awk '{print $2}')
-    [ -n "$PEER_IP" ] || die "Invalid choice '$CHOICE'."
+    # ── Join: configure the chosen/pasted hive node as a peer, sync, request admission ──
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[{'id':sys.argv[2].replace('.','-'),'url':'http://'+sys.argv[2]+':'+sys.argv[3]}]},open(sys.argv[4],'w'),indent=2)" "$THIS_DEVICE" "$PEER_IP" "$PEER_PORT" "$PEERS_FILE"
     ok "Peer configured: $PEER_IP:$PEER_PORT"
     info "Syncing the hive (pulling its journal + owner declaration)..."
     ./hv sync now >/dev/null 2>&1 || true
     ask "Your name (the principal you'd like to be admitted as): "
-    read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$USER}"
+    read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$THIS_USER}"
     ./hv join --principal "$PRINCIPAL" 2>/dev/null || true
     warn "You're syncing the hive but NOT yet admitted — your writes won't count until the owner admits you."
     echo "  Ask the hive's owner to run:  hv group admit $THIS_DEVICE --principal $PRINCIPAL"
@@ -702,8 +772,14 @@ echo "  Try:     hv stats   (health check: hv doctor)"
 [ -z "$BIN_ON_PATH" ] && \
   echo "           ↳ new terminals work automatically; for THIS shell once: source ~/.bashrc"
 echo ""
-echo "  SSH to this device from any peer:"
-echo "    tailscale ssh ${USER}@${THIS_IP}"
+if [ -n "$IS_ANDROID" ]; then
+  echo "  Add another device to this hive:"
+  echo "    hive-mind invite      (prints the address to paste during its install)"
+else
+  echo "  SSH to this device from any peer:"
+  echo "    tailscale ssh ${THIS_USER}@${THIS_IP}"
+  echo "  Add another device to this hive:  hive-mind invite"
+fi
 echo ""
 
 if [ -f "$PEERS_FILE" ]; then

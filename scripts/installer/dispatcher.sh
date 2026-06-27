@@ -31,6 +31,7 @@ case "$CMD" in
   install)   exec bash "$INSTALLER/_install_node.sh" "$@" ;;
   update)    exec bash "$INSTALLER/_update.sh"       "$@" ;;
   status)    exec bash "$INSTALLER/_status.sh"       "$@" ;;
+  invite)    exec bash "$INSTALLER/_invite.sh"       "$@" ;;
   uninstall) exec bash "$INSTALLER/_uninstall.sh"    "$@" ;;
   *)
     echo "Usage: hive-mind <subcommand>"
@@ -39,6 +40,7 @@ case "$CMD" in
     echo "  install      Set up this device from scratch"
     echo "  update       Pull latest + restart daemon"
     echo "  status       Show device health and peer sync state"
+    echo "  invite       Print the address to paste on a new device to join this hive"
     echo "  uninstall    Remove HiveMind from this device (--keep-hive to keep your data)"
     echo ""
     ;;

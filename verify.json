@@ -1,5 +1,5 @@
 {
-  "digest": "c975bb943d8d174d589708397d91e082401fb7803dee93279c219431c04facd2",
+  "digest": "9de0fb38f0e059eb720650ea4cf636a92e598d17fe8b05155658f6df730cb7f8",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -23,7 +23,7 @@
     "docs/CLI_REFERENCE.md": "7aec908bee8810d77a7864668f4d127757c0a9e3f15d0890ef5dc8143d2560bd",
     "docs/HV_ARCHITECTURE.md": "767a440683dd04d59b1b47f0a2f4f6a9c15173dbaf187d9c793b6a866327b552",
     "docs/INTERNALS.md": "54da83b3ae2e29967b3a9f6676af186bf9fe2deb46fe39433714fe0d4a0366be",
-    "docs/P2P_DESIGN.md": "98814aa2094e4b9abaae8f27febe3d92b8035379654b148e3e8345c306a9075e",
+    "docs/P2P_DESIGN.md": "933781919e2ad7693bc92a8457cb867e03c6229d253a23129ac7a8b314cb8f31",
     "docs/SYNC_API.md": "1a6d1cbae277a0d997ee4d1db8afd4e3ab5637f725c0b99d9d568d743081a9d5",
     "docs/THREAT_MODEL.md": "22af29f3159f33155fecd1549b7a6ba12aa0a25fda67d9d846fc580e42ef4c12",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
@@ -48,7 +48,7 @@
     "scripts/common/nudge_hook.sh": "cfe1b887835c0390fca615845b0e6b4437e27aec124e5367a354a774dd250bad",
     "scripts/common/session_hook.sh": "ed8880743eb24514bfa61a3c20c2ebb333a2bc250d9d0a59599444d9a733a8d4",
     "scripts/common/sign_release.py": "8f795fb9f9c484096623b238bab060d0a8b41105937cb806cb632c4f2e5d612c",
-    "scripts/common/smoke.sh": "98c29b17c84f54f95fca6e15638b7d6042d419977d2e4f89b7aeecb6dfbd7109",
+    "scripts/common/smoke.sh": "764cf5d31576deb96c1feb3c8e3fe37f615ce975fc4359d222bf4fc78b2dc7aa",
     "scripts/common/sync_smoke.sh": "5031d357411b868a81b47771259c2ba8095a74e9cebbac9d8c6cd9d9aa2444f9",
     "scripts/installer/_identity.sh": "034ef4599c778fddf593544cf5b409a7b37a980e099fee34decaf102aaedf575",
     "scripts/installer/_install_node.sh": "65bd39c8bfdbdc4690e128c9d3510547cd05331a68f3846249bad139e33f94cd",
@@ -78,7 +78,7 @@
     "tests/test_group.py": "2cd725336a6328a738ee631267ec1f4cd9a2cdc72512deb9787d9419fff3d93a",
     "tests/test_hardening_batch2.py": "780ac325406fdc99c47509374d518f3a34fcb28673793cd7c92d2bf02e45545d",
     "tests/test_hermes_plugin.py": "53edea0986fda9e583a485afd631b3e2d51dff7eef55cf661ce6b54514e46744",
-    "tests/test_hv.py": "708b6985bf151c424c2a0996cf32258c1e686869061c95d4c2f8f684a89d0d09",
+    "tests/test_hv.py": "4983cb3f159d1f10b1c0a98106c644ebb91f062cece15c0ccf78fb992b3321e2",
     "tests/test_keep_identity.py": "cd52f58d33e9c431221e2d3534dae26e0fcaa126f33859cc3010a9e9d0a117b4",
     "tests/test_keyperm.py": "b8373497951c311648d4230925e0fc7f611cb03ac8d2395d4968ef3e5150b411",
     "tests/test_mcp_parity.py": "8b1ff346c6ba48bb19bc4bf950a8c5d267408d143e699aac01e1ac6e4ca82f8b",

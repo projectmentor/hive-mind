@@ -155,8 +155,112 @@ def hive_stats() -> str:
 
 
 @mcp.tool()
+def hive_retract(fact_id: int, reason: str = "") -> str:
+    """Record SOFT negative evidence against a fact (a reversible soft-forget), source=claude-ai.
+
+    Use when you find a fact is wrong or stale and want to down-weight it without destroying it.
+    This is deliberate, reversible negative evidence — NOT a deletion. The decisive owner-forget
+    (`hv retract --owner`) is intentionally NOT exposed here; it stays a CLI/owner action.
+
+    Prefer `hive_remember(..., )` with a prose `resolves #<id>` when you are replacing the fact with
+    a correction; use this when you just want to retract.
+    """
+    args = ["retract", str(fact_id), "--source", "claude-ai"]
+    if reason:
+        args += ["--reason", reason]
+    return _run_hv(args)
+
+
+@mcp.tool()
+def hive_entity(action: str, name: str = "", type: str = "", attr: str = "",
+                fact_id: int | None = None, confidence: float | None = None) -> str:
+    """Manage entities (people, projects, concepts) and link facts to them.
+
+    action:
+    - "list"  — list known entities.
+    - "show"  — show one entity and its linked facts (pass name).
+    - "add"   — create/upsert an entity (pass name, optional type, optional attr as a JSON string).
+    - "link"  — attach a fact to an entity (pass name + fact_id, optional confidence).
+
+    Entities are the corpus's nouns; linking facts to them makes recall by subject reliable.
+    """
+    args = ["entity", action]
+    if name:
+        args += ["--name", name]
+    if type:
+        args += ["--type", type]
+    if attr:
+        args += ["--attr", attr]
+    if fact_id is not None:
+        args += ["--fact-id", str(fact_id)]
+    if confidence is not None:
+        args += ["--confidence", str(confidence)]
+    return _run_hv(args)
+
+
+@mcp.tool()
+def hive_whoami() -> str:
+    """Show THIS device's identity and membership status (sterile / fertile / owner).
+
+    Read-only. Tells you whether this node can write to a governed hive yet, who the owner is, and
+    this device's fingerprint — useful when a write is rejected or sync isn't converging.
+    """
+    return _run_hv(["whoami"])
+
+
+@mcp.tool()
+def hive_members() -> str:
+    """List the hive's admitted devices (read-only view of `hv group list`).
+
+    The mutating membership/governance verbs (admit/revoke/deny/change/purge) and owner/key/capsule
+    operations are owner-level and intentionally CLI-only — they are not exposed over MCP.
+    """
+    return _run_hv(["group", "list"])
+
+
+@mcp.tool()
+def hive_discover(format: str = "text") -> str:
+    """Scan the tailnet for reachable hives (Tailscale + /hive/info probe). Read-only.
+
+    format: text|json. Use to find peers before joining/configuring sync.
+    """
+    return _run_hv(["discover", "--format", format], timeout=60)
+
+
+@mcp.tool()
+def hive_verify() -> str:
+    """Verify this is the official, untampered HiveMind (checks the signed source manifest). Read-only."""
+    return _run_hv(["verify"])
+
+
+@mcp.tool()
+def hive_version() -> str:
+    """Print the hv contract version (SemVer). Read-only — handy to confirm feature parity."""
+    return _run_hv(["version"])
+
+
+@mcp.tool()
+def hive_telemetry_report(view: str = "report", since: str = "") -> str:
+    """Read the LOCAL-ONLY session telemetry (observability, never corpus/sync data). Read-only.
+
+    view="report" aggregates usage (optionally windowed by `since`, e.g. "7d", "24h");
+    view="list" shows recent raw session records. This is pure observability — it is NOT knowledge.
+    """
+    if view == "list":
+        return _run_hv(["telemetry", "list"])
+    args = ["telemetry", "report"]
+    if since:
+        args += ["--since", since]
+    return _run_hv(args)
+
+
+@mcp.tool()
 def hive_sync() -> str:
-    """Trigger a peer sync round now (hv sync now). Normally the daemon handles this."""
+    """Trigger a peer sync round now (hv sync now). Normally the daemon handles this.
+
+    (The long-running `hv sync daemon` is intentionally not exposed — it blocks forever and is the
+    installed service's job, not an MCP call.)
+    """
     return _run_hv(["sync", "now"], timeout=60)
 
 

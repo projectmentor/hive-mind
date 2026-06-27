@@ -778,14 +778,17 @@ This file is not synced to git — it's specific to each machine.
 ./hv sync daemon
 
 # Check background service status
+sv status hive-sync                                        # Android (Termux)
 systemctl --user status hive-sync                          # Linux / WSL
 launchctl print gui/$(id -u)/com.projectmentor.hive-sync   # macOS
 
 # Watch sync logs live
+tail -f ~/.hive-mind/logs/hive-sync.log                    # Android (Termux)
 journalctl --user -u hive-sync -f                          # Linux / WSL
 tail -f ~/Library/Logs/hive-mind/hive-sync.log             # macOS
 
 # Restart the background service (e.g. after editing peers.json)
+sv restart hive-sync                                                 # Android (Termux)
 systemctl --user restart hive-sync                                   # Linux / WSL
 launchctl kickstart -k gui/$(id -u)/com.projectmentor.hive-sync      # macOS
 ```

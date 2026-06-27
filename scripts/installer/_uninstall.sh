@@ -73,6 +73,18 @@ if [ "$(uname -s)" = "Darwin" ]; then
     rm -f "$HOME/Library/LaunchAgents/com.projectmentor.$_l.plist"
   done
   [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "sync_daemon.py" 2>/dev/null || true
+elif [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ] || [ -d /data/data/com.termux ]; then
+  # Android/Termux runit: stop + disable both services, remove their dirs + the
+  # Termux:Boot entrypoint. Inlined (like the macOS arm) so uninstall stays
+  # self-contained and need not source the supervisor backend.
+  _RUNIT_SVC_DIR="${PREFIX:-/data/data/com.termux/files/usr}/var/service"
+  for _l in hive-sync hive-doctor; do
+    sv down "$_l"    2>/dev/null || true
+    sv-disable "$_l" 2>/dev/null || true
+    rm -rf "$_RUNIT_SVC_DIR/$_l"
+  done
+  rm -f "$HOME/.termux/boot/start-hive-mind"
+  [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "sync_daemon.py" 2>/dev/null || true
 else
   systemctl --user disable --now hive-doctor.timer 2>/dev/null || true
   systemctl --user stop hive-doctor.service        2>/dev/null || true
@@ -124,6 +136,7 @@ PY
 fi
 rm -rf "$HOME/.claude/skills/hive-memory" 2>/dev/null || true
 rm -f /tmp/hive-sync.log 2>/dev/null || true
+rm -rf "$HOME/.hive-mind/logs" 2>/dev/null || true   # Android/Termux daemon logs
 
 # ── 4. Identity + Hive data ──────────────────────────────────────────────────
 # Preserve the device IDENTITY (to the stable stash) whenever the user asked to keep anything, so

@@ -46,11 +46,14 @@ echo -e "${BLD}hive-mind installer${RST}"
 echo "────────────────────────────────────────────"
 echo ""
 
-# ── guard: supported OS (Linux native, WSL2 on Windows 11, or macOS) ────────
+# ── guard: supported OS (Linux native, WSL2 on Windows 11, macOS, Android/Termux) ──
+# Android/Termux reports `uname -s`=Linux, so it falls through the permissive Linux
+# arm here; `hive-mind install` (_install_node.sh) then detects Termux and branches
+# the supervisor (termux-services/runit) + deps (pkg/pip). git/bash come from `pkg`.
 case "$(uname -s)" in
-  Linux)  : ;;   # native Linux, or WSL2 on Windows 11 — both fine
+  Linux)  : ;;   # native Linux, WSL2 on Windows 11, or Android/Termux — all fine
   Darwin) : ;;   # macOS
-  *)      die "Unsupported OS: $(uname -s). HiveMind supports Linux, WSL2, and macOS." ;;
+  *)      die "Unsupported OS: $(uname -s). HiveMind supports Linux, WSL2, macOS, and Android (Termux)." ;;
 esac
 
 # ── 1. ensure ~/.local/bin exists and is on PATH ───────────────────────────

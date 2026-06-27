@@ -522,7 +522,7 @@ if [[ "$INIT_SYSTEM" == "launchd" ]]; then
 
 elif [[ "$INIT_SYSTEM" == "runit" ]]; then
   # Android/Termux: runit services hive-sync (runsvdir respawn) + hive-doctor
-  # (15-min loop), plus a Termux:Boot entrypoint. See scripts/installer/_runit.sh.
+  # (15-min loop), plus a Termux:Boot entrypoint. See scripts/platform/termux/_runit.sh.
   if command -v runit_install >/dev/null 2>&1 && command -v sv >/dev/null 2>&1; then
     runit_install "$HIVE_DIR" "$SERVICE_NAME" \
       && ok "runit services installed: hive-sync (keep-alive) + hive-doctor (15-min loop)" \
@@ -537,7 +537,7 @@ elif [[ "$INIT_SYSTEM" == "runit" ]]; then
   fi
 
 elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
-  # Hardened daemon unit + self-heal timer (see scripts/installer/_units.sh).
+  # Hardened daemon unit + self-heal timer (see scripts/platform/linux/_units.sh).
   write_systemd_units "$HIVE_DIR" "$SERVICE_NAME"
   ok "systemd units installed: hive-sync.service (hardened) + hive-doctor.timer"
 

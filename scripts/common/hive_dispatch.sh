@@ -14,7 +14,7 @@
 # Usage (from settings.json):  hive_dispatch.sh {session-start|user-prompt|precompact|sessionend}
 
 event="${1:-}"
-SCRIPTS="${HIVE_HOME:-$HOME/projects/hive-mind}/scripts"
+SCRIPTS="${HIVE_HOME:-$HOME/projects/hive-mind}/scripts/common"
 payload="$(cat 2>/dev/null)"   # consume the hook's stdin once; each behavior gets its own copy
 
 # run <script> [args...] — feed the captured payload on stdin, let stdout pass through to the model,

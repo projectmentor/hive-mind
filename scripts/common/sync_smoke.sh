@@ -12,7 +12,7 @@
 #
 set -uo pipefail
 
-PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HV="$PROJECT/hv"
 cd "$PROJECT"
 

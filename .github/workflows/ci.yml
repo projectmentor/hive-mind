@@ -39,7 +39,7 @@ jobs:
           ln -s "$PWD/scripts/installer/dispatcher.sh" /tmp/hive-mind
           /tmp/hive-mind help | grep -q 'Subcommands'
       - name: launchd plists render + plutil -lint
-        run: bash scripts/installer/_launchd.sh --render-test
+        run: bash scripts/platform/macos/_launchd.sh --render-test
       - name: sync daemon answers on :9876 natively
         run: |
           HIVE_HOME="$PWD" python3 ./hv rebuild >/dev/null 2>&1 || true
@@ -75,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: runit run/boot scripts render + sh -n lint
-        run: bash scripts/installer/_runit.sh --render-test
+        run: bash scripts/platform/termux/_runit.sh --render-test
       - name: _service_kind resolves to runit under a Termux environment
         run: TERMUX_VERSION=1 bash -c '. scripts/installer/_service.sh; [ "$(_service_kind)" = runit ] && type runit_install >/dev/null'
       - name: _service_kind stays systemd on an ordinary Linux runner (no regression)

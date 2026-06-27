@@ -14,6 +14,8 @@ Endpoints:
 
 import errno
 import json
+import os
+import socket
 import threading
 import time
 import urllib.request
@@ -40,6 +42,27 @@ _ingest_lock = threading.Lock()
 MAX_BODY_BYTES = 32 * 1024 * 1024          # reject /sync/ingest bodies larger than this (413)
 SOCKET_TIMEOUT = 30                        # per-connection read timeout, seconds (slow-loris guard)
 MAX_CONCURRENT_REQUESTS = 32               # in-flight handlers; excess → 503 (thread-exhaustion guard)
+
+# ── path-MTU resilience ──────────────────────────────────────────────────────────────────────
+# Many tailnets ride an underlay whose effective path MTU is BELOW Tailscale's default 1280, which
+# silently blackholes full-size packets: a small response (/sync/hello) passes, but a multi-KB
+# /sync/chunk stalls until the read timeout and the peers never converge. Clamping the outgoing TCP
+# segment size keeps every segment under that ceiling, so sync works on the DEFAULT Tailscale MTU
+# with NO per-node `ip link` / MTU tweaks. Override (or disable with 0) via HIVE_SYNC_MAXSEG.
+SYNC_MAX_SEG = int(os.environ.get("HIVE_SYNC_MAXSEG", "1000"))
+
+
+def _clamp_mss(sock):
+    """Best-effort: cap a socket's outgoing TCP segment size to SYNC_MAX_SEG. No-op when disabled
+    or unsupported (e.g. a platform without TCP_MAXSEG)."""
+    if SYNC_MAX_SEG <= 0 or not hasattr(socket, "TCP_MAXSEG"):
+        return
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_MAXSEG, SYNC_MAX_SEG)
+    except OSError:
+        pass
+
+
 RATE_BUCKET_CAPACITY = 256                 # per-peer token bucket burst (generous: a full chunked
 RATE_REFILL_PER_SEC = 64                   #   sync is bursty — these throttle abuse, not real sync)
 
@@ -88,6 +111,7 @@ class Handler(BaseHTTPRequestHandler):
             self.connection.settimeout(SOCKET_TIMEOUT)
         except Exception:
             pass
+        _clamp_mss(self.connection)      # keep responses under a sub-1280-MTU tailnet ceiling
 
     def log_message(self, fmt, *args):  # keep the daemon quiet; errors go to do_*
         pass
@@ -248,6 +272,7 @@ def make_server(bind=None, port=None):
     for p in range(base, base + 5):
         try:
             srv = ThreadingHTTPServer((bind, p), Handler)
+            _clamp_mss(srv.socket)   # accepted connections inherit the clamped MSS (Linux)
             if p != base:
                 print(f"sync daemon: :{base} is held by a non-hive service; using :{p}")
                 _persist_port(p)

@@ -28,6 +28,17 @@ def test_two_node_convergence():
     assert r.returncode == 0, f"sync_smoke.sh failed:\n{r.stdout}\n{r.stderr}"
 
 
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
+def test_two_node_convergence_under_aggressive_pagination():
+    # Path-MTU resilience: force 1-entry PULL/PUSH pages and a tiny TCP MSS clamp. These change
+    # only the transport granularity (smaller requests, smaller segments) — the G-Set union result
+    # must be byte-identical, so the same harness must still converge. Guards against pagination or
+    # the MSS clamp accidentally dropping/duplicating entries.
+    env = dict(os.environ, HIVE_SYNC_PULL_PAGE="1", HIVE_SYNC_PUSH_PAGE="1", HIVE_SYNC_MAXSEG="600")
+    r = subprocess.run([str(SMOKE)], capture_output=True, text=True, env=env)
+    assert r.returncode == 0, f"sync_smoke.sh under pagination/clamp failed:\n{r.stdout}\n{r.stderr}"
+
+
 def _free_port():
     s = socket.socket()
     s.bind(("127.0.0.1", 0))

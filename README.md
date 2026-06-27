@@ -102,6 +102,13 @@ Connect the Tailscale Android app before syncing. A phone behind Tailscale's use
 can't accept inbound connections, but it doesn't need to: it converges by syncing outbound
 every 5 minutes.
 
+**Joining an existing hive from the phone.** Android has no `tailscale` CLI (Tailscale is the
+app), so the installer can't auto-discover hives on the tailnet. Instead, on a device that's
+already in the hive run `hive-mind invite` — it prints one line (that device's Tailscale
+address). Paste it when the phone's `hive-mind install` asks for a hive address. You only need
+one node to join; everything else syncs from there. Then admit the phone from the owner:
+`hv group admit <phone-device-id> --principal <you>`.
+
 </details>
 
 <details>

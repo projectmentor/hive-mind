@@ -82,3 +82,34 @@ jobs:
         run: bash -c '. scripts/installer/_service.sh; [ "$(_service_kind)" = systemd ]'
       - name: runit_uninstall is idempotent
         run: TERMUX_VERSION=1 bash -c '. scripts/installer/_service.sh; runit_uninstall hive-sync; runit_uninstall hive-sync'
+      - name: installer scripts lint clean (bash -n)
+        run: |
+          for f in install.sh _install_node.sh _service.sh _invite.sh _uninstall.sh _update.sh _status.sh dispatcher.sh; do
+            bash -n "scripts/installer/$f"
+          done
+          # Per-OS service backends now live under scripts/platform/<os>/ (see scripts/README.md).
+          for f in scripts/platform/linux/_units.sh scripts/platform/macos/_launchd.sh scripts/platform/termux/_runit.sh; do
+            bash -n "$f"
+          done
+      - name: hive-mind invite runs + dispatcher routes it
+        run: |
+          bash scripts/installer/_invite.sh >/dev/null          # exits 0 even with no tailscale (warns)
+          bash scripts/installer/dispatcher.sh help | grep -q 'invite'
+      - name: seed-address parser strips scheme/user/path, rejects junk
+        run: |
+          python3 - <<'PY'
+          import re
+          def parse(s):
+              s=s.strip(); s=re.sub(r'^[a-zA-Z][a-zA-Z0-9+.-]*://','',s)
+              if '@' in s: s=s.split('@',1)[1]
+              s=s.split('/',1)[0]; host,port=s,'9876'
+              if ':' in s: host,port=s.rsplit(':',1)
+              host=host.strip(); port=(port.strip() or '9876')
+              return f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+$',host) and port.isdigit() else ''
+          assert parse('100.84.84.100')=='100.84.84.100 9876'
+          assert parse('david@100.84.84.100:9876')=='100.84.84.100 9876'
+          assert parse('http://100.84.84.100:9876/sync')=='100.84.84.100 9876'
+          assert parse('garbage here')==''
+          assert parse('')==''
+          print('seed-parse OK')
+          PY

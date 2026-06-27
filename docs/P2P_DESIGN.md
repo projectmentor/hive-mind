@@ -170,7 +170,7 @@ GET /hive/info   (discovery; never returns the journal)
 
 **Implementation:** Python stdlib `http.server` (`ThreadingHTTPServer` +
 `BaseHTTPRequestHandler`), synchronous, 5 endpoints — no FastAPI dependency.
-Runs on Tailscale interface only (port 9876). See `sync_daemon.py`.
+Runs on Tailscale interface only (port 9876). See `hive_sync_daemon.py`.
 
 ---
 
@@ -318,7 +318,7 @@ Bundle Python CLI into single binary.
 
 ## 10. Appendix: Sync Daemon Sketch
 
-The shipped implementation lives in `sync_daemon.py` and uses the Python stdlib
+The shipped implementation lives in `hive_sync_daemon.py` and uses the Python stdlib
 `http.server` (`ThreadingHTTPServer` + `BaseHTTPRequestHandler`) — synchronous,
 no FastAPI/uvicorn dependency. A `Handler` dispatches on `self.path`:
 

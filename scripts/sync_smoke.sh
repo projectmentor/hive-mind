@@ -66,8 +66,8 @@ env $EA HIVE_NODE_ID=nodeY "$HV" retract "$RFID" --source peerY >/dev/null
 env $EA HIVE_NODE_ID=nodeZ "$HV" retract "$RFID" --source peerZ >/dev/null
 
 # Start both daemons (serve-only).
-env $EA python3 -c "import sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
-env $EB python3 -c "import sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DB=$!
+env $EA python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
+env $EB python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DB=$!
 
 # Wait for readiness via curl retry (no sleep).
 curl -sf --retry 50 --retry-connrefused --retry-delay 0 "http://127.0.0.1:$PA/sync/merkle-root" >/dev/null || { no "daemon A failed to start"; exit 1; }

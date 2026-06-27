@@ -19,9 +19,9 @@
 write_systemd_units() {
   local hive_dir="$1" svc="${2:-hive-sync}"
 
-  # A wrong/empty hive_dir would write a broken ExecStart (e.g. /sync_daemon.py).
-  if [ -z "$hive_dir" ] || [ ! -f "$hive_dir/sync_daemon.py" ]; then
-    echo "write_systemd_units: invalid hive_dir '$hive_dir' (no sync_daemon.py)" >&2
+  # A wrong/empty hive_dir would write a broken ExecStart (e.g. /hive_sync_daemon.py).
+  if [ -z "$hive_dir" ] || [ ! -f "$hive_dir/hive_sync_daemon.py" ]; then
+    echo "write_systemd_units: invalid hive_dir '$hive_dir' (no hive_sync_daemon.py)" >&2
     return 1
   fi
 
@@ -38,7 +38,7 @@ write_systemd_units() {
   # systemd has already torn down its own control-group, and the new process has
   # not forked yet, so this only ever hits true orphans. Frees port 9876 for the
   # canonical daemon. The pattern is anchored to the python interpreter running
-  # sync_daemon.py (how every launch path starts it) so it can't match an editor,
+  # hive_sync_daemon.py (how every launch path starts it) so it can't match an editor,
   # tail, or grep that merely mentions the filename. KillMode=control-group reaps
   # the whole tree (no zombies). Restart=always + a generous StartLimit keep it up
   # without a tight crash loop.
@@ -52,8 +52,8 @@ StartLimitBurst=20
 [Service]
 Type=simple
 WorkingDirectory=$hive_dir
-ExecStartPre=-/usr/bin/pkill -f python3.*sync_daemon.py
-ExecStart=/usr/bin/python3 $hive_dir/sync_daemon.py
+ExecStartPre=-/usr/bin/pkill -f python3.*hive_sync_daemon.py
+ExecStart=/usr/bin/python3 $hive_dir/hive_sync_daemon.py
 Restart=always
 RestartSec=5
 KillMode=control-group

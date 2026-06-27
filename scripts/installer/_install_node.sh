@@ -532,8 +532,8 @@ elif [[ "$INIT_SYSTEM" == "runit" ]]; then
     # still syncs; Termux:Boot (if installed) re-launches it on reboot.
     warn "termux-services (sv) unavailable — falling back to a nohup keep-alive (no auto-respawn)."
     mkdir -p "$HOME/.hive-mind/logs"
-    pkill -f sync_daemon.py 2>/dev/null || true
-    nohup python3 "$HIVE_DIR/sync_daemon.py" >> "$HOME/.hive-mind/logs/hive-sync.log" 2>&1 &
+    pkill -f hive_sync_daemon.py 2>/dev/null || true
+    nohup python3 "$HIVE_DIR/hive_sync_daemon.py" >> "$HOME/.hive-mind/logs/hive-sync.log" 2>&1 &
   fi
 
 elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
@@ -554,8 +554,8 @@ elif [[ "$INIT_SYSTEM" == "initd" ]]; then
 ### END INIT INFO
 HIVE_HOME=$HIVE_DIR
 case "\$1" in
-  start) nohup /usr/bin/python3 $HIVE_DIR/sync_daemon.py >> /tmp/hive-sync.log 2>&1 & ;;
-  stop)  pkill -f sync_daemon.py || true ;;
+  start) nohup /usr/bin/python3 $HIVE_DIR/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1 & ;;
+  stop)  pkill -f hive_sync_daemon.py || true ;;
   restart) \$0 stop; \$0 start ;;
 esac
 INITD
@@ -564,7 +564,7 @@ INITD
   ok "init.d service installed: $INITD_SCRIPT"
 
 else
-  CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/sync_daemon.py >> /tmp/hive-sync.log 2>&1"
+  CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1"
   ( crontab -l 2>/dev/null | grep -v "sync_daemon"; echo "$CRON_LINE" ) | crontab -
   ok "@reboot cron entry installed (fallback)"
 fi
@@ -585,8 +585,8 @@ elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
 elif [[ "$INIT_SYSTEM" == "initd" ]]; then
   sudo /etc/init.d/$SERVICE_NAME restart
 else
-  pkill -f sync_daemon.py 2>/dev/null || true
-  nohup python3 "$HIVE_DIR/sync_daemon.py" >> /tmp/hive-sync.log 2>&1 &
+  pkill -f hive_sync_daemon.py 2>/dev/null || true
+  nohup python3 "$HIVE_DIR/hive_sync_daemon.py" >> /tmp/hive-sync.log 2>&1 &
 fi
 sleep 2
 

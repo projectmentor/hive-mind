@@ -1,13 +1,13 @@
 # HiveMind Sync API Reference
 
-The sync daemon (`sync_daemon.py`) exposes a minimal JSON/HTTP API on port
+The sync daemon (`hive_sync_daemon.py`) exposes a minimal JSON/HTTP API on port
 `:9876` (default). All endpoints are unauthenticated — transport security is
 provided by Tailscale (WireGuard). Only admit Tailscale peers.
 
 Start the daemon:
 ```bash
 ./hv sync daemon          # serve + periodic outbound sync (every 5 min)
-python3 sync_daemon.py    # same, direct
+python3 hive_sync_daemon.py    # same, direct
 ```
 
 ---

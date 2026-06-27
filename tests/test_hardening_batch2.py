@@ -23,7 +23,7 @@ import merkle        # noqa: E402
 
 
 def _load(name, home, monkeypatch, **env):
-    """Load a fresh copy of `name` ('hv' or 'sync_daemon') with HIVE_HOME (+ extra env) set first —
+    """Load a fresh copy of `name` ('hv' or 'hive_sync_daemon') with HIVE_HOME (+ extra env) set first —
     NODE_ID / DEVICE_KEY_PATH are resolved at import, so env must be in place before exec."""
     monkeypatch.setenv("HIVE_HOME", str(home))
     for k, v in env.items():
@@ -38,7 +38,7 @@ def _load(name, home, monkeypatch, **env):
 
 # ── P1-6: rate limiter ────────────────────────────────────────────────────────────────────────
 def test_rate_limiter_burst_then_deny(tmp_path, monkeypatch):
-    sd = _load("sync_daemon", tmp_path, monkeypatch)
+    sd = _load("hive_sync_daemon", tmp_path, monkeypatch)
     rl = sd._RateLimiter(capacity=3, refill_per_sec=0)   # no refill → deterministic burst test
     assert [rl.allow("1.2.3.4") for _ in range(3)] == [True, True, True]
     assert rl.allow("1.2.3.4") is False                  # bucket drained
@@ -53,7 +53,7 @@ def _free_port():
 
 
 def test_oversized_post_rejected_413(tmp_path, monkeypatch):
-    sd = _load("sync_daemon", tmp_path, monkeypatch)
+    sd = _load("hive_sync_daemon", tmp_path, monkeypatch)
     monkeypatch.setattr(sd, "MAX_BODY_BYTES", 100)       # shrink the cap so the test body is tiny
     server, _bind, port = sd.make_server(bind="127.0.0.1", port=_free_port())
     t = threading.Thread(target=server.serve_forever, daemon=True)

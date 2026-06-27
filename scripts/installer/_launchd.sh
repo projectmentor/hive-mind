@@ -46,8 +46,8 @@ _resolve_tailscale() {
 # Split out from launchd_install so tests/CI can render + lint without a GUI domain.
 _launchd_render() {
   local hive_dir="$1" py plist
-  if [ -z "$hive_dir" ] || [ ! -f "$hive_dir/sync_daemon.py" ]; then
-    echo "_launchd_render: invalid hive_dir '$hive_dir' (no sync_daemon.py)" >&2
+  if [ -z "$hive_dir" ] || [ ! -f "$hive_dir/hive_sync_daemon.py" ]; then
+    echo "_launchd_render: invalid hive_dir '$hive_dir' (no hive_sync_daemon.py)" >&2
     return 1
   fi
   py="$(_launchd_python3)"
@@ -64,7 +64,7 @@ _launchd_render() {
   <key>ProgramArguments</key>
   <array>
     <string>$py</string>
-    <string>$hive_dir/sync_daemon.py</string>
+    <string>$hive_dir/hive_sync_daemon.py</string>
   </array>
   <key>WorkingDirectory</key><string>$hive_dir</string>
   <key>EnvironmentVariables</key>

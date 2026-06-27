@@ -42,7 +42,7 @@ def test_launchd_renders_well_formed_plists(tmp_path):
     assert sync["RunAtLoad"] is True
     assert sync["KeepAlive"] is True          # ≙ systemd Restart=always
     assert sync["ThrottleInterval"] == 5      # ≙ RestartSec=5
-    assert sync["ProgramArguments"][-1].endswith("/sync_daemon.py")
+    assert sync["ProgramArguments"][-1].endswith("/hive_sync_daemon.py")
     assert sync["EnvironmentVariables"]["HIVE_HOME"] == str(REPO)
 
     doctor = plistlib.loads((agents / "com.projectmentor.hive-doctor.plist").read_bytes())
@@ -51,10 +51,10 @@ def test_launchd_renders_well_formed_plists(tmp_path):
 
 
 def test_launchd_render_rejects_bad_hive_dir(tmp_path):
-    """A hive_dir without sync_daemon.py must fail loudly rather than write a broken plist."""
+    """A hive_dir without hive_sync_daemon.py must fail loudly rather than write a broken plist."""
     r = _bash(f'. "{LAUNCHD}"; _launchd_render "{tmp_path}"')
     assert r.returncode != 0
-    assert "no sync_daemon.py" in r.stderr
+    assert "no hive_sync_daemon.py" in r.stderr
 
 
 def test_service_kind_dispatch():

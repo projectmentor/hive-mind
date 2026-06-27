@@ -219,6 +219,17 @@ def hive_members() -> str:
 
 
 @mcp.tool()
+def hive_peers() -> str:
+    """List hive members by device + principal + address + reachability (read-only).
+
+    Authoritative roster from the governance journal, with each device's advertised address and a
+    live reachable/in-sync/diverged/unreachable probe — useful when sync isn't converging and you
+    need to see which device (not just which principal) is unreachable.
+    """
+    return _run_hv(["peers"], timeout=60)
+
+
+@mcp.tool()
 def hive_discover(format: str = "text") -> str:
     """Scan the tailnet for reachable hives (Tailscale + /hive/info probe). Read-only.
 

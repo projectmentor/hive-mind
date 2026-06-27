@@ -150,7 +150,7 @@ if [ "${BASH_SOURCE[0]:-x}" = "${0:-y}" ] && [ "${1:-}" = "--render-test" ]; the
   _tmp="$(mktemp -d)"
   _LAUNCHD_AGENTS_DIR="$_tmp/agents"
   _LAUNCHD_LOG_DIR="$_tmp/logs"
-  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
   _launchd_render "$_repo"
   for _f in "$_LAUNCHD_AGENTS_DIR"/*.plist; do
     echo "lint: $_f"

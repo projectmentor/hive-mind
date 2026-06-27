@@ -10,7 +10,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 loader = importlib.machinery.SourceFileLoader("hvmod", str(ROOT / "hv"))
 spec = importlib.util.spec_from_loader("hvmod", loader)
 hv = importlib.util.module_from_spec(spec)

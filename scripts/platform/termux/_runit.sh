@@ -153,7 +153,7 @@ if [ "${BASH_SOURCE[0]:-x}" = "${0:-y}" ] && [ "${1:-}" = "--render-test" ]; the
   _RUNIT_SERVICE_DIR="$_tmp/service"
   _RUNIT_LOG_DIR="$_tmp/logs"
   _RUNIT_BOOT_DIR="$_tmp/boot"
-  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
   _runit_render "$_repo"
   for _f in "$_RUNIT_SERVICE_DIR/hive-sync/run" "$_RUNIT_SERVICE_DIR/hive-doctor/run" \
             "$_RUNIT_BOOT_DIR/start-hive-mind"; do

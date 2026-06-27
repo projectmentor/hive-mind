@@ -5,7 +5,7 @@ name: Sign release manifest
 # the signed manifest exactly in step with the code on main, so a fresh `git clone` always passes
 # `hv verify`. Releasing is then just normal pushes — no manual signing step.
 #
-# One-time setup: run scripts/gen_keypair.py locally, commit hivemind.pub, publish it to the website,
+# One-time setup: run scripts/common/gen_keypair.py locally, commit hivemind.pub, publish it to the website,
 # and store the printed private key with:
 #   gh secret set HIVE_SIGNING_KEY --repo projectmentor/hive-mind --body '<base64 seed>'
 
@@ -43,7 +43,7 @@ jobs:
         run: pip install -r requirements.txt pytest   # sign_release.py's gate runs `python3 -m pytest`
 
       - name: Regenerate manifest
-        run: python3 scripts/gen_verify.py
+        run: python3 scripts/common/gen_verify.py
 
       - name: Sign and self-check
         env:
@@ -53,7 +53,7 @@ jobs:
             echo "HIVE_SIGNING_KEY not set yet — committing unsigned manifest only."
             exit 0
           fi
-          python3 scripts/sign_release.py
+          python3 scripts/common/sign_release.py
           if [ -f hivemind.pub ]; then
             HIVE_PUBKEY_URL="file://$PWD/hivemind.pub" ./hv verify | tee /tmp/v.txt
             grep -q '✓ Official' /tmp/v.txt

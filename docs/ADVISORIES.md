@@ -50,9 +50,9 @@ It is a normal, signed code change — no special command:
    `summary` (and an optional `id`).
 2. Bump the top-level `updated` date.
 3. Regenerate and re-sign the source manifest so `hv verify` stays green. On a push to `main` CI does
-   this automatically (`.github/workflows/sign.yml` runs `scripts/gen_verify.py` then
-   `scripts/sign_release.py`). To do it locally you need the release key:
-   `python3 scripts/gen_verify.py && HIVE_SIGNING_KEY=… python3 scripts/sign_release.py`.
+   this automatically (`.github/workflows/sign.yml` runs `scripts/common/gen_verify.py` then
+   `scripts/common/sign_release.py`). To do it locally you need the release key:
+   `python3 scripts/common/gen_verify.py && HIVE_SIGNING_KEY=… python3 scripts/common/sign_release.py`.
 4. Commit and push. Every node picks it up on its next `git pull` / `hive-mind update`, and the next
    `hv doctor` pass surfaces any high-severity crypto entry.
 

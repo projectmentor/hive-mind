@@ -19,9 +19,11 @@
 
 # Dir this file lives in — resolve so we can source siblings regardless of CWD.
 _SERVICE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+# Per-OS service backends live under scripts/platform/<os>/ (sibling of installer/).
+_PLATFORM_DIR="$(cd "$_SERVICE_LIB_DIR/../platform" && pwd)"
 
 # systemd unit writer (Linux) — always available; a no-op when no user systemd bus.
-if [ -f "$_SERVICE_LIB_DIR/_units.sh" ]; then . "$_SERVICE_LIB_DIR/_units.sh"; fi
+if [ -f "$_PLATFORM_DIR/linux/_units.sh" ]; then . "$_PLATFORM_DIR/linux/_units.sh"; fi
 
 # launchd: the supervisor key on macOS. runit: Android/Termux. `systemd` covers
 # native Linux + WSL (where the concrete init may be systemctl/systemd/initd/cron
@@ -43,13 +45,13 @@ _service_kind() {
 }
 
 # Pull in the launchd backend only on macOS (defines launchd_* + _resolve_tailscale).
-if [ "$(_service_kind)" = launchd ] && [ -f "$_SERVICE_LIB_DIR/_launchd.sh" ]; then
-  . "$_SERVICE_LIB_DIR/_launchd.sh"
+if [ "$(_service_kind)" = launchd ] && [ -f "$_PLATFORM_DIR/macos/_launchd.sh" ]; then
+  . "$_PLATFORM_DIR/macos/_launchd.sh"
 fi
 
 # Pull in the runit backend only on Android/Termux (defines runit_*).
-if [ "$(_service_kind)" = runit ] && [ -f "$_SERVICE_LIB_DIR/_runit.sh" ]; then
-  . "$_SERVICE_LIB_DIR/_runit.sh"
+if [ "$(_service_kind)" = runit ] && [ -f "$_PLATFORM_DIR/termux/_runit.sh" ]; then
+  . "$_PLATFORM_DIR/termux/_runit.sh"
 fi
 
 # service_install <hive_dir> [svc] — install + enable the supervisor units.

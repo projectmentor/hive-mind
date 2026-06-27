@@ -13,9 +13,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 INSTALLER = REPO / "scripts" / "installer"
-LAUNCHD = INSTALLER / "_launchd.sh"
+PLATFORM = REPO / "scripts" / "platform"
+LAUNCHD = PLATFORM / "macos" / "_launchd.sh"
 SERVICE = INSTALLER / "_service.sh"
-UNITS = INSTALLER / "_units.sh"
+UNITS = PLATFORM / "linux" / "_units.sh"
 
 
 def _bash(script, env=None, path_prefix=None):

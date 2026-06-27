@@ -10,6 +10,8 @@ name: Sign release manifest
 #   gh secret set HIVE_SIGNING_KEY --repo projectmentor/hive-mind --body '<base64 seed>'
 
 on:
+  workflow_dispatch:   # manual re-sign — e.g. after a history rewrite whose top commit touched only
+                       # excluded paths (verify.json/*.json), which would otherwise skip the push trigger
   push:
     branches: [main]
     paths:

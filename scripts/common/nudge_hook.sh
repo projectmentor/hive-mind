@@ -35,7 +35,7 @@ text="$(parse prompt user_prompt)"
 # hv still owns the precise decision (MIN_GAP etc.) when we do spawn it.
 if [ "$event" = "user-prompt" ]; then
   HM="${HIVE_HOME:-$HOME/projects/hive-mind}"
-  ENVF="$HM/nudge.env"; [ -f "$ENVF" ] || ENVF="$HM/nudge.env.example"
+  ENVF="$HM/nudge.env"; [ -f "$ENVF" ] || ENVF="$HM/config/nudge.env.example"
   cfg() { grep -E "^$1=" "$ENVF" 2>/dev/null | tail -1 | cut -d= -f2- \
           | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]*//; s/[[:space:]]*$//; s/^"//; s/"$//'; }
   save_every="$(cfg SAVE_EVERY)"; save_every="${save_every:-0}"

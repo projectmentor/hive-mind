@@ -39,11 +39,11 @@ jobs:
           ln -s "$PWD/scripts/installer/dispatcher.sh" /tmp/hive-mind
           /tmp/hive-mind help | grep -q 'Subcommands'
       - name: launchd plists render + plutil -lint
-        run: bash scripts/installer/_launchd.sh --render-test
+        run: bash scripts/platform/macos/_launchd.sh --render-test
       - name: sync daemon answers on :9876 natively
         run: |
           HIVE_HOME="$PWD" python3 ./hv rebuild >/dev/null 2>&1 || true
-          HIVE_HOME="$PWD" nohup python3 sync_daemon.py >/tmp/d.log 2>&1 &
+          HIVE_HOME="$PWD" nohup python3 hive_sync_daemon.py >/tmp/d.log 2>&1 &
           ok=
           for i in $(seq 1 20); do
             curl -sf http://127.0.0.1:9876/sync/hello >/dev/null && { ok=1; break; }
@@ -75,7 +75,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: runit run/boot scripts render + sh -n lint
-        run: bash scripts/installer/_runit.sh --render-test
+        run: bash scripts/platform/termux/_runit.sh --render-test
       - name: _service_kind resolves to runit under a Termux environment
         run: TERMUX_VERSION=1 bash -c '. scripts/installer/_service.sh; [ "$(_service_kind)" = runit ] && type runit_install >/dev/null'
       - name: _service_kind stays systemd on an ordinary Linux runner (no regression)
@@ -84,8 +84,12 @@ jobs:
         run: TERMUX_VERSION=1 bash -c '. scripts/installer/_service.sh; runit_uninstall hive-sync; runit_uninstall hive-sync'
       - name: installer scripts lint clean (bash -n)
         run: |
-          for f in install.sh _install_node.sh _service.sh _runit.sh _invite.sh _uninstall.sh _update.sh _status.sh dispatcher.sh; do
+          for f in install.sh _install_node.sh _service.sh _invite.sh _uninstall.sh _update.sh _status.sh dispatcher.sh; do
             bash -n "scripts/installer/$f"
+          done
+          # Per-OS service backends now live under scripts/platform/<os>/ (see scripts/README.md).
+          for f in scripts/platform/linux/_units.sh scripts/platform/macos/_launchd.sh scripts/platform/termux/_runit.sh; do
+            bash -n "$f"
           done
       - name: hive-mind invite runs + dispatcher routes it
         run: |

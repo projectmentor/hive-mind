@@ -64,7 +64,6 @@ JOURNAL_DIR = HIVE_HOME / "journal"
 # another node's identity to launder corroboration. A key is minted only by `hv key init` or the
 # migration — importing hv NEVER creates one, so a legacy hostname node keeps its identity until
 # it is deliberately migrated. HIVE_NODE_ID still overrides (tests / two instances on one box).
-NODE_LABEL = os.environ.get("HIVE_NODE_LABEL", socket.gethostname())
 DEVICE_KEY_PATH = HIVE_HOME / ".device-key"
 DEVICE_ID_PATH = HIVE_HOME / ".device-id"
 
@@ -104,7 +103,57 @@ def _resolve_node_id():
     return socket.gethostname()
 
 
+# Hostnames that are NOT unique enough to be a node label on their own. Containers, fresh WSL2
+# installs, and minimal images routinely report one of these, so two unrelated boxes would both
+# show up as "linux" in the hive (the label rides in the join-request an owner approves).
+_GENERIC_HOSTNAMES = {
+    "", "linux", "localhost", "localhost.localdomain",
+    "ubuntu", "debian", "kali", "raspberrypi", "archlinux",
+}
+
+
+def _machine_suffix():
+    """A short, stable per-machine suffix for disambiguating a generic hostname. Prefers the device
+    fingerprint (already collision-safe), else /etc/machine-id; returns None if neither is available."""
+    did = None
+    try:
+        if DEVICE_ID_PATH.exists():
+            did = DEVICE_ID_PATH.read_text().strip()
+    except Exception:
+        did = None
+    if not did:
+        seed = _device_seed()
+        if seed is not None and _ed25519 is not None:
+            did = _device_id_for_pub(_ed25519.pub_from_seed(seed))
+    if did:
+        return did.split(":")[-1][:6]            # last 6 hex of the fingerprint
+    for p in ("/etc/machine-id", "/var/lib/dbus/machine-id"):
+        try:
+            mid = Path(p).read_text().strip()
+            if mid:
+                return mid[:6]
+        except Exception:
+            continue
+    return None
+
+
+def _human_label():
+    """Human-readable node label. HIVE_NODE_LABEL wins; otherwise the hostname — but a GENERIC
+    hostname (linux/localhost/blank, common on containers/WSL) is suffixed with a short stable
+    per-machine id so two such nodes don't both surface as 'linux' in the hive."""
+    env = os.environ.get("HIVE_NODE_LABEL")
+    if env:
+        return env
+    host = (socket.gethostname() or "").strip()
+    if host.lower() in _GENERIC_HOSTNAMES:
+        suf = _machine_suffix()
+        base = host or "node"
+        return f"{base}-{suf}" if suf else base
+    return host
+
+
 NODE_ID = _resolve_node_id()
+NODE_LABEL = _human_label()
 
 
 # Owner identity (governance root). A separate Ed25519 key, distinct from the device key, is the
@@ -241,7 +290,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.14"   # 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.14"   # 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -1847,13 +1896,13 @@ def stats(args):
 
 
 def sync_cmd(args):
-    """Sync with peers (Phase 2 — implemented in sync_client / sync_daemon)."""
+    """Sync with peers (Phase 2 — implemented in sync_client / hive_sync_daemon)."""
     if args.sync_action == "now":
         import sync_client
         sync_client.sync_now()
     elif args.sync_action == "daemon":
-        import sync_daemon
-        sync_daemon.run_daemon()
+        import hive_sync_daemon
+        hive_sync_daemon.run_daemon()
     else:
         print("usage: hv sync {now|daemon}")
 
@@ -1872,7 +1921,7 @@ _NUDGE_DEFAULTS = {
     "AUDIT_ON": "precompact,sessionend",
     "AUDIT_DEPTH": "light",
     "VOLATILE_TTL_HOURS": "24",   # default freshness window for facts tagged `volatile`
-    # Seeds inferred from real session history (see scripts/infer-phrases.py).
+    # Seeds inferred from real session history (see scripts/common/infer-phrases.py).
     "HIVE_NUDGE_PHRASES": ("we need,we should,i want,idea,wait,before we,keep,"
                            "remember,decision,the issue,lesson,wrong"),
 }
@@ -2738,7 +2787,7 @@ def migrate_device_identity_cmd(args):
         e.pop("pub", None)
         migrated.append(e)
 
-    # Recompute each device's prev_hash chain from genesis (migrate_journal_v2 pattern).
+    # Recompute each device's prev_hash chain from genesis (utilities/migrate_journal pattern).
     by_node = {}
     for e in migrated:
         by_node.setdefault(e["node_id"], []).append(e)
@@ -2917,7 +2966,7 @@ def _kill_orphans(orphans):
 # byte-for-byte across nodes. (event, command, timeout) — timeouts cover the sum of a shim's
 # behaviors (session telemetry ~12s + nudge ~8s on the session events). This is currently the only
 # foreign-config integration; plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim.
-_CLAUDE_HOOKS_BASE = "$HOME/projects/hive-mind/scripts"
+_CLAUDE_HOOKS_BASE = "$HOME/projects/hive-mind/scripts/common"
 _CLAUDE_HOOK_SPEC = [
     ("SessionStart",     f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh session-start", 20),
     ("SessionEnd",       f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh sessionend",    20),
@@ -2936,8 +2985,8 @@ def _is_hive_hook_command(cmd):
     legacy direct hook from before the shim. Lets the reconcile prune our OWN stale wiring without
     ever touching a hook the user added."""
     c = cmd or ""
-    return ("hive_dispatch.sh" in c or "/scripts/session_hook.sh" in c
-            or "/scripts/nudge_hook.sh" in c or "hive-mind/scripts" in c)
+    return ("hive_dispatch.sh" in c or "/session_hook.sh" in c
+            or "/nudge_hook.sh" in c or "hive-mind/scripts" in c)
 
 
 def _agent_hook_reconcile(cfg, hook_spec):

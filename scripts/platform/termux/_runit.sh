@@ -14,7 +14,7 @@
 #   hive-doctor  while-loop every 900s      ≙ hive-doctor.timer OnUnitActiveSec=15min
 #
 # A phone behind Tailscale's userspace VPN cannot accept inbound :9876, but it
-# never needs to: sync_daemon.py's run_daemon() does an OUTBOUND sync_now() every
+# never needs to: hive_sync_daemon.py's run_daemon() does an OUTBOUND sync_now() every
 # 300s, which both pulls and pushes — so the supervised daemon converges the node
 # on its own. A Termux:Boot entrypoint (~/.termux/boot/) restarts it on reboot.
 #
@@ -47,8 +47,8 @@ _runit_sh() {
 # without termux-services or a phone.
 _runit_render() {
   local hive_dir="$1" py sh svc_run doctor_run boot
-  if [ -z "$hive_dir" ] || [ ! -f "$hive_dir/sync_daemon.py" ]; then
-    echo "_runit_render: invalid hive_dir '$hive_dir' (no sync_daemon.py)" >&2
+  if [ -z "$hive_dir" ] || [ ! -f "$hive_dir/hive_sync_daemon.py" ]; then
+    echo "_runit_render: invalid hive_dir '$hive_dir' (no hive_sync_daemon.py)" >&2
     return 1
   fi
   py="$(_runit_python3)"; sh="$(_runit_sh)"
@@ -63,7 +63,7 @@ _runit_render() {
 # run_daemon() serves :9876 AND syncs outbound every 300s — converges this node.
 export HIVE_HOME="$hive_dir"
 cd "$hive_dir" || exit 1
-exec "$py" "$hive_dir/sync_daemon.py" >> "$_RUNIT_LOG_DIR/hive-sync.log" 2>&1
+exec "$py" "$hive_dir/hive_sync_daemon.py" >> "$_RUNIT_LOG_DIR/hive-sync.log" 2>&1
 RUN
 
   # ── self-heal: `hv doctor --fix` on a 900s loop (runit has no timers) ──
@@ -153,7 +153,7 @@ if [ "${BASH_SOURCE[0]:-x}" = "${0:-y}" ] && [ "${1:-}" = "--render-test" ]; the
   _RUNIT_SERVICE_DIR="$_tmp/service"
   _RUNIT_LOG_DIR="$_tmp/logs"
   _RUNIT_BOOT_DIR="$_tmp/boot"
-  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+  _repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
   _runit_render "$_repo"
   for _f in "$_RUNIT_SERVICE_DIR/hive-sync/run" "$_RUNIT_SERVICE_DIR/hive-doctor/run" \
             "$_RUNIT_BOOT_DIR/start-hive-mind"; do
@@ -161,7 +161,7 @@ if [ "${BASH_SOURCE[0]:-x}" = "${0:-y}" ] && [ "${1:-}" = "--render-test" ]; the
     [ -x "$_f" ] || { echo "render-test FAIL: $_f not executable" >&2; exit 1; }
     sh -n "$_f"  || { echo "render-test FAIL: $_f has a syntax error" >&2; exit 1; }
   done
-  grep -q 'exec .*sync_daemon.py'  "$_RUNIT_SERVICE_DIR/hive-sync/run"   || { echo "render-test FAIL: hive-sync missing daemon exec" >&2; exit 1; }
+  grep -q 'exec .*hive_sync_daemon.py'  "$_RUNIT_SERVICE_DIR/hive-sync/run"   || { echo "render-test FAIL: hive-sync missing daemon exec" >&2; exit 1; }
   grep -q 'doctor --fix'           "$_RUNIT_SERVICE_DIR/hive-doctor/run" || { echo "render-test FAIL: hive-doctor missing doctor --fix" >&2; exit 1; }
   grep -q 'sv up hive-sync'        "$_RUNIT_BOOT_DIR/start-hive-mind"    || { echo "render-test FAIL: boot script missing sv up" >&2; exit 1; }
   echo "render-test OK"

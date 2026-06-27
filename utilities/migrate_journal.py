@@ -30,7 +30,7 @@ from pathlib import Path
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 JOURNAL_DIR = HIVE_HOME / "journal"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # utilities/ → repo root (for merkle)
 import merkle  # noqa: E402
 
 

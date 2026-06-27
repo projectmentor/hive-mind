@@ -390,7 +390,20 @@ step "5/$TOTAL  Node identity"
 
 cd "$HIVE_DIR"
 THIS_IP="$TS_IP"
-THIS_NODE=$(hostname)
+# Human label for this node. A GENERIC hostname (linux/localhost/blank — common on containers and
+# fresh WSL2) is not unique, so two such boxes would both register as "linux" in the hive. Suffix
+# it with a short stable machine id. (hv's NODE_LABEL applies the same guard at runtime, preferring
+# the device fingerprint once a key is minted — this early value is for the installer's display.)
+THIS_NODE=$(hostname 2>/dev/null || echo node)
+case "$(printf '%s' "$THIS_NODE" | tr '[:upper:]' '[:lower:]')" in
+  ""|linux|localhost|localhost.localdomain|ubuntu|debian|kali|raspberrypi|archlinux)
+    _mid=""
+    for _f in /etc/machine-id /var/lib/dbus/machine-id; do
+      [ -r "$_f" ] && _mid="$(cut -c1-6 < "$_f" 2>/dev/null)" && [ -n "$_mid" ] && break
+    done
+    [ -n "$_mid" ] && THIS_NODE="${THIS_NODE:-node}-$_mid"
+    ;;
+esac
 
 # Resume a preserved identity (from a prior `uninstall --keep-identity` / `--keep-hive`) BEFORE
 # minting, so a reinstall keeps the same device_id — and the owner's prior admission (keyed by
@@ -579,7 +592,7 @@ if [[ "$INIT_SYSTEM" == "launchd" ]]; then
 
 elif [[ "$INIT_SYSTEM" == "runit" ]]; then
   # Android/Termux: runit services hive-sync (runsvdir respawn) + hive-doctor
-  # (15-min loop), plus a Termux:Boot entrypoint. See scripts/installer/_runit.sh.
+  # (15-min loop), plus a Termux:Boot entrypoint. See scripts/platform/termux/_runit.sh.
   if command -v runit_install >/dev/null 2>&1 && command -v sv >/dev/null 2>&1; then
     runit_install "$HIVE_DIR" "$SERVICE_NAME" \
       && ok "runit services installed: hive-sync (keep-alive) + hive-doctor (15-min loop)" \
@@ -589,12 +602,12 @@ elif [[ "$INIT_SYSTEM" == "runit" ]]; then
     # still syncs; Termux:Boot (if installed) re-launches it on reboot.
     warn "termux-services (sv) unavailable — falling back to a nohup keep-alive (no auto-respawn)."
     mkdir -p "$HOME/.hive-mind/logs"
-    pkill -f sync_daemon.py 2>/dev/null || true
-    nohup python3 "$HIVE_DIR/sync_daemon.py" >> "$HOME/.hive-mind/logs/hive-sync.log" 2>&1 &
+    pkill -f hive_sync_daemon.py 2>/dev/null || true
+    nohup python3 "$HIVE_DIR/hive_sync_daemon.py" >> "$HOME/.hive-mind/logs/hive-sync.log" 2>&1 &
   fi
 
 elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
-  # Hardened daemon unit + self-heal timer (see scripts/installer/_units.sh).
+  # Hardened daemon unit + self-heal timer (see scripts/platform/linux/_units.sh).
   write_systemd_units "$HIVE_DIR" "$SERVICE_NAME"
   ok "systemd units installed: hive-sync.service (hardened) + hive-doctor.timer"
 
@@ -611,8 +624,8 @@ elif [[ "$INIT_SYSTEM" == "initd" ]]; then
 ### END INIT INFO
 HIVE_HOME=$HIVE_DIR
 case "\$1" in
-  start) nohup /usr/bin/python3 $HIVE_DIR/sync_daemon.py >> /tmp/hive-sync.log 2>&1 & ;;
-  stop)  pkill -f sync_daemon.py || true ;;
+  start) nohup /usr/bin/python3 $HIVE_DIR/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1 & ;;
+  stop)  pkill -f hive_sync_daemon.py || true ;;
   restart) \$0 stop; \$0 start ;;
 esac
 INITD
@@ -621,7 +634,7 @@ INITD
   ok "init.d service installed: $INITD_SCRIPT"
 
 else
-  CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/sync_daemon.py >> /tmp/hive-sync.log 2>&1"
+  CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1"
   ( crontab -l 2>/dev/null | grep -v "sync_daemon"; echo "$CRON_LINE" ) | crontab -
   ok "@reboot cron entry installed (fallback)"
 fi
@@ -642,8 +655,8 @@ elif [[ "$INIT_SYSTEM" == "systemctl" || "$INIT_SYSTEM" == "systemd" ]]; then
 elif [[ "$INIT_SYSTEM" == "initd" ]]; then
   sudo /etc/init.d/$SERVICE_NAME restart
 else
-  pkill -f sync_daemon.py 2>/dev/null || true
-  nohup python3 "$HIVE_DIR/sync_daemon.py" >> /tmp/hive-sync.log 2>&1 &
+  pkill -f hive_sync_daemon.py 2>/dev/null || true
+  nohup python3 "$HIVE_DIR/hive_sync_daemon.py" >> /tmp/hive-sync.log 2>&1 &
 fi
 sleep 2
 
@@ -668,7 +681,7 @@ if command -v hermes &>/dev/null; then
   HERMES_PLUGINS="${HERMES_HOME:-$HOME/.hermes}/plugins"
   mkdir -p "$HERMES_PLUGINS"
   rm -rf "$HERMES_PLUGINS/hive-mind"
-  ln -s "$HIVE_DIR/hermes_plugin" "$HERMES_PLUGINS/hive-mind"
+  ln -s "$HIVE_DIR/integrations/hermes" "$HERMES_PLUGINS/hive-mind"
   hermes config set memory.provider hive-mind 2>/dev/null && \
     ok "Hermes memory plugin linked and activated" || \
     warn "Hermes plugin linked but config set failed — run manually: hermes config set memory.provider hive-mind"

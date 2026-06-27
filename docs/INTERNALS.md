@@ -383,10 +383,10 @@ cd ~/projects/hive-mind
 python3 -m pytest -q
 
 # CLI smoke test
-./scripts/smoke.sh
+./scripts/common/smoke.sh
 
 # Two-node sync smoke test
-./scripts/sync_smoke.sh
+./scripts/common/sync_smoke.sh
 ```
 
 Tests use `HIVE_NOW` and `HIVE_NODE_ID` env vars to pin time and identity for

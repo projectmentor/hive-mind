@@ -1,13 +1,13 @@
 # HiveMind Sync API Reference
 
-The sync daemon (`sync_daemon.py`) exposes a minimal JSON/HTTP API on port
+The sync daemon (`hive_sync_daemon.py`) exposes a minimal JSON/HTTP API on port
 `:9876` (default). All endpoints are unauthenticated — transport security is
 provided by Tailscale (WireGuard). Only admit Tailscale peers.
 
 Start the daemon:
 ```bash
 ./hv sync daemon          # serve + periodic outbound sync (every 5 min)
-python3 sync_daemon.py    # same, direct
+python3 hive_sync_daemon.py    # same, direct
 ```
 
 ---
@@ -352,7 +352,7 @@ alongside `action`.
 Get a node's device id and public key with `hv config identity show` on that machine.
 
 `.peers.json` is gitignored (contains Tailscale IPs). Copy from
-`.peers.json.example` and edit per node.
+`config/.peers.json.example` and edit per node.
 
 **WSL + Tailscale note:** Each WSL2 instance gets its own Tailscale IP (appears
 as a separate machine on the tailnet, e.g. `node-a-1`). The sync daemon

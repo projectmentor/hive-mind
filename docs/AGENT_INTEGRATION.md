@@ -125,8 +125,8 @@ is real, working code in this repo — **study it, then write the equivalent for
 
 - **Claude Code (reference):** `~/.claude/settings.json` registers ONE stable shim per lifecycle
   event (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`) → `command` runs
-  `scripts/hive_dispatch.sh <event>`. The shim consumes the hook's stdin once, replays it to each
-  behavior for that event (session telemetry, then the nudge/digest in `scripts/nudge_hook.sh`), and
+  `scripts/common/hive_dispatch.sh <event>`. The shim consumes the hook's stdin once, replays it to each
+  behavior for that event (session telemetry, then the nudge/digest in `scripts/common/nudge_hook.sh`), and
   passes their stdout through so context injection still works. Because the foreign config holds only
   the shim, **what** runs per event is a source-controlled decision, not a `~/.claude` edit — you
   don't hand-wire it: `hv` owns the shim spec, the installer/update wire it via `hv doctor wire-agent`,
@@ -182,7 +182,7 @@ Only record the new `Spec-Version` to your marker file if all pass:
 
 ## 6. Config
 
-Per-node tuning lives in `nudge.env` (copy from `nudge.env.example`; mirrors the `.peers.json`
+Per-node tuning lives in `nudge.env` (copy from `config/nudge.env.example`; mirrors the `.peers.json`
 convention): `SAVE_EVERY`, `MIN_GAP`, `SAVE_ON_PHRASE`, `AUDIT_ON`, `AUDIT_DEPTH`,
 `HIVE_NUDGE_PHRASES`. `hv` reads it for you — your adapter does not need to parse it. Honor it by
 simply routing text through `hv nudge`/`hv audit`.
@@ -238,13 +238,13 @@ when it must re-wire.
   **secure ingestion only** (`--env-file`/`--file`/`--stdin`/interactive `getpass` — never via chat or
   argv). Owner-signed **`capsule_putters`** config gates who may publish. `hv doctor` gains a hard-fail
   **`crypto`** check (RFC 7748/8032 + ed↔curve + sealed-capsule KATs on the self-heal timer) and
-  `scripts/sign_release.py` refuses to sign `verify.json` on a red suite. Additive to the wire format —
+  `scripts/common/sign_release.py` refuses to sign `verify.json` on a red suite. Additive to the wire format —
   existing adapters are unaffected — but agents gain `hv wire`/`hv capsule` as the self-provisioning
   surface.
 - `1.12` — **self-healing agent integration via a stable shim**. The Claude Code hooks live in a
   foreign config (`~/.claude/settings.json`) the daemon self-heal never owned, so a node updated from
   before a hook existed could pass every health check yet silently miss half its hooks. The fix is to
-  register only a **stable dispatch shim** there — `scripts/hive_dispatch.sh <event>`, one per
+  register only a **stable dispatch shim** there — `scripts/common/hive_dispatch.sh <event>`, one per
   lifecycle event — and decide *which* behaviors run for each event inside that script, which lives in
   source control (and so under `hv verify`'s signature). New behaviors then ship by update, never by
   re-wiring `~/.claude`; only a new event TYPE changes the registered set. `hv` holds the one shim
@@ -335,5 +335,5 @@ real agent or the owner confirms. A background model never self-certifies a fact
 
 ---
 
-*One brain (`hv`), one spec (this file), one reference (`scripts/nudge_hook.sh`). Everything else an
+*One brain (`hv`), one spec (this file), one reference (`scripts/common/nudge_hook.sh`). Everything else an
 agent writes for itself, and keeps current by re-reading this spec when its version changes.*

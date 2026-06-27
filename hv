@@ -1832,7 +1832,8 @@ def stats(args):
         by_node[e["node_id"]] = by_node.get(e["node_id"], 0) + 1
 
     print(f"Hive Mind Stats — {HIVE_HOME}")
-    print(f"  Device:             {NODE_ID}")
+    _self_addr = _self_address()
+    print(f"  Device:             {NODE_ID}" + (f"  @ {_self_addr}" if _self_addr else ""))
     facts_line = f"{live_facts} live  (avg confidence: {avg_conf})"
     if forgotten_facts:
         facts_line += f"  +{forgotten_facts} forgotten"
@@ -2066,6 +2067,9 @@ def whoami_cmd(args):
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     print(f"device:    {NODE_ID}  ({NODE_LABEL})")
+    _addr = _self_address()
+    if _addr:
+        print(f"address:   {_addr}   (share via `hive-mind invite`)")
     if not gov["owner_id"]:
         print("hive:      (none — no owner established yet)")
         print("status:    UNAFFILIATED  (`hv owner init` to start a hive, or sync one then `hv join`)")
@@ -4458,20 +4462,71 @@ def owner_cmd(args):
         print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
 
 
+def _self_tailnet_ip():
+    """This device's Tailscale IPv4, best-effort ('' if Tailscale isn't up). Used for display
+    (whoami/stats) and to advertise a reachable URL in join-requests.
+
+    The `tailscale` CLI is authoritative, so try it FIRST — the 100.64.0.0/10 range is shared
+    with carrier-grade NAT and some WSL/virtual interfaces, so a bare interface grep can return
+    a non-tailnet 100.x. The interface scan is the Android/Termux fallback (no CLI there, since
+    Tailscale is the app); it prefers a tailscale-looking interface (tun/utun/tailscale) so a
+    cellular CGNAT 100.x can't be mistaken for the tunnel address."""
+    pat = re.compile(r"\b(100\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.\d{1,3}\.\d{1,3})\b")
+    # 1. authoritative: the tailscale CLI (Linux / macOS / WSL).
+    try:
+        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=3).stdout
+        ip = (out.strip().splitlines() or [""])[0].strip()
+        if pat.fullmatch(ip):
+            return ip
+    except Exception:
+        pass
+    # 2. Android/Termux fallback: read the tailnet 100.x from the interface, preferring the tun.
+    try:
+        out = subprocess.run(["ip", "-4", "-o", "addr"], capture_output=True, text=True, timeout=2).stdout
+        fallback = ""
+        for line in out.splitlines():
+            m = pat.search(line)
+            if not m:
+                continue
+            if re.search(r"\b(tailscale\d*|ts\d+|tun\d*|utun\d*)\b", line):
+                return m.group(1)            # a tailscale-looking interface wins outright
+            fallback = fallback or m.group(1)  # else remember a bare 100.x as a last resort
+        if fallback:
+            return fallback
+    except Exception:
+        pass
+    # 3. macOS/BSD without the CLI on PATH: ifconfig.
+    try:
+        out = subprocess.run(["ifconfig"], capture_output=True, text=True, timeout=2).stdout
+        m = pat.search(out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def _self_sync_port():
+    """The sync port this device binds/advertises (from .peers.json; default 9876)."""
+    try:
+        import sync_common
+        return sync_common.load_peers().get("port", 9876)
+    except Exception:
+        return 9876
+
+
+def _self_address():
+    """'ip:port' this device is reachable at on the tailnet, or '' if the IP is unknown.
+    For display (whoami/stats) and as the basis of the join-request URL."""
+    ip = _self_tailnet_ip()
+    return f"{ip}:{_self_sync_port()}" if ip else ""
+
+
 def _self_sync_url():
     """This device's reachable sync URL (Tailscale IPv4 : configured port) — carried in a
     join-request so the owner can peer back on admit. Best-effort; '' if the IP is unknown."""
-    try:
-        import sync_common
-        port = sync_common.load_peers().get("port", 9876)
-    except Exception:
-        port = 9876
-    try:
-        out = subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5).stdout
-        ip = (out.strip().splitlines() or [""])[0].strip()
-    except Exception:
-        ip = ""
-    return f"http://{ip}:{port}" if ip else ""
+    addr = _self_address()
+    return f"http://{addr}" if addr else ""
 
 
 def _join_request_url(device_id):

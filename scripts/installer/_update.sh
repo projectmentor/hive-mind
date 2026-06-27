@@ -20,8 +20,24 @@ echo -e "${BLD}hive-mind update${RST}"
 echo "────────────────────────────────────"
 
 info "Pulling latest from GitHub..."
-git -C "$HIVE_DIR" pull --ff-only
-ok "Repo updated"
+# Normally a fast-forward. But if upstream history was REWRITTEN (e.g. a force-push to scrub a
+# leaked secret from history), the local branch can no longer fast-forward and a plain pull aborts,
+# stranding the node on the old history. Detect that case and hard-reset to the upstream — but ONLY
+# when the working tree is clean, so a node with genuine local edits is never silently clobbered.
+git -C "$HIVE_DIR" fetch --tags origin
+_BR="$(git -C "$HIVE_DIR" rev-parse --abbrev-ref HEAD)"
+if git -C "$HIVE_DIR" merge-base --is-ancestor HEAD "@{u}" 2>/dev/null; then
+  git -C "$HIVE_DIR" pull --ff-only
+  ok "Repo updated"
+elif [ -z "$(git -C "$HIVE_DIR" status --porcelain)" ]; then
+  info "Upstream history was rewritten — hard-resetting clean tree to origin/$_BR"
+  git -C "$HIVE_DIR" reset --hard "@{u}"
+  ok "Repo re-synced to rewritten upstream"
+else
+  echo "  Upstream diverged AND you have local changes — refusing to reset." >&2
+  echo "  Commit/stash your changes, then: git -C \"$HIVE_DIR\" reset --hard @{u}" >&2
+  exit 1
+fi
 
 # The pull above may have replaced THIS script on disk, but bash is still running
 # the old copy from memory — so any update logic added in the new version (e.g.

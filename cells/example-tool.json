@@ -1,0 +1,24 @@
+{
+  "name": "example-tool",
+  "kind": "tool",
+  "version": 1,
+  "_comment": "REFERENCE CELL — dummy data only. This documents the cell schema that `hv wire` consumes. Real per-node cells are gitignored (see .gitignore) so private infra details never land in the public repo: copy this file, fill in your tool, and journal it with `hv wire --add <file>`. Never put a real account id, site id, or secret in a tracked cell.",
+  "requires": ["EXAMPLE_API_TOKEN"],
+  "spec": {
+    "obtain": "Where/how to get the credential, e.g. 'dashboard -> Settings -> API -> Create token'. Leave generic (or drop `requires`) when the tool needs no credential.",
+    "platforms": {
+      "linux":  {"steps": ["# shell steps to wire this tool on Linux (e.g. register an MCP server)"]},
+      "wsl":    {"steps": []},
+      "darwin": {"steps": []}
+    },
+    "gotchas": [
+      "One gotcha per line — rate limits, auth-header quirks, common error codes.",
+      "Keep every line GENERIC: never embed a real account id, site id, hostname, or secret."
+    ]
+  },
+  "verify": {
+    "http": "https://api.example.com/v1/ping",
+    "headers": {"Authorization": "Bearer {EXAMPLE_API_TOKEN}"},
+    "expect": "\"ok\":true"
+  }
+}

@@ -6,7 +6,7 @@ journal/*.jsonl
 journal.bak.*/
 store.db.bak.*
 
-# Peer registry is per-node, not versioned (use .peers.json.example as a template)
+# Peer registry is per-node, not versioned (use config/.peers.json.example as a template)
 .peers.json
 
 # Device identity (per-node Ed25519 key). The seed is SECRET — never commit or sync it.
@@ -18,12 +18,18 @@ store.db.bak.*
 # Exported owner-key backups (`hv owner export`, default name hive-owner-<id>.key). SECRET.
 hive-owner-*.key
 
-# Nudge config + per-session debounce state (per-node; use nudge.env.example as a template)
+# Nudge config + per-session debounce state (per-node; use config/nudge.env.example as a template)
 nudge.env
 .nudge_state/
 
 # Telemetry is a LOCAL-ONLY observability lane (per-node; never synced, never in the corpus)
 .telemetry/
+
+# Cells are per-node wiring runbooks that can carry PRIVATE infra details (account/site ids, internal
+# refs). Keep live cells out of the (public) repo; only the dummy example-*.json reference is tracked.
+# Distribute real cells through the journal (`hv wire --add`), not source control.
+cells/*.json
+!cells/example-*.json
 
 # IDE
 .vscode/

@@ -1,11 +1,13 @@
 from pathlib import Path
 import importlib
+import importlib.machinery
+import importlib.util
 import sys
 import types
 
 
-# hermes_plugin imports agent.memory_provider from the Hermes runtime, which is
-# not present in this repo. Stub the minimal interface so we can test the plugin
+# integrations/hermes imports agent.memory_provider from the Hermes runtime, which
+# is not present in this repo. Stub the minimal interface so we can test the plugin
 # behavior in isolation.
 agent_mod = types.ModuleType("agent")
 memory_provider_mod = types.ModuleType("agent.memory_provider")
@@ -20,7 +22,13 @@ agent_mod.memory_provider = memory_provider_mod  # type: ignore[attr-defined]
 sys.modules.setdefault("agent", agent_mod)
 sys.modules.setdefault("agent.memory_provider", memory_provider_mod)
 
-hermes_plugin = importlib.import_module("hermes_plugin")
+# Load the plugin from its new home under integrations/ (a plain folder, not an
+# importable package — the "claude-code" sibling has a hyphen — so load by path).
+_HERMES = Path(__file__).resolve().parent.parent / "integrations" / "hermes" / "__init__.py"
+_loader = importlib.machinery.SourceFileLoader("hermes_plugin", str(_HERMES))
+_spec = importlib.util.spec_from_loader("hermes_plugin", _loader)
+hermes_plugin = importlib.util.module_from_spec(_spec)
+_loader.exec_module(hermes_plugin)
 
 
 def test_system_prompt_block_includes_session_start_nudge(monkeypatch, tmp_path):

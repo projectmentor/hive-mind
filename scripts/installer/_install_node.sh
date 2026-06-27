@@ -433,6 +433,16 @@ else
   warn "Could not mint a device key (existing journal?). Continuing with hostname identity."
   THIS_DEVICE="$THIS_NODE"
 fi
+# Android has no /etc/machine-id, so the generic-hostname guard above can't disambiguate the label
+# there (it stays bare "localhost"). Now that the device key is established, suffix a still-generic
+# label with the device fingerprint — matching hv's runtime NODE_LABEL (e.g. "localhost-31a7f9").
+# Android-only: gated on $IS_ANDROID and a real k1: device id, so no other platform is affected.
+if [ -n "$IS_ANDROID" ] && [ "${THIS_DEVICE#k1:}" != "$THIS_DEVICE" ]; then
+  case "$(printf '%s' "$THIS_NODE" | tr '[:upper:]' '[:lower:]')" in
+    ""|linux|localhost|localhost.localdomain)
+      _fp="${THIS_DEVICE#k1:}"; THIS_NODE="${THIS_NODE:-node}-${_fp:0:6}" ;;
+  esac
+fi
 ok "This device: $THIS_NODE ($THIS_DEVICE) @ $THIS_IP"
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -559,8 +569,16 @@ print(f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port
     ask "Your name (the principal you'd like to be admitted as): "
     read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$THIS_USER}"
     ./hv join --principal "$PRINCIPAL" 2>/dev/null || true
-    warn "You're syncing the hive but NOT yet admitted — your writes won't count until the owner admits you."
-    echo "  Ask the hive's owner to run:  hv group admit $THIS_DEVICE --principal $PRINCIPAL"
+    # A resumed identity (uninstall --keep-identity) is often ALREADY admitted, so the blanket
+    # "not yet admitted" warning below is misleading. On Android — where resume-after-reinstall is
+    # the common path — check the admitted set first and skip the warning when already in it.
+    # Android-only (gated on $IS_ANDROID): every other platform keeps the prior behavior verbatim.
+    if [ -n "$IS_ANDROID" ] && ./hv group list 2>/dev/null | grep -q "$THIS_DEVICE"; then
+      ok "This device is already admitted (principal: $PRINCIPAL) — no owner action needed."
+    else
+      warn "You're syncing the hive but NOT yet admitted — your writes won't count until the owner admits you."
+      echo "  Ask the hive's owner to run:  hv group admit $THIS_DEVICE --principal $PRINCIPAL"
+    fi
   fi
 fi
 

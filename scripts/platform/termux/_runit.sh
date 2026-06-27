@@ -26,6 +26,12 @@
 # (where PREFIX is unset) so the rendered paths still resemble a real device.
 _RUNIT_PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 _RUNIT_SERVICE_DIR="${_RUNIT_SERVICE_DIR:-$_RUNIT_PREFIX/var/service}"
+# `sv` resolves services under $SVDIR. Export it so OUR sv up/restart/status calls find the services
+# even when this backend is invoked from a script whose environment never loaded termux-services'
+# profile hook (which is what sets SVDIR). Without it `sv` falls back to /var/service and fails with
+# "unable to change to service directory: file does not exist" even though runsvdir IS running the
+# daemon. Termux-only file — never sourced off Android, so no other platform is affected.
+export SVDIR="$_RUNIT_SERVICE_DIR"
 _RUNIT_LOG_DIR="${_RUNIT_LOG_DIR:-$HOME/.hive-mind/logs}"
 _RUNIT_BOOT_DIR="${_RUNIT_BOOT_DIR:-$HOME/.termux/boot}"
 
@@ -88,6 +94,7 @@ RUN
 # disabled for Termux + Termux:Boot. A wakelock keeps Android Doze from freezing
 # the daemon.
 termux-wake-lock 2>/dev/null || true
+export SVDIR="$_RUNIT_SERVICE_DIR"   # so the sv up calls below resolve the services
 # Start the runit supervisor tree if termux-services' login hook hasn't already.
 if [ -x "$_RUNIT_PREFIX/etc/profile.d/start-services.sh" ]; then
   . "$_RUNIT_PREFIX/etc/profile.d/start-services.sh"

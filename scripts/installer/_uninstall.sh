@@ -78,6 +78,7 @@ elif [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ] |
   # Termux:Boot entrypoint. Inlined (like the macOS arm) so uninstall stays
   # self-contained and need not source the supervisor backend.
   _RUNIT_SVC_DIR="${PREFIX:-/data/data/com.termux/files/usr}/var/service"
+  export SVDIR="$_RUNIT_SVC_DIR"   # so `sv` finds the services even without termux-services' profile hook
   for _l in hive-sync hive-doctor; do
     sv down "$_l"    2>/dev/null || true
     sv-disable "$_l" 2>/dev/null || true

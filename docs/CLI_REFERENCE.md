@@ -830,7 +830,25 @@ hive-mind <subcommand> [options]
 | `install` | Set up this device from scratch (discovery-driven bootstrap or join). |
 | `update` | Pull the latest code and restart the sync daemon. |
 | `status` | Show device health and peer sync state. |
+| `invite` | Print the one-line address to paste on a new device so it can join this hive. |
 | `uninstall` | Remove HiveMind from this device (see flags below). |
+
+### `hive-mind invite` — add another device
+
+```bash
+hive-mind invite
+```
+
+Run it on any device that's **already in the hive**; its only output is this node's Tailscale
+address (e.g. `100.84.84.100`). On the **new** device, run `hive-mind install` and paste that
+line when it asks for a hive address — no need to know what an IP is or where to find it.
+
+`hive-mind install` auto-discovers hives on platforms with the `tailscale` CLI (Linux, macOS,
+WSL). On **Android (Termux)** there is no `tailscale` CLI — Tailscale is the phone's VPN app —
+so discovery can't enumerate the tailnet; the installer asks you to paste an address instead.
+You only ever need **one** node of the hive to join; the rest syncs from there. (A fresh
+`hive-mind install` on the owner device prints the invite line automatically once the hive is
+created.)
 
 ### `hive-mind uninstall`
 

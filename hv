@@ -290,7 +290,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.14"   # 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.15"   # 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -337,7 +337,8 @@ def init_db():
         rationale TEXT,
         superseded_by INTEGER REFERENCES decisions(id),
         source_agent TEXT NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        tags TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_facts_tags ON facts(tags);
@@ -388,6 +389,9 @@ def init_db():
         conn.execute("ALTER TABLE facts ADD COLUMN last_evidence_at TIMESTAMP")
     if "resolves" not in fcols:                # 1.11: local id of the fact this row resolves/closes
         conn.execute("ALTER TABLE facts ADD COLUMN resolves INTEGER")
+    dcols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
+    if "tags" not in dcols:                     # 1.15: project/topic tags on a decision (JSON list)
+        conn.execute("ALTER TABLE decisions ADD COLUMN tags TEXT")
     conn.commit()
     # Index created here (not in the schema script above) so it works on both
     # fresh and migrated DBs — the column is guaranteed to exist by this point.
@@ -1304,13 +1308,14 @@ def persist_decision(conn, entry):
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO decisions (content, rationale, source_agent, created_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO decisions (content, rationale, source_agent, created_at, tags)
+        VALUES (?, ?, ?, ?, ?)
     """, (
         payload["content"],
         payload.get("rationale"),
         payload.get("source", "manual"),
         payload.get("created_at", ts),
+        json.dumps(payload.get("tags", [])),
     ))
     did = cur.lastrowid
     _record_index(conn, entry, "decision", did)
@@ -1630,8 +1635,11 @@ def _fts_query(raw):
 
 
 def search(args):
-    """Search facts. Ranks/filters by EFFECTIVE confidence (the time-invariant base projection
-    decayed by recency, computed at query time with $HIVE_NOW); surfaces contested claims."""
+    """Search facts AND decisions. Facts rank/filter by EFFECTIVE confidence (the time-invariant base
+    projection decayed by recency, computed at query time with $HIVE_NOW) and surface contested claims.
+    Decisions have no confidence projection, so they match by content/rationale/tags (newest-first,
+    superseded ones flagged) — finding a decision by tag/text is the stable alternative to citing its
+    node-local `#id`."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
     cols = "id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at"
@@ -1652,6 +1660,14 @@ def search(args):
         like = f"%{args.query}%"
         rows = conn.execute(f"SELECT {cols} FROM facts WHERE content LIKE ? LIMIT 200",
                             (like,)).fetchall()
+
+    # Decisions: small table, no FTS / confidence — a direct LIKE over content, rationale and
+    # tags. Superseded decisions still surface (flagged), so history stays visible.
+    dlike = f"%{args.query}%"
+    dec_rows = conn.execute(
+        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by "
+        "FROM decisions WHERE content LIKE ? OR rationale LIKE ? OR tags LIKE ? "
+        "ORDER BY created_at DESC LIMIT 10", (dlike, dlike, dlike)).fetchall()
     conn.close()
 
     # Decay + threshold + rank in Python (effective confidence depends on `now`).
@@ -1661,7 +1677,11 @@ def search(args):
     scored = scored[:10]
 
     if args.format == "json":
-        print(json.dumps([{**dict(r), "effective_confidence": eff} for eff, r in scored], indent=2))
+        # Stays a flat list (back-compat) with a new `kind` discriminator; decisions carry no
+        # confidence, so a min_confidence>0 consumer naturally drops them.
+        out = [{**dict(r), "kind": "fact", "effective_confidence": eff} for eff, r in scored]
+        out += [{**dict(r), "kind": "decision"} for r in dec_rows]
+        print(json.dumps(out, indent=2))
     else:
         for eff, r in scored:
             tags = json.loads(r["tags"]) if r["tags"] else []
@@ -1669,10 +1689,22 @@ def search(args):
             print(f"[{r['id']}] {r['content']}")
             print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  From: {r['source_agent']}{flag}")
             print()
+        if dec_rows:
+            print("Decisions:")
+            for r in dec_rows:
+                dtags = json.loads(r["tags"]) if r["tags"] else []
+                tagstr = f"  [{', '.join(dtags)}]" if dtags else ""
+                sup = "  ⚠ SUPERSEDED" if r["superseded_by"] else ""
+                print(f"  #{r['id']} {r['content']}{tagstr}{sup}")
+                if r["rationale"]:
+                    print(f"       ↳ {r['rationale']}")
+            print()
 
 
 def decide(args):
-    """Record a decision."""
+    """Record a decision. `--tags` scopes it (e.g. by project) and is journaled in the
+    decision payload, so the decision is findable by `hv search` alongside facts — the stable
+    alternative to citing a decision by its node-local, rebuild-unstable `#id`."""
     # Resolve --supersedes (a local id) to a journal-identity reference so the
     # supersedes link survives rebuilds and cross-node merges.
     supersedes_ref = None
@@ -1681,10 +1713,13 @@ def decide(args):
         supersedes_ref = _index_lookup(conn0, "decision", args.supersedes)
         conn0.close()
 
+    tags = [t.strip() for t in args.tags.split(",")] if getattr(args, "tags", None) else []
+    tags = [t for t in tags if t]
     payload = {
         "content": args.content,
         "rationale": args.rationale,
         "supersedes_ref": supersedes_ref,
+        "tags": tags,
         "source": os.environ.get("HERMES_AGENT", "manual"),
     }
     entry = append_journal("decision", payload)
@@ -1696,7 +1731,8 @@ def decide(args):
     conn.commit()
     conn.close()
 
-    print(f"Decided as decision #{res['id']}")
+    tagnote = f"  [{', '.join(tags)}]" if tags else ""
+    print(f"Decided as decision #{res['id']}{tagnote}")
 
 
 def entity(args):
@@ -5355,6 +5391,7 @@ def build_parser():
     decide_parser = subparsers.add_parser("decide", help="Record a decision")
     decide_parser.add_argument("content", help="Decision content")
     decide_parser.add_argument("--rationale", help="Why this decision")
+    decide_parser.add_argument("--tags", help="Comma-separated tags (e.g. project scope), like `remember`")
     decide_parser.add_argument("--supersedes", type=int, help="ID of decision this replaces")
 
     retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")

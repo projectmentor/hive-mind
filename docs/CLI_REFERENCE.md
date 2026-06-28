@@ -89,7 +89,7 @@ them. You can link a new decision to an older one it replaces, so you always
 have a clear trail of what changed and why.
 
 ```
-hv decide <content> [--rationale TEXT] [--supersedes ID]
+hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID]
 ```
 
 **Arguments:**
@@ -98,6 +98,7 @@ hv decide <content> [--rationale TEXT] [--supersedes ID]
 |---|---|
 | `content` | The decision, stated clearly. Required. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
+| `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision ids (`#N`) are node-local and shift on rebuild, so don't reference a decision by its number; find it by tag or text. |
 | `--supersedes` | The ID of a previous decision this replaces. The old decision stays on record; this one is linked to it. |
 
 **Examples:**
@@ -108,6 +109,11 @@ hv decide <content> [--rationale TEXT] [--supersedes ID]
 # With rationale
 ./hv decide "Use Tailscale SSH for inter-node access" \
     --rationale "Zero-config, auth handled by the tailnet, nothing to maintain"
+
+# Project-scoped so `hv search` finds it later
+./hv decide "Android uses the runit supervisor (no systemd on Termux)" \
+    --rationale "Termux has no systemd; runit/termux-services is the native supervisor" \
+    --tags hive-mind,android
 
 # Replacing a previous decision
 ./hv decide "Install Tailscale inside WSL — each device gets its own IP" \
@@ -671,10 +677,14 @@ hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
 
 ---
 
-### `hv search` — Search stored facts
+### `hv search` — Search stored facts and decisions
 
 Find facts by keyword. Results are ranked by confidence — the most corroborated
-facts come first.
+facts come first. Matching **decisions** are listed too, under a `Decisions:`
+section (newest first, superseded ones flagged), matched on their content,
+rationale, or tags — so `hv search hive-mind` surfaces that project's decisions
+alongside its facts. Decisions have no confidence, so `--min-confidence` does not
+filter them in text mode.
 
 ```
 hv search <query> [--format {text,json}] [--min-confidence N]
@@ -684,9 +694,9 @@ hv search <query> [--format {text,json}] [--min-confidence N]
 
 | Argument | What it does |
 |---|---|
-| `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. |
-| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. |
-| `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. |
+| `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. Matches facts (content/tags) and decisions (content/rationale/tags). |
+| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. JSON is a flat list; each row carries a `kind` field (`fact` or `decision`). |
+| `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. (In JSON, decisions carry no confidence, so a `min_confidence > 0` consumer drops them.) |
 
 **Examples:**
 ```bash

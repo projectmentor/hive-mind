@@ -136,15 +136,21 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
 
 
 @mcp.tool()
-def hive_decide(content: str, rationale: str = "") -> str:
+def hive_decide(content: str, rationale: str = "", tags: str = "") -> str:
     """Record an architectural or process DECISION with its rationale.
 
     Use for choices that shape future work. Search first to avoid duplicating an existing
     decision. (Decisions are not source-tagged by the CLI; the rationale is the provenance.)
+
+    tags: comma-separated (e.g. the project) so the decision is findable by hive_search /
+    `hv search` by tag/text instead of by an unstable, node-local decision id.
     """
     args = ["decide", content]
     if rationale:
         args += ["--rationale", rationale]
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    if tag_list:
+        args += ["--tags", ",".join(tag_list)]
     return _run_hv(args)
 
 

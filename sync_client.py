@@ -91,9 +91,33 @@ def _differing_windows(local_chunks, remote_chunks):
                 yield node, ci * SIZE + 1, (ci + 1) * SIZE
 
 
+def _peer_label(peer):
+    """A clean, unambiguous label for sync output: the peer's ADDRESS (host:port), not the
+    .peers.json `id` (which can be a principal like "david" — many devices share one).
+    `hv peers` maps an address to its device_id + principal."""
+    url = str(peer.get("url", "")).rstrip("/")
+    return url.split("://", 1)[-1] if url else str(peer.get("id", "?"))
+
+
+def _short_err(e):
+    """A one-line reason for a failed peer round, instead of the raw requests/urllib3 dump."""
+    exc = requests.exceptions
+    if isinstance(e, exc.ConnectTimeout):
+        return "connect timeout"
+    if isinstance(e, exc.ReadTimeout):
+        return "read timeout"
+    if isinstance(e, exc.SSLError):
+        return "TLS error"
+    if isinstance(e, exc.ConnectionError):
+        return "connection refused / unreachable"
+    if isinstance(e, exc.HTTPError):
+        return f"HTTP {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+    return (str(e).split("(Caused by", 1)[0].strip()[:80] or e.__class__.__name__)
+
+
 def _sync_with_peer(peer):
     base = peer["url"].rstrip("/")
-    pid = peer.get("id", base)
+    pid = _peer_label(peer)
 
     local = _local_entries()
     local_root = merkle.merkle_root(merkle.chunk_hashes(local))
@@ -159,9 +183,9 @@ def sync_now():
         try:
             _sync_with_peer(peer)
         except requests.RequestException as e:
-            print(f"  {peer.get('id', peer.get('url'))}: offline/unreachable ({e})")
+            print(f"  {_peer_label(peer)}: unreachable ({_short_err(e)})")
         except Exception as e:
-            print(f"  {peer.get('id', peer.get('url'))}: error {e}")
+            print(f"  {_peer_label(peer)}: error ({_short_err(e)})")
 
 
 if __name__ == "__main__":

@@ -84,9 +84,11 @@ jobs:
         run: TERMUX_VERSION=1 bash -c '. scripts/installer/_service.sh; runit_uninstall hive-sync; runit_uninstall hive-sync'
       - name: installer scripts lint clean (bash -n)
         run: |
-          for f in install.sh _install_node.sh _service.sh _invite.sh _uninstall.sh _update.sh _status.sh dispatcher.sh; do
+          for f in install.sh _install_node.sh _service.sh _invite.sh _uninstall.sh _update.sh _reset.sh _status.sh dispatcher.sh; do
             bash -n "scripts/installer/$f"
           done
+          bash scripts/installer/_reset.sh --help | grep -q 'reset'      # reset usage works
+          bash scripts/installer/dispatcher.sh help | grep -q 'reset'    # dispatcher routes it
           # Per-OS service backends now live under scripts/platform/<os>/ (see scripts/README.md).
           for f in scripts/platform/linux/_units.sh scripts/platform/macos/_launchd.sh scripts/platform/termux/_runit.sh; do
             bash -n "$f"

@@ -1,5 +1,5 @@
 {
-  "digest": "b1b1a60097cc36d6ab960e0c423f5f42c6caa5491361bec2b2371775ae48824f",
+  "digest": "4ddf05f1e32caeeeb516acf0c1cb204ecd51aa77a2df5dd9eb267634ca8a8195",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -30,7 +30,7 @@
     "glama.json": "324dd61ba65a72154bb599baf92da55d6d9f34a952371681360fd55bf9e12b8d",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hive_sync_daemon.py": "3528f2de4ed602f729b7d8faa2c76176f0fb5c6f2d3aeec287d19a8ed0973985",
-    "hv": "8c020e80e72ae41f8f79bbb54f45020e2863587f2351855229b68ce6d055f1af",
+    "hv": "96c89163a7308ac857e74c004e1efd45f54013d8e0ec736297e05c4ebf34f0a6",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "e2f2831359968dce15110190660bc26aad9faae4e662d4d2289b46b60985614c",
     "integrations/claude-code/wire-up/SKILL.md": "a1ff0f388cddf1bbface6670e40b8647667a4c45656cbafb4d728f083c514e97",

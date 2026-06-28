@@ -1,5 +1,5 @@
 {
-  "digest": "6c3ed5958562cbcb3209e6985ce0091edd462f839e5a3c4f95c29923f0480756",
+  "digest": "b1b1a60097cc36d6ab960e0c423f5f42c6caa5491361bec2b2371775ae48824f",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -63,7 +63,7 @@
     "scripts/platform/linux/_units.sh": "100d9e8970dada5b027147d9a90d2af474e0accdf4bc1d7c157c15ebb96f6216",
     "scripts/platform/macos/_launchd.sh": "ff0a12116f5a625e7066de3a03822cf5d740e0a5f070a37af47c94fef3ae72a8",
     "scripts/platform/termux/_runit.sh": "3306411d30ec5dcc37c1becc16b530c96792fab7ded01ac1d7a1afea9b935286",
-    "sync_client.py": "3b3276693a20fe6c6cec527d0f09edc1e036b75d3d69adabd4d34729c382c00b",
+    "sync_client.py": "5e47569aeef6a9ca98cf264e75869a3f0fe8f732618bd9a0613e66bc23848baa",
     "sync_common.py": "b70480b6b8c20e115aa7adb17520fd71cf9a4aa9ebe6dd0e52cc86cf740a11f1",
     "sync_daemon.py": "f5ee127c4c15579244b5f80a9587ff55dd4575a978763917583175808d980cfe",
     "tests/conftest.py": "8cdd191e3b8336ac1e38a234cbe698784b09ee28c73f7071290b2183f14004ea",

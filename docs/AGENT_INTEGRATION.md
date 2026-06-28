@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.14`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.15`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -209,6 +209,16 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.15` — **taggable, searchable decisions**. `hv decide --tags <a,b>` records project/topic tags on
+  a decision (journaled additively in the decision payload; projected to a new `decisions.tags`
+  column — pre-1.15 decisions read back untagged). `hv search` now **also returns matching decisions**
+  (a `LIKE` over content, rationale and tags, newest-first, superseded ones flagged) alongside facts,
+  so a project decision is findable by tag or text instead of by its node-local, rebuild-unstable
+  `#id` (the local id is a store.db rowid — it differs between nodes and shifts on rebuild, so it was
+  never a stable cross-node reference). `hv search --format json` stays a flat list but each row gains
+  a `kind` discriminator (`fact` | `decision`); a `min_confidence > 0` consumer naturally drops
+  decisions (they carry no confidence). The MCP `hive_decide` gains a `tags` argument for parity.
+  Additive journal field, wire-compatible — no sync, admission, or CLI-removal change.
 - `1.14` — **standards-anchored crypto**. The bundled symmetric layer moved off a hand-rolled
   SHA-256-CTR keystream + HMAC encrypt-then-MAC onto pure-Python **ChaCha20-Poly1305 (RFC 8439,
   `chacha20poly1305.py`)** — so the crypto self-test pins the RFC's *published* known-answer vector

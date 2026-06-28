@@ -4792,34 +4792,119 @@ def _peer_status(url, local_root):
         return "unreachable"
 
 
+def _join_request_label(device_id):
+    """The human-readable label a device advertised in its join-request (last one wins), or '' if
+    none — the device-NAME source for `hv peers`, mirroring _join_request_url."""
+    label = ""
+    for e in merkle.read_all_entries(JOURNAL_DIR):
+        if e.get("type") == "governance":
+            p = e.get("payload", {})
+            if p.get("action") == "join-request" and p.get("device_id") == device_id and p.get("label"):
+                label = p["label"]
+    return label
+
+
 def peers_cmd(args):
-    """List the hive's MEMBERS by device + principal + address + reachability. Authoritative: the
-    roster comes from the governance journal (admitted device_ids + their principals), and each
-    device's address from the join-request URL it advertised — NOT from the local .peers.json labels
-    (which can mislabel a peer by principal). Read-only; probes each peer's /sync/merkle-root."""
+    """List hive MEMBERS by name + device + principal + address + last-seen + reachability.
+    Authoritative roster from the governance journal (admitted device_ids + principals). NAME is the
+    device's advertised join-request label. ADDRESS is resolved from a LIVE probe of the local
+    .peers.json peers (/sync/hello -> node_id) first, then the advertised join-request URL — so a
+    reachable peer (e.g. gregorius) shows its address even if it never advertised one. LAST SEEN is
+    the date of the device's newest journal entry, so dormant/dead devices are obvious; a footer
+    surfaces ready `hv group purge` commands for devices idle >14 days. Read-only."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     if not gov["owner_id"]:
         print("No owner established yet — no hive members to list. (`hv owner init`, or sync a hive then `hv join`.)")
         return
     local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
-    rows = []
+
+    # newest journal-entry timestamp per device (the staleness signal)
+    last_seen = {}
+    for e in entries:
+        d = e.get("node_id"); ts = e.get("timestamp", "")
+        if d and ts > last_seen.get(d, ""):
+            last_seen[d] = ts
+
+    # Probe local .peers.json peers ONCE: /sync/hello -> node_id, so an admitted device maps to a
+    # live address even when it never recorded a join-request URL (the gregorius gap).
+    probed = {}   # node_id -> (address, status, label) from a live probe of the local peer list
+    try:
+        import requests
+        import sync_common
+        peerlist = sync_common.load_peers().get("peers", [])
+    except Exception:
+        requests, peerlist = None, []
+    for peer in (peerlist or []):
+        url = str(peer.get("url", "")).rstrip("/")
+        if not url or requests is None:
+            continue
+        try:
+            nid = requests.get(url + "/sync/hello", timeout=5).json().get("node_id")
+            if not nid:
+                continue
+            try:
+                root = requests.get(url + "/sync/merkle-root", timeout=5).json().get("root_hash")
+                st = "reachable · in sync" if root == local_root else "reachable · diverged"
+            except Exception:
+                st = "reachable"
+            try:
+                lbl = requests.get(url + "/hive/info", timeout=5).json().get("label", "")
+            except Exception:
+                lbl = ""
+            probed[nid] = (url.replace("http://", "").replace("https://", ""), st, lbl)
+        except Exception:
+            continue
+
+    def _short(d):
+        return (d[:11] + "…") if len(d) > 12 else d
+
+    def _age_days(ts):
+        try:
+            import datetime
+            t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return (datetime.datetime.now(datetime.timezone.utc) - t).days
+        except Exception:
+            return None
+
+    rows, stale = [], []
     for d in sorted(gov["admitted"]):
+        pr = probed.get(d)
         prin = gov["principals"].get(d) or "?"
         if d == NODE_ID:
-            addr, status = (_self_address() or "—"), "this device"
+            name, addr, status = NODE_LABEL, (_self_address() or "—"), "this device"
+        elif pr:                                           # live .peers.json resolution (addr, status, label)
+            name = pr[2] or _join_request_label(d) or "?"
+            addr, status = pr[0], pr[1]
         else:
+            name = _join_request_label(d) or "?"
             url = _join_request_url(d)
-            addr = url.rstrip("/").replace("http://", "") if url else "(no advertised address)"
-            status = _peer_status(url, local_root)
-        rows.append((d, prin, addr, status))
-    wd = max((len(r[0]) for r in rows), default=6)
-    wp = max([len(str(r[1])) for r in rows] + [len("PRINCIPAL")])
-    wa = max([len(r[2]) for r in rows] + [len("ADDRESS")])
+            if url:
+                addr, status = url.rstrip("/").replace("http://", ""), _peer_status(url, local_root)
+            else:
+                addr, status = "—", "no address"
+        seen = (last_seen.get(d, "")[:10]) or "—"
+        rows.append((name, _short(d), prin, addr, seen, status))
+        if d != NODE_ID:
+            age = _age_days(last_seen.get(d, ""))
+            if age is not None and age > 14:
+                stale.append((d, name, seen, age))
+
+    wn = max([len(str(r[0])) for r in rows] + [len("NAME")])
+    wd = max([len(str(r[1])) for r in rows] + [len("DEVICE")])
+    wp = max([len(str(r[2])) for r in rows] + [len("PRINCIPAL")])
+    wa = max([len(str(r[3])) for r in rows] + [len("ADDRESS")])
+    ws = max([len(str(r[4])) for r in rows] + [len("LAST SEEN")])
     print(f"hive {gov['hive_id']} — owner {gov['owner_id']}  ({len(rows)} admitted device(s))")
-    print(f"  {'DEVICE'.ljust(wd)}  {'PRINCIPAL'.ljust(wp)}  {'ADDRESS'.ljust(wa)}  STATUS")
-    for d, prin, addr, status in rows:
-        print(f"  {d.ljust(wd)}  {str(prin).ljust(wp)}  {addr.ljust(wa)}  {status}")
+    print(f"  {'NAME'.ljust(wn)}  {'DEVICE'.ljust(wd)}  {'PRINCIPAL'.ljust(wp)}  {'ADDRESS'.ljust(wa)}  {'LAST SEEN'.ljust(ws)}  STATUS")
+    for name, dev, prin, addr, seen, status in rows:
+        print(f"  {str(name).ljust(wn)}  {dev.ljust(wd)}  {str(prin).ljust(wp)}  {str(addr).ljust(wa)}  {seen.ljust(ws)}  {status}")
+    if stale:
+        print("\n  Stale candidate(s) — no activity in >14 days. To remove (owner only):")
+        for d, name, seen, age in stale:
+            print(f"    hv group purge {d}    # {name}, last seen {seen} ({age}d ago)")
+    else:
+        print("\n  Stale/dead device? Owner: hv group purge <device_id>  (tombstone; entries stay in the journal but stop counting)")
 
 
 def discover_cmd(args):

@@ -1,5 +1,5 @@
 {
-  "digest": "ca2a38630db94482e3e882054f423781d6b90d2d37767f5fa839445eb9b115e3",
+  "digest": "a6aaa39b781f0f4ebce7814a56025c3b934c2329d4da2bfed8855d1b47a1f1ce",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -19,8 +19,8 @@
     "config/nudge.env.example": "b95d4e44478c4fc0b0a09b45858b616c6edc4127d4946334e8c8983556d97785",
     "crypto_selftest.py": "5cfacd5a3ca4936f1d5a15c2ec088accf576b78d736365860c8163902ad98be4",
     "docs/ADVISORIES.md": "2d0c3c0965f52086101737f69439b7173728bfb4c63fa5fb718616f811091e7f",
-    "docs/AGENT_INTEGRATION.md": "5db0e25df715fe23dd658548ee14af8a069759cd062c3179f65c89a5471d99b6",
-    "docs/CLI_REFERENCE.md": "2f564c3aa3d9305a351b85c8e973f8bcb6df054a5f0fb750079f0d449380ef6e",
+    "docs/AGENT_INTEGRATION.md": "9c80986c87e980e2b99ca79530a631e3279d50682b7225d2d61697de80485f9b",
+    "docs/CLI_REFERENCE.md": "143f978fc996c2946805ef03e34560fb362ea2bea006a260a9c50aea38c96c12",
     "docs/HV_ARCHITECTURE.md": "767a440683dd04d59b1b47f0a2f4f6a9c15173dbaf187d9c793b6a866327b552",
     "docs/INTERNALS.md": "54da83b3ae2e29967b3a9f6676af186bf9fe2deb46fe39433714fe0d4a0366be",
     "docs/P2P_DESIGN.md": "933781919e2ad7693bc92a8457cb867e03c6229d253a23129ac7a8b314cb8f31",
@@ -30,12 +30,12 @@
     "glama.json": "324dd61ba65a72154bb599baf92da55d6d9f34a952371681360fd55bf9e12b8d",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hive_sync_daemon.py": "3528f2de4ed602f729b7d8faa2c76176f0fb5c6f2d3aeec287d19a8ed0973985",
-    "hv": "96c89163a7308ac857e74c004e1efd45f54013d8e0ec736297e05c4ebf34f0a6",
+    "hv": "3ebc01158e96a528bebbda7e5e807b7a9c05eac2af04215355a734761426ed9d",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "e2f2831359968dce15110190660bc26aad9faae4e662d4d2289b46b60985614c",
     "integrations/claude-code/wire-up/SKILL.md": "a1ff0f388cddf1bbface6670e40b8647667a4c45656cbafb4d728f083c514e97",
     "integrations/hermes/__init__.py": "fa3240aa56d9a4e32efd09a431a6305d6b317fd4cd17d93e860dc48e0499e3ce",
-    "integrations/mcp/hive_mcp.py": "501a4a8c6b342dfb3b83175b518928c36254da4bc383d977dc7173686c3451ee",
+    "integrations/mcp/hive_mcp.py": "57794b9ae5ccf9c80ac25fa35424960d24d5ffa08fdfded77ad5faa607c922ae",
     "integrations/mcp/install.sh": "d99338a4ebfdc667785e7582b0cd16074f79e7206469c4a14094c967f5a975c2",
     "merkle.py": "856cd3085fb6669e276e9d46adae2b0755f486ebf89758b1bd9ee0e286191564",
     "requirements.txt": "7cc4959877dbe6b6c63a8eb1bfe3bfb545fa8fe5b28b1b2c13e4a7c1c0d1c4d4",
@@ -99,5 +99,5 @@
     "utilities/migrate_journal.py": "aa00124580fcb0e33d4a2e7aadf0a19fe7c6dab39b07d1309e3b9816e7a7120f",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
-  "version": "1.14"
+  "version": "1.15"
 }

@@ -145,7 +145,8 @@ Most of the time your agents call `hv` for you. Full reference:
 | `hive-mind install` | Full device setup from scratch |
 | `hive-mind status`  | Show device health and peer sync state |
 | `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys; `--yes` skips the confirmation prompt) |
-| `hive-mind update`  | Pull latest and restart the daemon |
+| `hive-mind update`  | Pull latest and restart the daemon (auto-heals after a force-push / history rewrite) |
+| `hive-mind reset`   | Recover a wedged install: force-align code to `origin` + rebuild + restart + verify. Keeps your Hive data (journal, keys, identity). `-y` skips the prompt. |
 
 ---
 

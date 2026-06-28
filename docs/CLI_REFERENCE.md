@@ -828,7 +828,8 @@ hive-mind <subcommand> [options]
 | Subcommand | What it does |
 |---|---|
 | `install` | Set up this device from scratch (discovery-driven bootstrap or join). |
-| `update` | Pull the latest code and restart the sync daemon. |
+| `update` | Pull the latest code and restart the sync daemon. **Auto-heals** after a force-push / history rewrite: when a fast-forward isn't possible and the tree is clean, it hard-resets to the upstream instead of aborting. |
+| `reset` | Recover a **wedged** install in one command: force-align the code to `origin` (even after a rewrite, even with local edits), rebuild the DB from the journal, refresh the supervisor units + Claude Code hooks, restart the daemon, and verify authenticity. **Your Hive (journal, keys, device identity) is preserved** — this is not `uninstall`. Use it when `hv doctor`/`hv verify` is unhappy after a breaking change. `-y` skips the prompt. |
 | `status` | Show device health and peer sync state. |
 | `invite` | Print the one-line address to paste on a new device so it can join this hive. |
 | `uninstall` | Remove HiveMind from this device (see flags below). |

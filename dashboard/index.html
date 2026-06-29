@@ -156,6 +156,16 @@ const PER=25;
 let META={}, state={view:'overview',node:null,nodeTab:'overview',detail:null}, PEERS=[];
 let LAST={facts:[],decisions:[],sessions:[]};   // current rows, for detail lookups
 
+// Click handling via DELEGATION (one document listener) rather than inline data-onclick="" attributes.
+// Inline handler attributes can be silently dropped by some browser environments (extensions, proxy
+// CSP, cached quirks) while JS-assigned handlers still fire — which is exactly the "only the nav
+// works" failure. Delegation uses the same JS mechanism the nav relies on, so it works everywhere.
+document.addEventListener('click', e=>{
+  const el=e.target.closest('[data-onclick]'); if(!el) return;
+  try{ new Function('event', el.getAttribute('data-onclick')).call(el, e); }
+  catch(err){ console.error('dashboard click handler:', err); }
+});
+
 (async function boot(){
   try{ META=await getJSON('/api/overview'); }catch(e){ $('#app').innerHTML='<div class="empty">could not reach /api/overview — is the daemon running?</div>'; return; }
   $('#hRole').textContent=META.role; $('#hRole').className='badge link '+(META.role==='OWNER'?'owner':'');
@@ -178,13 +188,13 @@ function render(){
 
 /* ---------- modals ---------- */
 function openModal(title,bodyHtml,logo){
-  $('#modal').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal">
-    <div class="mh">${logo?'<img src="logo.svg" alt="">':''}<strong>${esc(title)}</strong><button class="x" onclick="closeModal()">×</button></div>
+  $('#modal').innerHTML=`<div class="modal-bg" data-onclick="if(event.target===this)closeModal()"><div class="modal">
+    <div class="mh">${logo?'<img src="logo.svg" alt="">':''}<strong>${esc(title)}</strong><button class="x" data-onclick="closeModal()">×</button></div>
     <div class="mb">${bodyHtml}</div></div></div>`;
 }
 window.closeModal=()=>{$('#modal').innerHTML='';};
 window.copyCmd=btn=>{const c=btn.parentElement.querySelector('code'); if(c){try{navigator.clipboard.writeText(c.textContent);}catch(e){} btn.textContent='Copied ✓'; setTimeout(()=>btn.textContent='Copy',1300);}};
-const cmdBlock=cmd=>`<div class="cmd"><code>${esc(cmd)}</code><button class="btn" onclick="copyCmd(this)">Copy</button></div>`;
+const cmdBlock=cmd=>`<div class="cmd"><code>${esc(cmd)}</code><button class="btn" data-onclick="copyCmd(this)">Copy</button></div>`;
 async function openOfficialModal(){
   openModal('Authenticity','<div class="loading"><span class="spin"></span> verifying…</div>',true);
   let v={ok:false,lines:[],version:META.contract};
@@ -212,24 +222,24 @@ async function openOfficialModal(){
 
 /* ---------- shared rows ---------- */
 function factRow(f){
-  return `<div class="row link" onclick="openFact(${f.id})"><div class="content">${esc((f.content||'').slice(0,240))}</div>
+  return `<div class="row link" data-onclick="openFact(${f.id})"><div class="content">${esc((f.content||'').slice(0,240))}</div>
    <div class="meta">
      <span class="bar"><i style="width:${Math.max(0,Math.round((f.confidence||0)*100))}%"></i></span>
      <span style="color:${confColor(f.confidence||0)}">${(f.confidence||0).toFixed(2)}</span>
      ${f.contested?'<span class="pill contested">CONTESTED</span>':''}${f.forgotten?'<span class="pill forgotten">FORGOTTEN</span>':''}
-     ${(f.tags||[]).map(t=>`<span class="chip" onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
+     ${(f.tags||[]).map(t=>`<span class="chip" data-onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
      <span style="margin-left:auto">${esc(f.source)} · ${esc(f.created)}</span></div></div>`;
 }
 function decRow(d){
-  return `<div class="row link" onclick="openDecision(${d.id})"><div class="content">#${d.id} ${esc((d.content||'').slice(0,240))}
+  return `<div class="row link" data-onclick="openDecision(${d.id})"><div class="content">#${d.id} ${esc((d.content||'').slice(0,240))}
      ${d.superseded?'<span class="pill superseded">SUPERSEDED</span>':''}</div>
    ${d.rationale?`<div class="rationale">${esc(d.rationale.slice(0,300))}</div>`:''}
-   <div class="meta">${(d.tags||[]).map(t=>`<span class="chip proj" onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
+   <div class="meta">${(d.tags||[]).map(t=>`<span class="chip proj" data-onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
      <span style="margin-left:auto">${esc(d.created)}</span></div></div>`;
 }
 function pager(cur,total,per,fn){
   const pages=Math.ceil(total/per); if(!total||total<=per) return '';
-  const b=(lab,pg,dis,on)=>`<button class="pg${on?' on':''}" ${dis?'disabled':''} onclick="${fn}(${pg})">${lab}</button>`;
+  const b=(lab,pg,dis,on)=>`<button class="pg${on?' on':''}" ${dis?'disabled':''} data-onclick="${fn}(${pg})">${lab}</button>`;
   const out=[b('«',1,cur===1),b('‹',cur-1,cur===1)]; const lo=Math.max(1,cur-2),hi=Math.min(pages,cur+2);
   if(lo>1){out.push(b('1',1,false,cur===1)); if(lo>2)out.push('<span class="pgdots">…</span>');}
   for(let p=lo;p<=hi;p++)out.push(b(String(p),p,false,p===cur));
@@ -246,20 +256,20 @@ window.closeDetail=()=>{state.detail=null; render();};
 function kv(k,v){return `<div class="kv"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`;}
 function renderDetail(){
   const d=state.detail;
-  const crumb=`<div class="crumb"><button class="back" onclick="closeDetail()">‹ Back</button><span class="who">${esc({fact:'Fact',decision:'Decision',session:'Session'}[d.kind])} detail</span></div>`;
+  const crumb=`<div class="crumb"><button class="back" data-onclick="closeDetail()">‹ Back</button><span class="who">${esc({fact:'Fact',decision:'Decision',session:'Session'}[d.kind])} detail</span></div>`;
   if(d.kind==='fact'){const f=d.data;
     $('#app').innerHTML=crumb+`<div class="panel"><h2>Fact #${f.id}</h2><div class="full">${esc(f.content)}</div></div>
       <div class="panel"><h2>Details</h2>
         ${kv('Confidence',`<span class="bar"><i style="width:${Math.round((f.confidence||0)*100)}%"></i></span> <span style="color:${confColor(f.confidence||0)}">${(f.confidence||0).toFixed(2)}</span>`)}
         ${kv('State', (f.contested?'<span class="pill contested">CONTESTED</span> ':'')+(f.forgotten?'<span class="pill forgotten">FORGOTTEN</span>':'')||'live')}
-        ${kv('Tags', (f.tags||[]).map(t=>`<span class="chip" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'<span class="muted">—</span>')}
+        ${kv('Tags', (f.tags||[]).map(t=>`<span class="chip" data-onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'<span class="muted">—</span>')}
         ${kv('Source', esc(f.source))}${kv('Created', esc(f.created))}</div>
       <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
   } else if(d.kind==='decision'){const x=d.data;
     $('#app').innerHTML=crumb+`<div class="panel"><h2>Decision #${x.id}${x.superseded?' <span class="pill superseded">SUPERSEDED</span>':''}</h2><div class="full">${esc(x.content)}</div></div>
       ${x.rationale?`<div class="panel"><h2>Rationale</h2><div class="full" style="color:var(--dim)">${esc(x.rationale)}</div></div>`:''}
       <div class="panel"><h2>Details</h2>
-        ${kv('Tags',(x.tags||[]).map(t=>`<span class="chip proj" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'—')}
+        ${kv('Tags',(x.tags||[]).map(t=>`<span class="chip proj" data-onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'—')}
         ${kv('Created',esc(x.created))}</div>
       <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
   } else {const s=d.data;
@@ -279,11 +289,11 @@ function renderDetail(){
 async function overview(){
   $('#app').innerHTML=`
    <div class="grid cards">
-     <div class="card link" onclick="goTab('corpus')"><div class="lbl">Facts</div><div class="stat">${META.facts}</div></div>
-     <div class="card link" onclick="goTab('corpus')"><div class="lbl">Decisions</div><div class="stat">${META.decisions}</div></div>
-     <div class="card link" onclick="goTab('hive')"><div class="lbl">Nodes</div><div class="stat">${META.nodes} <small>admitted</small></div></div>
+     <div class="card link" data-onclick="goTab('corpus')"><div class="lbl">Facts</div><div class="stat">${META.facts}</div></div>
+     <div class="card link" data-onclick="goTab('corpus')"><div class="lbl">Decisions</div><div class="stat">${META.decisions}</div></div>
+     <div class="card link" data-onclick="goTab('hive')"><div class="lbl">Nodes</div><div class="stat">${META.nodes} <small>admitted</small></div></div>
      <div class="card"><div class="lbl">Contested</div><div class="stat" style="color:${META.contested?'var(--bad)':'var(--ink)'}">${META.contested}</div></div>
-     <div class="card link" id="auditCard" onclick="goView('audit')"><div class="lbl">Audit</div><div class="stat"><span class="spin"></span></div></div>
+     <div class="card link" id="auditCard" data-onclick="goView('audit')"><div class="lbl">Audit</div><div class="stat"><span class="spin"></span></div></div>
    </div>
    <div class="panel"><h2>Top facts</h2><div id="ovFacts">${spin()}</div></div>
    <div class="panel"><h2>Recent decisions</h2><div id="ovDecs">${spin()}</div></div>`;
@@ -333,7 +343,7 @@ const dotFor=s=>({'in sync':'ok','reachable':'ok','admitted':'ok','diverged':'st
 function peerRows(peers,probing){
   return peers.map(p=>{const cls=p.self?'self':dotFor(p.status);
     const st=p.self?p.status:(probing&&!/stale|offline/.test(p.status)?`<span class="spin" style="width:11px;height:11px"></span> resolving…`:esc(p.status));
-    return `<tr class="link" onclick="openNode('${esc(p.device)}')" title="View this node">
+    return `<tr class="link" data-onclick="openNode('${esc(p.device)}')" title="View this node">
       <td><span class="dot ${cls}"></span>${esc(p.name)}</td><td class="mono">${esc(p.device)}</td><td>${esc(p.principal)}</td>
       <td class="mono">${esc(p.addr)}</td><td>${esc(p.seen)}</td><td>${st}</td></tr>`;}).join('');
 }
@@ -364,7 +374,7 @@ function telemetryBody(t,page,pagerFn,showNode){
   const xlab=days.map((d,i)=>`<div>${(i===0||i===days.length-1)?d.day.slice(5):''}</div>`).join('');
   const models=Object.entries(t.by_model||{}).sort((a,b)=>(b[1].in+b[1].out)-(a[1].in+a[1].out));
   const total=t.recent_total||T.sessions||0; const pg=pager(page,total,PER,pagerFn);
-  const recent=(t.recent||[]).map((r,i)=>`<tr class="link" onclick="openSession(${i})"><td class="mono">${esc(r.when)}</td>${showNode?`<td>${esc(r.node_name||r.node||'-')}</td>`:''}<td>${esc(r.agent)}</td><td>${esc(r.project)}</td><td>${fmtDur(r.duration_s)}</td><td>${fmtNum(r.tokens_in)}/${fmtNum(r.tokens_out)}</td><td>${fmtCost(r.cost_usd)}</td></tr>`).join('');
+  const recent=(t.recent||[]).map((r,i)=>`<tr class="link" data-onclick="openSession(${i})"><td class="mono">${esc(r.when)}</td>${showNode?`<td>${esc(r.node_name||r.node||'-')}</td>`:''}<td>${esc(r.agent)}</td><td>${esc(r.project)}</td><td>${fmtDur(r.duration_s)}</td><td>${fmtNum(r.tokens_in)}/${fmtNum(r.tokens_out)}</td><td>${fmtCost(r.cost_usd)}</td></tr>`).join('');
   return `<div class="grid cards">
      <div class="card"><div class="lbl">Sessions</div><div class="stat">${fmtNum(T.sessions||0)}</div></div>
      <div class="card"><div class="lbl">Time</div><div class="stat" style="font-size:20px">${fmtDur(T.duration_s)}</div></div>
@@ -399,7 +409,7 @@ async function telemetry(){
      <select id="tagent"><option value="">All agents</option>${opt(fac.agents,TF.fagent)}</select>
    </div>`;
   const line=`<div class="note"><b>${admitted} admitted · ${online} online · ${reporting} reporting telemetry</b>${noTel?` · ${noTel} online without telemetry (older code — joins after update)`:''}${off?` · ${off} offline`:''}. Telemetry is local to each node, aggregated live over the tailnet.</div>`;
-  const nodesPanel=`<div class="panel"><h2>${(t.nodes||[]).length} Nodes</h2><table><thead><tr><th>Node</th><th>Sessions</th><th>Status</th></tr></thead><tbody>${(t.nodes||[]).map(n=>`<tr class="link ${n.status==='offline'?'off':''}" onclick="openNode('${esc(n.node_id)}')"><td><span class="dot ${dotForNode(n.status)}"></span>${esc(n.node)}</td><td>${fmtNum(n.sessions)}</td><td>${esc(statusText(n.status))}</td></tr>`).join('')}</tbody></table></div>`;
+  const nodesPanel=`<div class="panel"><h2>${(t.nodes||[]).length} Nodes</h2><table><thead><tr><th>Node</th><th>Sessions</th><th>Status</th></tr></thead><tbody>${(t.nodes||[]).map(n=>`<tr class="link ${n.status==='offline'?'off':''}" data-onclick="openNode('${esc(n.node_id)}')"><td><span class="dot ${dotForNode(n.status)}"></span>${esc(n.node)}</td><td>${fmtNum(n.sessions)}</td><td>${esc(statusText(n.status))}</td></tr>`).join('')}</tbody></table></div>`;
   $('#app').innerHTML=controls+line+nodesPanel+(t.totals&&t.totals.sessions!==undefined?telemetryBody(t,TP,'goTel',true):'<div class="empty">no sessions</div>');
   $('#tsort').value=TF.sort;
   ['tsort','tnode','tproj','tagent'].forEach(id=>{const e=$('#'+id);if(e)e.onchange=telReload;});
@@ -416,9 +426,9 @@ window.goNDecs=async p=>{NC.dpage=p;renderNode();};
 function nodeQ(extra){return state.node?('node='+encodeURIComponent(state.node)+(extra?'&'+extra:'')):extra;}
 async function renderNode(){
   const p=PEERS.find(x=>x.device===state.node)||{name:state.node,device:state.node,principal:'?',addr:'—',seen:'—',status:'?',self:false};
-  const head=body=>{$('#app').innerHTML=`<div class="crumb"><button class="back" onclick="backHive()">‹ Hive</button>
+  const head=body=>{$('#app').innerHTML=`<div class="crumb"><button class="back" data-onclick="backHive()">‹ Hive</button>
       <span class="who"><span class="dot ${p.self?'self':dotFor(p.status)}"></span>${esc(p.name)}</span><span class="mono">${esc(p.device)}</span></div>
-    <div class="subnav">${['overview','corpus','stats','telemetry'].map(tb=>`<button class="${state.nodeTab===tb?'on':''}" onclick="nodeTab('${tb}')">${tb[0].toUpperCase()+tb.slice(1)}</button>`).join('')}</div>
+    <div class="subnav">${['overview','corpus','stats','telemetry'].map(tb=>`<button class="${state.nodeTab===tb?'on':''}" data-onclick="nodeTab('${tb}')">${tb[0].toUpperCase()+tb.slice(1)}</button>`).join('')}</div>
     <div id="ndbody">${body}</div>`;};
   head(spin('loading…')); const body=()=>$('#ndbody');
   const unreachable=`<div class="note">${esc(p.name)} isn't reachable right now. Per-node views are proxied live over the tailnet, so an offline node — or one on older code without these endpoints — has nothing to show here.</div>`;
@@ -470,13 +480,13 @@ function loadStatus(nodeParam){   // fire the three commands in parallel; each p
   });
 }
 async function status(){
-  $('#app').innerHTML=`<div class="crumb"><button class="back" onclick="goTab('overview')">‹ Overview</button><span class="who">Device status</span></div><div id="stbody">${statusPanels()}</div>`;
+  $('#app').innerHTML=`<div class="crumb"><button class="back" data-onclick="goTab('overview')">‹ Overview</button><span class="who">Device status</span></div><div id="stbody">${statusPanels()}</div>`;
   loadStatus(null);
 }
 
 /* ---------- Audit view (Overview audit card) ---------- */
 async function audit(){
-  $('#app').innerHTML=`<div class="crumb"><button class="back" onclick="goTab('overview')">‹ Overview</button><span class="who">Audit</span></div><div id="aubody">${spin()}</div>`;
+  $('#app').innerHTML=`<div class="crumb"><button class="back" data-onclick="goTab('overview')">‹ Overview</button><span class="who">Audit</span></div><div id="aubody">${spin()}</div>`;
   let a; try{ a=await getJSON('/api/audit'); }catch(e){ const b=$('#aubody'); if(b)b.innerHTML='<div class="empty">unavailable</div>'; return; }
   const card=(lbl,n,warn)=>`<div class="card"><div class="lbl">${lbl}</div><div class="stat" style="${warn&&n?'color:var(--warn)':''}">${n}</div></div>`;
   const s=a.samples||{};
@@ -492,7 +502,7 @@ async function loadRelated(kind,id){
   const el=$('#related'); if(!el)return;
   if(!r.related||!r.related.length){ el.innerHTML='<div class="empty">No facts share tags with this '+esc(kind)+'.</div>'; return; }
   LAST.facts=r.related;
-  el.innerHTML=`<table><thead><tr><th>Conf</th><th>Shared tags</th><th>Fact</th></tr></thead><tbody>${r.related.map(f=>`<tr class="link" onclick="openFact(${f.id})"><td><span style="color:${confColor(f.confidence)}">${f.confidence.toFixed(2)}</span></td><td>${(f.shared||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join(' ')}</td><td>${esc((f.content||'').slice(0,110))}${f.contested?' <span class="pill contested">CONTESTED</span>':''}</td></tr>`).join('')}</tbody></table>`;
+  el.innerHTML=`<table><thead><tr><th>Conf</th><th>Shared tags</th><th>Fact</th></tr></thead><tbody>${r.related.map(f=>`<tr class="link" data-onclick="openFact(${f.id})"><td><span style="color:${confColor(f.confidence)}">${f.confidence.toFixed(2)}</span></td><td>${(f.shared||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join(' ')}</td><td>${esc((f.content||'').slice(0,110))}${f.contested?' <span class="pill contested">CONTESTED</span>':''}</td></tr>`).join('')}</tbody></table>`;
 }
 </script>
 </body></html>

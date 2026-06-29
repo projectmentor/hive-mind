@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>HiveMind</title>
+<link rel="icon" href="favicon.svg">
+<style>
+:root{
+  /* HiveMind brand tokens (website/site/assets/dev.css) */
+  --bg:#08090a; --surface:#111213; --elevated:#1a1b1c;
+  --ink:#f7f8f8; --dim:#9ca3af; --muted:#6b7280;
+  --accent:#F2994A; --accent-hover:#E07A00;
+  --line:rgba(255,255,255,.08); --line-subtle:rgba(255,255,255,.04);
+  --font:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ok:#3fb950; --warn:#d29922; --bad:#f85149;
+  --r-card:8px; --r-panel:12px; --r-btn:6px;
+}
+*{box-sizing:border-box}
+body{margin:0;font:14px/1.55 var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+header{position:sticky;top:0;z-index:5;background:rgba(8,9,10,.86);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);padding:11px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+header .logo{height:26px;display:block}
+.badge{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--dim);font-weight:500}
+.badge.ok{color:var(--ok);border-color:rgba(63,185,80,.35);background:rgba(63,185,80,.08)}
+.badge.owner{color:var(--accent);border-color:rgba(242,153,74,.35);background:rgba(242,153,74,.08)}
+.badge.mono{font-family:var(--mono)}
+.spacer{flex:1}
+nav{display:flex;gap:4px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+nav button{background:none;border:0;color:var(--dim);padding:8px 14px;border-radius:var(--r-btn);cursor:pointer;font:600 13px var(--font)}
+nav button:hover{color:var(--ink);background:var(--elevated)}
+nav button.active{color:var(--ink);background:var(--elevated);box-shadow:inset 0 -2px 0 var(--accent)}
+main{padding:18px;max-width:1100px;margin:0 auto}
+.grid{display:grid;gap:14px}
+.cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);padding:14px 16px}
+.stat{font-size:26px;font-weight:700;letter-spacing:-.5px}
+.stat small{font-size:12px;font-weight:500;color:var(--dim);letter-spacing:0}
+.lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-panel);margin-top:16px;overflow:hidden}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;display:flex;align-items:center}
+.row{padding:12px 16px;border-bottom:1px solid var(--line-subtle)}
+.row:last-child{border-bottom:0}
+.content{font-size:14px}
+.meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:12px}
+.chip{font-size:11px;padding:2px 8px;border-radius:var(--r-btn);background:var(--elevated);color:var(--dim);border:1px solid var(--line);cursor:pointer;font-weight:500}
+.chip.proj{background:rgba(242,153,74,.1);color:var(--accent);border-color:rgba(242,153,74,.3)}
+.chip:hover{border-color:var(--accent)}
+.bar{height:6px;border-radius:6px;background:var(--elevated);overflow:hidden;width:88px;display:inline-block;vertical-align:middle}
+.bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--accent-hover),var(--accent))}
+.pill{font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:999px}
+.pill.contested{background:rgba(248,81,73,.12);color:var(--bad);border:1px solid rgba(248,81,73,.35)}
+.pill.superseded{background:var(--elevated);color:var(--dim);border:1px solid var(--line)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px;vertical-align:middle}
+.dot.self{background:var(--accent)} .dot.ok{background:var(--ok)} .dot.admitted{background:var(--ok)} .dot.stale{background:var(--warn)} .dot.off{background:var(--muted)}
+.controls{display:flex;gap:10px;padding:14px 0;flex-wrap:wrap;align-items:center}
+input[type=search],select{background:var(--surface);border:1px solid var(--line);color:var(--ink);
+  border-radius:var(--r-btn);padding:9px 12px;font:13px var(--font);outline:none}
+input[type=search]{flex:1;min-width:180px}
+input::placeholder{color:var(--muted)}
+input:focus,select:focus{border-color:var(--accent)}
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);font-weight:600;padding:10px 16px;border-bottom:1px solid var(--line)}
+td{padding:11px 16px;border-bottom:1px solid var(--line-subtle);font-size:13px}
+tr:last-child td{border-bottom:0}
+.mono{font-family:var(--mono);font-size:12px;color:var(--dim)}
+.sub{color:var(--dim);font-size:12px;margin-top:4px}
+.note{margin:14px 0;padding:10px 14px;border:1px dashed var(--line);border-radius:10px;color:var(--dim);font-size:12px;background:var(--surface)}
+.rationale{color:var(--dim);font-size:12.5px;margin-top:5px;padding-left:12px;border-left:2px solid var(--line)}
+.count{color:var(--muted);font-size:12px;margin-left:auto;font-weight:500}
+.empty{padding:30px 16px;text-align:center;color:var(--muted)}
+footer{max-width:1100px;margin:8px auto 30px;padding:0 18px;color:var(--muted);font-size:11px}
+</style></head>
+<body>
+<header>
+  <img class="logo" src="logo.svg" alt="HiveMind">
+  <span class="badge owner" id="hRole">…</span>
+  <span class="badge ok" id="hAuth">…</span>
+  <span class="spacer"></span>
+  <span class="badge" id="hNode"></span>
+  <span class="badge mono" id="hMerkle"></span>
+</header>
+<nav>
+  <button data-v="overview" class="active">Overview</button>
+  <button data-v="corpus">Corpus</button>
+  <button data-v="hive">Hive</button>
+</nav>
+<main id="app"><div class="empty">loading…</div></main>
+<footer>Read-only · served by the sync daemon on this node · data is live from <span class="mono">/api/*</span>.</footer>
+
+<script>
+const $=(s,r=document)=>r.querySelector(s);
+const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const confColor=c=>c>=.6?'var(--ok)':c>=.3?'var(--accent)':'var(--warn)';
+const getJSON=async u=>{const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();};
+let META={}, state={view:'overview', q:'', tag:'', kind:'all'};
+
+(async function boot(){
+  try{ META=await getJSON('/api/overview'); }catch(e){ $('#app').innerHTML='<div class="empty">could not reach /api/overview — is the daemon running?</div>'; return; }
+  $('#hRole').textContent=META.role; $('#hRole').className='badge '+(META.role==='OWNER'?'owner':'');
+  $('#hAuth').textContent='✓ v'+META.contract+' authentic';
+  $('#hNode').textContent=META.node; $('#hMerkle').textContent=META.merkle;
+  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
+    state.view=b.dataset.v;
+    document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x===b));
+    render();
+  });
+  render();
+})();
+
+function render(){state.view==='overview'?overview():state.view==='corpus'?corpus():hive();}
+
+function factRow(f){
+  return `<div class="row"><div class="content">${esc(f.content).slice(0,220)}</div>
+   <div class="meta">
+     <span class="bar"><i style="width:${Math.round(f.confidence*100)}%"></i></span>
+     <span style="color:${confColor(f.confidence)}">${f.confidence.toFixed(2)}</span>
+     ${f.contested?'<span class="pill contested">CONTESTED</span>':''}
+     ${f.tags.map(t=>`<span class="chip" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
+     <span style="margin-left:auto">${esc(f.source)} · ${f.created}</span>
+   </div></div>`;
+}
+function decRow(d){
+  return `<div class="row"><div class="content">#${d.id} ${esc(d.content).slice(0,220)}
+     ${d.superseded?'<span class="pill superseded">SUPERSEDED</span>':''}</div>
+   ${d.rationale?`<div class="rationale">${esc(d.rationale).slice(0,280)}</div>`:''}
+   <div class="meta">${d.tags.map(t=>`<span class="chip proj" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
+     <span style="margin-left:auto">${d.created}</span></div></div>`;
+}
+
+async function overview(){
+  $('#app').innerHTML='<div class="empty">loading…</div>';
+  let s={facts:[],decisions:[]};
+  try{ s=await getJSON('/api/search?limit=8'); }catch(e){}
+  $('#app').innerHTML=`
+   <div class="grid cards">
+     <div class="card"><div class="lbl">Facts</div><div class="stat">${META.facts}</div></div>
+     <div class="card"><div class="lbl">Decisions</div><div class="stat">${META.decisions}</div></div>
+     <div class="card"><div class="lbl">Nodes</div><div class="stat">${META.nodes} <small>admitted</small></div></div>
+     <div class="card"><div class="lbl">Contested</div><div class="stat" style="color:${META.contested?'var(--bad)':'var(--ink)'}">${META.contested}</div></div>
+   </div>
+   <div class="panel"><h2>Top facts</h2>${s.facts.slice(0,5).map(factRow).join('')||'<div class="empty">none</div>'}</div>
+   <div class="panel"><h2>Recent decisions</h2>${s.decisions.slice(0,4).map(decRow).join('')||'<div class="empty">none</div>'}</div>`;
+}
+
+let _tags=new Set();
+function corpus(){
+  $('#app').innerHTML=`
+   <div class="controls">
+     <input type="search" id="q" placeholder="Search facts & decisions…" value="${esc(state.q)}">
+     <select id="kind">
+       <option value="all">All</option><option value="fact">Facts</option><option value="decision">Decisions</option>
+     </select>
+     <select id="tag"><option value="">All tags</option></select>
+   </div>
+   <div id="results"><div class="empty">loading…</div></div>`;
+  const sync=()=>{$('#q').value=state.q;$('#kind').value=state.kind;$('#tag').value=state.tag;};
+  sync();
+  let timer;
+  const upd=()=>{state.q=$('#q').value;state.kind=$('#kind').value;state.tag=$('#tag').value;
+    clearTimeout(timer);timer=setTimeout(results,180);};
+  $('#q').oninput=upd; $('#kind').onchange=upd; $('#tag').onchange=upd;
+  results();
+}
+async function results(){
+  const p=new URLSearchParams({q:state.q,kind:state.kind,limit:'40'});
+  if(state.tag) p.set('tag',state.tag);
+  let s={facts:[],decisions:[]};
+  try{ s=await getJSON('/api/search?'+p.toString()); }catch(e){}
+  // keep the tag dropdown populated from whatever tags we have seen
+  [...s.facts.flatMap(f=>f.tags),...s.decisions.flatMap(d=>d.tags)].forEach(t=>_tags.add(t));
+  const sel=$('#tag'); if(sel){const cur=state.tag;
+    sel.innerHTML='<option value="">All tags</option>'+[..._tags].sort().map(t=>`<option ${t===cur?'selected':''}>${esc(t)}</option>`).join('');}
+  let html='';
+  if(state.kind!=='decision') html+=`<div class="panel"><h2>Facts <span class="count">${s.facts.length}</span></h2>${s.facts.map(factRow).join('')||'<div class="empty">no matches</div>'}</div>`;
+  if(state.kind!=='fact') html+=`<div class="panel"><h2>Decisions <span class="count">${s.decisions.length}</span></h2>${s.decisions.map(decRow).join('')||'<div class="empty">no matches</div>'}</div>`;
+  $('#results').innerHTML=html;
+}
+function filterTag(t){state.view='corpus';state.tag=t;state.q='';state.kind='all';
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));render();}
+
+async function hive(){
+  $('#app').innerHTML='<div class="empty">loading…</div>';
+  let peers=[];
+  try{ peers=(await getJSON('/api/peers')).peers; }catch(e){}
+  const dotFor=s=>({'in sync':'ok','reachable':'ok','admitted':'ok','diverged':'stale','stale':'stale','offline':'off'}[s]||'off');
+  const rows=peers.map(p=>{
+    const cls=p.self?'self':dotFor(p.status);
+    return `<tr><td><span class="dot ${cls}"></span>${esc(p.name)}</td>
+      <td class="mono">${esc(p.device)}</td><td>${esc(p.principal)}</td>
+      <td class="mono">${esc(p.addr)}</td><td>${esc(p.seen)}</td><td>${esc(p.status)}</td></tr>`;}).join('');
+  $('#app').innerHTML=`
+   <div class="panel"><h2>Peers <span class="count">${peers.length} admitted</span></h2>
+     <table><thead><tr><th>Name</th><th>Device</th><th>Principal</th><th>Address</th><th>Last seen</th><th>Status</th></tr></thead>
+     <tbody>${rows||'<tr><td colspan=6 class="empty">no peers</td></tr>'}</tbody></table></div>
+   <div class="note">Stale device? Owner: <span class="mono">hv group purge &lt;device_id&gt;</span> — tombstones it (journal entries stay, stop counting).</div>
+   <div class="grid cards" style="margin-top:16px">
+     <div class="card"><div class="lbl">Owner</div><div class="stat" style="font-size:17px">${META.role==='OWNER'?esc(META.node):'(remote)'}</div><div class="sub mono">${esc(META.owner_id||'—')}</div></div>
+     <div class="card"><div class="lbl">Hive</div><div class="stat mono" style="font-size:14px;color:var(--ink)">${esc(META.hive||'—')}</div></div>
+     <div class="card"><div class="lbl">Merkle root</div><div class="stat mono" style="font-size:13px;color:var(--accent)">${esc(META.merkle)}</div><div class="sub">${META.nodes} node(s) admitted</div></div>
+   </div>`;
+}
+</script>
+</body></html>

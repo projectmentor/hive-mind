@@ -1282,6 +1282,17 @@ def _days_between(ts_a, ts_b):
     return (b - a).total_seconds() / 86400.0
 
 
+def _age_days(ts):
+    """Whole days since ISO-8601 `ts`, or None if unparseable. The staleness signal for `hv peers`
+    and the dashboard /api/peers (a device idle > 14d is a purge candidate)."""
+    try:
+        import datetime
+        t = datetime.datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+        return (datetime.datetime.now(datetime.timezone.utc) - t).days
+    except Exception:
+        return None
+
+
 def _election_id(new_owner_pub_b64, basis_ts):
     """Content-addressed election proposal id: derived from WHAT is proposed (the new owner pubkey
     + the proposer's basis timestamp). So every device's vote/re-proposal for the same intent shares
@@ -1634,6 +1645,35 @@ def _fts_query(raw):
     return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
 
 
+_FACT_COLS = "id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at"
+
+
+def _query_facts(conn, query, limit=200):
+    """Facts matching `query` via FTS5 (falling back to LIKE when FTS is unavailable or the query
+    has no tokens). The shared read used by `hv search` and the dashboard /api/search."""
+    fts_expr = _fts_query(query)
+    if fts_expr is not None:
+        try:
+            return conn.execute(
+                f"SELECT {', '.join('f.' + c for c in _FACT_COLS.split(', '))} "
+                f"FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid "
+                f"WHERE facts_fts MATCH ? LIMIT ?", (fts_expr, limit)).fetchall()
+        except sqlite3.OperationalError:
+            pass  # FTS unavailable — fall back
+    return conn.execute(f"SELECT {_FACT_COLS} FROM facts WHERE content LIKE ? LIMIT ?",
+                        (f"%{query}%", limit)).fetchall()
+
+
+def _query_decisions(conn, query, limit=10):
+    """Decisions matching `query` (LIKE over content/rationale/tags), newest-first. No FTS /
+    confidence projection — the table is small. Superseded ones are included (flagged by caller)."""
+    like = f"%{query}%"
+    return conn.execute(
+        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by "
+        "FROM decisions WHERE content LIKE ? OR rationale LIKE ? OR tags LIKE ? "
+        "ORDER BY created_at DESC LIMIT ?", (like, like, like, limit)).fetchall()
+
+
 def search(args):
     """Search facts AND decisions. Facts rank/filter by EFFECTIVE confidence (the time-invariant base
     projection decayed by recency, computed at query time with $HIVE_NOW) and surface contested claims.
@@ -1642,32 +1682,8 @@ def search(args):
     node-local `#id`."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
-    cols = "id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at"
-    rows = None
-
-    fts_expr = _fts_query(args.query)
-    if fts_expr is not None:
-        try:
-            rows = conn.execute(f"""
-                SELECT {', '.join('f.' + c for c in cols.split(', '))}
-                FROM facts f JOIN facts_fts ON f.id = facts_fts.rowid
-                WHERE facts_fts MATCH ? LIMIT 200
-            """, (fts_expr,)).fetchall()
-        except sqlite3.OperationalError:
-            rows = None  # FTS unavailable — fall back
-
-    if rows is None:
-        like = f"%{args.query}%"
-        rows = conn.execute(f"SELECT {cols} FROM facts WHERE content LIKE ? LIMIT 200",
-                            (like,)).fetchall()
-
-    # Decisions: small table, no FTS / confidence — a direct LIKE over content, rationale and
-    # tags. Superseded decisions still surface (flagged), so history stays visible.
-    dlike = f"%{args.query}%"
-    dec_rows = conn.execute(
-        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by "
-        "FROM decisions WHERE content LIKE ? OR rationale LIKE ? OR tags LIKE ? "
-        "ORDER BY created_at DESC LIMIT 10", (dlike, dlike, dlike)).fetchall()
+    rows = _query_facts(conn, args.query)
+    dec_rows = _query_decisions(conn, args.query)
     conn.close()
 
     # Decay + threshold + rank in Python (effective confidence depends on `now`).
@@ -1733,6 +1749,198 @@ def decide(args):
 
     tagnote = f"  [{', '.join(tags)}]" if tags else ""
     print(f"Decided as decision #{res['id']}{tagnote}")
+
+
+# ── Dashboard read API (operator-facing; reused by the sync daemon's /api/* and by `hv dash`) ──
+# Pure read functions returning JSON-able dicts. They reuse the same projections the CLI uses
+# (confidence decay, governance, search), so the dashboard never drifts from `hv`. Read-only:
+# they never write the journal or store.db. The daemon already serves the corpus over the tailnet
+# via /sync/chunk, so /api/* exposes nothing the sync surface doesn't already.
+def _is_self_owner(gov):
+    """True iff THIS device holds the owner key AND is the established owner (same test the
+    boot-time pending-admissions notice uses). Best-effort; False when no owner key is present."""
+    try:
+        if _ed25519 is None or _owner_seed() is None:
+            return False
+        return gov.get("owner_id") == _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed()))
+    except Exception:
+        return False
+
+
+def _short_root(root):
+    disp = root if (root or "").startswith("sha256:") else ("sha256:" + root if root else "")
+    return (disp[:18] + "…" + disp[-8:]) if len(disp) > 30 else (disp or "?")
+
+
+def api_overview():
+    """Header + counts for the dashboard Overview. Cheap: counts + one merkle root, no network."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    conn = get_conn()
+    nf = conn.execute("SELECT count(*) FROM facts").fetchone()[0]
+    nd = conn.execute("SELECT count(*) FROM decisions").fetchone()[0]
+    contested = conn.execute("SELECT count(*) FROM facts WHERE contested = 1").fetchone()[0]
+    conn.close()
+    root = merkle.merkle_root(merkle.chunk_hashes(entries))
+    return {
+        "node": NODE_LABEL, "node_id": NODE_ID,
+        "hive": gov.get("hive_id"), "owner_id": gov.get("owner_id"),
+        "role": "OWNER" if _is_self_owner(gov) else "MEMBER",
+        "contract": CONTRACT_VERSION,
+        "facts": nf, "decisions": nd, "contested": contested,
+        "nodes": len(gov.get("admitted") or set()),
+        "address": _self_address() or "",
+        "merkle": _short_root(root), "merkle_full": root,
+    }
+
+
+def api_search(query="", tag=None, kind="all", min_confidence=0.0, limit=50):
+    """Facts + decisions for `query`, mirroring `hv search` (effective-confidence ranking for facts,
+    LIKE for decisions) but returning structured rows. Empty query = browse everything (top `limit`)."""
+    conn = get_conn()
+    now = os.environ.get("HIVE_NOW") or _now_iso()
+    facts, decisions = [], []
+    if kind != "decision":
+        for r in _query_facts(conn, query or ""):
+            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
+            if eff < min_confidence:
+                continue
+            tags = json.loads(r["tags"]) if r["tags"] else []
+            if tag and tag not in tags:
+                continue
+            facts.append({"id": r["id"], "content": r["content"], "tags": tags,
+                          "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                          "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        facts.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
+        facts = facts[:limit]
+    if kind != "fact":
+        for r in _query_decisions(conn, query or "", limit=limit):
+            tags = json.loads(r["tags"]) if r["tags"] else []
+            if tag and tag not in tags:
+                continue
+            decisions.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
+                              "tags": tags, "superseded": bool(r["superseded_by"]),
+                              "created": (r["created_at"] or "")[:10]})
+    conn.close()
+    return {"facts": facts, "decisions": decisions}
+
+
+def _probe_peer_map(timeout=3):
+    """Concurrently probe the local .peers.json peers — /sync/hello → node_id, /hive/info → label,
+    /sync/merkle-root vs ours → in-sync|diverged. Returns {node_id: (address, status, label)}. Bounded
+    by ONE short timeout (all probes run concurrently), so offline peers can't serialize into a long
+    hang. Empty when `requests` or the peer list is unavailable. Same resolution `hv peers` uses, but
+    parallel — this is what fills in a directly-admitted peer's name/address (the gregorius gap)."""
+    try:
+        import concurrent.futures
+        import requests
+        import sync_common
+        peerlist = sync_common.load_peers().get("peers", []) or []
+    except Exception:
+        return {}
+    if not peerlist:
+        return {}
+    local_root = merkle.merkle_root(merkle.chunk_hashes(merkle.read_all_entries(JOURNAL_DIR)))
+
+    def probe(peer):
+        url = str(peer.get("url", "")).rstrip("/")
+        if not url:
+            return None
+        try:
+            nid = requests.get(url + "/sync/hello", timeout=timeout).json().get("node_id")
+        except Exception:
+            return None
+        if not nid:
+            return None
+        try:
+            root = requests.get(url + "/sync/merkle-root", timeout=timeout).json().get("root_hash")
+            st = "in sync" if root == local_root else "diverged"
+        except Exception:
+            st = "reachable"
+        try:
+            lbl = requests.get(url + "/hive/info", timeout=timeout).json().get("label", "")
+        except Exception:
+            lbl = ""
+        return (nid, url.replace("http://", "").replace("https://", ""), st, lbl)
+
+    out = {}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(peerlist))) as ex:
+        for res in ex.map(probe, peerlist):
+            if res:
+                out[res[0]] = (res[1], res[2], res[3])
+    return out
+
+
+def api_peers(probe=True):
+    """Admitted devices for the dashboard Hive tab: name, device, principal, address, last-seen,
+    status. Names/addresses/sync-status are resolved by a bounded concurrent live probe (so a
+    directly-admitted peer like gregorius still shows a real name/address); unreachable peers fall
+    back to their join-request label/URL and last-seen staleness. Read-only; never mutates."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    last_seen = {}
+    for e in entries:
+        d, ts = e.get("node_id"), e.get("timestamp", "")
+        if d and ts > last_seen.get(d, ""):
+            last_seen[d] = ts
+    probed = _probe_peer_map() if probe else {}
+    out = []
+    for d in sorted(gov.get("admitted") or set()):
+        prin = gov["principals"].get(d) or "?"
+        seen = (last_seen.get(d, "")[:10]) or "—"
+        age = _age_days(last_seen.get(d, ""))
+        short = (d[:11] + "…") if len(d) > 12 else d
+        if d == NODE_ID:
+            name, addr, status = NODE_LABEL, (_self_address() or "—"), "self"
+        elif d in probed:
+            paddr, pst, plbl = probed[d]
+            name = plbl or _join_request_label(d) or short
+            addr, status = paddr, pst
+        else:
+            name = _join_request_label(d) or short
+            url = _join_request_url(d)
+            addr = url.rstrip("/").replace("http://", "").replace("https://", "") if url else "—"
+            status = "stale" if (age is not None and age > 14) else "offline"
+        out.append({"name": name, "device": d, "principal": prin,
+                    "addr": addr, "seen": seen, "status": status, "self": d == NODE_ID})
+    return out
+
+
+def dash(args):
+    """Print the read-only web dashboard URL(s) the sync daemon serves, and (unless --print) try to
+    open a browser. The daemon serves the SPA + /api/* on its sync port, so the dashboard is reachable
+    wherever sync is — localhost always, plus the tailnet IP for viewing from another device."""
+    port = _self_sync_port()
+    local = f"http://127.0.0.1:{port}/"
+    ip = _self_tailnet_ip()
+    tnet = f"http://{ip}:{port}/" if ip else ""
+    up = False
+    try:
+        import urllib.request
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/sync/hello", timeout=2)
+        up = True
+    except Exception:
+        up = False
+    print("HiveMind dashboard")
+    print(f"  Local:    {local}")
+    if tnet:
+        print(f"  Tailnet:  {tnet}  (open on any device on your tailnet)")
+    if not up:
+        print("\n  ⚠ The sync daemon isn't answering on this port — the dashboard won't load yet.")
+        print("    Check it with `hive-mind status`, then retry `hv dash`.")
+        return
+    if getattr(args, "print_only", False):
+        return
+    import shutil
+    opener = next(([c] for c in ("termux-open-url", "xdg-open", "open") if shutil.which(c)), None)
+    if opener:
+        try:
+            subprocess.Popen(opener + [local], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print("\n  Opening in your browser…")
+            return
+        except Exception:
+            pass
+    print("\n  (Couldn't auto-open a browser — open the Local URL above.)")
 
 
 def entity(args):
@@ -2536,7 +2744,9 @@ _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", 
 # copy at the canonical site, not from being self-listed). Listing any of them would be circular.
 _VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env",
                          ".peers.json", ".device-key", ".device-id", ".owner-key"}
-_VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg"}
+_VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg",
+                ".html", ".css", ".js", ".svg"}   # .html/.css/.js/.svg: the dashboard SPA + assets the
+                                                  # daemon serves are signed too (tamper-evident over HTTP)
 OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
 # The trust anchor: the public key, served from our own TLS domain (a DIFFERENT origin than the
 # code host). A fork can ship its own hivemind.pub, but it cannot change what this URL serves, so a
@@ -4895,14 +5105,6 @@ def peers_cmd(args):
     def _short(d):
         return (d[:11] + "…") if len(d) > 12 else d
 
-    def _age_days(ts):
-        try:
-            import datetime
-            t = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
-            return (datetime.datetime.now(datetime.timezone.utc) - t).days
-        except Exception:
-            return None
-
     rows, stale = [], []
     for d in sorted(gov["admitted"]):
         pr = probed.get(d)
@@ -5415,6 +5617,10 @@ def build_parser():
     subparsers.add_parser("whoami", help="Show this device's identity + membership status (sterile/fertile/owner)")
     subparsers.add_parser("peers", help="List hive members by device + principal + address + reachability")
 
+    dash_parser = subparsers.add_parser("dash", help="Open the read-only web dashboard (served by the sync daemon)")
+    dash_parser.add_argument("--print", dest="print_only", action="store_true",
+                             help="Print the dashboard URL(s) only; do not open a browser")
+
     doctor_parser = subparsers.add_parser("doctor", help="Health checks + device maintenance (rebuild, merkle, migrate-identity)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
     doctor_parser.add_argument("--fix", action="store_true",
@@ -5652,6 +5858,8 @@ def main():
         whoami_cmd(args)
     elif args.command == "peers":
         peers_cmd(args)
+    elif args.command == "dash":
+        dash(args)
     else:
         parser.print_help()
 

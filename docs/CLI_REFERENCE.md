@@ -15,6 +15,7 @@ memory.
 | Command | What it does |
 |---|---|
 | `hv config` | Device identity (`identity`) + owner-signed confidence (`confidence`) / quorum (`quorum`) params |
+| `hv dash` | Open the read-only web dashboard (served by the sync daemon) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
 | `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle` + `migrate-identity` + `rebuild` + `wire-agent` |
@@ -721,6 +722,44 @@ hv search <query> [--format {text,json}] [--min-confidence N]
 # All options together
 ./hv search "infrastructure" --format json --min-confidence 0.5
 ```
+
+---
+
+### `hv dash` — Open the web dashboard
+
+A read-only dashboard for browsing your hive in a browser — facts and decisions
+(searchable, filterable by tag), and a live Hive tab showing your peers and their
+status. It's served by the **sync daemon** itself (no extra process): the daemon
+already runs on your sync port, so the dashboard is reachable wherever sync is —
+always on `localhost`, and on your **tailnet IP** so you can open it from another
+device on your tailnet (your laptop, your phone). Nothing is exposed to the public
+internet; it rides the same private path your sync already uses.
+
+`hv dash` prints the URL(s) and tries to open your browser. On a headless box (or
+Android/Termux, or WSL) where it can't, the printed URL is the point — open it
+yourself.
+
+```
+hv dash [--print]
+```
+
+**Arguments:**
+
+| Argument | What it does |
+|---|---|
+| `--print` | Print the dashboard URL(s) only; don't try to open a browser. Handy over SSH or in scripts. |
+
+**Examples:**
+```bash
+# Open the dashboard in your browser
+./hv dash
+
+# Just show me the URLs (e.g. over SSH)
+./hv dash --print
+```
+
+The dashboard is **read-only** — it never writes to the corpus. Governed actions
+(admitting devices, retracting, deciding) stay on the CLI by design.
 
 ---
 

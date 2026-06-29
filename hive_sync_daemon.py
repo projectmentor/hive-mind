@@ -247,10 +247,18 @@ class Handler(BaseHTTPRequestHandler):
                     sort=q.get("sort", ["salience"])[0], status=q.get("status", ["all"])[0]))
             elif u.path == "/api/tags":
                 self._send(200, hv.api_tags())
+            elif u.path == "/api/related":
+                self._send(200, hv.api_related(
+                    kind=q.get("kind", ["fact"])[0],
+                    item_id=int(q.get("id", ["0"])[0] or 0)))
             elif u.path == "/api/audit":
                 self._send(200, hv.api_audit())
             elif u.path == "/api/status":
-                self._send(200, _api_status())
+                cmd = q.get("cmd", [None])[0]   # per-command so the UI can load progressively
+                if cmd in ("whoami", "stats", "doctor"):
+                    self._send(200, {cmd: _run_hv_text([cmd], 40 if cmd == "doctor" else 12)})
+                else:
+                    self._send(200, _api_status())
             elif u.path == "/api/verify":
                 self._send(200, hv.api_verify())
             elif u.path == "/api/telemetry":          # node!=self already handled by the proxy above

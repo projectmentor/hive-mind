@@ -157,6 +157,23 @@ def test_api_telemetry_facets_and_sort(daemon):
     assert "facets" in t and "projects" in t["facets"] and "nodes" in t["facets"]
 
 
+def test_api_telemetry_hive_node_accounting(daemon):
+    t = json.loads(_get(daemon, "/api/telemetry?scope=hive")[1])
+    # single isolated node → it lists itself with an explicit status, and the admitted/online/
+    # reporting counts are present so the offline gap is never silent.
+    assert all(k in t for k in ("nodes", "admitted", "online", "reporting"))
+    assert t["nodes"] and t["nodes"][0]["status"] == "self"
+
+
+def test_api_related_by_tags(daemon):
+    a = json.loads(_get(daemon, "/api/search?q=&kind=fact&limit=1")[1])
+    fid = a["facts"][0]["id"]
+    r = json.loads(_get(daemon, f"/api/related?kind=fact&id={fid}")[1])
+    # the seed fact is tagged android,installer; related is by shared tags, excluding itself
+    assert "related" in r and "android" in r["tags"]
+    assert all(x["id"] != fid for x in r["related"])
+
+
 def test_node_proxy_unknown_node_is_graceful(daemon):
     # A node id we can't resolve to a reachable peer must not error — it returns reachable:false.
     o = json.loads(_get(daemon, "/api/overview?node=k1:doesnotexist")[1])

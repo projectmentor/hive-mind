@@ -1873,6 +1873,45 @@ def api_tags():
     return {"tags": sorted(tags)}
 
 
+def api_related(kind, item_id, limit=25):
+    """Facts related to a fact/decision by SHARED TAGS (the simple, robust signal) — powers the
+    'Related facts' table in a detail view. Excludes the item itself; ranked by number of shared tags,
+    then effective confidence. Empty when the source has no tags."""
+    conn = get_conn()
+    try:
+        tbl = "decisions" if kind == "decision" else "facts"
+        row = conn.execute(f"SELECT tags FROM {tbl} WHERE id = ?", (item_id,)).fetchone()
+        src = set()
+        if row and row["tags"]:
+            try:
+                src = {str(t).strip() for t in json.loads(row["tags"]) if str(t).strip()}
+            except Exception:
+                src = set()
+        if not src:
+            return {"related": [], "tags": []}
+        now = os.environ.get("HIVE_NOW") or _now_iso()
+        out = []
+        for r in conn.execute(f"SELECT {_FACT_COLS} FROM facts").fetchall():
+            if kind == "fact" and r["id"] == item_id:
+                continue
+            try:
+                ftags = [str(t).strip() for t in (json.loads(r["tags"]) if r["tags"] else [])]
+            except Exception:
+                ftags = []
+            shared = src & set(ftags)
+            if not shared:
+                continue
+            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
+            out.append({"id": r["id"], "content": r["content"], "tags": ftags,
+                        "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                        "shared": sorted(shared), "shared_n": len(shared),
+                        "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        out.sort(key=lambda x: (x["shared_n"], x["confidence"]), reverse=True)
+        return {"related": out[:limit], "tags": sorted(src)}
+    finally:
+        conn.close()
+
+
 def api_audit():
     """The real `hv audit` signal as counts (+ a small sample per category) for the dashboard: re-check
     (volatile past freshness), stale (forgotten/contested/decayed), duplicate (same-source redundant +
@@ -1985,10 +2024,12 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
     than silent. (Offline-inclusive totals would need a synced rollup — a deliberate follow-up.)"""
     collected = [(NODE_LABEL, NODE_ID, api_telemetry(limit=per_node_cap, offset=0), True)]
     peers = api_peers(probe=True)
-    targets = [(p["name"], p["device"], p["addr"]) for p in peers
-               if not p["self"] and ":" in (p.get("addr") or "")]
-    unreachable = [(p["name"], p["device"]) for p in peers
-                   if not p["self"] and ":" not in (p.get("addr") or "")]
+
+    def _live(p):   # reachable NOW (has an address AND its sync status isn't offline/stale)
+        st = (p.get("status") or "").lower()
+        return ":" in (p.get("addr") or "") and not any(x in st for x in ("offline", "stale", "no address"))
+    targets = [(p["name"], p["device"], p["addr"]) for p in peers if not p["self"] and _live(p)]
+    unreachable = [(p["name"], p["device"]) for p in peers if not p["self"] and not _live(p)]
     if targets:
         import concurrent.futures
         import requests
@@ -2005,21 +2046,27 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
             collected.extend(ex.map(fetch, targets))
 
     nodes, all_recent = [], []
-    for name, nid, tel, ok in collected:
-        avail = bool(ok and tel and tel.get("available") and "totals" in tel)
-        nodes.append({"node": name, "node_id": nid, "reachable": avail,
-                      "sessions": (tel or {}).get("totals", {}).get("sessions", 0) if avail else 0})
+    for i, (name, nid, tel, ok) in enumerate(collected):
+        avail = bool(tel and tel.get("available") and "totals" in tel)
+        # collected[0] is self; the rest came from `targets`, i.e. they ARE sync-reachable. So a peer
+        # that answered sync but has no telemetry is ONLINE on older code, NOT offline.
+        status = "self" if i == 0 else ("online" if avail else "no-telemetry")
+        nodes.append({"node": name, "node_id": nid, "status": status, "reachable": avail,
+                      "sessions": tel.get("totals", {}).get("sessions", 0) if avail else 0})
         if avail:
             for x in tel.get("recent", []):
                 row = dict(x)
                 row["node_name"] = name
                 all_recent.append(row)
     for name, nid in unreachable:
-        nodes.append({"node": name, "node_id": nid, "reachable": False, "sessions": 0})
-    nodes.sort(key=lambda n: (not n["reachable"], n["node"]))
+        nodes.append({"node": name, "node_id": nid, "status": "offline", "reachable": False, "sessions": 0})
+    order = {"self": 0, "online": 1, "no-telemetry": 2, "offline": 3}
+    nodes.sort(key=lambda n: (order.get(n["status"], 9), n["node"]))
     agg = _tel_aggregate(all_recent, limit, offset, sort, project, agent, node)
-    return {"available": True, "scope": "hive", "nodes": nodes,
-            "admitted": len(nodes), "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
+    return {"available": True, "scope": "hive", "nodes": nodes, "admitted": len(nodes),
+            "online": sum(1 for n in nodes if n["status"] != "offline"),
+            "reporting": sum(1 for n in nodes if n["status"] in ("self", "online")),
+            "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
 
 
 def _probe_peer_map(timeout=3):

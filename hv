@@ -1903,52 +1903,123 @@ def api_audit():
     }
 
 
-def api_telemetry(limit=25, offset=0):
-    """This node's session telemetry (LOCAL, never synced): totals, a paginated slice of recent
-    sessions (newest first; `recent_total` is the full count for the pager), per-day session counts
-    (for a sparkline), and per-model token totals. Read-only; empty before any session lands."""
+def _tel_recent_dict(r, node_name=None):
+    """One telemetry session row → a JSON-able dict (the unit both views aggregate from)."""
+    try:
+        m = json.loads(r["models"]) if r["models"] else {}
+    except Exception:
+        m = {}
+    return {"when": (r["started_at"] or r["updated_at"] or "")[:19],
+            "session_id": r["session_id"], "started_at": r["started_at"], "updated_at": r["updated_at"],
+            "agent": (f'{r["agent"]}:{r["agent_identity"]}'.rstrip(":")) or "-",
+            "project": r["project"] or "-",
+            "duration_s": r["duration_s"] or 0, "tokens_in": r["tokens_in"] or 0,
+            "tokens_out": r["tokens_out"] or 0, "cost_usd": r["cost_usd"], "models": m,
+            "node": r["node_id"], "node_name": node_name or NODE_LABEL}
+
+
+def _tel_aggregate(recents, limit, offset, sort="recent", project=None, agent=None, node=None):
+    """Shared telemetry projection over a list of per-session dicts: compute `facets`, FILTER by
+    node/project/agent, total + by-day + by-model over the FILTERED set, then SORT (recent|cost|tokens|
+    duration) and paginate. Used by both the per-node and hive-combined views so they behave identically."""
+    facets = {"projects": sorted({x["project"] for x in recents}),
+              "agents": sorted({x["agent"] for x in recents}),
+              "nodes": sorted({(x.get("node_name") or x.get("node") or "-") for x in recents})}
+
+    def keep(x):
+        if project and x["project"] != project:
+            return False
+        if agent and x["agent"] != agent:
+            return False
+        if node and (x.get("node_name") or x.get("node")) != node:
+            return False
+        return True
+    f = [x for x in recents if keep(x)]
+    tot = {"sessions": len(f), "duration_s": 0.0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "priced": False}
+    by_day, by_model = {}, {}
+    for x in f:
+        tot["duration_s"] += x["duration_s"] or 0
+        tot["tokens_in"] += x["tokens_in"] or 0
+        tot["tokens_out"] += x["tokens_out"] or 0
+        if x["cost_usd"] is not None:
+            tot["cost_usd"] += x["cost_usd"]
+            tot["priced"] = True
+        d = (x["when"] or "")[:10]
+        if d:
+            by_day[d] = by_day.get(d, 0) + 1
+        for mname, mv in (x.get("models") or {}).items():
+            pm = by_model.setdefault(mname, {"in": 0, "out": 0, "cost": 0.0, "priced": False})
+            pm["in"] += mv.get("in", 0)
+            pm["out"] += mv.get("out", 0)
+            if "cost" in mv:
+                pm["cost"] += mv["cost"]
+                pm["priced"] = True
+    if not tot["priced"]:
+        tot["cost_usd"] = None
+    keyf = {"cost": lambda x: x["cost_usd"] or 0,
+            "tokens": lambda x: (x["tokens_in"] or 0) + (x["tokens_out"] or 0),
+            "duration": lambda x: x["duration_s"] or 0}.get(sort, lambda x: x["when"] or "")
+    f = sorted(f, key=keyf, reverse=True)
+    return {"totals": tot, "recent": f[offset:offset + limit], "recent_total": len(f),
+            "by_day": [{"day": d, "sessions": c} for d, c in sorted(by_day.items())][-21:],
+            "by_model": by_model, "facets": facets}
+
+
+def api_telemetry(limit=25, offset=0, sort="recent", project=None, agent=None, node=None):
+    """This node's session telemetry (LOCAL, never synced) — sortable, filterable, paginated. Read-only."""
     try:
         rows = _telemetry_rows("")
     except Exception:
-        return {"available": False, "totals": {}, "recent": [], "by_day": [], "by_model": {}}
-    tot = {"sessions": len(rows), "duration_s": 0.0, "tokens_in": 0, "tokens_out": 0,
-           "cost_usd": 0.0, "priced": False}
-    by_day, by_model, recent = {}, {}, []
-    for r in rows:
-        tot["duration_s"] += r["duration_s"] or 0
-        tot["tokens_in"] += r["tokens_in"] or 0
-        tot["tokens_out"] += r["tokens_out"] or 0
-        if r["cost_usd"] is not None:
-            tot["cost_usd"] += r["cost_usd"]
-            tot["priced"] = True
-        day = (r["started_at"] or r["updated_at"] or "")[:10]
-        if day:
-            by_day[day] = by_day.get(day, 0) + 1
-        try:
-            mm = json.loads(r["models"]) if r["models"] else {}
-        except Exception:
-            mm = {}
-        for model, t in mm.items():
-            pm = by_model.setdefault(model, {"in": 0, "out": 0, "cost": 0.0, "priced": False})
-            pm["in"] += t.get("in", 0)
-            pm["out"] += t.get("out", 0)
-            if "cost" in t:
-                pm["cost"] += t["cost"]
-                pm["priced"] = True
-    for r in rows[offset:offset + limit]:
-        recent.append({
-            "when": (r["started_at"] or r["updated_at"] or "")[:19],
-            "agent": (f'{r["agent"]}:{r["agent_identity"]}'.rstrip(":")) or "-",
-            "project": r["project"] or "-",
-            "duration_s": r["duration_s"] or 0,
-            "tokens_in": r["tokens_in"] or 0, "tokens_out": r["tokens_out"] or 0,
-            "cost_usd": r["cost_usd"], "node": r["node_id"],
-        })
-    if not tot["priced"]:
-        tot["cost_usd"] = None
-    return {"available": True, "totals": tot, "recent": recent, "recent_total": len(rows),
-            "by_day": [{"day": d, "sessions": c} for d, c in sorted(by_day.items())][-21:],
-            "by_model": by_model}
+        return {"available": False, "node": NODE_LABEL, "node_id": NODE_ID, "totals": {},
+                "recent": [], "by_day": [], "by_model": {}, "facets": {}}
+    agg = _tel_aggregate([_tel_recent_dict(r) for r in rows], limit, offset, sort, project, agent, node)
+    return {"available": True, "node": NODE_LABEL, "node_id": NODE_ID, **agg}
+
+
+def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=None, node=None,
+                       per_node_cap=2000, timeout=4):
+    """COMBINED telemetry across the hive — the daemon fetches each REACHABLE admitted peer's
+    /api/telemetry concurrently and merges with the local DB into one feed, then sorts/filters/paginates.
+    Telemetry is local + unsynced, so an OFFLINE node contributes nothing: `nodes` lists EVERY admitted
+    device with its reachability + session count, and `admitted`/`reachable` make the gap explicit rather
+    than silent. (Offline-inclusive totals would need a synced rollup — a deliberate follow-up.)"""
+    collected = [(NODE_LABEL, NODE_ID, api_telemetry(limit=per_node_cap, offset=0), True)]
+    peers = api_peers(probe=True)
+    targets = [(p["name"], p["device"], p["addr"]) for p in peers
+               if not p["self"] and ":" in (p.get("addr") or "")]
+    unreachable = [(p["name"], p["device"]) for p in peers
+                   if not p["self"] and ":" not in (p.get("addr") or "")]
+    if targets:
+        import concurrent.futures
+        import requests
+
+        def fetch(t):
+            name, nid, addr = t
+            try:
+                tel = requests.get(f"http://{addr}/api/telemetry?limit={per_node_cap}&offset=0",
+                                   timeout=timeout).json()
+                return (name, nid, tel, True)
+            except Exception:
+                return (name, nid, None, False)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(targets))) as ex:
+            collected.extend(ex.map(fetch, targets))
+
+    nodes, all_recent = [], []
+    for name, nid, tel, ok in collected:
+        avail = bool(ok and tel and tel.get("available") and "totals" in tel)
+        nodes.append({"node": name, "node_id": nid, "reachable": avail,
+                      "sessions": (tel or {}).get("totals", {}).get("sessions", 0) if avail else 0})
+        if avail:
+            for x in tel.get("recent", []):
+                row = dict(x)
+                row["node_name"] = name
+                all_recent.append(row)
+    for name, nid in unreachable:
+        nodes.append({"node": name, "node_id": nid, "reachable": False, "sessions": 0})
+    nodes.sort(key=lambda n: (not n["reachable"], n["node"]))
+    agg = _tel_aggregate(all_recent, limit, offset, sort, project, agent, node)
+    return {"available": True, "scope": "hive", "nodes": nodes,
+            "admitted": len(nodes), "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
 
 
 def _probe_peer_map(timeout=3):
@@ -1997,6 +2068,40 @@ def _probe_peer_map(timeout=3):
     return out
 
 
+_PEER_PROBE_CACHE = {"t": 0.0, "map": {}}
+
+
+def _probe_peer_map_cached(ttl=5):
+    """`_probe_peer_map` with a short TTL cache. The daemon is a long-lived process, so a Hive-tab view
+    followed by a node drill-down (which each need the peer→address map) reuses one probe instead of
+    re-probing every peer per request."""
+    import time
+    now = time.monotonic()
+    if _PEER_PROBE_CACHE["map"] and (now - _PEER_PROBE_CACHE["t"]) < ttl:
+        return _PEER_PROBE_CACHE["map"]
+    m = _probe_peer_map()
+    _PEER_PROBE_CACHE.update(t=now, map=m)
+    return m
+
+
+def api_node_addr(node_id):
+    """The 'host:port' for an admitted, reachable peer (from the cached probe), or None. The ONLY way a
+    node-scoped request resolves a target address — callers never pass a host — so the daemon's per-node
+    proxy can't be pointed at an arbitrary address (no SSRF)."""
+    if not node_id or node_id == NODE_ID:
+        return None
+    info = _probe_peer_map_cached().get(node_id)
+    return info[0] if info else None
+
+
+def api_verify():
+    """The local integrity + signature verdict (no network anchor fetch), as data — powers the header
+    'authentic' modal. {ok, version, level, lines}."""
+    v = _verify_status(Path(__file__).resolve().parent, check_anchor=False)
+    return {"ok": v["ok"], "version": v.get("version"), "level": v.get("level"), "lines": v.get("lines", []),
+            "official_source": OFFICIAL_SOURCE, "site": "https://hivemind.projectmentor.org"}
+
+
 def api_peers(probe=True):
     """Admitted devices for the dashboard Hive tab: name, device, principal, address, last-seen,
     status. Names/addresses/sync-status are resolved by a bounded concurrent live probe (so a
@@ -2009,7 +2114,7 @@ def api_peers(probe=True):
         d, ts = e.get("node_id"), e.get("timestamp", "")
         if d and ts > last_seen.get(d, ""):
             last_seen[d] = ts
-    probed = _probe_peer_map() if probe else {}
+    probed = _probe_peer_map_cached() if probe else {}
     out = []
     for d in sorted(gov.get("admitted") or set()):
         prin = gov["principals"].get(d) or "?"

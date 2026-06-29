@@ -140,6 +140,29 @@ def test_api_peers_probe_off_is_fast(daemon):
     assert "peers" in o and isinstance(o["peers"], list)
 
 
+def test_api_status_runs_hv_commands(daemon):
+    # /api/status shells out to hv whoami/stats/doctor — give doctor room to run.
+    s = json.loads(_get(daemon, "/api/status", timeout=45)[1])
+    for k in ("whoami", "stats", "doctor"):
+        assert isinstance(s[k], str) and s[k]
+
+
+def test_api_verify(daemon):
+    v = json.loads(_get(daemon, "/api/verify")[1])
+    assert "ok" in v and isinstance(v["lines"], list) and v["official_source"]
+
+
+def test_api_telemetry_facets_and_sort(daemon):
+    t = json.loads(_get(daemon, "/api/telemetry?sort=cost&limit=5")[1])
+    assert "facets" in t and "projects" in t["facets"] and "nodes" in t["facets"]
+
+
+def test_node_proxy_unknown_node_is_graceful(daemon):
+    # A node id we can't resolve to a reachable peer must not error — it returns reachable:false.
+    o = json.loads(_get(daemon, "/api/overview?node=k1:doesnotexist")[1])
+    assert o.get("reachable") is False
+
+
 def test_serves_spa_and_assets(daemon):
     st, body, ct = _get(daemon, "/")
     assert st == 200 and "text/html" in ct

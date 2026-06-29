@@ -18,7 +18,7 @@ HV_SUBCOMMANDS = set(re.findall(r'\bsubparsers\.add_parser\(\s*"([a-z][a-z-]*)"'
 
 # Commands intentionally kept OFF the MCP surface: owner/membership governance, encrypt-to-device
 # secrets, device-key material, and local maintenance/wiring. These are owner/CLI-level by design.
-CLI_ONLY = {"owner", "admit", "join", "config", "capsule", "key", "doctor", "wire"}
+CLI_ONLY = {"owner", "admit", "join", "config", "capsule", "key", "doctor", "wire", "dash"}
 # `group` is exposed read-only (list) but its mutating actions are owner-only — handled separately.
 PARTIAL = {"group"}
 

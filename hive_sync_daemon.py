@@ -14,6 +14,7 @@ Endpoints:
 
 import errno
 import json
+import os
 import threading
 import time
 import urllib.request
@@ -24,6 +25,17 @@ import merkle
 import sync_common
 
 hv = sync_common.load_hv()
+
+# Read-only dashboard SPA, served from the committed dashboard/ dir next to this file. An explicit
+# allowlist (name -> content-type) — NOT arbitrary file serving — so there is no path-traversal
+# surface. The /api/* JSON below is the data layer; both are read-only and reachable wherever the
+# sync port is (the daemon already serves the corpus via /sync/chunk, so this adds no new exposure).
+_DASH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
+_STATIC = {
+    "index.html": "text/html; charset=utf-8",
+    "logo.svg": "image/svg+xml",
+    "favicon.svg": "image/svg+xml",
+}
 
 # Sync wire-protocol version. Advertised in /sync/hello and /hive/info so additive handshake
 # changes (e.g. later read-gating) can be negotiated without a journal-schema break.
@@ -101,6 +113,22 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_static(self, name):
+        """Serve one allowlisted dashboard asset (no traversal: name must be a literal key)."""
+        ctype = _STATIC.get(name)
+        if not ctype:
+            return self._send(404, {"error": "not found"})
+        try:
+            with open(os.path.join(_DASH_DIR, name), "rb") as f:
+                body = f.read()
+        except OSError:
+            return self._send(404, {"error": "dashboard asset missing"})
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _enter(self):
         """Rate-limit + concurrency gate. Returns True if the request may proceed (caller MUST then
         call _leave() in a finally); otherwise sends 429/503 and returns False."""
@@ -156,6 +184,19 @@ class Handler(BaseHTTPRequestHandler):
                 end = int(q.get("end", ["0"])[0])
                 sel = merkle.entries_in_range(_entries(), node, start, end)
                 self._send(200, {"entries": sel, "hash": merkle.hash_entries(sel)})
+            elif u.path == "/api/overview":
+                self._send(200, hv.api_overview())
+            elif u.path == "/api/search":
+                self._send(200, hv.api_search(
+                    query=q.get("q", [""])[0], tag=(q.get("tag", [None])[0] or None),
+                    kind=q.get("kind", ["all"])[0],
+                    min_confidence=float(q.get("min_confidence", ["0"])[0] or 0)))
+            elif u.path == "/api/peers":
+                self._send(200, {"peers": hv.api_peers()})
+            elif u.path in ("/", "/index.html", "/dashboard", "/dashboard/"):
+                self._serve_static("index.html")
+            elif u.path in ("/logo.svg", "/favicon.svg"):
+                self._serve_static(u.path.lstrip("/"))
             else:
                 self._send(404, {"error": "not found"})
         except Exception as e:  # never crash the handler thread

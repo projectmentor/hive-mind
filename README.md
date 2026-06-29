@@ -129,11 +129,17 @@ wsl --shutdown
 ```bash
 ./hv remember "The payments API rate-limits at 100 req/s" --tags api,payments
 ./hv search "payments"
-./hv decide "Use AGPL for the core" --rationale "keeps the dual-license option open"
+./hv decide "Use AGPL for the core" --rationale "keeps the dual-license option open" --tags licensing
 ./hv stats
+./hv dash            # open the read-only web dashboard (facts, decisions, peers) in your browser
 ./hv doctor          # health check: integrity, DB, sync, hygiene, agent hooks (--fix self-heals)
 ./hv sync now        # manual sync to all peers
 ```
+
+The **dashboard** (`hv dash`) is a read-only web view of your hive — searchable facts and
+decisions (filterable by tag) plus a live peers/health tab. It's served by the sync daemon
+itself, so it's reachable on `localhost` and across your private **tailnet** (open it from your
+phone or laptop) with nothing exposed to the public internet.
 
 Most of the time your agents call `hv` for you. Full reference:
 [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md).

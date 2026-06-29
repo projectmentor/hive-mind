@@ -11,13 +11,15 @@ Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
 Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/)
 
 <p align="center">
-  <video src="https://hivemind.projectmentor.org/assets/hivemind-video-splash.mp4"
-         poster="https://hivemind.projectmentor.org/assets/og-image.png"
-         controls muted loop playsinline width="680"></video>
+  <a href="https://hivemind.projectmentor.org/dev/#dashboard">
+    <img src="https://hivemind.projectmentor.org/assets/dashboard/01-overview.png"
+         alt="The HiveMind dashboard (hv dash)" width="780"></a>
 </p>
 
-> If the video does not play inline, watch it at
-> **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)**.
+<p align="center">
+  <em>The read-only dashboard, <code>hv dash</code>. Watch the
+  <a href="https://hivemind.projectmentor.org">intro video</a> on the site.</em>
+</p>
 
 HiveMind is a shared, append-only memory that your AI agents read and write as they work.
 Facts, decisions, and outcomes accumulate over time and earn trust through **independent

@@ -2112,9 +2112,11 @@ def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailn
             lbl = requests.get(url + "/hive/info", timeout=timeout).json().get("label", "")
         except Exception:
             lbl = ""
-        # owner-supplied local name: a node whose own label is blank (e.g. Android/Termux with a
-        # generic hostname) can still be named from the peer list via a "label" on its .peers.json entry.
-        return (nid, url.replace("http://", "").replace("https://", ""), st, lbl or peer.get("label", ""))
+        # owner-supplied local name OVERRIDES the node's own label: a "label" on the .peers.json entry
+        # wins over a node's self-reported label (e.g. an Android/Termux generic hostname like
+        # "localhost-…"), so the owner can name a peer (zfold-6) and it stays consistent even when the
+        # slow node's /hive/info probe times out.
+        return (nid, url.replace("http://", "").replace("https://", ""), st, peer.get("label", "") or lbl)
 
     out = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(peerlist))) as ex:

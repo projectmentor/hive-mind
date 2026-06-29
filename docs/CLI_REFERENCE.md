@@ -727,9 +727,12 @@ hv search <query> [--format {text,json}] [--min-confidence N]
 
 ### `hv dash` — Open the web dashboard
 
-A read-only dashboard for browsing your hive in a browser — facts and decisions
-(searchable, filterable by tag), and a live Hive tab showing your peers and their
-status. It's served by the **sync daemon** itself (no extra process): the daemon
+A read-only dashboard for browsing your hive in a browser. Four tabs: **Overview**
+(counts, convergence, contested, the live audit summary), **Corpus** (facts and
+decisions — search, filter by tag, sort by salience or recency, filter on status
+like contested/forgotten/volatile, paginated), **Hive** (peers + health, with live
+sync status), and **Telemetry** (this node's sessions, tokens, and cost over time).
+It's served by the **sync daemon** itself (no extra process): the daemon
 already runs on your sync port, so the dashboard is reachable wherever sync is —
 always on `localhost`, and on your **tailnet IP** so you can open it from another
 device on your tailnet (your laptop, your phone). Nothing is exposed to the public

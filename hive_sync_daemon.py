@@ -190,9 +190,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, hv.api_search(
                     query=q.get("q", [""])[0], tag=(q.get("tag", [None])[0] or None),
                     kind=q.get("kind", ["all"])[0],
-                    min_confidence=float(q.get("min_confidence", ["0"])[0] or 0)))
+                    min_confidence=float(q.get("min_confidence", ["0"])[0] or 0),
+                    limit=max(1, min(200, int(q.get("limit", ["50"])[0] or 50))),
+                    offset=max(0, int(q.get("offset", ["0"])[0] or 0)),
+                    sort=q.get("sort", ["salience"])[0], status=q.get("status", ["all"])[0]))
+            elif u.path == "/api/tags":
+                self._send(200, hv.api_tags())
+            elif u.path == "/api/audit":
+                self._send(200, hv.api_audit())
+            elif u.path == "/api/telemetry":
+                self._send(200, hv.api_telemetry(
+                    limit=max(1, min(200, int(q.get("limit", ["25"])[0] or 25))),
+                    offset=max(0, int(q.get("offset", ["0"])[0] or 0))))
             elif u.path == "/api/peers":
-                self._send(200, {"peers": hv.api_peers()})
+                probe = q.get("probe", ["1"])[0] not in ("0", "false", "no")
+                self._send(200, {"peers": hv.api_peers(probe=probe)})
             elif u.path in ("/", "/index.html", "/dashboard", "/dashboard/"):
                 self._serve_static("index.html")
             elif u.path in ("/logo.svg", "/favicon.svg"):

@@ -90,8 +90,53 @@ def test_api_search_tag_scopes_results(daemon):
     assert o["decisions"] == []
 
 
+def test_api_search_paginates(daemon):
+    o = json.loads(_get(daemon, "/api/search?q=&limit=1&offset=0")[1])
+    assert o["facts_total"] >= 1 and o["decisions_total"] >= 1
+    assert len(o["facts"]) <= 1
+    # offset past the end → empty page, totals still reported
+    o2 = json.loads(_get(daemon, "/api/search?q=&kind=fact&limit=50&offset=9999")[1])
+    assert o2["facts"] == [] and o2["facts_total"] >= 1
+
+
+def test_api_search_sort_and_status(daemon):
+    # sort=recency must not error and returns the same shape
+    o = json.loads(_get(daemon, "/api/search?q=&sort=recency&limit=50")[1])
+    assert "facts" in o
+    # a status filter the seed data doesn't hit still returns a well-formed page
+    o2 = json.loads(_get(daemon, "/api/search?q=&kind=fact&status=contested")[1])
+    assert o2["facts"] == [] and "facts_total" in o2
+
+
+def test_api_audit_shape(daemon):
+    a = json.loads(_get(daemon, "/api/audit")[1])
+    for k in ("recheck", "stale", "duplicate", "contravened"):
+        assert isinstance(a[k], int)
+    assert "samples" in a
+
+
+def test_api_tags_lists_distinct_tags(daemon):
+    o = json.loads(_get(daemon, "/api/tags")[1])
+    assert "tags" in o and isinstance(o["tags"], list)
+    # seeded: fact tags android,installer + decision tag android
+    assert "android" in o["tags"] and "installer" in o["tags"]
+    assert o["tags"] == sorted(o["tags"])
+
+
+def test_api_telemetry_shape(daemon):
+    t = json.loads(_get(daemon, "/api/telemetry?limit=25&offset=0")[1])
+    assert "totals" in t and "recent" in t and "by_day" in t and "by_model" in t
+    assert "recent_total" in t and isinstance(t["recent"], list)
+
+
 def test_api_peers_shape(daemon):
     o = json.loads(_get(daemon, "/api/peers")[1])
+    assert "peers" in o and isinstance(o["peers"], list)
+
+
+def test_api_peers_probe_off_is_fast(daemon):
+    # probe=0 skips the network probe entirely — same shape, no hang.
+    o = json.loads(_get(daemon, "/api/peers?probe=0")[1])
     assert "peers" in o and isinstance(o["peers"], list)
 
 

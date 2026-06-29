@@ -1794,35 +1794,161 @@ def api_overview():
     }
 
 
-def api_search(query="", tag=None, kind="all", min_confidence=0.0, limit=50):
-    """Facts + decisions for `query`, mirroring `hv search` (effective-confidence ranking for facts,
-    LIKE for decisions) but returning structured rows. Empty query = browse everything (top `limit`)."""
+def api_search(query="", tag=None, kind="all", min_confidence=0.0,
+               limit=50, offset=0, sort="salience", status="all"):
+    """Facts + decisions for `query`, mirroring `hv search` but PAGINATED and sortable/filterable.
+    `sort`: salience (effective confidence, default) | recency (created). `status` (facts): all (live,
+    >= min_confidence) | contested | forgotten (owner-forgotten, normally hidden) | volatile. Returns
+    the page slice plus `*_total` so the UI can page; empty query browses everything."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
-    facts, decisions = [], []
+    facts, decisions, facts_total, dec_total = [], [], 0, 0
     if kind != "decision":
-        for r in _query_facts(conn, query or ""):
-            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
-            if eff < min_confidence:
-                continue
+        matched = []
+        for r in _query_facts(conn, query or "", limit=10000):
+            base = r["confidence"]
+            eff = _effective_confidence(base, r["last_evidence_at"], now)
             tags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in tags:
                 continue
-            facts.append({"id": r["id"], "content": r["content"], "tags": tags,
-                          "confidence": round(eff, 2), "contested": bool(r["contested"]),
-                          "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
-        facts.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
-        facts = facts[:limit]
+            tl = [str(t).lower() for t in tags]
+            if status == "contested":
+                if not r["contested"]:
+                    continue
+            elif status == "forgotten":
+                if base > FORGET_FLOOR:
+                    continue
+            elif status == "volatile":
+                if not ("volatile" in tl or any(t.startswith("ttl:") for t in tl)):
+                    continue
+            else:  # all live facts at/above the floor (forgotten ones stay hidden here)
+                if eff < min_confidence:
+                    continue
+            matched.append({"id": r["id"], "content": r["content"], "tags": tags,
+                            "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                            "forgotten": base <= FORGET_FLOOR,
+                            "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        if sort == "recency":
+            matched.sort(key=lambda f: (f["created"], f["confidence"]), reverse=True)
+        else:  # salience
+            matched.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
+        facts_total = len(matched)
+        facts = matched[offset:offset + limit]
     if kind != "fact":
-        for r in _query_decisions(conn, query or "", limit=limit):
+        dmatched = []
+        for r in _query_decisions(conn, query or "", limit=10000):
             tags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in tags:
                 continue
-            decisions.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
-                              "tags": tags, "superseded": bool(r["superseded_by"]),
-                              "created": (r["created_at"] or "")[:10]})
+            dmatched.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
+                             "tags": tags, "superseded": bool(r["superseded_by"]),
+                             "created": (r["created_at"] or "")[:10]})
+        dec_total = len(dmatched)
+        decisions = dmatched[offset:offset + limit]
     conn.close()
-    return {"facts": facts, "decisions": decisions}
+    return {"facts": facts, "decisions": decisions,
+            "facts_total": facts_total, "decisions_total": dec_total,
+            "offset": offset, "limit": limit}
+
+
+def api_tags():
+    """All distinct tags across facts + decisions, sorted. Lets the dashboard tag filter stay
+    COMPLETE even when the result lists are paginated (the page only carries its own rows' tags)."""
+    conn = get_conn()
+    tags = set()
+    for tbl in ("facts", "decisions"):
+        try:
+            rows = conn.execute(f"SELECT tags FROM {tbl} WHERE tags IS NOT NULL AND tags != ''").fetchall()
+        except Exception:
+            continue
+        for r in rows:
+            try:
+                for t in (json.loads(r[0]) if r[0] else []):
+                    t = str(t).strip()
+                    if t:
+                        tags.add(t)
+            except Exception:
+                continue
+    conn.close()
+    return {"tags": sorted(tags)}
+
+
+def api_audit():
+    """The real `hv audit` signal as counts (+ a small sample per category) for the dashboard: re-check
+    (volatile past freshness), stale (forgotten/contested/decayed), duplicate (same-source redundant +
+    paraphrase), contravened (un-reconciled corrections). Light depth — cheap enough for a card."""
+    a = _compute_audit(depth="light")
+
+    def sample(items, n=8):
+        out = []
+        for it in items[:n]:
+            r = it[0] if isinstance(it, tuple) else it
+            try:
+                out.append({"id": r["id"], "content": (r["content"] or "")[:140]})
+            except Exception:
+                continue
+        return out
+
+    return {
+        "recheck": len(a["recheck"]),
+        "stale": len(a["forgotten"]) + len(a["contested"]) + len(a["decayed"]),
+        "duplicate": len(a["redundant"]) + len(a["paraphrase"]),
+        "contravened": len(a["contravened"]),
+        "samples": {
+            "recheck": sample(a["recheck"]),
+            "contested": sample(a["contested"]),
+            "decayed": sample(a["decayed"]),
+            "contravened": sample([c[0] for c in a["contravened"]]),
+        },
+    }
+
+
+def api_telemetry(limit=25, offset=0):
+    """This node's session telemetry (LOCAL, never synced): totals, a paginated slice of recent
+    sessions (newest first; `recent_total` is the full count for the pager), per-day session counts
+    (for a sparkline), and per-model token totals. Read-only; empty before any session lands."""
+    try:
+        rows = _telemetry_rows("")
+    except Exception:
+        return {"available": False, "totals": {}, "recent": [], "by_day": [], "by_model": {}}
+    tot = {"sessions": len(rows), "duration_s": 0.0, "tokens_in": 0, "tokens_out": 0,
+           "cost_usd": 0.0, "priced": False}
+    by_day, by_model, recent = {}, {}, []
+    for r in rows:
+        tot["duration_s"] += r["duration_s"] or 0
+        tot["tokens_in"] += r["tokens_in"] or 0
+        tot["tokens_out"] += r["tokens_out"] or 0
+        if r["cost_usd"] is not None:
+            tot["cost_usd"] += r["cost_usd"]
+            tot["priced"] = True
+        day = (r["started_at"] or r["updated_at"] or "")[:10]
+        if day:
+            by_day[day] = by_day.get(day, 0) + 1
+        try:
+            mm = json.loads(r["models"]) if r["models"] else {}
+        except Exception:
+            mm = {}
+        for model, t in mm.items():
+            pm = by_model.setdefault(model, {"in": 0, "out": 0, "cost": 0.0, "priced": False})
+            pm["in"] += t.get("in", 0)
+            pm["out"] += t.get("out", 0)
+            if "cost" in t:
+                pm["cost"] += t["cost"]
+                pm["priced"] = True
+    for r in rows[offset:offset + limit]:
+        recent.append({
+            "when": (r["started_at"] or r["updated_at"] or "")[:19],
+            "agent": (f'{r["agent"]}:{r["agent_identity"]}'.rstrip(":")) or "-",
+            "project": r["project"] or "-",
+            "duration_s": r["duration_s"] or 0,
+            "tokens_in": r["tokens_in"] or 0, "tokens_out": r["tokens_out"] or 0,
+            "cost_usd": r["cost_usd"], "node": r["node_id"],
+        })
+    if not tot["priced"]:
+        tot["cost_usd"] = None
+    return {"available": True, "totals": tot, "recent": recent, "recent_total": len(rows),
+            "by_day": [{"day": d, "sessions": c} for d, c in sorted(by_day.items())][-21:],
+            "by_model": by_model}
 
 
 def _probe_peer_map(timeout=3):

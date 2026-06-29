@@ -1957,10 +1957,12 @@ def _tel_recent_dict(r, node_name=None):
             "node": r["node_id"], "node_name": node_name or NODE_LABEL}
 
 
-def _tel_aggregate(recents, limit, offset, sort="recent", project=None, agent=None, node=None):
+def _tel_aggregate(recents, limit, offset, sort="recent", project=None, agent=None, node=None,
+                   day=None, model=None):
     """Shared telemetry projection over a list of per-session dicts: compute `facets`, FILTER by
-    node/project/agent, total + by-day + by-model over the FILTERED set, then SORT (recent|cost|tokens|
-    duration) and paginate. Used by both the per-node and hive-combined views so they behave identically."""
+    node/project/agent/day/model, total + by-day + by-model over the FILTERED set, then SORT
+    (recent|cost|tokens|duration) and paginate. `day`/`model` let the by-day bars and by-model rows
+    drill in. Used by both the per-node and hive-combined views so they behave identically."""
     facets = {"projects": sorted({x["project"] for x in recents}),
               "agents": sorted({x["agent"] for x in recents}),
               "nodes": sorted({(x.get("node_name") or x.get("node") or "-") for x in recents})}
@@ -1971,6 +1973,10 @@ def _tel_aggregate(recents, limit, offset, sort="recent", project=None, agent=No
         if agent and x["agent"] != agent:
             return False
         if node and (x.get("node_name") or x.get("node")) != node:
+            return False
+        if day and (x.get("when") or "")[:10] != day:
+            return False
+        if model and model not in (x.get("models") or {}):
             return False
         return True
     f = [x for x in recents if keep(x)]
@@ -2004,19 +2010,20 @@ def _tel_aggregate(recents, limit, offset, sort="recent", project=None, agent=No
             "by_model": by_model, "facets": facets}
 
 
-def api_telemetry(limit=25, offset=0, sort="recent", project=None, agent=None, node=None):
+def api_telemetry(limit=25, offset=0, sort="recent", project=None, agent=None, node=None,
+                  day=None, model=None):
     """This node's session telemetry (LOCAL, never synced) — sortable, filterable, paginated. Read-only."""
     try:
         rows = _telemetry_rows("")
     except Exception:
         return {"available": False, "node": NODE_LABEL, "node_id": NODE_ID, "totals": {},
                 "recent": [], "by_day": [], "by_model": {}, "facets": {}}
-    agg = _tel_aggregate([_tel_recent_dict(r) for r in rows], limit, offset, sort, project, agent, node)
+    agg = _tel_aggregate([_tel_recent_dict(r) for r in rows], limit, offset, sort, project, agent, node, day, model)
     return {"available": True, "node": NODE_LABEL, "node_id": NODE_ID, **agg}
 
 
 def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=None, node=None,
-                       per_node_cap=2000, timeout=4):
+                       day=None, model=None, per_node_cap=2000, timeout=15):
     """COMBINED telemetry across the hive — the daemon fetches each REACHABLE admitted peer's
     /api/telemetry concurrently and merges with the local DB into one feed, then sorts/filters/paginates.
     Telemetry is local + unsynced, so an OFFLINE node contributes nothing: `nodes` lists EVERY admitted
@@ -2062,14 +2069,14 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
         nodes.append({"node": name, "node_id": nid, "status": "offline", "reachable": False, "sessions": 0})
     order = {"self": 0, "online": 1, "no-telemetry": 2, "offline": 3}
     nodes.sort(key=lambda n: (order.get(n["status"], 9), n["node"]))
-    agg = _tel_aggregate(all_recent, limit, offset, sort, project, agent, node)
+    agg = _tel_aggregate(all_recent, limit, offset, sort, project, agent, node, day, model)
     return {"available": True, "scope": "hive", "nodes": nodes, "admitted": len(nodes),
             "online": sum(1 for n in nodes if n["status"] != "offline"),
             "reporting": sum(1 for n in nodes if n["status"] in ("self", "online")),
             "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
 
 
-def _probe_peer_map(timeout=3):
+def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailnet can answer in 3-4s
     """Concurrently probe the local .peers.json peers — /sync/hello → node_id, /hive/info → label,
     /sync/merkle-root vs ours → in-sync|diverged. Returns {node_id: (address, status, label)}. Bounded
     by ONE short timeout (all probes run concurrently), so offline peers can't serialize into a long
@@ -2105,7 +2112,9 @@ def _probe_peer_map(timeout=3):
             lbl = requests.get(url + "/hive/info", timeout=timeout).json().get("label", "")
         except Exception:
             lbl = ""
-        return (nid, url.replace("http://", "").replace("https://", ""), st, lbl)
+        # owner-supplied local name: a node whose own label is blank (e.g. Android/Termux with a
+        # generic hostname) can still be named from the peer list via a "label" on its .peers.json entry.
+        return (nid, url.replace("http://", "").replace("https://", ""), st, lbl or peer.get("label", ""))
 
     out = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(peerlist))) as ex:

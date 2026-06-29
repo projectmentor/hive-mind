@@ -172,7 +172,7 @@ document.addEventListener('click', e=>{
   $('#hAuth').textContent='checking…'; $('#hNode').textContent=META.node; $('#hMerkle').textContent=META.merkle;
   $('#hRole').onclick=()=>goView('status');
   $('#hAuth').onclick=openOfficialModal;
-  $('#hHelp').onclick=()=>openModal('Help','<p>A built-in AI assistant for the dashboard is on the way. For now, use the <code>hv</code> CLI or the docs.</p>');
+  $('#hHelp').onclick=()=>openModal('Help','<p>A built-in AI assistant for the dashboard is on the way. For now, use the <code>hv</code> CLI or <a href="https://hivemind.projectmentor.org/dev/" target="_blank" rel="noopener">the docs</a>.</p>');
   getJSON('/api/verify').then(v=>{const a=$('#hAuth'); if(v.ok){a.textContent='✓ v'+(v.version||META.contract)+' authentic';a.className='badge link ok';}else{a.textContent='⚠ modified locally';a.className='badge link warn';}}).catch(()=>{});
   document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>goTab(b.dataset.v));
   render();
@@ -195,6 +195,7 @@ function openModal(title,bodyHtml,logo){
 window.closeModal=()=>{$('#modal').innerHTML='';};
 window.copyCmd=btn=>{const c=btn.parentElement.querySelector('code'); if(c){try{navigator.clipboard.writeText(c.textContent);}catch(e){} btn.textContent='Copied ✓'; setTimeout(()=>btn.textContent='Copy',1300);}};
 const cmdBlock=cmd=>`<div class="cmd"><code>${esc(cmd)}</code><button class="btn" data-onclick="copyCmd(this)">Copy</button></div>`;
+const shieldIcon=ok=>`<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="${ok?'#3fb950':'#f85149'}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;flex:none"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6z"/>${ok?'<path d="M9 12l2 2 4-4"/>':'<line x1="12" y1="8.5" x2="12" y2="13"/><line x1="12" y1="15.7" x2="12.01" y2="15.7"/>'}</svg>`;
 async function openOfficialModal(){
   openModal('Authenticity','<div class="loading"><span class="spin"></span> verifying…</div>',true);
   let v={ok:false,lines:[],version:META.contract};
@@ -211,7 +212,7 @@ async function openOfficialModal(){
      <div class="fix"><p class="ft">Reinstall from the official source</p>
        <p>No signed manifest found — restore a genuine copy:</p>${cmdBlock('cd ~/projects/hive-mind && git fetch origin && git reset --hard origin/main && hive-mind update')}</div>`);
   openModal('Official HiveMind',
-    `<div class="verdict ${ok?'':'bad'}">${ok?'✓':'⚠'} ${esc((v.lines&&v.lines[0])||('HiveMind v'+(v.version||META.contract)))}</div>
+    `<div class="verdict ${ok?'':'bad'}">${shieldIcon(ok)} ${esc(((v.lines&&v.lines[0])||('HiveMind v'+(v.version||META.contract))).replace(/^[✓⚠✗·\s]+/,''))}</div>
      ${(v.lines||[]).slice(1).map(l=>`<p class="mono" style="color:var(--dim)">${esc(l)}</p>`).join('')}
      ${fix}
      <p><strong>Use only the official HiveMind from <a href="https://projectmentor.org" target="_blank" rel="noopener">ProjectMentor</a>. Trust no imitations.</strong></p>
@@ -280,9 +281,11 @@ function renderDetail(){
         ${kv('Tokens',fmtNum(s.tokens_in)+' in / '+fmtNum(s.tokens_out)+' out')}${kv('Cost',fmtCost(s.cost_usd))}
         ${s.session_id?kv('Session id','<span class="mono">'+esc(s.session_id)+'</span>'):''}
         ${s.started_at?kv('Started','<span class="mono">'+esc(s.started_at)+'</span>'):''}${s.updated_at?kv('Updated','<span class="mono">'+esc(s.updated_at)+'</span>'):''}</div>
-      ${models.length?`<div class="panel"><h2>By model</h2><table><thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${models.map(([m,v])=>`<tr><td class="mono">${esc(m)}</td><td>${fmtNum(v.in)}</td><td>${fmtNum(v.out)}</td><td>${v.cost!=null?fmtCost(v.cost):'n/a'}</td></tr>`).join('')}</tbody></table></div>`:''}`;
+      ${models.length?`<div class="panel"><h2>By model</h2><table><thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${models.map(([m,v])=>`<tr><td class="mono">${esc(m)}</td><td>${fmtNum(v.in)}</td><td>${fmtNum(v.out)}</td><td>${v.cost!=null?fmtCost(v.cost):'n/a'}</td></tr>`).join('')}</tbody></table></div>`:''}
+      <div class="panel"><h2>Related sessions <span class="count">same project</span></h2><div id="relsess">${spin()}</div></div>`;
   }
   if(d.kind==='fact'||d.kind==='decision') loadRelated(d.kind,d.data.id);
+  else if(d.kind==='session') loadRelatedSessions(d.data);
 }
 
 /* ---------- Overview ---------- */
@@ -292,7 +295,7 @@ async function overview(){
      <div class="card link" data-onclick="goTab('corpus')"><div class="lbl">Facts</div><div class="stat">${META.facts}</div></div>
      <div class="card link" data-onclick="goTab('corpus')"><div class="lbl">Decisions</div><div class="stat">${META.decisions}</div></div>
      <div class="card link" data-onclick="goTab('hive')"><div class="lbl">Nodes</div><div class="stat">${META.nodes} <small>admitted</small></div></div>
-     <div class="card"><div class="lbl">Contested</div><div class="stat" style="color:${META.contested?'var(--bad)':'var(--ink)'}">${META.contested}</div></div>
+     <div class="card link" data-onclick="openContested()"><div class="lbl">Contested</div><div class="stat" style="color:${META.contested?'var(--bad)':'var(--ink)'}">${META.contested}</div></div>
      <div class="card link" id="auditCard" data-onclick="goView('audit')"><div class="lbl">Audit</div><div class="stat"><span class="spin"></span></div></div>
    </div>
    <div class="panel"><h2>Top facts</h2><div id="ovFacts">${spin()}</div></div>
@@ -324,18 +327,21 @@ function corpus(){
 function cparams(kind,page){const p=new URLSearchParams({q:C.q,kind,sort:C.sort,status:C.status,limit:String(PER),offset:String((page-1)*PER)});if(C.tag)p.set('tag',C.tag);return p.toString();}
 async function loadFacts(){if(C.kind==='decision'){C.facts=[];C.ftotal=0;return;}const s=await getJSON('/api/search?'+cparams('fact',C.fpage));C.facts=s.facts;C.ftotal=s.facts_total||s.facts.length;}
 async function loadDecs(){if(C.kind==='fact'){C.decs=[];C.dtotal=0;return;}const s=await getJSON('/api/search?'+cparams('decision',C.dpage));C.decs=s.decisions;C.dtotal=s.decisions_total||s.decisions.length;}
-async function loadCorpus(){$('#results').innerHTML=spin();try{await Promise.all([loadFacts(),loadDecs()]);}catch(e){}renderCorpus();}
-window.goFacts=async p=>{C.fpage=p;try{await loadFacts();}catch(e){}renderCorpus();window.scrollTo({top:0});};
-window.goDecs=async p=>{C.dpage=p;try{await loadDecs();}catch(e){}renderCorpus();};
-function renderCorpus(){
-  LAST.facts=C.facts; LAST.decisions=C.decs; let html='';
-  if(C.kind!=='decision'){const pg=pager(C.fpage,C.ftotal,PER,'goFacts');
-    html+=`<div class="panel"><h2>${C.ftotal} Facts${pg}</h2>`+(C.facts.map(factRow).join('')||'<div class="empty">no matches</div>')+(pg?`<div class="pgfoot">${pg}</div>`:'')+`</div>`;}
-  if(C.kind!=='fact'){const pg=pager(C.dpage,C.dtotal,PER,'goDecs');
-    html+=`<div class="panel"><h2>${C.dtotal} Decisions${pg}</h2>`+(C.decs.map(decRow).join('')||'<div class="empty">no matches</div>')+(pg?`<div class="pgfoot">${pg}</div>`:'')+`</div>`;}
+function fpanelHTML(){LAST.facts=C.facts;const pg=pager(C.fpage,C.ftotal,PER,'goFacts');return `<h2>${C.ftotal} Facts${pg}</h2>`+(C.facts.map(factRow).join('')||'<div class="empty">no matches</div>')+(pg?`<div class="pgfoot">${pg}</div>`:'');}
+function dpanelHTML(){LAST.decisions=C.decs;const pg=pager(C.dpage,C.dtotal,PER,'goDecs');return `<h2>${C.dtotal} Decisions${pg}</h2>`+(C.decs.map(decRow).join('')||'<div class="empty">no matches</div>')+(pg?`<div class="pgfoot">${pg}</div>`:'');}
+function loadCorpus(){   // progressive: render each panel's shell, then fill facts and decisions independently
+  let html='';
+  if(C.kind!=='decision') html+=`<div id="fpanel" class="panel"><h2>Facts</h2>${spin()}</div>`;
+  if(C.kind!=='fact') html+=`<div id="dpanel" class="panel"><h2>Decisions</h2>${spin()}</div>`;
   $('#results').innerHTML=html;
+  if(C.kind!=='decision') loadFacts().then(()=>{const e=$('#fpanel');if(e)e.innerHTML=fpanelHTML();}).catch(()=>{const e=$('#fpanel');if(e)e.innerHTML='<h2>Facts</h2><div class="empty">error</div>';});
+  if(C.kind!=='fact') loadDecs().then(()=>{const e=$('#dpanel');if(e)e.innerHTML=dpanelHTML();}).catch(()=>{const e=$('#dpanel');if(e)e.innerHTML='<h2>Decisions</h2><div class="empty">error</div>';});
 }
+window.goFacts=async p=>{C.fpage=p;const e=$('#fpanel');if(e)e.innerHTML=`<h2>Facts</h2>${spin()}`;try{await loadFacts();}catch(err){}if($('#fpanel'))$('#fpanel').innerHTML=fpanelHTML();window.scrollTo({top:0});};
+window.goDecs=async p=>{C.dpage=p;const e=$('#dpanel');if(e)e.innerHTML=`<h2>Decisions</h2>${spin()}`;try{await loadDecs();}catch(err){}if($('#dpanel'))$('#dpanel').innerHTML=dpanelHTML();};
 window.filterTag=t=>{if(state.detail||state.node){state.detail=null;state.node=null;}state.view='corpus';C.tag=t;C.q='';C.kind='all';C.status='all';C.fpage=1;C.dpage=1;
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));corpus();};
+window.openContested=()=>{state.node=null;state.detail=null;state.view='corpus';C.q='';C.tag='';C.kind='fact';C.status='contested';C.sort='salience';C.fpage=1;C.dpage=1;
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));corpus();};
 
 /* ---------- Hive ---------- */
@@ -367,10 +373,10 @@ async function hive(){
 }
 
 /* ---------- Telemetry body (shared) ---------- */
-function telemetryBody(t,page,pagerFn,showNode){
+function telemetryBody(t,page,pagerFn,showNode,drill){
   LAST.sessions=t.recent||[];
   const T=t.totals||{}; const days=t.by_day||[]; const max=Math.max(1,...days.map(d=>d.sessions));
-  const bars=days.map(d=>`<div title="${d.day}: ${d.sessions}" style="height:${Math.round(d.sessions/max*100)}%"></div>`).join('');
+  const bars=days.map(d=>`<div title="${d.day}: ${d.sessions}${drill?' — click to filter':''}" style="height:${Math.round(d.sessions/max*100)}%${drill?';cursor:pointer':''}" ${drill?`data-onclick="telFilterDay('${d.day}')"`:''}></div>`).join('');
   const xlab=days.map((d,i)=>`<div>${(i===0||i===days.length-1)?d.day.slice(5):''}</div>`).join('');
   const models=Object.entries(t.by_model||{}).sort((a,b)=>(b[1].in+b[1].out)-(a[1].in+a[1].out));
   const total=t.recent_total||T.sessions||0; const pg=pager(page,total,PER,pagerFn);
@@ -381,20 +387,23 @@ function telemetryBody(t,page,pagerFn,showNode){
      <div class="card"><div class="lbl">Tokens</div><div class="stat" style="font-size:18px">${fmtNum(T.tokens_in)}<small> in</small> / ${fmtNum(T.tokens_out)}<small> out</small></div></div>
      <div class="card"><div class="lbl">Cost</div><div class="stat" style="font-size:20px">${fmtCost(T.cost_usd)}</div></div></div>
    <div class="panel"><h2>Sessions per day</h2><div class="spark">${bars||''}</div><div class="sparkx">${xlab}</div></div>
-   ${models.length?`<div class="panel"><h2>By model</h2><table><thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${models.map(([m,v])=>`<tr><td class="mono">${esc(m)}</td><td>${fmtNum(v.in)}</td><td>${fmtNum(v.out)}</td><td>${v.priced?fmtCost(v.cost):'n/a'}</td></tr>`).join('')}</tbody></table></div>`:''}
+   ${models.length?`<div class="panel"><h2>By model</h2><table><thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${models.map(([m,v])=>`<tr ${drill?`class="link" data-onclick="telFilterModel('${esc(m)}')"`:''}><td class="mono">${esc(m)}</td><td>${fmtNum(v.in)}</td><td>${fmtNum(v.out)}</td><td>${v.priced?fmtCost(v.cost):'n/a'}</td></tr>`).join('')}</tbody></table></div>`:''}
    <div class="panel"><h2>${fmtNum(total)} Recent session${total===1?'':'s'}${pg}</h2>
      <table><thead><tr><th>When</th>${showNode?'<th>Node</th>':''}<th>Agent</th><th>Project</th><th>Dur</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${recent}</tbody></table>
      ${pg?`<div class="pgfoot">${pg}</div>`:''}</div>`;
 }
 
 /* ---------- Telemetry tab (combined across the hive, sort+filter) ---------- */
-let TP=1, TF={sort:'recent',fnode:'',fproject:'',fagent:''};
+let TP=1, TF={sort:'recent',fnode:'',fproject:'',fagent:'',fday:'',fmodel:''};
 window.goTel=p=>{TP=p;telemetry();window.scrollTo({top:0});};
 window.telReload=()=>{TF.sort=$('#tsort').value;TF.fnode=$('#tnode').value;TF.fproject=$('#tproj').value;TF.fagent=$('#tagent').value;TP=1;telemetry();};
+window.telFilterModel=m=>{TF.fmodel=m;TP=1;telemetry();};
+window.telFilterDay=d=>{TF.fday=d;TP=1;telemetry();};
 async function telemetry(){
   $('#app').innerHTML=spin('aggregating telemetry across the hive…');
   const p=new URLSearchParams({scope:'hive',sort:TF.sort,limit:String(PER),offset:String((TP-1)*PER)});
   if(TF.fnode)p.set('fnode',TF.fnode); if(TF.fproject)p.set('fproject',TF.fproject); if(TF.fagent)p.set('fagent',TF.fagent);
+  if(TF.fday)p.set('fday',TF.fday); if(TF.fmodel)p.set('fmodel',TF.fmodel);
   let t; try{ t=await getJSON('/api/telemetry?'+p.toString()); }catch(e){ $('#app').innerHTML='<div class="empty">telemetry unavailable</div>'; return; }
   const fac=t.facets||{projects:[],agents:[],nodes:[]};
   const opt=(arr,sel)=>arr.map(x=>`<option ${x===sel?'selected':''}>${esc(x)}</option>`).join('');
@@ -410,16 +419,21 @@ async function telemetry(){
    </div>`;
   const line=`<div class="note"><b>${admitted} admitted · ${online} online · ${reporting} reporting telemetry</b>${noTel?` · ${noTel} online without telemetry (older code — joins after update)`:''}${off?` · ${off} offline`:''}. Telemetry is local to each node, aggregated live over the tailnet.</div>`;
   const nodesPanel=`<div class="panel"><h2>${(t.nodes||[]).length} Nodes</h2><table><thead><tr><th>Node</th><th>Sessions</th><th>Status</th></tr></thead><tbody>${(t.nodes||[]).map(n=>`<tr class="link ${n.status==='offline'?'off':''}" data-onclick="openNode('${esc(n.node_id)}')"><td><span class="dot ${dotForNode(n.status)}"></span>${esc(n.node)}</td><td>${fmtNum(n.sessions)}</td><td>${esc(statusText(n.status))}</td></tr>`).join('')}</tbody></table></div>`;
-  $('#app').innerHTML=controls+line+nodesPanel+(t.totals&&t.totals.sessions!==undefined?telemetryBody(t,TP,'goTel',true):'<div class="empty">no sessions</div>');
+  const chips=[];
+  if(TF.fday) chips.push(`<span class="chip proj">day: ${esc(TF.fday)} <a data-onclick="telFilterDay('')">×</a></span>`);
+  if(TF.fmodel) chips.push(`<span class="chip proj">model: ${esc(TF.fmodel)} <a data-onclick="telFilterModel('')">×</a></span>`);
+  const chipbar=chips.length?`<div class="controls">${chips.join(' ')}</div>`:'';
+  $('#app').innerHTML=controls+chipbar+line+nodesPanel+(t.totals&&t.totals.sessions!==undefined?telemetryBody(t,TP,'goTel',true,true):'<div class="empty">no sessions</div>');
   $('#tsort').value=TF.sort;
   ['tsort','tnode','tproj','tagent'].forEach(id=>{const e=$('#'+id);if(e)e.onchange=telReload;});
 }
 
 /* ---------- Per-node drill-down ---------- */
-let NTP=1, NC={fpage:1,dpage:1};
-window.openNode=id=>{state.node=id;state.nodeTab='overview';state.detail=null;NTP=1;NC={fpage:1,dpage:1};render();};
+let NTP=1, NC={fpage:1,dpage:1,status:'all'};
+window.openNode=id=>{state.node=id;state.nodeTab='overview';state.detail=null;NTP=1;NC={fpage:1,dpage:1,status:'all'};render();};
 window.backHive=()=>{state.node=null;state.detail=null;state.view='hive';document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='hive'));render();};
-window.nodeTab=tab=>{state.nodeTab=tab;if(tab==='telemetry')NTP=1;if(tab==='corpus'){NC={fpage:1,dpage:1};}render();};
+window.nodeTab=tab=>{state.nodeTab=tab;if(tab==='telemetry')NTP=1;if(tab==='corpus'){NC={fpage:1,dpage:1,status:'all'};}render();};
+window.openNodeContested=()=>{state.nodeTab='corpus';NC={fpage:1,dpage:1,status:'contested'};render();};
 window.goNodeTel=p=>{NTP=p;render();window.scrollTo({top:0});};
 window.goNFacts=async p=>{NC.fpage=p;renderNode();};
 window.goNDecs=async p=>{NC.dpage=p;renderNode();};
@@ -436,28 +450,46 @@ async function renderNode(){
     if(state.nodeTab==='overview'){
       const o=await getJSON('/api/overview?'+nodeQ()); if(!body())return;
       if(o.reachable===false||o.facts===undefined){body().innerHTML=unreachable;return;}
+      // divergence: compare the node's FULL merkle to a FRESH local one (META.merkle goes stale as the
+      // hive syncs). Never for self — it can't diverge from itself.
+      const isSelf = o.node_id && META.node_id && o.node_id===META.node_id;
+      let sync='';
+      if(isSelf){ sync='<div class="kv"><div class="k"></div><div class="v" style="color:var(--ok)">this node</div></div>'; }
+      else if(o.merkle_full){ try{ const loc=await getJSON('/api/overview'); if(loc.merkle_full) sync=loc.merkle_full===o.merkle_full
+          ?'<div class="kv"><div class="k"></div><div class="v" style="color:var(--ok)">in sync with this node</div></div>'
+          :'<div class="kv"><div class="k"></div><div class="v"><span class="pill contested">DIVERGED from this node</span></div></div>'; }catch(e){} }
+      if(!body())return;
       body().innerHTML=`<div class="grid cards">
-         <div class="card"><div class="lbl">Facts</div><div class="stat">${o.facts}</div></div>
-         <div class="card"><div class="lbl">Decisions</div><div class="stat">${o.decisions}</div></div>
-         <div class="card"><div class="lbl">Contested</div><div class="stat" style="color:${o.contested?'var(--bad)':'var(--ink)'}">${o.contested}</div></div>
+         <div class="card link" data-onclick="nodeTab('corpus')"><div class="lbl">Facts</div><div class="stat">${o.facts}</div></div>
+         <div class="card link" data-onclick="nodeTab('corpus')"><div class="lbl">Decisions</div><div class="stat">${o.decisions}</div></div>
+         <div class="card link" data-onclick="openNodeContested()"><div class="lbl">Contested</div><div class="stat" style="color:${o.contested?'var(--bad)':'var(--ink)'}">${o.contested}</div></div>
          <div class="card"><div class="lbl">Role</div><div class="stat" style="font-size:16px">${esc(o.role)}</div></div></div>
        <div class="panel"><h2>Node</h2>${kv('Hive','<span class="mono">'+esc(o.hive||'—')+'</span>')}${kv('Contract','v'+esc(o.contract))}${kv('Address','<span class="mono">'+esc(o.address||'—')+'</span>')}${kv('Merkle root','<span class="mono">'+esc(o.merkle)+'</span>')}
-         ${o.merkle!==META.merkle?'<div class="kv"><div class="k"></div><div class="v"><span class="pill contested">DIVERGED from this node</span></div></div>':''}</div>`;
+         ${sync}</div>`;
     } else if(state.nodeTab==='stats'){
       if(!body())return;
       body().innerHTML=statusPanels();   // progressive: whoami/stats fast, doctor fills in
       loadStatus(state.node);
       return;
     } else if(state.nodeTab==='corpus'){
-      const f=await getJSON('/api/search?'+nodeQ(`kind=fact&limit=${PER}&offset=${(NC.fpage-1)*PER}`));
-      const dd=await getJSON('/api/search?'+nodeQ(`kind=decision&limit=${PER}&offset=${(NC.dpage-1)*PER}`));
       if(!body())return;
-      if(f.facts===undefined){body().innerHTML=unreachable;return;}
-      LAST.facts=f.facts; LAST.decisions=dd.decisions;
-      const ft=f.facts_total||f.facts.length, dt=dd.decisions_total||dd.decisions.length;
-      const fpg=pager(NC.fpage,ft,PER,'goNFacts'), dpg=pager(NC.dpage,dt,PER,'goNDecs');
-      body().innerHTML=`<div class="panel"><h2>${ft} Facts${fpg}</h2>${f.facts.map(factRow).join('')||'<div class="empty">none</div>'}${fpg?`<div class="pgfoot">${fpg}</div>`:''}</div>
-        <div class="panel"><h2>${dt} Decisions${dpg}</h2>${dd.decisions.map(decRow).join('')||'<div class="empty">none</div>'}${dpg?`<div class="pgfoot">${dpg}</div>`:''}</div>`;
+      const st=NC.status||'all';
+      const filt=st!=='all'?`<div class="note">Filtered to <b>${esc(st)}</b> facts on this node · <a href="javascript:void 0" data-onclick="nodeTab('corpus')">clear</a></div>`:'';
+      // progressive: shells first, then fill facts + decisions independently
+      body().innerHTML=filt+`<div id="nfpanel" class="panel"><h2>Facts</h2>${spin()}</div>`+(st==='all'?`<div id="ndpanel" class="panel"><h2>Decisions</h2>${spin()}</div>`:'');
+      const unr=unreachable;
+      getJSON('/api/search?'+nodeQ(`kind=fact&status=${st}&limit=${PER}&offset=${(NC.fpage-1)*PER}`)).then(f=>{
+        const b=$('#nfpanel'); if(!b)return;
+        if(f.facts===undefined){b.innerHTML='<h2>Facts</h2>'+unr;return;}
+        LAST.facts=f.facts; const ft=f.facts_total||f.facts.length; const fpg=pager(NC.fpage,ft,PER,'goNFacts');
+        b.innerHTML=`<h2>${ft} Facts${fpg}</h2>`+(f.facts.map(factRow).join('')||'<div class="empty">none</div>')+(fpg?`<div class="pgfoot">${fpg}</div>`:'');
+      }).catch(()=>{const b=$('#nfpanel');if(b)b.innerHTML='<h2>Facts</h2><div class="empty">unavailable</div>';});
+      if(st==='all') getJSON('/api/search?'+nodeQ(`kind=decision&limit=${PER}&offset=${(NC.dpage-1)*PER}`)).then(dd=>{
+        const b=$('#ndpanel'); if(!b)return;
+        LAST.decisions=dd.decisions; const dt=dd.decisions_total||dd.decisions.length; const dpg=pager(NC.dpage,dt,PER,'goNDecs');
+        b.innerHTML=`<h2>${dt} Decisions${dpg}</h2>`+(dd.decisions.map(decRow).join('')||'<div class="empty">none</div>')+(dpg?`<div class="pgfoot">${dpg}</div>`:'');
+      }).catch(()=>{const b=$('#ndpanel');if(b)b.innerHTML='<h2>Decisions</h2><div class="empty">unavailable</div>';});
+      return;
     } else {
       const t=await getJSON('/api/telemetry?'+nodeQ(`limit=${PER}&offset=${(NTP-1)*PER}`)); if(!body())return;
       if(t.reachable===false){body().innerHTML=unreachable;return;}
@@ -503,6 +535,15 @@ async function loadRelated(kind,id){
   if(!r.related||!r.related.length){ el.innerHTML='<div class="empty">No facts share tags with this '+esc(kind)+'.</div>'; return; }
   LAST.facts=r.related;
   el.innerHTML=`<table><thead><tr><th>Conf</th><th>Shared tags</th><th>Fact</th></tr></thead><tbody>${r.related.map(f=>`<tr class="link" data-onclick="openFact(${f.id})"><td><span style="color:${confColor(f.confidence)}">${f.confidence.toFixed(2)}</span></td><td>${(f.shared||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join(' ')}</td><td>${esc((f.content||'').slice(0,110))}${f.contested?' <span class="pill contested">CONTESTED</span>':''}</td></tr>`).join('')}</tbody></table>`;
+}
+async function loadRelatedSessions(s){
+  const el=$('#relsess'); if(!el)return;
+  let t; try{ t=await getJSON(`/api/telemetry?scope=hive&fproject=${encodeURIComponent(s.project||'-')}&limit=12`); }
+  catch(e){ el.innerHTML='<div class="empty">none</div>'; return; }
+  const rows=(t.recent||[]).filter(r=>!(s.session_id&&r.session_id===s.session_id)).slice(0,10);
+  if(!rows.length){ el.innerHTML='<div class="empty">No other sessions for project '+esc(s.project||'-')+'.</div>'; return; }
+  LAST.sessions=rows;
+  el.innerHTML=`<table><thead><tr><th>When</th><th>Node</th><th>Agent</th><th>Dur</th><th>Cost</th></tr></thead><tbody>${rows.map((r,i)=>`<tr class="link" data-onclick="openSession(${i})"><td class="mono">${esc(r.when)}</td><td>${esc(r.node_name||r.node||'-')}</td><td>${esc(r.agent)}</td><td>${fmtDur(r.duration_s)}</td><td>${fmtCost(r.cost_usd)}</td></tr>`).join('')}</tbody></table>`;
 }
 </script>
 </body></html>

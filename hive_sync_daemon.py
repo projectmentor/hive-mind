@@ -15,11 +15,13 @@ Endpoints:
 import errno
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import merkle
 import sync_common
@@ -90,6 +92,30 @@ def _entries():
     return merkle.read_all_entries(hv.JOURNAL_DIR)
 
 
+_HV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hv")
+
+
+def _run_hv_text(args, timeout):
+    """Capture the text output of a read-only `hv` subcommand for the dashboard Status view. The args
+    are HARD-CODED at the call site (never client input), so there's no command-injection surface."""
+    try:
+        r = subprocess.run([sys.executable, _HV_PATH, *args], capture_output=True, text=True,
+                           timeout=timeout, env=os.environ)
+        out = r.stdout.strip()
+        if r.stderr.strip():
+            out = (out + "\n" + r.stderr.strip()).strip()
+        return out or "(no output)"
+    except Exception as e:
+        return f"(error running hv {' '.join(args)}: {e})"
+
+
+def _api_status():
+    """`hv whoami` + `hv stats` + `hv doctor` text — the header owner-chip Status view."""
+    return {"whoami": _run_hv_text(["whoami"], 10),
+            "stats": _run_hv_text(["stats"], 10),
+            "doctor": _run_hv_text(["doctor"], 30)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hive-sync/2.0"
     timeout = SOCKET_TIMEOUT             # honored by socketserver setup() → socket read timeout
@@ -153,6 +179,31 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         try:
+            # Per-node proxy: these read endpoints can be served for a SPECIFIC node — self = local,
+            # a peer = proxied over the tailnet. hv resolves the address from the admitted-peer probe
+            # (never from the client), so the proxy can't be aimed at an arbitrary host (no SSRF).
+            node = q.get("node", [None])[0]
+            if node and node != hv.NODE_ID and u.path in (
+                    "/api/overview", "/api/search", "/api/status", "/api/telemetry"):
+                addr = hv.api_node_addr(node)
+                if not addr:
+                    self._send(200, {"available": False, "reachable": False, "node_id": node,
+                                     "error": "node unreachable or no advertised address"})
+                    return
+                qs = "&".join(f"{k}={quote(v[0])}" for k, v in q.items() if k != "node")
+                try:
+                    with urllib.request.urlopen(
+                            f"http://{addr}{u.path}" + (f"?{qs}" if qs else ""), timeout=6) as rr:
+                        body = rr.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                except Exception as e:
+                    self._send(200, {"available": False, "reachable": False, "node_id": node,
+                                     "error": str(e)[:90]})
+                return
             if u.path == "/sync/hello":
                 es = _entries()
                 self._send(200, {
@@ -190,9 +241,42 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, hv.api_search(
                     query=q.get("q", [""])[0], tag=(q.get("tag", [None])[0] or None),
                     kind=q.get("kind", ["all"])[0],
-                    min_confidence=float(q.get("min_confidence", ["0"])[0] or 0)))
+                    min_confidence=float(q.get("min_confidence", ["0"])[0] or 0),
+                    limit=max(1, min(200, int(q.get("limit", ["50"])[0] or 50))),
+                    offset=max(0, int(q.get("offset", ["0"])[0] or 0)),
+                    sort=q.get("sort", ["salience"])[0], status=q.get("status", ["all"])[0]))
+            elif u.path == "/api/tags":
+                self._send(200, hv.api_tags())
+            elif u.path == "/api/related":
+                self._send(200, hv.api_related(
+                    kind=q.get("kind", ["fact"])[0],
+                    item_id=int(q.get("id", ["0"])[0] or 0)))
+            elif u.path == "/api/audit":
+                self._send(200, hv.api_audit())
+            elif u.path == "/api/status":
+                cmd = q.get("cmd", [None])[0]   # per-command so the UI can load progressively
+                if cmd in ("whoami", "stats", "doctor"):
+                    self._send(200, {cmd: _run_hv_text([cmd], 40 if cmd == "doctor" else 12)})
+                else:
+                    self._send(200, _api_status())
+            elif u.path == "/api/verify":
+                self._send(200, hv.api_verify())
+            elif u.path == "/api/telemetry":          # node!=self already handled by the proxy above
+                lim = max(1, min(2000, int(q.get("limit", ["25"])[0] or 25)))
+                off = max(0, int(q.get("offset", ["0"])[0] or 0))
+                sort = q.get("sort", ["recent"])[0]
+                fproj = q.get("fproject", [None])[0]
+                fagent = q.get("fagent", [None])[0]
+                fnode = q.get("fnode", [None])[0]
+                if q.get("scope", ["self"])[0] == "hive":   # combined across reachable nodes
+                    self._send(200, hv.api_telemetry_hive(limit=lim, offset=off, sort=sort,
+                                                          project=fproj, agent=fagent, node=fnode))
+                else:                                       # local (also what peers answer during aggregation)
+                    self._send(200, hv.api_telemetry(limit=lim, offset=off, sort=sort,
+                                                     project=fproj, agent=fagent))
             elif u.path == "/api/peers":
-                self._send(200, {"peers": hv.api_peers()})
+                probe = q.get("probe", ["1"])[0] not in ("0", "false", "no")
+                self._send(200, {"peers": hv.api_peers(probe=probe)})
             elif u.path in ("/", "/index.html", "/dashboard", "/dashboard/"):
                 self._serve_static("index.html")
             elif u.path in ("/logo.svg", "/favicon.svg"):

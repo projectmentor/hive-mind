@@ -5,7 +5,6 @@
 <link rel="icon" href="favicon.svg">
 <style>
 :root{
-  /* HiveMind brand tokens (website/site/assets/dev.css) */
   --bg:#08090a; --surface:#111213; --elevated:#1a1b1c;
   --ink:#f7f8f8; --dim:#9ca3af; --muted:#6b7280;
   --accent:#F2994A; --accent-hover:#E07A00;
@@ -19,14 +18,19 @@
 body{margin:0;font:14px/1.55 var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased}
 a{color:var(--accent);text-decoration:none}
 header{position:sticky;top:0;z-index:5;background:rgba(8,9,10,.86);backdrop-filter:blur(8px);
-  border-bottom:1px solid var(--line);padding:11px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  border-bottom:1px solid var(--line);padding:11px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 header .logo{height:26px;display:block}
 .badge{font-size:11px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);color:var(--dim);font-weight:500}
 .badge.ok{color:var(--ok);border-color:rgba(63,185,80,.35);background:rgba(63,185,80,.08)}
 .badge.owner{color:var(--accent);border-color:rgba(242,153,74,.35);background:rgba(242,153,74,.08)}
+.badge.warn{color:var(--warn);border-color:rgba(210,153,34,.35);background:rgba(210,153,34,.08)}
 .badge.mono{font-family:var(--mono)}
+.badge.link{cursor:pointer} .badge.link:hover{filter:brightness(1.25);border-color:var(--accent)}
+.help{width:24px;height:24px;border-radius:50%;border:1px solid var(--line);color:var(--dim);background:var(--surface);
+  cursor:help;font:700 13px var(--font);display:inline-flex;align-items:center;justify-content:center}
+.help:hover{border-color:var(--accent);color:var(--accent)}
 .spacer{flex:1}
-nav{display:flex;gap:4px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface)}
+nav{display:flex;gap:4px;padding:8px 14px;border-bottom:1px solid var(--line);background:var(--surface);flex-wrap:wrap}
 nav button{background:none;border:0;color:var(--dim);padding:8px 14px;border-radius:var(--r-btn);cursor:pointer;font:600 13px var(--font)}
 nav button:hover{color:var(--ink);background:var(--elevated)}
 nav button.active{color:var(--ink);background:var(--elevated);box-shadow:inset 0 -2px 0 var(--accent)}
@@ -34,13 +38,15 @@ main{padding:18px;max-width:1100px;margin:0 auto}
 .grid{display:grid;gap:14px}
 .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);padding:14px 16px}
+.card.link{cursor:pointer} .card.link:hover{border-color:var(--accent)}
 .stat{font-size:26px;font-weight:700;letter-spacing:-.5px}
 .stat small{font-size:12px;font-weight:500;color:var(--dim);letter-spacing:0}
 .lbl{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.7px;font-weight:600}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-panel);margin-top:16px;overflow:hidden}
-.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;display:flex;align-items:center}
+.panel h2{font-size:12px;text-transform:uppercase;letter-spacing:.7px;color:var(--dim);margin:0;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;display:flex;align-items:center;gap:8px}
 .row{padding:12px 16px;border-bottom:1px solid var(--line-subtle)}
 .row:last-child{border-bottom:0}
+.row.link{cursor:pointer} .row.link:hover{background:var(--elevated)}
 .content{font-size:14px}
 .meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:7px;color:var(--muted);font-size:12px}
 .chip{font-size:11px;padding:2px 8px;border-radius:var(--r-btn);background:var(--elevated);color:var(--dim);border:1px solid var(--line);cursor:pointer;font-weight:500}
@@ -50,9 +56,9 @@ main{padding:18px;max-width:1100px;margin:0 auto}
 .bar > i{display:block;height:100%;background:linear-gradient(90deg,var(--accent-hover),var(--accent))}
 .pill{font-size:10px;font-weight:700;letter-spacing:.4px;padding:2px 7px;border-radius:999px}
 .pill.contested{background:rgba(248,81,73,.12);color:var(--bad);border:1px solid rgba(248,81,73,.35)}
-.pill.superseded{background:var(--elevated);color:var(--dim);border:1px solid var(--line)}
+.pill.superseded,.pill.forgotten{background:var(--elevated);color:var(--dim);border:1px solid var(--line)}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px;vertical-align:middle}
-.dot.self{background:var(--accent)} .dot.ok{background:var(--ok)} .dot.admitted{background:var(--ok)} .dot.stale{background:var(--warn)} .dot.off{background:var(--muted)}
+.dot.self{background:var(--ok);box-shadow:0 0 0 2px rgba(63,185,80,.25)} .dot.ok{background:var(--ok)} .dot.stale{background:var(--warn)} .dot.off{background:var(--muted)}
 .controls{display:flex;gap:10px;padding:14px 0;flex-wrap:wrap;align-items:center}
 input[type=search],select{background:var(--surface);border:1px solid var(--line);color:var(--ink);
   border-radius:var(--r-btn);padding:9px 12px;font:13px var(--font);outline:none}
@@ -63,142 +69,430 @@ table{width:100%;border-collapse:collapse}
 th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);font-weight:600;padding:10px 16px;border-bottom:1px solid var(--line)}
 td{padding:11px 16px;border-bottom:1px solid var(--line-subtle);font-size:13px}
 tr:last-child td{border-bottom:0}
+tr.link{cursor:pointer} tr.link:hover td{background:var(--elevated)}
+tr.off td{color:var(--muted)}
 .mono{font-family:var(--mono);font-size:12px;color:var(--dim)}
 .sub{color:var(--dim);font-size:12px;margin-top:4px}
 .note{margin:14px 0;padding:10px 14px;border:1px dashed var(--line);border-radius:10px;color:var(--dim);font-size:12px;background:var(--surface)}
 .rationale{color:var(--dim);font-size:12.5px;margin-top:5px;padding-left:12px;border-left:2px solid var(--line)}
 .count{color:var(--muted);font-size:12px;margin-left:auto;font-weight:500}
 .empty{padding:30px 16px;text-align:center;color:var(--muted)}
+.loading{display:flex;align-items:center;gap:10px;color:var(--dim);padding:26px 16px;justify-content:center}
+.spin{display:inline-block;width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+.btn{background:var(--surface);border:1px solid var(--line);color:var(--ink);border-radius:var(--r-btn);padding:8px 16px;cursor:pointer;font:600 12px var(--font)}
+.btn:hover{border-color:var(--accent);color:var(--accent)}
+.pager{display:inline-flex;gap:2px;align-items:center;flex-wrap:wrap}
+.pager .pg{background:var(--bg);border:1px solid var(--line);color:var(--dim);min-width:28px;height:26px;padding:0 7px;border-radius:var(--r-btn);cursor:pointer;font:600 12px var(--font)}
+.pager .pg:hover:not([disabled]):not(.on){border-color:var(--accent);color:var(--ink)}
+.pager .pg.on{background:var(--accent);border-color:var(--accent);color:#180f04}
+.pager .pg[disabled]{opacity:.35;cursor:default}
+.pgdots{color:var(--muted);padding:0 3px}
+.pgfoot{display:flex;justify-content:center;padding:13px 16px;border-top:1px solid var(--line-subtle)}
+.panel h2 .pager{margin-left:auto;text-transform:none;letter-spacing:0}
+.spark{display:flex;align-items:flex-end;gap:3px;height:64px;padding:14px 16px 8px}
+.spark > div{flex:1;background:linear-gradient(180deg,var(--accent),var(--accent-hover));border-radius:2px 2px 0 0;min-height:2px;opacity:.9}
+.sparkx{display:flex;gap:3px;padding:0 16px 12px;color:var(--muted);font-size:10px}
+.sparkx > div{flex:1;text-align:center;overflow:hidden;white-space:nowrap}
+.crumb{display:flex;align-items:center;gap:10px;padding:14px 0 4px;flex-wrap:wrap}
+.crumb .back{background:var(--surface);border:1px solid var(--line);color:var(--dim);border-radius:var(--r-btn);padding:6px 12px;cursor:pointer;font:600 12px var(--font)}
+.crumb .back:hover{border-color:var(--accent);color:var(--ink)}
+.crumb .who{font-size:16px;font-weight:700}
+.subnav{display:flex;gap:4px;margin:10px 0 0;flex-wrap:wrap}
+.subnav button{background:none;border:0;color:var(--dim);padding:7px 13px;border-radius:var(--r-btn);cursor:pointer;font:600 12px var(--font)}
+.subnav button:hover{color:var(--ink);background:var(--elevated)}
+.subnav button.on{color:var(--ink);background:var(--elevated);box-shadow:inset 0 -2px 0 var(--accent)}
+.cli{margin:0;padding:14px 16px;font:12px/1.5 var(--mono);color:var(--ink);white-space:pre-wrap;word-break:break-word;overflow-x:auto}
+.kv{display:flex;gap:12px;padding:11px 16px;border-bottom:1px solid var(--line-subtle);font-size:13px}
+.kv:last-child{border-bottom:0}
+.kv .k{color:var(--dim);min-width:120px;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
+.kv .v{flex:1;word-break:break-word}
+.full{padding:16px;font-size:15px;line-height:1.6;white-space:pre-wrap;word-break:break-word}
+.modal-bg{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;padding:20px}
+.modal{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-panel);max-width:560px;width:100%;max-height:85vh;overflow:auto;box-shadow:0 24px 60px -20px rgba(0,0,0,.8)}
+.modal .mh{display:flex;align-items:center;gap:10px;padding:16px 18px;border-bottom:1px solid var(--line)}
+.modal .mh img{height:22px} .modal .mh .x{margin-left:auto;background:none;border:0;color:var(--dim);font-size:20px;cursor:pointer;line-height:1}
+.modal .mb{padding:16px 18px;font-size:14px;line-height:1.55}
+.modal .mb p{margin:.5rem 0;color:var(--dim)} .modal .mb code{font-family:var(--mono);background:var(--elevated);padding:1px 5px;border-radius:4px;color:var(--ink)}
+.verdict{display:flex;gap:8px;align-items:center;font-weight:600;color:var(--ok);margin-bottom:6px}
+.verdict.bad{color:var(--warn)}
+.fix{margin:.7rem 0;padding:11px 13px;border:1px solid var(--line);border-radius:8px;background:var(--bg)}
+.fix .ft{color:var(--ink);font-weight:600;margin:0 0 6px}
+.cmd{display:flex;align-items:center;gap:8px;margin:6px 0}
+.cmd code{flex:1;font-family:var(--mono);font-size:12px;background:var(--elevated);padding:6px 9px;border-radius:6px;color:var(--ink);overflow-x:auto;white-space:nowrap}
+.cmd .btn{padding:6px 10px}
 footer{max-width:1100px;margin:8px auto 30px;padding:0 18px;color:var(--muted);font-size:11px}
 </style></head>
 <body>
 <header>
   <img class="logo" src="logo.svg" alt="HiveMind">
-  <span class="badge owner" id="hRole">…</span>
-  <span class="badge ok" id="hAuth">…</span>
+  <span class="badge owner link" id="hRole" title="Device status">…</span>
+  <span class="badge ok link" id="hAuth" title="Authenticity">…</span>
   <span class="spacer"></span>
   <span class="badge" id="hNode"></span>
   <span class="badge mono" id="hMerkle"></span>
+  <span class="help" id="hHelp" title="Help — an AI assistant is coming soon">?</span>
 </header>
 <nav>
   <button data-v="overview" class="active">Overview</button>
   <button data-v="corpus">Corpus</button>
   <button data-v="hive">Hive</button>
+  <button data-v="telemetry">Telemetry</button>
 </nav>
-<main id="app"><div class="empty">loading…</div></main>
-<footer>Read-only · served by the sync daemon on this node · data is live from <span class="mono">/api/*</span>.</footer>
+<main id="app"><div class="loading"><span class="spin"></span> loading…</div></main>
+<footer>Read-only · served by the sync daemon on this node · live from <span class="mono">/api/*</span>.</footer>
+<div id="modal"></div>
 
 <script>
 const $=(s,r=document)=>r.querySelector(s);
-const esc=s=>(s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const confColor=c=>c>=.6?'var(--ok)':c>=.3?'var(--accent)':'var(--warn)';
 const getJSON=async u=>{const r=await fetch(u);if(!r.ok)throw new Error(r.status);return r.json();};
-let META={}, state={view:'overview', q:'', tag:'', kind:'all'};
+const spin=t=>`<div class="loading"><span class="spin"></span> ${t||'loading…'}</div>`;
+const fmtDur=s=>{s=Math.round(s||0);const h=(s/3600)|0,m=((s%3600)/60)|0;return h?`${h}h${String(m).padStart(2,'0')}m`:`${m}m`;};
+const fmtNum=n=>(n||0).toLocaleString();
+const fmtCost=c=>c==null?'n/a':'~$'+Number(c).toFixed(2);
+const PER=25;
+let META={}, state={view:'overview',node:null,nodeTab:'overview',detail:null}, PEERS=[];
+let LAST={facts:[],decisions:[],sessions:[]};   // current rows, for detail lookups
 
 (async function boot(){
   try{ META=await getJSON('/api/overview'); }catch(e){ $('#app').innerHTML='<div class="empty">could not reach /api/overview — is the daemon running?</div>'; return; }
-  $('#hRole').textContent=META.role; $('#hRole').className='badge '+(META.role==='OWNER'?'owner':'');
-  $('#hAuth').textContent='✓ v'+META.contract+' authentic';
-  $('#hNode').textContent=META.node; $('#hMerkle').textContent=META.merkle;
-  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
-    state.view=b.dataset.v;
-    document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x===b));
-    render();
-  });
+  $('#hRole').textContent=META.role; $('#hRole').className='badge link '+(META.role==='OWNER'?'owner':'');
+  $('#hAuth').textContent='checking…'; $('#hNode').textContent=META.node; $('#hMerkle').textContent=META.merkle;
+  $('#hRole').onclick=()=>goView('status');
+  $('#hAuth').onclick=openOfficialModal;
+  $('#hHelp').onclick=()=>openModal('Help','<p>A built-in AI assistant for the dashboard is on the way. For now, use the <code>hv</code> CLI or the docs.</p>');
+  getJSON('/api/verify').then(v=>{const a=$('#hAuth'); if(v.ok){a.textContent='✓ v'+(v.version||META.contract)+' authentic';a.className='badge link ok';}else{a.textContent='⚠ modified locally';a.className='badge link warn';}}).catch(()=>{});
+  document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>goTab(b.dataset.v));
   render();
 })();
+function goTab(v){state.view=v;state.node=null;state.detail=null;if(v==='corpus'){C.fpage=1;C.dpage=1;}if(v==='telemetry')TP=1;
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v===v));render();}
+function goView(v){state.view=v;state.node=null;state.detail=null;document.querySelectorAll('nav button').forEach(x=>x.classList.remove('active'));render();}
+function render(){
+  if(state.detail) return renderDetail();
+  if(state.node) return renderNode();
+  ({overview,corpus,hive,telemetry,status,audit})[state.view]();
+}
 
-function render(){state.view==='overview'?overview():state.view==='corpus'?corpus():hive();}
+/* ---------- modals ---------- */
+function openModal(title,bodyHtml,logo){
+  $('#modal').innerHTML=`<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal">
+    <div class="mh">${logo?'<img src="logo.svg" alt="">':''}<strong>${esc(title)}</strong><button class="x" onclick="closeModal()">×</button></div>
+    <div class="mb">${bodyHtml}</div></div></div>`;
+}
+window.closeModal=()=>{$('#modal').innerHTML='';};
+window.copyCmd=btn=>{const c=btn.parentElement.querySelector('code'); if(c){try{navigator.clipboard.writeText(c.textContent);}catch(e){} btn.textContent='Copied ✓'; setTimeout(()=>btn.textContent='Copy',1300);}};
+const cmdBlock=cmd=>`<div class="cmd"><code>${esc(cmd)}</code><button class="btn" onclick="copyCmd(this)">Copy</button></div>`;
+async function openOfficialModal(){
+  openModal('Authenticity','<div class="loading"><span class="spin"></span> verifying…</div>',true);
+  let v={ok:false,lines:[],version:META.contract};
+  try{ v=await getJSON('/api/verify'); }catch(e){}
+  const ok=v.ok;
+  // Remediation guidance when the local source doesn't match the signed manifest. Read-only on
+  // purpose — the operator runs the command in a terminal where they can see what it will do.
+  const fix = ok ? '' : (v.level==='modified' ? `
+     <div class="fix"><p class="ft">Re-align this install</p>
+       <p>If you made local changes, review them first:</p>${cmdBlock('git -C ~/projects/hive-mind status')}
+       <p>Re-align to the signed source (clean tree):</p>${cmdBlock('hive-mind update')}
+       <p>…or discard local edits and force-align:</p>${cmdBlock('hive-mind reset -y')}
+       <p style="color:var(--muted);font-size:12px">Run these in a terminal on that device. (A one-click control from the dashboard is coming as an opt-in admin mode.)</p></div>` : `
+     <div class="fix"><p class="ft">Reinstall from the official source</p>
+       <p>No signed manifest found — restore a genuine copy:</p>${cmdBlock('cd ~/projects/hive-mind && git fetch origin && git reset --hard origin/main && hive-mind update')}</div>`);
+  openModal('Official HiveMind',
+    `<div class="verdict ${ok?'':'bad'}">${ok?'✓':'⚠'} ${esc((v.lines&&v.lines[0])||('HiveMind v'+(v.version||META.contract)))}</div>
+     ${(v.lines||[]).slice(1).map(l=>`<p class="mono" style="color:var(--dim)">${esc(l)}</p>`).join('')}
+     ${fix}
+     <p><strong>Use only the official HiveMind from <a href="https://projectmentor.org" target="_blank" rel="noopener">ProjectMentor</a>. Trust no imitations.</strong></p>
+     <p>To confirm your copy is genuine, run <code>hv verify</code> (or <code>hive-mind verify</code>). A genuine install shows a green check and confirms it against the canonical source; a fork, mirror, or modified copy is flagged with the official URL.</p>
+     <p>Source: <code>${esc(v.official_source||'github.com/projectmentor/hive-mind')}</code> · Site: <a href="${esc(v.site||'https://hivemind.projectmentor.org')}" target="_blank" rel="noopener">hivemind.projectmentor.org</a></p>`,
+    true);
+}
 
+/* ---------- shared rows ---------- */
 function factRow(f){
-  return `<div class="row"><div class="content">${esc(f.content).slice(0,220)}</div>
+  return `<div class="row link" onclick="openFact(${f.id})"><div class="content">${esc((f.content||'').slice(0,240))}</div>
    <div class="meta">
-     <span class="bar"><i style="width:${Math.round(f.confidence*100)}%"></i></span>
-     <span style="color:${confColor(f.confidence)}">${f.confidence.toFixed(2)}</span>
-     ${f.contested?'<span class="pill contested">CONTESTED</span>':''}
-     ${f.tags.map(t=>`<span class="chip" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
-     <span style="margin-left:auto">${esc(f.source)} · ${f.created}</span>
-   </div></div>`;
+     <span class="bar"><i style="width:${Math.max(0,Math.round((f.confidence||0)*100))}%"></i></span>
+     <span style="color:${confColor(f.confidence||0)}">${(f.confidence||0).toFixed(2)}</span>
+     ${f.contested?'<span class="pill contested">CONTESTED</span>':''}${f.forgotten?'<span class="pill forgotten">FORGOTTEN</span>':''}
+     ${(f.tags||[]).map(t=>`<span class="chip" onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
+     <span style="margin-left:auto">${esc(f.source)} · ${esc(f.created)}</span></div></div>`;
 }
 function decRow(d){
-  return `<div class="row"><div class="content">#${d.id} ${esc(d.content).slice(0,220)}
+  return `<div class="row link" onclick="openDecision(${d.id})"><div class="content">#${d.id} ${esc((d.content||'').slice(0,240))}
      ${d.superseded?'<span class="pill superseded">SUPERSEDED</span>':''}</div>
-   ${d.rationale?`<div class="rationale">${esc(d.rationale).slice(0,280)}</div>`:''}
-   <div class="meta">${d.tags.map(t=>`<span class="chip proj" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
-     <span style="margin-left:auto">${d.created}</span></div></div>`;
+   ${d.rationale?`<div class="rationale">${esc(d.rationale.slice(0,300))}</div>`:''}
+   <div class="meta">${(d.tags||[]).map(t=>`<span class="chip proj" onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
+     <span style="margin-left:auto">${esc(d.created)}</span></div></div>`;
+}
+function pager(cur,total,per,fn){
+  const pages=Math.ceil(total/per); if(!total||total<=per) return '';
+  const b=(lab,pg,dis,on)=>`<button class="pg${on?' on':''}" ${dis?'disabled':''} onclick="${fn}(${pg})">${lab}</button>`;
+  const out=[b('«',1,cur===1),b('‹',cur-1,cur===1)]; const lo=Math.max(1,cur-2),hi=Math.min(pages,cur+2);
+  if(lo>1){out.push(b('1',1,false,cur===1)); if(lo>2)out.push('<span class="pgdots">…</span>');}
+  for(let p=lo;p<=hi;p++)out.push(b(String(p),p,false,p===cur));
+  if(hi<pages){if(hi<pages-1)out.push('<span class="pgdots">…</span>'); out.push(b(String(pages),pages,false,cur===pages));}
+  out.push(b('›',cur+1,cur===pages),b('»',pages,cur===pages));
+  return `<div class="pager">${out.join('')}</div>`;
 }
 
+/* ---------- detail views (fact / decision / session) ---------- */
+window.openFact=id=>{const f=LAST.facts.find(x=>x.id===id); if(f){state.detail={kind:'fact',data:f}; render();}};
+window.openDecision=id=>{const d=LAST.decisions.find(x=>x.id===id); if(d){state.detail={kind:'decision',data:d}; render();}};
+window.openSession=i=>{const s=LAST.sessions[i]; if(s){state.detail={kind:'session',data:s}; render();}};
+window.closeDetail=()=>{state.detail=null; render();};
+function kv(k,v){return `<div class="kv"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`;}
+function renderDetail(){
+  const d=state.detail;
+  const crumb=`<div class="crumb"><button class="back" onclick="closeDetail()">‹ Back</button><span class="who">${esc({fact:'Fact',decision:'Decision',session:'Session'}[d.kind])} detail</span></div>`;
+  if(d.kind==='fact'){const f=d.data;
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Fact #${f.id}</h2><div class="full">${esc(f.content)}</div></div>
+      <div class="panel"><h2>Details</h2>
+        ${kv('Confidence',`<span class="bar"><i style="width:${Math.round((f.confidence||0)*100)}%"></i></span> <span style="color:${confColor(f.confidence||0)}">${(f.confidence||0).toFixed(2)}</span>`)}
+        ${kv('State', (f.contested?'<span class="pill contested">CONTESTED</span> ':'')+(f.forgotten?'<span class="pill forgotten">FORGOTTEN</span>':'')||'live')}
+        ${kv('Tags', (f.tags||[]).map(t=>`<span class="chip" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'<span class="muted">—</span>')}
+        ${kv('Source', esc(f.source))}${kv('Created', esc(f.created))}</div>
+      <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
+  } else if(d.kind==='decision'){const x=d.data;
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Decision #${x.id}${x.superseded?' <span class="pill superseded">SUPERSEDED</span>':''}</h2><div class="full">${esc(x.content)}</div></div>
+      ${x.rationale?`<div class="panel"><h2>Rationale</h2><div class="full" style="color:var(--dim)">${esc(x.rationale)}</div></div>`:''}
+      <div class="panel"><h2>Details</h2>
+        ${kv('Tags',(x.tags||[]).map(t=>`<span class="chip proj" onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'—')}
+        ${kv('Created',esc(x.created))}</div>
+      <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
+  } else {const s=d.data;
+    const models=Object.entries(s.models||{});
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Session</h2>
+        ${kv('When',esc(s.when))}${kv('Node',esc(s.node_name||s.node||'-'))}${kv('Agent',esc(s.agent))}
+        ${kv('Project',esc(s.project))}${kv('Duration',fmtDur(s.duration_s))}
+        ${kv('Tokens',fmtNum(s.tokens_in)+' in / '+fmtNum(s.tokens_out)+' out')}${kv('Cost',fmtCost(s.cost_usd))}
+        ${s.session_id?kv('Session id','<span class="mono">'+esc(s.session_id)+'</span>'):''}
+        ${s.started_at?kv('Started','<span class="mono">'+esc(s.started_at)+'</span>'):''}${s.updated_at?kv('Updated','<span class="mono">'+esc(s.updated_at)+'</span>'):''}</div>
+      ${models.length?`<div class="panel"><h2>By model</h2><table><thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${models.map(([m,v])=>`<tr><td class="mono">${esc(m)}</td><td>${fmtNum(v.in)}</td><td>${fmtNum(v.out)}</td><td>${v.cost!=null?fmtCost(v.cost):'n/a'}</td></tr>`).join('')}</tbody></table></div>`:''}`;
+  }
+  if(d.kind==='fact'||d.kind==='decision') loadRelated(d.kind,d.data.id);
+}
+
+/* ---------- Overview ---------- */
 async function overview(){
-  $('#app').innerHTML='<div class="empty">loading…</div>';
-  let s={facts:[],decisions:[]};
-  try{ s=await getJSON('/api/search?limit=8'); }catch(e){}
   $('#app').innerHTML=`
    <div class="grid cards">
-     <div class="card"><div class="lbl">Facts</div><div class="stat">${META.facts}</div></div>
-     <div class="card"><div class="lbl">Decisions</div><div class="stat">${META.decisions}</div></div>
-     <div class="card"><div class="lbl">Nodes</div><div class="stat">${META.nodes} <small>admitted</small></div></div>
+     <div class="card link" onclick="goTab('corpus')"><div class="lbl">Facts</div><div class="stat">${META.facts}</div></div>
+     <div class="card link" onclick="goTab('corpus')"><div class="lbl">Decisions</div><div class="stat">${META.decisions}</div></div>
+     <div class="card link" onclick="goTab('hive')"><div class="lbl">Nodes</div><div class="stat">${META.nodes} <small>admitted</small></div></div>
      <div class="card"><div class="lbl">Contested</div><div class="stat" style="color:${META.contested?'var(--bad)':'var(--ink)'}">${META.contested}</div></div>
+     <div class="card link" id="auditCard" onclick="goView('audit')"><div class="lbl">Audit</div><div class="stat"><span class="spin"></span></div></div>
    </div>
-   <div class="panel"><h2>Top facts</h2>${s.facts.slice(0,5).map(factRow).join('')||'<div class="empty">none</div>'}</div>
-   <div class="panel"><h2>Recent decisions</h2>${s.decisions.slice(0,4).map(decRow).join('')||'<div class="empty">none</div>'}</div>`;
+   <div class="panel"><h2>Top facts</h2><div id="ovFacts">${spin()}</div></div>
+   <div class="panel"><h2>Recent decisions</h2><div id="ovDecs">${spin()}</div></div>`;
+  getJSON('/api/audit').then(a=>{const c=$('#auditCard'); if(c)c.innerHTML=`<div class="lbl">Audit</div><div class="stat" style="font-size:15px;color:${(a.recheck+a.stale+a.duplicate)?'var(--warn)':'var(--ink)'}">${a.recheck} <small>re-check · ${a.stale} stale · ${a.duplicate} dup${a.contravened?` · ${a.contravened} contra`:''}</small></div>`;}).catch(()=>{});
+  getJSON('/api/search?limit=8').then(s=>{LAST.facts=s.facts;LAST.decisions=s.decisions;
+    const f=$('#ovFacts'); if(f)f.innerHTML=s.facts.slice(0,5).map(factRow).join('')||'<div class="empty">none</div>';
+    const d=$('#ovDecs'); if(d)d.innerHTML=s.decisions.slice(0,4).map(decRow).join('')||'<div class="empty">none</div>';}).catch(()=>{});
 }
 
-let _tags=new Set();
+/* ---------- Corpus ---------- */
+let C={q:'',kind:'all',tag:'',sort:'salience',status:'all',fpage:1,dpage:1,facts:[],decs:[],ftotal:0,dtotal:0,tagsLoaded:false};
 function corpus(){
   $('#app').innerHTML=`
    <div class="controls">
-     <input type="search" id="q" placeholder="Search facts & decisions…" value="${esc(state.q)}">
-     <select id="kind">
-       <option value="all">All</option><option value="fact">Facts</option><option value="decision">Decisions</option>
-     </select>
+     <input type="search" id="q" placeholder="Search facts & decisions…" value="${esc(C.q)}">
+     <select id="kind"><option value="all">All</option><option value="fact">Facts</option><option value="decision">Decisions</option></select>
+     <select id="sort"><option value="salience">Sort: salience</option><option value="recency">Sort: recency</option></select>
+     <select id="status"><option value="all">Status: live</option><option value="contested">Contested</option><option value="forgotten">Forgotten</option><option value="volatile">Volatile</option></select>
      <select id="tag"><option value="">All tags</option></select>
-   </div>
-   <div id="results"><div class="empty">loading…</div></div>`;
-  const sync=()=>{$('#q').value=state.q;$('#kind').value=state.kind;$('#tag').value=state.tag;};
-  sync();
-  let timer;
-  const upd=()=>{state.q=$('#q').value;state.kind=$('#kind').value;state.tag=$('#tag').value;
-    clearTimeout(timer);timer=setTimeout(results,180);};
-  $('#q').oninput=upd; $('#kind').onchange=upd; $('#tag').onchange=upd;
-  results();
+   </div><div id="results">${spin()}</div>`;
+  $('#kind').value=C.kind; $('#sort').value=C.sort; $('#status').value=C.status;
+  if(!C.tagsLoaded) getJSON('/api/tags').then(r=>{C.tagsLoaded=true;const sel=$('#tag');if(sel){sel.innerHTML='<option value="">All tags</option>'+r.tags.map(t=>`<option>${esc(t)}</option>`).join('');sel.value=C.tag;}}).catch(()=>{});
+  let timer; const reload=()=>{C.q=$('#q').value;C.kind=$('#kind').value;C.sort=$('#sort').value;C.status=$('#status').value;C.tag=$('#tag').value;C.fpage=1;C.dpage=1;loadCorpus();};
+  $('#q').oninput=()=>{clearTimeout(timer);timer=setTimeout(reload,200);};
+  ['kind','sort','status','tag'].forEach(id=>$('#'+id).onchange=reload);
+  loadCorpus();
 }
-async function results(){
-  const p=new URLSearchParams({q:state.q,kind:state.kind,limit:'40'});
-  if(state.tag) p.set('tag',state.tag);
-  let s={facts:[],decisions:[]};
-  try{ s=await getJSON('/api/search?'+p.toString()); }catch(e){}
-  // keep the tag dropdown populated from whatever tags we have seen
-  [...s.facts.flatMap(f=>f.tags),...s.decisions.flatMap(d=>d.tags)].forEach(t=>_tags.add(t));
-  const sel=$('#tag'); if(sel){const cur=state.tag;
-    sel.innerHTML='<option value="">All tags</option>'+[..._tags].sort().map(t=>`<option ${t===cur?'selected':''}>${esc(t)}</option>`).join('');}
-  let html='';
-  if(state.kind!=='decision') html+=`<div class="panel"><h2>Facts <span class="count">${s.facts.length}</span></h2>${s.facts.map(factRow).join('')||'<div class="empty">no matches</div>'}</div>`;
-  if(state.kind!=='fact') html+=`<div class="panel"><h2>Decisions <span class="count">${s.decisions.length}</span></h2>${s.decisions.map(decRow).join('')||'<div class="empty">no matches</div>'}</div>`;
+function cparams(kind,page){const p=new URLSearchParams({q:C.q,kind,sort:C.sort,status:C.status,limit:String(PER),offset:String((page-1)*PER)});if(C.tag)p.set('tag',C.tag);return p.toString();}
+async function loadFacts(){if(C.kind==='decision'){C.facts=[];C.ftotal=0;return;}const s=await getJSON('/api/search?'+cparams('fact',C.fpage));C.facts=s.facts;C.ftotal=s.facts_total||s.facts.length;}
+async function loadDecs(){if(C.kind==='fact'){C.decs=[];C.dtotal=0;return;}const s=await getJSON('/api/search?'+cparams('decision',C.dpage));C.decs=s.decisions;C.dtotal=s.decisions_total||s.decisions.length;}
+async function loadCorpus(){$('#results').innerHTML=spin();try{await Promise.all([loadFacts(),loadDecs()]);}catch(e){}renderCorpus();}
+window.goFacts=async p=>{C.fpage=p;try{await loadFacts();}catch(e){}renderCorpus();window.scrollTo({top:0});};
+window.goDecs=async p=>{C.dpage=p;try{await loadDecs();}catch(e){}renderCorpus();};
+function renderCorpus(){
+  LAST.facts=C.facts; LAST.decisions=C.decs; let html='';
+  if(C.kind!=='decision'){const pg=pager(C.fpage,C.ftotal,PER,'goFacts');
+    html+=`<div class="panel"><h2>${C.ftotal} Facts${pg}</h2>`+(C.facts.map(factRow).join('')||'<div class="empty">no matches</div>')+(pg?`<div class="pgfoot">${pg}</div>`:'')+`</div>`;}
+  if(C.kind!=='fact'){const pg=pager(C.dpage,C.dtotal,PER,'goDecs');
+    html+=`<div class="panel"><h2>${C.dtotal} Decisions${pg}</h2>`+(C.decs.map(decRow).join('')||'<div class="empty">no matches</div>')+(pg?`<div class="pgfoot">${pg}</div>`:'')+`</div>`;}
   $('#results').innerHTML=html;
 }
-function filterTag(t){state.view='corpus';state.tag=t;state.q='';state.kind='all';
-  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));render();}
+window.filterTag=t=>{if(state.detail||state.node){state.detail=null;state.node=null;}state.view='corpus';C.tag=t;C.q='';C.kind='all';C.status='all';C.fpage=1;C.dpage=1;
+  document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));corpus();};
 
-async function hive(){
-  $('#app').innerHTML='<div class="empty">loading…</div>';
-  let peers=[];
-  try{ peers=(await getJSON('/api/peers')).peers; }catch(e){}
-  const dotFor=s=>({'in sync':'ok','reachable':'ok','admitted':'ok','diverged':'stale','stale':'stale','offline':'off'}[s]||'off');
-  const rows=peers.map(p=>{
-    const cls=p.self?'self':dotFor(p.status);
-    return `<tr><td><span class="dot ${cls}"></span>${esc(p.name)}</td>
-      <td class="mono">${esc(p.device)}</td><td>${esc(p.principal)}</td>
-      <td class="mono">${esc(p.addr)}</td><td>${esc(p.seen)}</td><td>${esc(p.status)}</td></tr>`;}).join('');
-  $('#app').innerHTML=`
-   <div class="panel"><h2>Peers <span class="count">${peers.length} admitted</span></h2>
+/* ---------- Hive ---------- */
+const dotFor=s=>({'in sync':'ok','reachable':'ok','admitted':'ok','diverged':'stale','stale':'stale','offline':'off'}[s]||'off');
+function peerRows(peers,probing){
+  return peers.map(p=>{const cls=p.self?'self':dotFor(p.status);
+    const st=p.self?p.status:(probing&&!/stale|offline/.test(p.status)?`<span class="spin" style="width:11px;height:11px"></span> resolving…`:esc(p.status));
+    return `<tr class="link" onclick="openNode('${esc(p.device)}')" title="View this node">
+      <td><span class="dot ${cls}"></span>${esc(p.name)}</td><td class="mono">${esc(p.device)}</td><td>${esc(p.principal)}</td>
+      <td class="mono">${esc(p.addr)}</td><td>${esc(p.seen)}</td><td>${st}</td></tr>`;}).join('');
+}
+function hiveShell(peers,probing){
+  $('#app').innerHTML=`<div class="panel"><h2>Peers <span class="count">${peers.length} admitted</span>${probing?'<span class="spin" style="width:12px;height:12px"></span>':''}</h2>
      <table><thead><tr><th>Name</th><th>Device</th><th>Principal</th><th>Address</th><th>Last seen</th><th>Status</th></tr></thead>
-     <tbody>${rows||'<tr><td colspan=6 class="empty">no peers</td></tr>'}</tbody></table></div>
-   <div class="note">Stale device? Owner: <span class="mono">hv group purge &lt;device_id&gt;</span> — tombstones it (journal entries stay, stop counting).</div>
+     <tbody>${peerRows(peers,probing)||'<tr><td colspan=6 class="empty">no peers</td></tr>'}</tbody></table></div>
+   <div class="note">Click a node for its overview, corpus, stats &amp; telemetry · Stale device? Owner: <span class="mono">hv group purge &lt;device_id&gt;</span></div>
    <div class="grid cards" style="margin-top:16px">
      <div class="card"><div class="lbl">Owner</div><div class="stat" style="font-size:17px">${META.role==='OWNER'?esc(META.node):'(remote)'}</div><div class="sub mono">${esc(META.owner_id||'—')}</div></div>
      <div class="card"><div class="lbl">Hive</div><div class="stat mono" style="font-size:14px;color:var(--ink)">${esc(META.hive||'—')}</div></div>
      <div class="card"><div class="lbl">Merkle root</div><div class="stat mono" style="font-size:13px;color:var(--accent)">${esc(META.merkle)}</div><div class="sub">${META.nodes} node(s) admitted</div></div>
    </div>`;
+}
+async function hive(){
+  $('#app').innerHTML=spin('loading peers…'); let fast=[];
+  try{ fast=(await getJSON('/api/peers?probe=0')).peers; }catch(e){}
+  PEERS=fast; hiveShell(fast,true);
+  try{ const probed=(await getJSON('/api/peers')).peers; PEERS=probed; if(state.view==='hive'&&!state.node&&!state.detail) hiveShell(probed,false); }
+  catch(e){ if(state.view==='hive'&&!state.node&&!state.detail) hiveShell(fast,false); }
+}
+
+/* ---------- Telemetry body (shared) ---------- */
+function telemetryBody(t,page,pagerFn,showNode){
+  LAST.sessions=t.recent||[];
+  const T=t.totals||{}; const days=t.by_day||[]; const max=Math.max(1,...days.map(d=>d.sessions));
+  const bars=days.map(d=>`<div title="${d.day}: ${d.sessions}" style="height:${Math.round(d.sessions/max*100)}%"></div>`).join('');
+  const xlab=days.map((d,i)=>`<div>${(i===0||i===days.length-1)?d.day.slice(5):''}</div>`).join('');
+  const models=Object.entries(t.by_model||{}).sort((a,b)=>(b[1].in+b[1].out)-(a[1].in+a[1].out));
+  const total=t.recent_total||T.sessions||0; const pg=pager(page,total,PER,pagerFn);
+  const recent=(t.recent||[]).map((r,i)=>`<tr class="link" onclick="openSession(${i})"><td class="mono">${esc(r.when)}</td>${showNode?`<td>${esc(r.node_name||r.node||'-')}</td>`:''}<td>${esc(r.agent)}</td><td>${esc(r.project)}</td><td>${fmtDur(r.duration_s)}</td><td>${fmtNum(r.tokens_in)}/${fmtNum(r.tokens_out)}</td><td>${fmtCost(r.cost_usd)}</td></tr>`).join('');
+  return `<div class="grid cards">
+     <div class="card"><div class="lbl">Sessions</div><div class="stat">${fmtNum(T.sessions||0)}</div></div>
+     <div class="card"><div class="lbl">Time</div><div class="stat" style="font-size:20px">${fmtDur(T.duration_s)}</div></div>
+     <div class="card"><div class="lbl">Tokens</div><div class="stat" style="font-size:18px">${fmtNum(T.tokens_in)}<small> in</small> / ${fmtNum(T.tokens_out)}<small> out</small></div></div>
+     <div class="card"><div class="lbl">Cost</div><div class="stat" style="font-size:20px">${fmtCost(T.cost_usd)}</div></div></div>
+   <div class="panel"><h2>Sessions per day</h2><div class="spark">${bars||''}</div><div class="sparkx">${xlab}</div></div>
+   ${models.length?`<div class="panel"><h2>By model</h2><table><thead><tr><th>Model</th><th>In</th><th>Out</th><th>Cost</th></tr></thead><tbody>${models.map(([m,v])=>`<tr><td class="mono">${esc(m)}</td><td>${fmtNum(v.in)}</td><td>${fmtNum(v.out)}</td><td>${v.priced?fmtCost(v.cost):'n/a'}</td></tr>`).join('')}</tbody></table></div>`:''}
+   <div class="panel"><h2>${fmtNum(total)} Recent session${total===1?'':'s'}${pg}</h2>
+     <table><thead><tr><th>When</th>${showNode?'<th>Node</th>':''}<th>Agent</th><th>Project</th><th>Dur</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>${recent}</tbody></table>
+     ${pg?`<div class="pgfoot">${pg}</div>`:''}</div>`;
+}
+
+/* ---------- Telemetry tab (combined across the hive, sort+filter) ---------- */
+let TP=1, TF={sort:'recent',fnode:'',fproject:'',fagent:''};
+window.goTel=p=>{TP=p;telemetry();window.scrollTo({top:0});};
+window.telReload=()=>{TF.sort=$('#tsort').value;TF.fnode=$('#tnode').value;TF.fproject=$('#tproj').value;TF.fagent=$('#tagent').value;TP=1;telemetry();};
+async function telemetry(){
+  $('#app').innerHTML=spin('aggregating telemetry across the hive…');
+  const p=new URLSearchParams({scope:'hive',sort:TF.sort,limit:String(PER),offset:String((TP-1)*PER)});
+  if(TF.fnode)p.set('fnode',TF.fnode); if(TF.fproject)p.set('fproject',TF.fproject); if(TF.fagent)p.set('fagent',TF.fagent);
+  let t; try{ t=await getJSON('/api/telemetry?'+p.toString()); }catch(e){ $('#app').innerHTML='<div class="empty">telemetry unavailable</div>'; return; }
+  const fac=t.facets||{projects:[],agents:[],nodes:[]};
+  const opt=(arr,sel)=>arr.map(x=>`<option ${x===sel?'selected':''}>${esc(x)}</option>`).join('');
+  const admitted=t.admitted||(t.nodes||[]).length, online=t.online||0, reporting=t.reporting||0;
+  const noTel=online-reporting, off=admitted-online;
+  const dotForNode=s=>({self:'self',online:'ok','no-telemetry':'stale',offline:'off'}[s]||'off');
+  const statusText=s=>({self:'this node',online:'online','no-telemetry':'online · no telemetry (older code)',offline:'offline'}[s]||s);
+  const controls=`<div class="controls">
+     <select id="tsort"><option value="recent">Sort: recency</option><option value="cost">Sort: cost</option><option value="tokens">Sort: tokens</option><option value="duration">Sort: duration</option></select>
+     <select id="tnode"><option value="">All nodes</option>${opt(fac.nodes,TF.fnode)}</select>
+     <select id="tproj"><option value="">All projects</option>${opt(fac.projects,TF.fproject)}</select>
+     <select id="tagent"><option value="">All agents</option>${opt(fac.agents,TF.fagent)}</select>
+   </div>`;
+  const line=`<div class="note"><b>${admitted} admitted · ${online} online · ${reporting} reporting telemetry</b>${noTel?` · ${noTel} online without telemetry (older code — joins after update)`:''}${off?` · ${off} offline`:''}. Telemetry is local to each node, aggregated live over the tailnet.</div>`;
+  const nodesPanel=`<div class="panel"><h2>${(t.nodes||[]).length} Nodes</h2><table><thead><tr><th>Node</th><th>Sessions</th><th>Status</th></tr></thead><tbody>${(t.nodes||[]).map(n=>`<tr class="link ${n.status==='offline'?'off':''}" onclick="openNode('${esc(n.node_id)}')"><td><span class="dot ${dotForNode(n.status)}"></span>${esc(n.node)}</td><td>${fmtNum(n.sessions)}</td><td>${esc(statusText(n.status))}</td></tr>`).join('')}</tbody></table></div>`;
+  $('#app').innerHTML=controls+line+nodesPanel+(t.totals&&t.totals.sessions!==undefined?telemetryBody(t,TP,'goTel',true):'<div class="empty">no sessions</div>');
+  $('#tsort').value=TF.sort;
+  ['tsort','tnode','tproj','tagent'].forEach(id=>{const e=$('#'+id);if(e)e.onchange=telReload;});
+}
+
+/* ---------- Per-node drill-down ---------- */
+let NTP=1, NC={fpage:1,dpage:1};
+window.openNode=id=>{state.node=id;state.nodeTab='overview';state.detail=null;NTP=1;NC={fpage:1,dpage:1};render();};
+window.backHive=()=>{state.node=null;state.detail=null;state.view='hive';document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='hive'));render();};
+window.nodeTab=tab=>{state.nodeTab=tab;if(tab==='telemetry')NTP=1;if(tab==='corpus'){NC={fpage:1,dpage:1};}render();};
+window.goNodeTel=p=>{NTP=p;render();window.scrollTo({top:0});};
+window.goNFacts=async p=>{NC.fpage=p;renderNode();};
+window.goNDecs=async p=>{NC.dpage=p;renderNode();};
+function nodeQ(extra){return state.node?('node='+encodeURIComponent(state.node)+(extra?'&'+extra:'')):extra;}
+async function renderNode(){
+  const p=PEERS.find(x=>x.device===state.node)||{name:state.node,device:state.node,principal:'?',addr:'—',seen:'—',status:'?',self:false};
+  const head=body=>{$('#app').innerHTML=`<div class="crumb"><button class="back" onclick="backHive()">‹ Hive</button>
+      <span class="who"><span class="dot ${p.self?'self':dotFor(p.status)}"></span>${esc(p.name)}</span><span class="mono">${esc(p.device)}</span></div>
+    <div class="subnav">${['overview','corpus','stats','telemetry'].map(tb=>`<button class="${state.nodeTab===tb?'on':''}" onclick="nodeTab('${tb}')">${tb[0].toUpperCase()+tb.slice(1)}</button>`).join('')}</div>
+    <div id="ndbody">${body}</div>`;};
+  head(spin('loading…')); const body=()=>$('#ndbody');
+  const unreachable=`<div class="note">${esc(p.name)} isn't reachable right now. Per-node views are proxied live over the tailnet, so an offline node — or one on older code without these endpoints — has nothing to show here.</div>`;
+  try{
+    if(state.nodeTab==='overview'){
+      const o=await getJSON('/api/overview?'+nodeQ()); if(!body())return;
+      if(o.reachable===false||o.facts===undefined){body().innerHTML=unreachable;return;}
+      body().innerHTML=`<div class="grid cards">
+         <div class="card"><div class="lbl">Facts</div><div class="stat">${o.facts}</div></div>
+         <div class="card"><div class="lbl">Decisions</div><div class="stat">${o.decisions}</div></div>
+         <div class="card"><div class="lbl">Contested</div><div class="stat" style="color:${o.contested?'var(--bad)':'var(--ink)'}">${o.contested}</div></div>
+         <div class="card"><div class="lbl">Role</div><div class="stat" style="font-size:16px">${esc(o.role)}</div></div></div>
+       <div class="panel"><h2>Node</h2>${kv('Hive','<span class="mono">'+esc(o.hive||'—')+'</span>')}${kv('Contract','v'+esc(o.contract))}${kv('Address','<span class="mono">'+esc(o.address||'—')+'</span>')}${kv('Merkle root','<span class="mono">'+esc(o.merkle)+'</span>')}
+         ${o.merkle!==META.merkle?'<div class="kv"><div class="k"></div><div class="v"><span class="pill contested">DIVERGED from this node</span></div></div>':''}</div>`;
+    } else if(state.nodeTab==='stats'){
+      if(!body())return;
+      body().innerHTML=statusPanels();   // progressive: whoami/stats fast, doctor fills in
+      loadStatus(state.node);
+      return;
+    } else if(state.nodeTab==='corpus'){
+      const f=await getJSON('/api/search?'+nodeQ(`kind=fact&limit=${PER}&offset=${(NC.fpage-1)*PER}`));
+      const dd=await getJSON('/api/search?'+nodeQ(`kind=decision&limit=${PER}&offset=${(NC.dpage-1)*PER}`));
+      if(!body())return;
+      if(f.facts===undefined){body().innerHTML=unreachable;return;}
+      LAST.facts=f.facts; LAST.decisions=dd.decisions;
+      const ft=f.facts_total||f.facts.length, dt=dd.decisions_total||dd.decisions.length;
+      const fpg=pager(NC.fpage,ft,PER,'goNFacts'), dpg=pager(NC.dpage,dt,PER,'goNDecs');
+      body().innerHTML=`<div class="panel"><h2>${ft} Facts${fpg}</h2>${f.facts.map(factRow).join('')||'<div class="empty">none</div>'}${fpg?`<div class="pgfoot">${fpg}</div>`:''}</div>
+        <div class="panel"><h2>${dt} Decisions${dpg}</h2>${dd.decisions.map(decRow).join('')||'<div class="empty">none</div>'}${dpg?`<div class="pgfoot">${dpg}</div>`:''}</div>`;
+    } else {
+      const t=await getJSON('/api/telemetry?'+nodeQ(`limit=${PER}&offset=${(NTP-1)*PER}`)); if(!body())return;
+      if(t.reachable===false){body().innerHTML=unreachable;return;}
+      if(!t.totals||!t.totals.sessions){body().innerHTML='<div class="note">No sessions recorded on this node yet.</div>';return;}
+      body().innerHTML=telemetryBody(t,NTP,'goNodeTel',false);
+    }
+  }catch(e){ if(body())body().innerHTML='<div class="empty">unavailable</div>'; }
+}
+
+/* ---------- Status view (header owner chip) — loads progressively ---------- */
+function statusPanels(){return `
+  <div class="panel"><h2>hv whoami</h2><div id="st-whoami">${spin()}</div></div>
+  <div class="panel"><h2>hv stats</h2><div id="st-stats">${spin()}</div></div>
+  <div class="panel"><h2>hv doctor</h2><div id="st-doctor">${spin('running doctor…')}</div></div>`;}
+function loadStatus(nodeParam){   // fire the three commands in parallel; each panel fills as it returns
+  ['whoami','stats','doctor'].forEach(cmd=>{
+    const qp=(nodeParam?'node='+encodeURIComponent(nodeParam)+'&':'')+'cmd='+cmd;
+    getJSON('/api/status?'+qp).then(s=>{const el=document.getElementById('st-'+cmd);if(el)el.innerHTML='<pre class="cli">'+esc(s[cmd]!=null?s[cmd]:(s.reachable===false?'(node not reachable for this view)':'(no output)'))+'</pre>';})
+      .catch(()=>{const el=document.getElementById('st-'+cmd);if(el)el.innerHTML='<pre class="cli">(unavailable)</pre>';});
+  });
+}
+async function status(){
+  $('#app').innerHTML=`<div class="crumb"><button class="back" onclick="goTab('overview')">‹ Overview</button><span class="who">Device status</span></div><div id="stbody">${statusPanels()}</div>`;
+  loadStatus(null);
+}
+
+/* ---------- Audit view (Overview audit card) ---------- */
+async function audit(){
+  $('#app').innerHTML=`<div class="crumb"><button class="back" onclick="goTab('overview')">‹ Overview</button><span class="who">Audit</span></div><div id="aubody">${spin()}</div>`;
+  let a; try{ a=await getJSON('/api/audit'); }catch(e){ const b=$('#aubody'); if(b)b.innerHTML='<div class="empty">unavailable</div>'; return; }
+  const card=(lbl,n,warn)=>`<div class="card"><div class="lbl">${lbl}</div><div class="stat" style="${warn&&n?'color:var(--warn)':''}">${n}</div></div>`;
+  const s=a.samples||{};
+  const sec=(title,items)=>items&&items.length?`<div class="panel"><h2>${title} <span class="count">${items.length}</span></h2>${items.map(it=>`<div class="row">#${it.id} ${esc(it.content)}</div>`).join('')}</div>`:'';
+  $('#aubody').innerHTML=`<div class="grid cards">${card('Re-check',a.recheck,1)}${card('Stale',a.stale,1)}${card('Duplicate',a.duplicate)}${card('Contravened',a.contravened,1)}</div>
+    <div class="note">A read-only reconciliation snapshot (light depth). Run <span class="mono">hv audit</span> for the full report, or reconcile with <span class="mono">hv retract</span> / <span class="mono">hv remember --resolves</span>.</div>
+    ${sec('Re-check — volatile, past freshness',s.recheck)}${sec('Contested',s.contested)}${sec('Decayed',s.decayed)}${sec('Contravened — un-reconciled corrections',s.contravened)}`;
+}
+
+/* ---------- Related facts (fact/decision detail) ---------- */
+async function loadRelated(kind,id){
+  let r; try{ r=await getJSON(`/api/related?kind=${kind}&id=${id}`); }catch(e){ const el=$('#related'); if(el)el.innerHTML='<div class="empty">none</div>'; return; }
+  const el=$('#related'); if(!el)return;
+  if(!r.related||!r.related.length){ el.innerHTML='<div class="empty">No facts share tags with this '+esc(kind)+'.</div>'; return; }
+  LAST.facts=r.related;
+  el.innerHTML=`<table><thead><tr><th>Conf</th><th>Shared tags</th><th>Fact</th></tr></thead><tbody>${r.related.map(f=>`<tr class="link" onclick="openFact(${f.id})"><td><span style="color:${confColor(f.confidence)}">${f.confidence.toFixed(2)}</span></td><td>${(f.shared||[]).map(t=>`<span class="chip">${esc(t)}</span>`).join(' ')}</td><td>${esc((f.content||'').slice(0,110))}${f.contested?' <span class="pill contested">CONTESTED</span>':''}</td></tr>`).join('')}</tbody></table>`;
 }
 </script>
 </body></html>

@@ -1794,35 +1794,279 @@ def api_overview():
     }
 
 
-def api_search(query="", tag=None, kind="all", min_confidence=0.0, limit=50):
-    """Facts + decisions for `query`, mirroring `hv search` (effective-confidence ranking for facts,
-    LIKE for decisions) but returning structured rows. Empty query = browse everything (top `limit`)."""
+def api_search(query="", tag=None, kind="all", min_confidence=0.0,
+               limit=50, offset=0, sort="salience", status="all"):
+    """Facts + decisions for `query`, mirroring `hv search` but PAGINATED and sortable/filterable.
+    `sort`: salience (effective confidence, default) | recency (created). `status` (facts): all (live,
+    >= min_confidence) | contested | forgotten (owner-forgotten, normally hidden) | volatile. Returns
+    the page slice plus `*_total` so the UI can page; empty query browses everything."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
-    facts, decisions = [], []
+    facts, decisions, facts_total, dec_total = [], [], 0, 0
     if kind != "decision":
-        for r in _query_facts(conn, query or ""):
-            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
-            if eff < min_confidence:
-                continue
+        matched = []
+        for r in _query_facts(conn, query or "", limit=10000):
+            base = r["confidence"]
+            eff = _effective_confidence(base, r["last_evidence_at"], now)
             tags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in tags:
                 continue
-            facts.append({"id": r["id"], "content": r["content"], "tags": tags,
-                          "confidence": round(eff, 2), "contested": bool(r["contested"]),
-                          "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
-        facts.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
-        facts = facts[:limit]
+            tl = [str(t).lower() for t in tags]
+            if status == "contested":
+                if not r["contested"]:
+                    continue
+            elif status == "forgotten":
+                if base > FORGET_FLOOR:
+                    continue
+            elif status == "volatile":
+                if not ("volatile" in tl or any(t.startswith("ttl:") for t in tl)):
+                    continue
+            else:  # all live facts at/above the floor (forgotten ones stay hidden here)
+                if eff < min_confidence:
+                    continue
+            matched.append({"id": r["id"], "content": r["content"], "tags": tags,
+                            "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                            "forgotten": base <= FORGET_FLOOR,
+                            "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        if sort == "recency":
+            matched.sort(key=lambda f: (f["created"], f["confidence"]), reverse=True)
+        else:  # salience
+            matched.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
+        facts_total = len(matched)
+        facts = matched[offset:offset + limit]
     if kind != "fact":
-        for r in _query_decisions(conn, query or "", limit=limit):
+        dmatched = []
+        for r in _query_decisions(conn, query or "", limit=10000):
             tags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in tags:
                 continue
-            decisions.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
-                              "tags": tags, "superseded": bool(r["superseded_by"]),
-                              "created": (r["created_at"] or "")[:10]})
+            dmatched.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
+                             "tags": tags, "superseded": bool(r["superseded_by"]),
+                             "created": (r["created_at"] or "")[:10]})
+        dec_total = len(dmatched)
+        decisions = dmatched[offset:offset + limit]
     conn.close()
-    return {"facts": facts, "decisions": decisions}
+    return {"facts": facts, "decisions": decisions,
+            "facts_total": facts_total, "decisions_total": dec_total,
+            "offset": offset, "limit": limit}
+
+
+def api_tags():
+    """All distinct tags across facts + decisions, sorted. Lets the dashboard tag filter stay
+    COMPLETE even when the result lists are paginated (the page only carries its own rows' tags)."""
+    conn = get_conn()
+    tags = set()
+    for tbl in ("facts", "decisions"):
+        try:
+            rows = conn.execute(f"SELECT tags FROM {tbl} WHERE tags IS NOT NULL AND tags != ''").fetchall()
+        except Exception:
+            continue
+        for r in rows:
+            try:
+                for t in (json.loads(r[0]) if r[0] else []):
+                    t = str(t).strip()
+                    if t:
+                        tags.add(t)
+            except Exception:
+                continue
+    conn.close()
+    return {"tags": sorted(tags)}
+
+
+def api_related(kind, item_id, limit=25):
+    """Facts related to a fact/decision by SHARED TAGS (the simple, robust signal) — powers the
+    'Related facts' table in a detail view. Excludes the item itself; ranked by number of shared tags,
+    then effective confidence. Empty when the source has no tags."""
+    conn = get_conn()
+    try:
+        tbl = "decisions" if kind == "decision" else "facts"
+        row = conn.execute(f"SELECT tags FROM {tbl} WHERE id = ?", (item_id,)).fetchone()
+        src = set()
+        if row and row["tags"]:
+            try:
+                src = {str(t).strip() for t in json.loads(row["tags"]) if str(t).strip()}
+            except Exception:
+                src = set()
+        if not src:
+            return {"related": [], "tags": []}
+        now = os.environ.get("HIVE_NOW") or _now_iso()
+        out = []
+        for r in conn.execute(f"SELECT {_FACT_COLS} FROM facts").fetchall():
+            if kind == "fact" and r["id"] == item_id:
+                continue
+            try:
+                ftags = [str(t).strip() for t in (json.loads(r["tags"]) if r["tags"] else [])]
+            except Exception:
+                ftags = []
+            shared = src & set(ftags)
+            if not shared:
+                continue
+            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
+            out.append({"id": r["id"], "content": r["content"], "tags": ftags,
+                        "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                        "shared": sorted(shared), "shared_n": len(shared),
+                        "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        out.sort(key=lambda x: (x["shared_n"], x["confidence"]), reverse=True)
+        return {"related": out[:limit], "tags": sorted(src)}
+    finally:
+        conn.close()
+
+
+def api_audit():
+    """The real `hv audit` signal as counts (+ a small sample per category) for the dashboard: re-check
+    (volatile past freshness), stale (forgotten/contested/decayed), duplicate (same-source redundant +
+    paraphrase), contravened (un-reconciled corrections). Light depth — cheap enough for a card."""
+    a = _compute_audit(depth="light")
+
+    def sample(items, n=8):
+        out = []
+        for it in items[:n]:
+            r = it[0] if isinstance(it, tuple) else it
+            try:
+                out.append({"id": r["id"], "content": (r["content"] or "")[:140]})
+            except Exception:
+                continue
+        return out
+
+    return {
+        "recheck": len(a["recheck"]),
+        "stale": len(a["forgotten"]) + len(a["contested"]) + len(a["decayed"]),
+        "duplicate": len(a["redundant"]) + len(a["paraphrase"]),
+        "contravened": len(a["contravened"]),
+        "samples": {
+            "recheck": sample(a["recheck"]),
+            "contested": sample(a["contested"]),
+            "decayed": sample(a["decayed"]),
+            "contravened": sample([c[0] for c in a["contravened"]]),
+        },
+    }
+
+
+def _tel_recent_dict(r, node_name=None):
+    """One telemetry session row → a JSON-able dict (the unit both views aggregate from)."""
+    try:
+        m = json.loads(r["models"]) if r["models"] else {}
+    except Exception:
+        m = {}
+    return {"when": (r["started_at"] or r["updated_at"] or "")[:19],
+            "session_id": r["session_id"], "started_at": r["started_at"], "updated_at": r["updated_at"],
+            "agent": (f'{r["agent"]}:{r["agent_identity"]}'.rstrip(":")) or "-",
+            "project": r["project"] or "-",
+            "duration_s": r["duration_s"] or 0, "tokens_in": r["tokens_in"] or 0,
+            "tokens_out": r["tokens_out"] or 0, "cost_usd": r["cost_usd"], "models": m,
+            "node": r["node_id"], "node_name": node_name or NODE_LABEL}
+
+
+def _tel_aggregate(recents, limit, offset, sort="recent", project=None, agent=None, node=None):
+    """Shared telemetry projection over a list of per-session dicts: compute `facets`, FILTER by
+    node/project/agent, total + by-day + by-model over the FILTERED set, then SORT (recent|cost|tokens|
+    duration) and paginate. Used by both the per-node and hive-combined views so they behave identically."""
+    facets = {"projects": sorted({x["project"] for x in recents}),
+              "agents": sorted({x["agent"] for x in recents}),
+              "nodes": sorted({(x.get("node_name") or x.get("node") or "-") for x in recents})}
+
+    def keep(x):
+        if project and x["project"] != project:
+            return False
+        if agent and x["agent"] != agent:
+            return False
+        if node and (x.get("node_name") or x.get("node")) != node:
+            return False
+        return True
+    f = [x for x in recents if keep(x)]
+    tot = {"sessions": len(f), "duration_s": 0.0, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0, "priced": False}
+    by_day, by_model = {}, {}
+    for x in f:
+        tot["duration_s"] += x["duration_s"] or 0
+        tot["tokens_in"] += x["tokens_in"] or 0
+        tot["tokens_out"] += x["tokens_out"] or 0
+        if x["cost_usd"] is not None:
+            tot["cost_usd"] += x["cost_usd"]
+            tot["priced"] = True
+        d = (x["when"] or "")[:10]
+        if d:
+            by_day[d] = by_day.get(d, 0) + 1
+        for mname, mv in (x.get("models") or {}).items():
+            pm = by_model.setdefault(mname, {"in": 0, "out": 0, "cost": 0.0, "priced": False})
+            pm["in"] += mv.get("in", 0)
+            pm["out"] += mv.get("out", 0)
+            if "cost" in mv:
+                pm["cost"] += mv["cost"]
+                pm["priced"] = True
+    if not tot["priced"]:
+        tot["cost_usd"] = None
+    keyf = {"cost": lambda x: x["cost_usd"] or 0,
+            "tokens": lambda x: (x["tokens_in"] or 0) + (x["tokens_out"] or 0),
+            "duration": lambda x: x["duration_s"] or 0}.get(sort, lambda x: x["when"] or "")
+    f = sorted(f, key=keyf, reverse=True)
+    return {"totals": tot, "recent": f[offset:offset + limit], "recent_total": len(f),
+            "by_day": [{"day": d, "sessions": c} for d, c in sorted(by_day.items())][-21:],
+            "by_model": by_model, "facets": facets}
+
+
+def api_telemetry(limit=25, offset=0, sort="recent", project=None, agent=None, node=None):
+    """This node's session telemetry (LOCAL, never synced) — sortable, filterable, paginated. Read-only."""
+    try:
+        rows = _telemetry_rows("")
+    except Exception:
+        return {"available": False, "node": NODE_LABEL, "node_id": NODE_ID, "totals": {},
+                "recent": [], "by_day": [], "by_model": {}, "facets": {}}
+    agg = _tel_aggregate([_tel_recent_dict(r) for r in rows], limit, offset, sort, project, agent, node)
+    return {"available": True, "node": NODE_LABEL, "node_id": NODE_ID, **agg}
+
+
+def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=None, node=None,
+                       per_node_cap=2000, timeout=4):
+    """COMBINED telemetry across the hive — the daemon fetches each REACHABLE admitted peer's
+    /api/telemetry concurrently and merges with the local DB into one feed, then sorts/filters/paginates.
+    Telemetry is local + unsynced, so an OFFLINE node contributes nothing: `nodes` lists EVERY admitted
+    device with its reachability + session count, and `admitted`/`reachable` make the gap explicit rather
+    than silent. (Offline-inclusive totals would need a synced rollup — a deliberate follow-up.)"""
+    collected = [(NODE_LABEL, NODE_ID, api_telemetry(limit=per_node_cap, offset=0), True)]
+    peers = api_peers(probe=True)
+
+    def _live(p):   # reachable NOW (has an address AND its sync status isn't offline/stale)
+        st = (p.get("status") or "").lower()
+        return ":" in (p.get("addr") or "") and not any(x in st for x in ("offline", "stale", "no address"))
+    targets = [(p["name"], p["device"], p["addr"]) for p in peers if not p["self"] and _live(p)]
+    unreachable = [(p["name"], p["device"]) for p in peers if not p["self"] and not _live(p)]
+    if targets:
+        import concurrent.futures
+        import requests
+
+        def fetch(t):
+            name, nid, addr = t
+            try:
+                tel = requests.get(f"http://{addr}/api/telemetry?limit={per_node_cap}&offset=0",
+                                   timeout=timeout).json()
+                return (name, nid, tel, True)
+            except Exception:
+                return (name, nid, None, False)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(16, len(targets))) as ex:
+            collected.extend(ex.map(fetch, targets))
+
+    nodes, all_recent = [], []
+    for i, (name, nid, tel, ok) in enumerate(collected):
+        avail = bool(tel and tel.get("available") and "totals" in tel)
+        # collected[0] is self; the rest came from `targets`, i.e. they ARE sync-reachable. So a peer
+        # that answered sync but has no telemetry is ONLINE on older code, NOT offline.
+        status = "self" if i == 0 else ("online" if avail else "no-telemetry")
+        nodes.append({"node": name, "node_id": nid, "status": status, "reachable": avail,
+                      "sessions": tel.get("totals", {}).get("sessions", 0) if avail else 0})
+        if avail:
+            for x in tel.get("recent", []):
+                row = dict(x)
+                row["node_name"] = name
+                all_recent.append(row)
+    for name, nid in unreachable:
+        nodes.append({"node": name, "node_id": nid, "status": "offline", "reachable": False, "sessions": 0})
+    order = {"self": 0, "online": 1, "no-telemetry": 2, "offline": 3}
+    nodes.sort(key=lambda n: (order.get(n["status"], 9), n["node"]))
+    agg = _tel_aggregate(all_recent, limit, offset, sort, project, agent, node)
+    return {"available": True, "scope": "hive", "nodes": nodes, "admitted": len(nodes),
+            "online": sum(1 for n in nodes if n["status"] != "offline"),
+            "reporting": sum(1 for n in nodes if n["status"] in ("self", "online")),
+            "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
 
 
 def _probe_peer_map(timeout=3):
@@ -1871,6 +2115,40 @@ def _probe_peer_map(timeout=3):
     return out
 
 
+_PEER_PROBE_CACHE = {"t": 0.0, "map": {}}
+
+
+def _probe_peer_map_cached(ttl=5):
+    """`_probe_peer_map` with a short TTL cache. The daemon is a long-lived process, so a Hive-tab view
+    followed by a node drill-down (which each need the peer→address map) reuses one probe instead of
+    re-probing every peer per request."""
+    import time
+    now = time.monotonic()
+    if _PEER_PROBE_CACHE["map"] and (now - _PEER_PROBE_CACHE["t"]) < ttl:
+        return _PEER_PROBE_CACHE["map"]
+    m = _probe_peer_map()
+    _PEER_PROBE_CACHE.update(t=now, map=m)
+    return m
+
+
+def api_node_addr(node_id):
+    """The 'host:port' for an admitted, reachable peer (from the cached probe), or None. The ONLY way a
+    node-scoped request resolves a target address — callers never pass a host — so the daemon's per-node
+    proxy can't be pointed at an arbitrary address (no SSRF)."""
+    if not node_id or node_id == NODE_ID:
+        return None
+    info = _probe_peer_map_cached().get(node_id)
+    return info[0] if info else None
+
+
+def api_verify():
+    """The local integrity + signature verdict (no network anchor fetch), as data — powers the header
+    'authentic' modal. {ok, version, level, lines}."""
+    v = _verify_status(Path(__file__).resolve().parent, check_anchor=False)
+    return {"ok": v["ok"], "version": v.get("version"), "level": v.get("level"), "lines": v.get("lines", []),
+            "official_source": OFFICIAL_SOURCE, "site": "https://hivemind.projectmentor.org"}
+
+
 def api_peers(probe=True):
     """Admitted devices for the dashboard Hive tab: name, device, principal, address, last-seen,
     status. Names/addresses/sync-status are resolved by a bounded concurrent live probe (so a
@@ -1883,7 +2161,7 @@ def api_peers(probe=True):
         d, ts = e.get("node_id"), e.get("timestamp", "")
         if d and ts > last_seen.get(d, ""):
             last_seen[d] = ts
-    probed = _probe_peer_map() if probe else {}
+    probed = _probe_peer_map_cached() if probe else {}
     out = []
     for d in sorted(gov.get("admitted") or set()):
         prin = gov["principals"].get(d) or "?"

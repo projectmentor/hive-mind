@@ -22,6 +22,10 @@ on:
       - '**/*.yml'
       - '**/*.yaml'
       - 'hv'
+      - '**/*.html'
+      - '**/*.css'
+      - '**/*.js'
+      - '**/*.svg'
       - '!verify.json'
       - '!verify.json.sig'
 

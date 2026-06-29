@@ -192,8 +192,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 qs = "&".join(f"{k}={quote(v[0])}" for k, v in q.items() if k != "node")
                 try:
+                    # generous timeout: a slow mobile node computes /api/overview (merkle + governance
+                    # over the whole journal in pure Python) in ~10-15s; the SPA shows a spinner meanwhile.
                     with urllib.request.urlopen(
-                            f"http://{addr}{u.path}" + (f"?{qs}" if qs else ""), timeout=6) as rr:
+                            f"http://{addr}{u.path}" + (f"?{qs}" if qs else ""), timeout=20) as rr:
                         body = rr.read()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -268,12 +270,14 @@ class Handler(BaseHTTPRequestHandler):
                 fproj = q.get("fproject", [None])[0]
                 fagent = q.get("fagent", [None])[0]
                 fnode = q.get("fnode", [None])[0]
+                fday = q.get("fday", [None])[0]
+                fmodel = q.get("fmodel", [None])[0]
                 if q.get("scope", ["self"])[0] == "hive":   # combined across reachable nodes
-                    self._send(200, hv.api_telemetry_hive(limit=lim, offset=off, sort=sort,
-                                                          project=fproj, agent=fagent, node=fnode))
+                    self._send(200, hv.api_telemetry_hive(limit=lim, offset=off, sort=sort, project=fproj,
+                                                          agent=fagent, node=fnode, day=fday, model=fmodel))
                 else:                                       # local (also what peers answer during aggregation)
-                    self._send(200, hv.api_telemetry(limit=lim, offset=off, sort=sort,
-                                                     project=fproj, agent=fagent))
+                    self._send(200, hv.api_telemetry(limit=lim, offset=off, sort=sort, project=fproj,
+                                                     agent=fagent, day=fday, model=fmodel))
             elif u.path == "/api/peers":
                 probe = q.get("probe", ["1"])[0] not in ("0", "false", "no")
                 self._send(200, {"peers": hv.api_peers(probe=probe)})

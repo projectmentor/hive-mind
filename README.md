@@ -17,7 +17,7 @@ Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https
 </p>
 
 <p align="center">
-  <em>The read-only dashboard, <code>hv dash</code>. Watch the
+  <em>The HiveMind dashboard, <code>hv dash</code>. Watch the
   <a href="https://hivemind.projectmentor.org">intro video</a> on the site.</em>
 </p>
 

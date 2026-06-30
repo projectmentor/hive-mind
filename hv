@@ -290,7 +290,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.16"   # 1.16: capsule write-authorization at the PROJECTION — `_capsule_state` now declines to honor a `capsule` entry whose signer was not the authorized writer (the owner AS OF that entry's journal position under the default `capsule_putters=owner`; any admitted device under `fertile`), closing a hole where a compromised ADMITTED device could supersede or tombstone ANY capsule by appending a journal entry directly, bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the entry still LANDS in every journal/Merkle; every node deterministically folds it away — no ingest/sync/admission change. Owner authority is POINT-IN-TIME via an additive read-only `gov['owner_timeline']`, so a prior owner's seals survive a transfer/succession/election (hive #58). Unsigned capsule entries are declined once an owner exists; a crypto-less (stripped) build keeps honoring (it already hard-fails the `crypto-modules` doctor check) rather than silently emptying capsules (hive #61). New advisory `capsule-authz` doctor check surfaces any now-unhonored entry. cell/comb authz + a separate `cell_writers` policy land in a follow-up PR (hive #60). 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.17"   # 1.17: cell/comb write-authorization at the PROJECTION — `_cell_state`/`_comb_state` now apply the same projection authorization as capsules (hive #58), but under a SEPARATE `cell_writers` policy (default `owner`; `fertile` = any admitted device), so a hive can keep executable definitions owner-only while running capsules fertile or vice versa (hive #60). A cell DEFINES what an agent/tool runs, so a malicious redefinition is code-injection-equivalent; previously `hv wire --add` appended cell/comb entries with NO write gate, so any admitted device could redefine a cell. BEHAVIOR CHANGE: under the default `cell_writers=owner` only the owner may publish cells/combs — `hv wire --add` now refuses a non-owner write and the projection declines a non-owner-signed cell/comb entry (it still LANDS in the journal; every node folds it away, convergence-safe). Cells/combs are owner-signed on write like capsules; new advisory `cell-authz` doctor check surfaces any now-unhonored definition. Migration-safe on hives with no non-owner cells (the doctor check makes any change visible). 1.16: capsule write-authorization at the PROJECTION — `_capsule_state` now declines to honor a `capsule` entry whose signer was not the authorized writer (the owner AS OF that entry's journal position under the default `capsule_putters=owner`; any admitted device under `fertile`), closing a hole where a compromised ADMITTED device could supersede or tombstone ANY capsule by appending a journal entry directly, bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the entry still LANDS in every journal/Merkle; every node deterministically folds it away — no ingest/sync/admission change. Owner authority is POINT-IN-TIME via an additive read-only `gov['owner_timeline']`, so a prior owner's seals survive a transfer/succession/election (hive #58). Unsigned capsule entries are declined once an owner exists; a crypto-less (stripped) build keeps honoring (it already hard-fails the `crypto-modules` doctor check) rather than silently emptying capsules (hive #61). New advisory `capsule-authz` doctor check surfaces any now-unhonored entry. cell/comb authz + a separate `cell_writers` policy land in a follow-up PR (hive #60). 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -844,14 +844,34 @@ def _projection_latest(entries, want_type, authz=None):
     return out
 
 
-def _cell_state(entries):
-    """name → latest `cell` payload. A cell is an executable unit with a `kind` (`tool`|`agent`)."""
-    return _projection_latest(entries, "cell")
+def _content_authz(gov, policy_key):
+    """The projection authorization callable for an authority-bearing content type governed by the
+    `policy_key` config knob (`capsule_putters` for capsules, `cell_writers` for cells/combs), or None
+    when authz is inactive — pre-owner, or a crypto-less (stripped) build, where the fold stays
+    permissive (hive #61). Default policy is `owner`."""
+    if not gov.get("owner_id") or _ed25519 is None:
+        return None
+    policy = gov.get("config", {}).get(policy_key, "owner")
+    return lambda signer, pos, p: _is_authorized_writer(signer, pos, p, gov, policy)
 
 
-def _comb_state(entries):
-    """name → latest `comb` payload. A comb is a named, ordered collection of cell names."""
-    return _projection_latest(entries, "comb")
+def _cell_state(entries, gov=None):
+    """name → latest `cell` payload. A cell is an executable unit with a `kind` (`tool`|`agent`) — it
+    DEFINES what an agent or tool runs, so a malicious redefinition is as dangerous as code injection.
+    Writes are authorized at the projection like capsules, but under the SEPARATE `cell_writers` policy
+    (default owner — hive decision #60), so a hive can keep cells owner-only while running capsules
+    fertile (or vice versa). Pass `gov` to reuse an already-computed governance projection."""
+    if gov is None:
+        gov = _governance_state(entries)
+    return _projection_latest(entries, "cell", authz=_content_authz(gov, "cell_writers"))
+
+
+def _comb_state(entries, gov=None):
+    """name → latest `comb` payload. A comb is a named, ordered collection of cell names. Authorized
+    under the same `cell_writers` policy as cells (hive #60). Pass `gov` to reuse it."""
+    if gov is None:
+        gov = _governance_state(entries)
+    return _projection_latest(entries, "comb", authz=_content_authz(gov, "cell_writers"))
 
 
 def _capsule_state(entries, gov=None):
@@ -865,11 +885,7 @@ def _capsule_state(entries, gov=None):
     permissively (decision #61). Pass `gov` to reuse an already-computed governance projection."""
     if gov is None:
         gov = _governance_state(entries)
-    authz = None
-    if gov.get("owner_id") and _ed25519 is not None:
-        policy = gov.get("config", {}).get("capsule_putters", "owner")
-        authz = lambda signer, pos, p: _is_authorized_writer(signer, pos, p, gov, policy)
-    return _projection_latest(entries, "capsule", authz=authz)
+    return _projection_latest(entries, "capsule", authz=_content_authz(gov, "capsule_putters"))
 
 
 def _owner_at(owner_timeline, pos):
@@ -924,18 +940,18 @@ def _capsule_version_conflicts(entries):
     return sorted({name for (name, _ver), nodes in seen.items() if len(nodes) > 1})
 
 
-def _capsule_unauthorized(entries, gov):
-    """Capsule entries the projection now DECLINES to honor because their signer was not the
-    authorized writer (the owner AS OF the write position, or an admitted device under `fertile`) —
-    surfaced by `hv doctor` so an operator sees what an upgrade changes rather than silently dropping
-    depended-on state (hive decisions #58/#61). Returns ['name vN by node_id', ...]; empty when authz
-    is inactive (pre-owner or a crypto-less build, where the fold stays permissive)."""
+def _content_unauthorized(entries, gov, want_type, policy_key):
+    """Entries of `want_type` the projection now DECLINES to honor because their signer was not the
+    authorized writer (the owner AS OF the write position, or an admitted device under `fertile`) under
+    the `policy_key` policy — surfaced by `hv doctor` so an operator sees what an upgrade changes rather
+    than silently dropping depended-on state (hive decisions #58/#60/#61). Returns ['name vN by
+    node_id', ...]; empty when authz is inactive (pre-owner or a crypto-less build)."""
     if not gov.get("owner_id") or _ed25519 is None:
         return []
-    policy = gov.get("config", {}).get("capsule_putters", "owner")
+    policy = gov.get("config", {}).get(policy_key, "owner")
     out = []
     for e in entries:
-        if e.get("type") != "capsule":
+        if e.get("type") != want_type:
             continue
         if "sig" in e and not _verify_entry(e):
             continue
@@ -1175,7 +1191,7 @@ def _governance_state_uncached(entries):
                     gov["config"][key] = int(raw)
                 elif key == "quorum_by" and raw in ("device", "principal"):
                     gov["config"][key] = raw
-                elif key == "capsule_putters" and raw in ("owner", "fertile"):
+                elif key in ("capsule_putters", "cell_writers") and raw in ("owner", "fertile"):
                     gov["config"][key] = raw
             except (TypeError, ValueError):
                 pass
@@ -3953,8 +3969,17 @@ def wire_cmd(args):
         if t not in ("cell", "comb") or not payload.get("name"):
             print("JSON must be a cell/comb with a 'name' (type 'cell' or 'comb').")
             return
+        gov = _governance_state(entries)
+        writers = gov.get("config", {}).get("cell_writers", "owner")
+        if gov.get("owner_id"):                 # cells are executable: gate the write (hive #60)
+            if writers == "owner" and _owner_seed() is None:
+                print("Publishing cells/combs is owner-only here (config cell_writers=owner) — the "
+                      "projection would decline a non-owner definition. Run on the owner device, or "
+                      "`hv config governance set cell_writers fertile`."); return
+            if writers == "fertile" and NODE_ID not in gov.get("admitted", set()):
+                print("Only admitted devices may publish cells/combs on this hive."); return
         payload.setdefault("version", 1)
-        append_journal(t, payload)
+        append_journal(t, _authorize_content_payload(payload))
         print(f"Published {t} {payload['name']!r} (version {payload['version']}).")
         return
 
@@ -4131,13 +4156,13 @@ def _my_curve_scalar():
     return _x25519.ed_seed_to_curve_scalar(seed)
 
 
-def _authorize_capsule_payload(payload):
-    """If this device holds the owner key, attach an owner signature so the projection can authorize
-    the write under `capsule_putters=owner` — the writer PROVES owner-key possession, exactly like a
-    governance act (a capsule is otherwise only device-signed). A no-op without the owner key: a
-    fertile-policy write is authorized by device admission and needs no owner_sig. The owner_sig does
-    not enter the capsule AAD (`alg|hive_id|name|version`), so it never affects sealing/opening.
-    Mutates and returns `payload`."""
+def _authorize_content_payload(payload):
+    """If this device holds the owner key, attach an owner signature so the projection can authorize an
+    authority-bearing content write (capsule, cell, comb) under the owner policy — the writer PROVES
+    owner-key possession, exactly like a governance act (the entry is otherwise only device-signed). A
+    no-op without the owner key: a fertile-policy write is authorized by device admission and needs no
+    owner_sig. For capsules the owner_sig is NOT part of the AAD (`alg|hive_id|name|version`), so it
+    never affects sealing/opening. Mutates and returns `payload`."""
     seed = _owner_seed()
     if seed is not None and _ed25519 is not None:
         return _sign_governance_payload(payload, seed, _ed25519.pub_from_seed(seed))
@@ -4189,7 +4214,7 @@ def capsule_cmd(args):
                 print("Only admitted devices may tombstone capsules on this hive."); return 1
         cur = caps.get(args.name)
         nextv = (int(cur.get("version", 0)) + 1) if cur else 1
-        append_journal("capsule", _authorize_capsule_payload(
+        append_journal("capsule", _authorize_content_payload(
             {"capsule_id": hashlib.sha256(args.name.encode()).hexdigest()[:16],
              "name": args.name, "kind": "tombstone", "version": nextv,
              "alg": "tombstone-v1", "wraps": []}))
@@ -4230,7 +4255,7 @@ def capsule_cmd(args):
                 nextv = int(cur.get("version", 0)) + 1
                 cap = _capsule_build(nm, cur.get("kind", "credential"), val,
                                      recips, nextv, gov.get("hive_id", ""), NODE_ID)
-                append_journal("capsule", _authorize_capsule_payload(cap))
+                append_journal("capsule", _authorize_content_payload(cap))
                 sealed = {w["device_id"] for w in cap.get("wraps", [])}
                 unsealable = sorted(set(recips) - sealed)
                 line = f"Rotated {nm!r} → v{nextv} ({len(sealed)} recipient(s))."
@@ -4249,7 +4274,7 @@ def capsule_cmd(args):
         nextv = (int(cur.get("version", 0)) + 1) if cur else 1
         cap = _capsule_build(args.name, "credential", val, recips, nextv,
                              gov.get("hive_id", ""), NODE_ID)
-        append_journal("capsule", _authorize_capsule_payload(cap))
+        append_journal("capsule", _authorize_content_payload(cap))
         sealed = {w["device_id"] for w in cap.get("wraps", [])}
         unsealable = sorted(set(recips) - sealed)
         msg = f"Sealed capsule {args.name!r} v{nextv} to {len(sealed)} device(s)."
@@ -4519,12 +4544,26 @@ def _doctor_status():
     #     write-time, or admitted under fertile). Surfaces what projection authorization drops so a
     #     depended-on secret is never silently unhonored on upgrade (hive #58/#61). Advisory.
     try:
-        unauth = _capsule_unauthorized(entries, gov)
+        unauth = _content_unauthorized(entries, gov, "capsule", "capsule_putters")
         if unauth:
             checks.append({"name": "capsule-authz", "status": "warn",
                            "detail": f"{len(unauth)} capsule entr(y/ies) NOT honored — signer was not "
                                      f"the authorized writer: {', '.join(unauth)} — re-`hv capsule put` "
                                      f"from an authorized device to supersede"})
+    except Exception:
+        pass
+
+    # 3e. Cell/comb (executable definitions) the projection DECLINES under the `cell_writers` policy —
+    #     same surfacing so an upgrade never silently drops a depended-on agent/tool definition
+    #     (hive #60). Advisory.
+    try:
+        unauth = (_content_unauthorized(entries, gov, "cell", "cell_writers")
+                  + _content_unauthorized(entries, gov, "comb", "cell_writers"))
+        if unauth:
+            checks.append({"name": "cell-authz", "status": "warn",
+                           "detail": f"{len(unauth)} cell/comb definition(s) NOT honored — signer was "
+                                     f"not the authorized writer: {', '.join(unauth)} — re-publish with "
+                                     f"`hv wire --add` from an authorized device to supersede"})
     except Exception:
         pass
 
@@ -5392,7 +5431,7 @@ def _config_set(key, value):
     quorum_by, dead_man_days)."""
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
-                "capsule_putters": str}
+                "capsule_putters": str, "cell_writers": str}
     if key not in coercers:
         print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
         return
@@ -5404,8 +5443,8 @@ def _config_set(key, value):
     if key == "quorum_by" and val not in ("device", "principal"):
         print("quorum_by must be 'device' or 'principal'")
         return
-    if key == "capsule_putters" and val not in ("owner", "fertile"):
-        print("capsule_putters must be 'owner' (default) or 'fertile' (any admitted device)")
+    if key in ("capsule_putters", "cell_writers") and val not in ("owner", "fertile"):
+        print(f"{key} must be 'owner' (default) or 'fertile' (any admitted device)")
         return
     if key == "quorum_m" and val < 0:
         print("quorum_m must be >= 0 (0 disables elections)")

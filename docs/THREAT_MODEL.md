@@ -50,6 +50,14 @@ at once). Concretely:
   untouched, so sync stays convergent) — every node just deterministically folds it away. `hv doctor`
   (`capsule-authz`) surfaces any entry the projection declines. Confidentiality is unaffected
   (recipient keys are identity-derived); this protects availability/integrity of the secret.
+- **Redefining an executable `cell`/`comb` by a compromised admitted device.** A `cell` defines what
+  an agent or tool runs and a `comb` orders cells, so a malicious redefinition is code-injection-
+  equivalent — and `hv wire --add` historically appended these with NO write gate. The same
+  projection authorization now applies to `_cell_state`/`_comb_state`, under a SEPARATE `cell_writers`
+  policy (default `owner`) so executable-definition authority is tunable independently of capsule
+  authority (a hive can keep cells owner-only while running capsules fertile). `hv wire --add` refuses
+  an unauthorized write and the projection declines a non-owner-signed cell/comb entry; `hv doctor`
+  (`cell-authz`) surfaces any it declines.
 - **Forged clock to trip succession early.** A quorum election's dead-man timer is anchored on the
   proposal's `basis_ts`. A proposal whose `basis_ts` leads its OWN entry timestamp by more than a
   small skew allowance is rejected — a deterministic, entry-time-only check (no wall-clock), so the

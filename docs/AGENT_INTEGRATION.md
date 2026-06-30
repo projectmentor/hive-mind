@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.16`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.17`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -209,6 +209,16 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.17` — **cell/comb write-authorization at the projection**. `_cell_state`/`_comb_state` now apply
+  the same projection authorization as capsules (1.16), but under a **separate `cell_writers` policy**
+  (default `owner`; `fertile` = any admitted device) — so a hive can keep executable definitions
+  owner-only while running capsules fertile, or the reverse. A `cell` defines what an agent or tool
+  runs, so a malicious redefinition is code-injection-equivalent. **Behavior change:** `hv wire --add`
+  was previously ungated (any admitted device could publish a cell/comb); under the default
+  `cell_writers=owner` only the owner may now publish, the CLI refuses a non-owner write, and the
+  projection declines a non-owner-signed cell/comb entry (it still lands in the journal — every node
+  folds it away, convergence-safe). New advisory `cell-authz` doctor check surfaces any now-unhonored
+  definition. `hv config governance set cell_writers owner|fertile`.
 - `1.16` — **capsule write-authorization at the projection**. `_capsule_state` now declines to honor a
   `capsule` entry whose signer was not the authorized writer — under the default `capsule_putters=owner`
   the entry must carry an owner signature from the owner who was legitimate *as of that entry's journal

@@ -36,6 +36,20 @@ at once). Concretely:
   join/admit payload is never trusted as a key (it is only a tamper tripwire → `suspect`). A
   low-order or malformed recipient key is skipped per-recipient and reported `unsealable`, never
   silently sealed to. The X25519 ECDH rejects the all-zero (low-order) shared secret.
+- **Superseding/killing a secret by a compromised admitted device.** A `capsule` is the shared
+  latest-wins projection (`_capsule_state`); a later version supersedes an older seal and a
+  `tombstone-v1` kills the secret. `capsule_putters` (default `owner`) is the write policy, but it
+  was historically enforced only in the CLI `put`/`rotate`/`rm` path — a compromised *admitted*
+  device could bypass it by appending a `capsule` entry to the journal directly, silently tombstoning
+  or resealing any capsule (a targeted denial-of-secret). The write policy is now enforced at the
+  **projection**: under `capsule_putters=owner` a `capsule` entry is honored only if it carries an
+  owner signature (the writer proves owner-key possession, exactly as a governance act does) AND that
+  owner was the legitimate owner AS OF the entry's journal position (point-in-time, so a prior
+  owner's seals survive a transfer/succession/election); under `fertile`, only a currently admitted,
+  non-purged device. An unauthorized entry still LANDS in every journal (the G-Set and Merkle are
+  untouched, so sync stays convergent) — every node just deterministically folds it away. `hv doctor`
+  (`capsule-authz`) surfaces any entry the projection declines. Confidentiality is unaffected
+  (recipient keys are identity-derived); this protects availability/integrity of the secret.
 - **Forged clock to trip succession early.** A quorum election's dead-man timer is anchored on the
   proposal's `basis_ts`. A proposal whose `basis_ts` leads its OWN entry timestamp by more than a
   small skew allowance is rejected — a deterministic, entry-time-only check (no wall-clock), so the
@@ -61,6 +75,19 @@ at once). Concretely:
   This only lets such an adversary *skip the waiting period* — controlling a quorum already permits
   a legitimate takeover after the wait — and the forged entries sort anomalously late. Residual,
   documented.
+- **Backdating by a compromised RETIRED owner key.** Capsule write-authorization under the owner
+  policy is point-in-time, judged by the entry's self-asserted timestamp against the owner-succession
+  timeline (there is no positional anchor for a content entry, unlike an election `basis_ts`). An
+  attacker who compromises a *former* owner key can forge a timestamp placing a malicious
+  capsule/tombstone *inside that key's former term*, where the projection still honors it. A
+  current-owner-only rule would avoid this but would also silently drop a prior owner's legitimate
+  seals after every ownership change — so point-in-time is the deliberate choice (it is required for
+  owner-resilience correctness). *Mitigation:* rotate capsules (and the upstream secrets) on an
+  ownership change, the same hygiene already advised when a device is removed. Residual, documented.
+- **Old ciphertext survives revocation/rotation.** A device removed (or an owner retired) still holds
+  any capsule version it already synced; `rotate`/`tombstone` cut it off the *new* version only. To
+  truly cut access, rotate the upstream token/secret too. Inherent to encrypt-to-device (you cannot
+  un-send ciphertext); the CLI says so at `put`/`rotate` time. Documented.
 
 ## Cryptographic posture
 

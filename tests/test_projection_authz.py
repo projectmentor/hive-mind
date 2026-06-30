@@ -80,7 +80,7 @@ def test_nonowner_tombstone_declined_owner_signed_honored(tmp_path, monkeypatch)
     # Convergence: the attack entry still LANDS in the journal; only the projection ignores it.
     assert any(e["type"] == "capsule" and e["payload"].get("alg") == "tombstone-v1" for e in entries)
     # The doctor visibility check surfaces exactly that declined entry.
-    assert any("MYTOK v2" in s for s in hv._capsule_unauthorized(entries, gov))
+    assert any("MYTOK v2" in s for s in hv._content_unauthorized(entries, gov, "capsule", "capsule_putters"))
 
     # The OWNER's own tombstone (owner-signed) IS honored.
     legit = base + [_capsule(hv, "MYTOK", 2, od_s, od_p, "2026-01-04T00:00:00Z", 4, tombstone=True, owner=(oseed, opub))]
@@ -166,4 +166,4 @@ def test_stripped_build_keeps_honoring(tmp_path, monkeypatch):
     monkeypatch.setattr(hv, "_ed25519", None)               # now simulate a crypto-less (stripped) build
     caps = hv._capsule_state(entries, gov)
     assert caps["MYTOK"]["alg"] == "tombstone-v1"            # keeps honoring rather than silently emptying
-    assert hv._capsule_unauthorized(entries, gov) == []     # authz inactive on a stripped build
+    assert hv._content_unauthorized(entries, gov, "capsule", "capsule_putters") == []     # authz inactive on a stripped build

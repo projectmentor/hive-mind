@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.15`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.16`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -209,6 +209,18 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.16` — **capsule write-authorization at the projection**. `_capsule_state` now declines to honor a
+  `capsule` entry whose signer was not the authorized writer — under the default `capsule_putters=owner`
+  the entry must carry an owner signature from the owner who was legitimate *as of that entry's journal
+  position* (point-in-time, so a prior owner's seals survive a transfer/succession/election); under
+  `fertile`, any currently admitted, non-purged device. This closes a hole where a compromised
+  *admitted* device could supersede or tombstone any capsule by appending a journal entry directly,
+  bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the
+  entry still lands in every journal and the Merkle is unchanged; every node deterministically folds it
+  away — no ingest/sync/admission change. Unsigned capsule entries are declined once an owner exists; a
+  crypto-less (stripped) build keeps honoring rather than silently emptying capsules. New advisory
+  `capsule-authz` doctor check surfaces any now-unhonored entry. `cell`/`comb` write-authorization (a
+  separate `cell_writers` policy) lands in a follow-up.
 - `1.15` — **taggable, searchable decisions**. `hv decide --tags <a,b>` records project/topic tags on
   a decision (journaled additively in the decision payload; projected to a new `decisions.tags`
   column — pre-1.15 decisions read back untagged). `hv search` now **also returns matching decisions**

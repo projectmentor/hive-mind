@@ -2154,11 +2154,17 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
         import concurrent.futures
         import requests
 
+        import sync_common
+
         def fetch(t):
             name, nid, addr = t
             try:
-                tel = requests.get(f"http://{addr}/api/telemetry?limit={per_node_cap}&offset=0",
-                                   timeout=timeout).json()
+                # /api/telemetry is loopback-only on the peer (GHSA-242f); sign this cross-node read
+                # with our device key so the admitted peer serves it.
+                qs = f"limit={per_node_cap}&offset=0"
+                hdrs = sync_common.sign_sync_request("GET", "/api/telemetry", qs, b"")
+                tel = requests.get(f"http://{addr}/api/telemetry?{qs}",
+                                   timeout=timeout, headers=hdrs or None).json()
                 return (name, nid, tel, True)
             except Exception:
                 return (name, nid, None, False)
@@ -2211,9 +2217,12 @@ def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailn
         if not url:
             return None
         try:
-            nid = requests.get(url + "/sync/hello", timeout=timeout).json().get("node_id")
+            # node_id + label come from /hive/info (open discovery) — NOT /sync/hello, which is now
+            # read-gated (GHSA-242f) and would 401 for a not-yet-admitted or unsigned probe.
+            info = requests.get(url + "/hive/info", timeout=timeout).json()
         except Exception:
             return None
+        nid = info.get("node_id")
         if not nid:
             return None
         try:
@@ -2221,10 +2230,7 @@ def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailn
             st = "in sync" if root == local_root else "diverged"
         except Exception:
             st = "reachable"
-        try:
-            lbl = requests.get(url + "/hive/info", timeout=timeout).json().get("label", "")
-        except Exception:
-            lbl = ""
+        lbl = info.get("label", "")
         # owner-supplied local name OVERRIDES the node's own label: a "label" on the .peers.json entry
         # wins over a node's self-reported label (e.g. an Android/Termux generic hostname like
         # "localhost-…"), so the owner can name a peer (zfold-6) and it stays consistent even when the
@@ -2550,8 +2556,29 @@ def sync_cmd(args):
     elif args.sync_action == "daemon":
         import hive_sync_daemon
         hive_sync_daemon.run_daemon()
+    elif args.sync_action == "auth":
+        import sync_common
+        cfg_path = sync_common.hive_home() / ".peers.json"
+        if not getattr(args, "mode", None):
+            env = os.environ.get("HIVE_SYNC_AUTH", "").strip().lower()
+            src = "HIVE_SYNC_AUTH env" if env in ("off", "permissive", "enforce") else ".peers.json (default permissive)"
+            print(f"sync read-auth mode: {sync_common.sync_auth_mode()}  (from {src})")
+            return
+        try:
+            cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        except Exception:
+            cfg = {}
+        cfg["sync_auth"] = args.mode
+        cfg_path.write_text(json.dumps(cfg, indent=2) + "\n")
+        print(f"sync read-auth mode set to '{args.mode}' in {cfg_path}.")
+        if os.environ.get("HIVE_SYNC_AUTH"):
+            print("  note: HIVE_SYNC_AUTH is set in the environment and OVERRIDES this file.")
+        print("  restart the daemon to apply:  systemctl --user restart hive-sync")
+        if args.mode == "enforce":
+            print("  first confirm every peer reports protocol_version 2:  "
+                  "curl <peer>/hive/info | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"protocol_version\"])'")
     else:
-        print("usage: hv sync {now|daemon}")
+        print("usage: hv sync {now|daemon|auth [off|permissive|enforce]}")
 
 
 # --------------------------------------------------------------------------
@@ -5545,7 +5572,9 @@ def peers_cmd(args):
         if not url or requests is None:
             continue
         try:
-            nid = requests.get(url + "/sync/hello", timeout=5).json().get("node_id")
+            # node_id + label from /hive/info (open discovery); /sync/hello is now read-gated.
+            info = requests.get(url + "/hive/info", timeout=5).json()
+            nid = info.get("node_id")
             if not nid:
                 continue
             try:
@@ -5553,11 +5582,7 @@ def peers_cmd(args):
                 st = "reachable · in sync" if root == local_root else "reachable · diverged"
             except Exception:
                 st = "reachable"
-            try:
-                lbl = requests.get(url + "/hive/info", timeout=5).json().get("label", "")
-            except Exception:
-                lbl = ""
-            probed[nid] = (url.replace("http://", "").replace("https://", ""), st, lbl)
+            probed[nid] = (url.replace("http://", "").replace("https://", ""), st, info.get("label", ""))
         except Exception:
             continue
 
@@ -6232,6 +6257,10 @@ def build_parser():
     sync_subparsers = sync_parser.add_subparsers(dest="sync_action")
     sync_subparsers.add_parser("now", help="One-shot bidirectional sync with all peers")
     sync_subparsers.add_parser("daemon", help="Run the sync daemon (serve + periodic sync)")
+    sync_auth_p = sync_subparsers.add_parser(
+        "auth", help="Show or set this node's sync read-auth mode (off|permissive|enforce)")
+    sync_auth_p.add_argument("mode", nargs="?", choices=["off", "permissive", "enforce"],
+                             help="omit to show the current mode; set to change it (restart the daemon to apply)")
 
     tel_parser = subparsers.add_parser("telemetry", help="Local-only session telemetry (observability, NOT facts)")
     tel_sub = tel_parser.add_subparsers(dest="telemetry_action")

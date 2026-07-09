@@ -15,9 +15,19 @@ is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mec
    do not hold. Governance acts that bear authority (owner/admit/config) additionally carry an owner
    signature. The journal converges deterministically across nodes (dedup by `(node_id, seq)`), so
    every honest node computes the same governance/confidence projection.
-3. **The network perimeter is Tailscale.** The sync daemon (`:9876`) is reachable by any device on
-   the tailnet. There is no application-layer authentication beyond network reachability + the
-   per-entry signatures above. Tailscale ACLs are the access-control boundary for *who can connect*.
+3. **The network perimeter is Tailscale, and sync READS are authenticated (defense in depth).** The
+   sync daemon binds the node's own tailnet IP (not `0.0.0.0`) by default, so it is not exposed on
+   other interfaces. Beyond that, the read surface is gated by an application-layer signed-request
+   envelope (`Hive-Auth-*`: an Ed25519 device signature over the request, verified against the
+   governance admitted-set, with a freshness window + nonce replay guard). A *remote* reader must be
+   an admitted device: `/sync/chunk` and `/sync/hello` require a valid signature; `/api/*` (the
+   corpus/telemetry surface) and the dashboard are loopback-only (local operator) or a signed peer
+   proxy; only minimal discovery (`/hive/info`, `/sync/merkle-root`, `/api/verify` — no journal
+   content) stays open so an unadmitted joiner can still find and verify the hive. Enforcement is a
+   per-node mode (`hv sync auth off|permissive|enforce`, default `permissive`) so a live fleet flips
+   to `enforce` independently once all peers speak protocol 2 — no lockstep cutover. Tailscale ACLs
+   remain the boundary for *who can connect*; the signed envelope is the boundary for *who can read*.
+   (Closes GHSA-242f-7fxg-f7wm. WRITES were already per-entry authenticated on ingest.)
 
 ## Adversary model (what we actively defend against)
 

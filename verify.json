@@ -1,5 +1,5 @@
 {
-  "digest": "b9b93b323e37a4e21498e645a5bcfb6224c1ef6a8d3fd2666692b4f10f60fa77",
+  "digest": "5263b2cae7f1a42ce520ea18ccfb5adf860d8ddbac134a06d64150e0ce3ebd0a",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -22,18 +22,18 @@
     "dashboard/index.html": "60b5b822fb17ecba93ed69d7ad4de5bfc5221045f1f4ec723706284c627b93da",
     "dashboard/logo.svg": "a7a44c7994dda2788c3f89e095b790a3429ace2642746442d41b40de9031458a",
     "docs/ADVISORIES.md": "2d0c3c0965f52086101737f69439b7173728bfb4c63fa5fb718616f811091e7f",
-    "docs/AGENT_INTEGRATION.md": "664cf9b706a872ffdabf4e5e17a07f13799e1f8ab312ea07fd7c74b3c53c5188",
-    "docs/CLI_REFERENCE.md": "487d8b0dd8291a3d9e135d4537eb07c03efbdfe0a26b989d8e95ca3d1df1864d",
+    "docs/AGENT_INTEGRATION.md": "27083c3dd82c79bbf6f8ba23827a29eff943927882b662165b0feff4a07aa9fd",
+    "docs/CLI_REFERENCE.md": "55243c358d705221c70964b63f36dc0259c114526ee4927bac63e993832e452a",
     "docs/HV_ARCHITECTURE.md": "767a440683dd04d59b1b47f0a2f4f6a9c15173dbaf187d9c793b6a866327b552",
-    "docs/INTERNALS.md": "54da83b3ae2e29967b3a9f6676af186bf9fe2deb46fe39433714fe0d4a0366be",
+    "docs/INTERNALS.md": "0145aaca1ef69e1042767c74b432fc83e736da31dcef8b7816f2ca43908bccb5",
     "docs/P2P_DESIGN.md": "933781919e2ad7693bc92a8457cb867e03c6229d253a23129ac7a8b314cb8f31",
     "docs/SYNC_API.md": "1a6d1cbae277a0d997ee4d1db8afd4e3ab5637f725c0b99d9d568d743081a9d5",
-    "docs/THREAT_MODEL.md": "b5652d2f41ed28536ad98c9ae2b01461cc403085ee8715bbb75c27b071f1e02b",
+    "docs/THREAT_MODEL.md": "91e84ca2cde80c5aa7ce1c082b1e434bebcc8575d950f298f037163a33e811e5",
     "ed25519.py": "da5551044768c9d2c54ed537eb79af2a682665c7937800fcece7b583268825c4",
     "glama.json": "324dd61ba65a72154bb599baf92da55d6d9f34a952371681360fd55bf9e12b8d",
     "hermes_integration.py": "82fbb32e7979bef46585c372c8033ee3acae83ee5ba37ac0668f52c9709968b3",
     "hive_sync_daemon.py": "7d077740d0d39ee38705c559f7ca7c3b08d66e39cfe02e9687f458d1b6fec5e0",
-    "hv": "8242ca72aac959187aa85196d6ec77c2decc12f6c54c4fba52af7d2387079a2b",
+    "hv": "9e8a32ebfa24c915adb6bafea9511e03592fda3971f7c0d8bbd2877552e77a5e",
     "integrations/claude-code/hive-memory/SKILL.md": "854fab8814ee84e93e96b2e2a285915afcc1202a3711fa3bee41656fdf6ebe7a",
     "integrations/claude-code/install.sh": "e2f2831359968dce15110190660bc26aad9faae4e662d4d2289b46b60985614c",
     "integrations/claude-code/wire-up/SKILL.md": "a1ff0f388cddf1bbface6670e40b8647667a4c45656cbafb4d728f083c514e97",
@@ -74,6 +74,7 @@
     "tests/conftest.py": "8cdd191e3b8336ac1e38a234cbe698784b09ee28c73f7071290b2183f14004ea",
     "tests/security/poc.py": "3fd6e13a0aa080e7408c76649ffc67128c8387ad0209621611ffca334973a631",
     "tests/test_admit_peering.py": "61094cc2aa48b60b4522b96efc17771c47146d0f6eb3a59a71f0cd6df65fbf7a",
+    "tests/test_announce.py": "41dbb76e03dfc4490d10d6d2ce5c5ba6c3f906cea178a87d96cf7f9efa16aa9b",
     "tests/test_capsule.py": "8a482718186236c1f11b19171f6a2246fd5d293416677e70c3b8584f36d04170",
     "tests/test_cell.py": "723623cd34e9965721df35e58c4e21e79c999d1cf9a1eb0496bf730996884bca",
     "tests/test_cell_comb_authz.py": "07cd370c4639351a464da96346f5036f517b8dcf67fef433bae9e0fbc78ee68d",
@@ -109,5 +110,5 @@
     "utilities/migrate_journal.py": "aa00124580fcb0e33d4a2e7aadf0a19fe7c6dab39b07d1309e3b9816e7a7120f",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
-  "version": "1.17"
+  "version": "1.18"
 }

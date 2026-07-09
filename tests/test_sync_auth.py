@@ -74,6 +74,62 @@ def _wait(port, timeout=45):
     raise AssertionError("daemon did not start serving in time")
 
 
+_NONLOOPBACK_OK = None
+
+
+def _reachable(url, timeout=3.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            time.sleep(0.1)
+    return False
+
+
+def _nonloopback_serving_works():
+    """Cached probe: can THIS host serve an HTTP daemon on a NON-loopback bind and reach it via BOTH
+    127.0.0.1 and its LAN IP? These wire tests bind 0.0.0.0 / the LAN IP to exercise the remote-auth
+    path — but some environments (notably macOS CI runners, whose firewall blocks non-loopback binds)
+    can't serve that, so even the loopback health-check never answers. There we SKIP (the platform-
+    agnostic unit tests in test_sync_request_signing.py + the Linux wire run cover the behavior). The
+    probe binds a throwaway server the same way the real fixture does, so it skips exactly when the
+    fixture would hang — without masking a genuine daemon crash (that still fails the test)."""
+    global _NONLOOPBACK_OK
+    if _NONLOOPBACK_OK is not None:
+        return _NONLOOPBACK_OK
+    lan = _lan_ip()
+    if not lan:
+        _NONLOOPBACK_OK = False
+        return False
+    import http.server
+    import threading
+
+    class _H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *a):
+            pass
+
+    port = _free_port()
+    try:
+        srv = http.server.ThreadingHTTPServer(("0.0.0.0", port), _H)
+    except OSError:
+        _NONLOOPBACK_OK = False
+        return False
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        _NONLOOPBACK_OK = _reachable(f"http://127.0.0.1:{port}/") and _reachable(f"http://{lan}:{port}/")
+    finally:
+        srv.shutdown()
+    return _NONLOOPBACK_OK
+
+
 def _sign(home, method, path, query, body=b"", seed=None):
     """Hive-Auth-* headers signed with `home`'s device key (or a supplied seed = a different device)."""
     if seed is None:
@@ -97,6 +153,10 @@ def _sign(home, method, path, query, body=b"", seed=None):
 def node(hive, monkeypatch):
     """Owner + admitted-self hive holding a secret canary, with a factory to start the daemon in a
     given sync_auth mode (bound to 0.0.0.0). Yields helpers; daemons are torn down at teardown."""
+    if not _nonloopback_serving_works():
+        pytest.skip("this environment can't serve a daemon on a non-loopback bind "
+                    "(e.g. a macOS CI runner's firewall); the wire auth tests require it — "
+                    "covered by test_sync_request_signing.py + the Linux wire run")
     monkeypatch.setenv("HIVE_OWNER_PASSPHRASE", "testpass")
     hive.run("key", "init")
     hive.run("owner", "init")

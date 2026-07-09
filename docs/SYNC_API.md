@@ -1,14 +1,88 @@
 # HiveMind Sync API Reference
 
 The sync daemon (`hive_sync_daemon.py`) exposes a minimal JSON/HTTP API on port
-`:9876` (default). All endpoints are unauthenticated — transport security is
-provided by Tailscale (WireGuard). Only admit Tailscale peers.
+`:9876` (default). Tailscale (WireGuard) is still the transport perimeter — only
+admit Tailscale peers — but the daemon no longer trusts network reachability
+alone. As of **protocol version 2**, remote sync **reads** are authenticated with
+a signed-request envelope (see [Request authentication](#request-authentication)),
+loopback (`127.0.0.1`) requests from the local operator stay unauthenticated, and
+the daemon binds its own tailnet address rather than `0.0.0.0`. This closes
+[GHSA-242f-7fxg-f7wm](ADVISORIES.md) — an unauthenticated remote peer could
+previously read the entire journal off `/sync/chunk`. Writes (`POST /sync/ingest`)
+were already gated by per-entry signatures and remain so.
 
 Start the daemon:
 ```bash
 ./hv sync daemon          # serve + periodic outbound sync (every 5 min)
 python3 hive_sync_daemon.py    # same, direct
 ```
+
+---
+
+## Request authentication
+
+Since protocol version 2, a **remote** request to an authenticated endpoint must
+carry a signed-request envelope. The client signs, with its Ed25519 **device
+key**, over the canonical string
+
+```
+method + "\n" + path + "\n" + sorted-query + "\n" + sha256(body) + "\n" + timestamp + "\n" + nonce
+```
+
+and presents the signature and its identity in HTTP headers:
+
+| Header | Value |
+|---|---|
+| `Hive-Auth-Alg` | `hive-sig-v1` (the envelope scheme id) |
+| `Hive-Auth-Device` | Signer's device id (`k1:…`) |
+| `Hive-Auth-Pub` | Signer's Ed25519 public key, base64 |
+| `Hive-Auth-Ts` | Unix timestamp (seconds) the request was signed |
+| `Hive-Auth-Nonce` | A per-request random nonce (replay guard) |
+| `Hive-Auth-Sig` | base64 Ed25519 signature over the canonical string above |
+
+On receipt the daemon:
+
+1. Verifies `Hive-Auth-Sig` against `Hive-Auth-Pub`, and that
+   `Hive-Auth-Device` is the fingerprint of that pubkey (`k1:` + first 16 hex of
+   `sha256(pub)`) — so a caller can't sign under another device's id.
+2. Requires the signer to be in the governance **admitted set** (an owner or
+   admitted device). A sterile/unknown device is refused.
+3. Checks the timestamp is **fresh** — within `±HIVE_SYNC_AUTH_WINDOW` seconds
+   (default `300`) — and that the nonce hasn't been seen inside that window
+   (replay guard).
+
+**Loopback bypass.** Requests arriving on `127.0.0.1` (the local `hv` CLI, the
+dashboard, or a signed peer proxy) are trusted without an envelope — the local
+operator already holds the keys. Only remote peers must sign.
+
+**Enforcement mode (phased rollout).** Each node runs one of three modes,
+independent of the protocol version it advertises:
+
+| Mode | Behavior |
+|---|---|
+| `off` | Read-auth disabled — legacy behavior, all reads open. |
+| `permissive` (default) | Clients sign every request; the daemon verifies and **logs** a failure but still serves. Nothing breaks while the fleet upgrades. |
+| `enforce` | An unauthenticated or invalid remote request to an authenticated endpoint is rejected (**401**). |
+
+Set the mode with `hv sync auth [off|permissive|enforce]` or the `HIVE_SYNC_AUTH`
+env var. See [Rolling out enforcement](#rolling-out-enforcement) below.
+
+---
+
+## Endpoint authentication classes
+
+The daemon binds **both** loopback (`127.0.0.1`) and its primary tailnet address.
+Every endpoint falls into one of three access classes:
+
+| Class | Endpoints | Who may call |
+|---|---|---|
+| **Open discovery** | `GET /hive/info`, `GET /sync/merkle-root`, `GET /api/verify` | Anyone reachable — no auth. These return metadata only (no journal content), so listing a hive stays open. |
+| **Remote-auth** | `GET /sync/hello`, `GET /sync/chunk`, `POST /sync/ingest` | Loopback (unauthenticated) **or** a signed request from an admitted device. Carries journal content, so remote callers must sign. |
+| **Loopback-only** | all `GET/POST /api/*` (except `/api/verify`) and the dashboard SPA | The local operator on `127.0.0.1`, or a signed peer proxy. Not served to an unauthenticated remote host. |
+
+`POST /sync/ingest` additionally verifies the per-entry signatures on the payload
+(unchanged) — the request envelope authenticates the *caller*, the entry
+signatures authenticate the *content*.
 
 ---
 
@@ -19,12 +93,17 @@ python3 hive_sync_daemon.py    # same, direct
 Node identity and journal summary. Used as the handshake and peer-discovery
 step during a sync round.
 
+**Auth class: remote-auth** — a remote caller must present a signed request
+envelope from an admitted device (loopback is exempt). See
+[Request authentication](#request-authentication).
+
 **Response:**
 ```json
 {
   "node_id": "node-a",
   "hive_id": "k1:2a2110f3d8963a9e",
-  "protocol_version": 1,
+  "protocol_version": 2,
+  "advertised_addr": "100.64.0.2:9876",
   "journal_summary": {
     "total": 48,
     "by_node": {
@@ -48,7 +127,8 @@ step during a sync round.
 |---|---|
 | `node_id` | This device's identity — its device-key fingerprint (`HIVE_NODE_ID` overrides) |
 | `hive_id` | The hive this node belongs to (the founding owner's device id). A client refuses to merge across differing hive ids |
-| `protocol_version` | Sync wire-protocol version (currently `1`). Bumped for additive handshake changes so they can be negotiated without a journal-schema break |
+| `protocol_version` | Sync wire-protocol version (currently `2` — read-authentication capable). Bumped for additive handshake changes so they can be negotiated without a journal-schema break |
+| `advertised_addr` | This node's reachable `host:port` (its tailnet address), so a peer learns where to reach it back without a config round-trip |
 | `journal_summary.by_node` | Highest seq seen per source node — used for quick divergence detection |
 | `chunks` | Per-node array of 100-entry chunk hashes (Merkle leaf hashes). Used to localize which windows need syncing |
 
@@ -77,6 +157,10 @@ transferred). If not → call `/sync/hello` to localize differing chunks.
 ### `GET /sync/chunk`
 
 Fetch a specific 100-entry window of the journal for a given source node.
+
+**Auth class: remote-auth** — this endpoint returns journal content, so a remote
+caller must present a signed request envelope from an admitted device (loopback
+is exempt). This is the read that GHSA-242f-7fxg-f7wm closed.
 
 **Query parameters:**
 
@@ -165,16 +249,21 @@ hardening for a future release.
 
 Discovery endpoint: minimal hive metadata plus the signed genesis (owner
 declaration) for verification. Never returns journal entries — so listing a
-hive stays open even if reads are gated later.
+hive (and confirming its protocol version during a rollout) stays open.
+
+**Auth class: open discovery** — unauthenticated. Returns metadata only, no
+journal content.
 
 **Response:**
 ```json
 {
   "hive_id": "k1:2a2110f3d8963a9e",
   "owner_id": "k1:2a2110f3d8963a9e",
+  "node_id": "k1:10f6b761dd1c2a90",
   "label": "node-a",
   "node_count": 2,
-  "protocol_version": 1,
+  "protocol_version": 2,
+  "advertised_addr": "100.64.0.2:9876",
   "genesis": { "node_id": "k1:...", "seq": 1, "type": "governance", "payload": { ... } }
 }
 ```
@@ -183,9 +272,11 @@ hive stays open even if reads are gated later.
 |---|---|
 | `hive_id` | The hive's identity (the founding owner's device id) — scopes all sync; cross-hive merges are refused |
 | `owner_id` | Current owner's device id from governance state |
+| `node_id` | This device's own identity (its device-key fingerprint). Moved here so discovery can name the responder without a `/sync/hello` round-trip |
 | `label` | This node's human-readable label (`HIVE_NODE_LABEL`) |
 | `node_count` | Number of admitted nodes (falls back to the count of distinct authoring nodes if no admit set exists) |
-| `protocol_version` | Sync wire-protocol version (see `/sync/hello`) |
+| `protocol_version` | Sync wire-protocol version (see `/sync/hello`). `2` = read-authentication capable — poll this across peers to confirm a fleet is ready to `enforce` |
+| `advertised_addr` | This node's reachable `host:port` (its tailnet address) |
 | `genesis` | The signed owner declaration entry, for independent verification of the hive's origin |
 
 ---
@@ -337,7 +428,6 @@ alongside `action`.
       "node_id": "k1:597b3e0f5fb92d37"
     }
   ],
-  "bind": "0.0.0.0",
   "port": 9876
 }
 ```
@@ -346,8 +436,14 @@ alongside `action`.
 |---|---|---|
 | `peers[].url` | required | Base URL of the peer's sync daemon |
 | `peers[].node_id` | optional | The peer's device id (`k1:…`), for logging and the admitted-peer set |
-| `bind` | `0.0.0.0` | Interface to bind the daemon to |
+| `bind` | auto | Interface to bind the daemon to. **Default is the node's own locally-bindable Tailscale IP (`100.64.0.0/10`), else `127.0.0.1` — never `0.0.0.0`.** Omit it and the daemon picks the right address. Set it only to override; `HIVE_BIND` in the environment takes precedence. A legacy `"bind": "0.0.0.0"` left in this file is auto-upgraded to the tailnet address on restart. |
 | `port` | `9876` | Port the daemon listens on |
+
+The daemon always binds **loopback in addition to** its primary address, so the
+local `hv` CLI and dashboard reach it on `127.0.0.1` regardless of `bind`.
+`0.0.0.0` is still available as a deliberate escape hatch via `HIVE_BIND=0.0.0.0`
+(e.g. an unusual NAT/interface setup) — it is no longer the default and the
+installer no longer hardcodes it.
 
 Get a node's device id and public key with `hv config identity show` on that machine.
 
@@ -355,9 +451,10 @@ Get a node's device id and public key with `hv config identity show` on that mac
 `config/.peers.json.example` and edit per node.
 
 **WSL + Tailscale note:** Each WSL2 instance gets its own Tailscale IP (appears
-as a separate machine on the tailnet, e.g. `node-a-1`). The sync daemon
-binds `0.0.0.0:9876` and is reachable directly at the WSL Tailscale IP. No
-portproxy or mirrored networking needed. Get the WSL IP with `tailscale ip`.
+as a separate machine on the tailnet, e.g. `node-a-1`). The sync daemon binds
+that WSL Tailscale IP (auto-detected) plus loopback, and is reachable directly
+at the WSL Tailscale IP. No portproxy or mirrored networking needed. Get the WSL
+IP with `tailscale ip`.
 
 **macOS note:** Install Tailscale via the app (App Store / standalone) or
 `brew install tailscale`; the app or `brew services` owns `tailscaled` (the
@@ -375,8 +472,40 @@ All endpoints return JSON on error:
 {"error": "description"}
 ```
 
-HTTP status codes: `200` success, `404` unknown path, `409` cross-hive push
-refused (`POST /sync/ingest` when the sender's `hive_id` differs from this
-node's), `500` internal error. A 409 body carries `{"error": "different hive",
-"hive_id": "<local>", "accepted": 0}`. The daemon never crashes a handler
-thread — all exceptions are caught and returned as 500.
+HTTP status codes: `200` success, `401` request-authentication failure (a remote
+call to a remote-auth or loopback-only endpoint with a missing/invalid/stale
+envelope, or a signer not in the admitted set — returned only under
+`HIVE_SYNC_AUTH=enforce`; `permissive` logs and serves), `404` unknown path,
+`409` cross-hive push refused (`POST /sync/ingest` when the sender's `hive_id`
+differs from this node's), `500` internal error. A 409 body carries
+`{"error": "different hive", "hive_id": "<local>", "accepted": 0}`. The daemon
+never crashes a handler thread — all exceptions are caught and returned as 500.
+
+---
+
+## Rolling out enforcement
+
+Read-authentication ships behind a per-node enforcement mode so a mixed-version
+fleet never breaks mid-upgrade. The rollout is:
+
+1. **Land the fix on every node.** Each updated daemon advertises
+   `protocol_version: 2` and defaults to `HIVE_SYNC_AUTH=permissive` — clients
+   sign every request, the daemon verifies and logs failures but still serves.
+   Nothing breaks while nodes update at their own pace (an offline node keeps
+   syncing under `permissive` when it returns).
+2. **Confirm the whole fleet reports protocol 2.** Poll each peer:
+   ```bash
+   curl -s http://<peer>:9876/hive/info | jq .protocol_version    # expect 2
+   ```
+   `/hive/info` is open discovery, so this needs no auth.
+3. **Flip each node to `enforce`, one at a time.** Once every peer reports
+   protocol 2 (so every client is signing), run on each node:
+   ```bash
+   hv sync auth enforce
+   ```
+   From then on that node rejects an unauthenticated or invalid remote read with
+   `401`. Local (`127.0.0.1`) access is unaffected.
+
+To pause enforcement on a node, `hv sync auth permissive` (or `off`). See
+`docs/CLI_REFERENCE.md` for the `hv sync auth` subcommand and the
+`HIVE_SYNC_AUTH` / `HIVE_SYNC_AUTH_WINDOW` / `HIVE_BIND` environment variables.

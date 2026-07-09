@@ -130,7 +130,6 @@ representative identical across nodes.
 ```json
 {
   "self": "node-a",
-  "bind": "0.0.0.0",
   "port": 9876,
   "peers": [
     {"id": "node-b", "url": "http://100.64.0.2:9876"}
@@ -138,39 +137,57 @@ representative identical across nodes.
 }
 ```
 
+`bind` is optional and defaults to the node's own locally-bindable Tailscale IP
+(`100.64.0.0/10`), else `127.0.0.1` — never `0.0.0.0` (the daemon also binds
+loopback for the local CLI/dashboard). `HIVE_BIND` overrides; a legacy
+`"bind": "0.0.0.0"` here is auto-upgraded on restart.
+
 ---
 
 ## 5. Sync Protocol (5 endpoints per node)
 
-All endpoints advertise `protocol_version` (`PROTOCOL_VERSION = 1`) so additive
-handshake changes can be negotiated without a journal-schema break.
+All endpoints advertise `protocol_version` (`PROTOCOL_VERSION = 2`) so additive
+handshake changes can be negotiated without a journal-schema break. Version 2
+added **read-authentication**: a remote caller of a content endpoint must present
+a signed-request envelope (`Hive-Auth-*` headers) from an admitted device; see
+`docs/SYNC_API.md` for the envelope and the endpoint auth classification.
 
 ```
-GET /sync/hello
-  -> {"node_id": "...", "hive_id": "...", "protocol_version": 1,
+GET /sync/hello   (remote-auth)
+  -> {"node_id": "...", "hive_id": "...", "protocol_version": 2,
+      "advertised_addr": "100.64.0.2:9876",
       "journal_summary": {"total": 250,
         "by_node": {"node-a": 147, "node-b": 89}},
       "chunks": {"node-a": ["sha256:...", ...], "node-b": [...]}}
   (chunk hashes are folded into hello — no separate chunks endpoint)
 
-GET /sync/merkle-root
+GET /sync/merkle-root   (open discovery)
   -> {"root_hash": "sha256:..."}
 
-GET /sync/chunk?node=X&start=1&end=100
+GET /sync/chunk?node=X&start=1&end=100   (remote-auth)
   -> {"entries": [...], "hash": "sha256:..."}
 
-POST /sync/ingest
+POST /sync/ingest   (remote-auth; content also per-entry signed)
   <- {"entries": [...]}
   -> {"accepted": 42, "duplicates": 3}
 
-GET /hive/info   (discovery; never returns the journal)
-  -> {"hive_id": "...", "owner_id": "...", "label": "...",
-      "node_count": 2, "protocol_version": 1, "genesis": {...}}
+GET /hive/info   (open discovery; never returns the journal)
+  -> {"hive_id": "...", "owner_id": "...", "node_id": "...", "label": "...",
+      "node_count": 2, "protocol_version": 2,
+      "advertised_addr": "100.64.0.2:9876", "genesis": {...}}
 ```
 
+**Auth model.** Remote reads of journal content (`/sync/hello`, `/sync/chunk`,
+`POST /sync/ingest`) require the signed envelope; loopback (`127.0.0.1`) is
+exempt (the local operator/CLI/dashboard); discovery endpoints (`/hive/info`,
+`/sync/merkle-root`, `/api/verify`) stay open but carry no journal content.
+Enforcement is per-node (`off` | `permissive` | `enforce`, default `permissive`)
+via `hv sync auth` / `HIVE_SYNC_AUTH` for a break-free phased rollout.
+
 **Implementation:** Python stdlib `http.server` (`ThreadingHTTPServer` +
-`BaseHTTPRequestHandler`), synchronous, 5 endpoints — no FastAPI dependency.
-Runs on Tailscale interface only (port 9876). See `hive_sync_daemon.py`.
+`BaseHTTPRequestHandler`), synchronous — no FastAPI dependency. Binds the node's
+own Tailscale IP (not `0.0.0.0`) plus loopback, port 9876. See
+`hive_sync_daemon.py`.
 
 ---
 

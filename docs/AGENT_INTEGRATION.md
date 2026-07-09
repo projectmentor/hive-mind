@@ -209,6 +209,29 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.18` — **sync read-authentication + bind hardening** (advisory GHSA-242f-7fxg-f7wm, High,
+  CWE-306). Writes were already authenticated (per-entry signatures on ingest); **reads were open** —
+  any host that could reach the sync port could pull the whole journal off `/sync/chunk`. Now remote
+  reads of journal content (`/sync/hello`, `/sync/chunk`, `POST /sync/ingest`) require a signed-request
+  envelope (`Hive-Auth-*` headers: the client signs, with its Ed25519 device key, over
+  `method + path + sorted-query + sha256(body) + timestamp + nonce`), the daemon verifies the sig,
+  that the signer is in the admitted set, and that the timestamp is fresh (default 300s,
+  `HIVE_SYNC_AUTH_WINDOW`) with a nonce replay guard. **Loopback (`127.0.0.1`) stays unauthenticated**
+  (the local operator, `hv`, and the dashboard); discovery metadata (`/hive/info`,
+  `/sync/merkle-root`, `/api/verify`) stays open but carries no journal content; the dashboard
+  `/api/*` data layer is loopback-only. **Bind hardening:** the daemon binds its own locally-bindable
+  Tailscale IP (`100.64.0.0/10`), else `127.0.0.1` — **never `0.0.0.0`** by default (plus loopback for
+  the local CLI/dashboard); `HIVE_BIND` is the escape hatch, a legacy `0.0.0.0` in `.peers.json`
+  auto-upgrades on restart, and the installer no longer hardcodes bind. `PROTOCOL_VERSION` → **2**
+  (advertised in `/hive/info` + `/sync/hello`, alongside a new `advertised_addr`; `node_id` moved onto
+  `/hive/info`). **Phased rollout, no fleet breakage:** enforcement is per-node
+  (`off` | `permissive` | `enforce`, default `permissive`) via the new **`hv sync auth`** subcommand
+  or `HIVE_SYNC_AUTH` — land the fix → every node reaches protocol 2 in `permissive` (clients sign,
+  nothing breaks) → confirm all peers report `protocol_version` 2 (`curl <peer>/hive/info`) → flip each
+  node to `enforce`. An offline node keeps syncing under `permissive` when it returns. This is the
+  daemon's wire behavior, not the `hv` CLI contract — no verb or flag changes for adapters; only a
+  foreign sync client that reads a peer must adopt the envelope (the bundled `hv`/daemon already do).
+  See `docs/SYNC_API.md` and `docs/ADVISORIES.md`.
 - `1.17` — **cell/comb write-authorization at the projection**. `_cell_state`/`_comb_state` now apply
   the same projection authorization as capsules (1.16), but under a **separate `cell_writers` policy**
   (default `owner`; `fertile` = any admitted device) — so a hive can keep executable definitions

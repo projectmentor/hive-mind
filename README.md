@@ -167,9 +167,12 @@ Most of the time your agents call `hv` for you. Full reference:
 - **SQLite** (`store.db`) — a derived index (WAL + FTS5) rebuilt from the journal on any node.
 - **Merkle index** — per-node chunk hashes for efficient delta sync: only missing entries move.
 - **Sync daemon** — a stdlib HTTP server on `:9876` that syncs with peers (every 5 minutes, or
-  on demand). No leader, no central broker. The tailnet is the trust perimeter, but the daemon also
-  caps request bodies, times out slow reads, bounds concurrent requests, and rate-limits per peer,
-  so a single misbehaving peer can't exhaust a node.
+  on demand). No leader, no central broker. The tailnet is the transport perimeter, but the daemon
+  no longer trusts reachability alone: remote peers must **sign their reads** with their device key
+  and be an admitted device (local `127.0.0.1` access stays open), and the daemon binds its own
+  Tailscale IP rather than `0.0.0.0`. It also caps request bodies, times out slow reads, bounds
+  concurrent requests, and rate-limits per peer, so a single misbehaving peer can't exhaust — or
+  silently read — a node. See [`docs/SYNC_API.md`](docs/SYNC_API.md).
 - **Capsules** — share secrets (API keys, tokens) as encrypt-to-device *capsules*: a secret sealed
   so only the devices you've admitted can open it. Each recipient's key is **derived from that
   device's signed identity**, so a capsule can never be sealed to a key a device hasn't proven it

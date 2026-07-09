@@ -45,7 +45,12 @@ at once). Concretely:
   device's own signed Ed25519 identity (X25519 conversion); a `curve_pub` merely *carried* on a
   join/admit payload is never trusted as a key (it is only a tamper tripwire → `suspect`). A
   low-order or malformed recipient key is skipped per-recipient and reported `unsealable`, never
-  silently sealed to. The X25519 ECDH rejects the all-zero (low-order) shared secret.
+  silently sealed to. The X25519 ECDH rejects the all-zero (low-order) shared secret. The
+  `announce` act (1.18) adds NO key source — it only gives a silent device a signed entry to
+  harvest from, under the same fingerprint binding; its payload is never trusted, its emission
+  guard applies the same binding (so a planted pub on a spoofed unsigned entry cannot suppress a
+  device's announcement), and unsigned-announce spam is the same accepted, inert class as
+  unsigned join-request spam.
 - **Superseding/killing a secret by a compromised admitted device.** A `capsule` is the shared
   latest-wins projection (`_capsule_state`); a later version supersedes an older seal and a
   `tombstone-v1` kills the secret. `capsule_putters` (default `owner`) is the write policy, but it

@@ -290,7 +290,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.17"   # 1.17: cell/comb write-authorization at the PROJECTION — `_cell_state`/`_comb_state` now apply the same projection authorization as capsules (hive #58), but under a SEPARATE `cell_writers` policy (default `owner`; `fertile` = any admitted device), so a hive can keep executable definitions owner-only while running capsules fertile or vice versa (hive #60). A cell DEFINES what an agent/tool runs, so a malicious redefinition is code-injection-equivalent; previously `hv wire --add` appended cell/comb entries with NO write gate, so any admitted device could redefine a cell. BEHAVIOR CHANGE: under the default `cell_writers=owner` only the owner may publish cells/combs — `hv wire --add` now refuses a non-owner write and the projection declines a non-owner-signed cell/comb entry (it still LANDS in the journal; every node folds it away, convergence-safe). Cells/combs are owner-signed on write like capsules; new advisory `cell-authz` doctor check surfaces any now-unhonored definition. Migration-safe on hives with no non-owner cells (the doctor check makes any change visible). 1.16: capsule write-authorization at the PROJECTION — `_capsule_state` now declines to honor a `capsule` entry whose signer was not the authorized writer (the owner AS OF that entry's journal position under the default `capsule_putters=owner`; any admitted device under `fertile`), closing a hole where a compromised ADMITTED device could supersede or tombstone ANY capsule by appending a journal entry directly, bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the entry still LANDS in every journal/Merkle; every node deterministically folds it away — no ingest/sync/admission change. Owner authority is POINT-IN-TIME via an additive read-only `gov['owner_timeline']`, so a prior owner's seals survive a transfer/succession/election (hive #58). Unsigned capsule entries are declined once an owner exists; a crypto-less (stripped) build keeps honoring (it already hard-fails the `crypto-modules` doctor check) rather than silently emptying capsules (hive #61). New advisory `capsule-authz` doctor check surfaces any now-unhonored entry. cell/comb authz + a separate `cell_writers` policy land in a follow-up PR (hive #60). 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.18"   # 1.18: capsule-addressability for silent devices — new authority-less, DEVICE-signed, kind-discriminated governance act `announce` (fixed envelope {action, kind}; kind-specific fields under `data`; first kind: `key`), whose only purpose is to EXIST as a signed entry carrying the device's pub so `_recipient_pubkeys` can harvest an identity-bound Curve25519 key for an admitted device that never authored an entry (direct owner admit, zero writes — it could never receive capsules and `doctor` warned forever; join-request devices were always fine, their request is signed). Ingest allowlists `announce` beside `join-request` (the ONE wire change); the projection ignores it entirely (grants nothing, deliberately projection-invisible); the trust model is UNCHANGED — a payload-carried key is still never a source, the pub is harvested off the signed entry under the same fingerprint binding. Unknown announce KINDS are accepted and ignored, so future kinds ride through 1.18 nodes with no skew window. `hv key announce` (alias `hv config identity announce`) emits it, guarded to once-ever per device — the guard uses the same pub↔device_id binding as harvest, so a planted pub on a spoofed unsigned entry can never suppress it; `hv doctor --fix` auto-emits on an owned hive (the 15-min timer self-heals the fleet). VERSION SKEW: a pre-1.18 peer deterministically REJECTS an announce on ingest (not in its allowlist, no owner_sig) and shows an advisory `diverged` against upgraded peers; nothing is lost — sync is stateless Merkle-diff re-pull, so the entry lands automatically on that peer's next round after IT upgrades (`hv sync now` alone won't clear it before then). Upgrade always-on nodes first, the emitting device last for a zero-noise rollout. 1.17: cell/comb write-authorization at the PROJECTION — `_cell_state`/`_comb_state` now apply the same projection authorization as capsules (hive #58), but under a SEPARATE `cell_writers` policy (default `owner`; `fertile` = any admitted device), so a hive can keep executable definitions owner-only while running capsules fertile or vice versa (hive #60). A cell DEFINES what an agent/tool runs, so a malicious redefinition is code-injection-equivalent; previously `hv wire --add` appended cell/comb entries with NO write gate, so any admitted device could redefine a cell. BEHAVIOR CHANGE: under the default `cell_writers=owner` only the owner may publish cells/combs — `hv wire --add` now refuses a non-owner write and the projection declines a non-owner-signed cell/comb entry (it still LANDS in the journal; every node folds it away, convergence-safe). Cells/combs are owner-signed on write like capsules; new advisory `cell-authz` doctor check surfaces any now-unhonored definition. Migration-safe on hives with no non-owner cells (the doctor check makes any change visible). 1.16: capsule write-authorization at the PROJECTION — `_capsule_state` now declines to honor a `capsule` entry whose signer was not the authorized writer (the owner AS OF that entry's journal position under the default `capsule_putters=owner`; any admitted device under `fertile`), closing a hole where a compromised ADMITTED device could supersede or tombstone ANY capsule by appending a journal entry directly, bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the entry still LANDS in every journal/Merkle; every node deterministically folds it away — no ingest/sync/admission change. Owner authority is POINT-IN-TIME via an additive read-only `gov['owner_timeline']`, so a prior owner's seals survive a transfer/succession/election (hive #58). Unsigned capsule entries are declined once an owner exists; a crypto-less (stripped) build keeps honoring (it already hard-fails the `crypto-modules` doctor check) rather than silently emptying capsules (hive #61). New advisory `capsule-authz` doctor check surfaces any now-unhonored entry. cell/comb authz + a separate `cell_writers` policy land in a follow-up PR (hive #60). 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -627,12 +627,20 @@ def append_foreign_entries(entries):
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
             continue
-        if (e.get("payload", {}).get("action") not in ("join-request", "propose-election", "vote-election")
+        if (e.get("payload", {}).get("action") not in ("join-request", "propose-election", "vote-election",
+                                                       "announce")
                 and _verify_governance(e.get("payload", {})) is None):
             # An authority-bearing governance act with no valid owner signature is forged. Rejection
             # is deterministic, so every honest node drops the same ones and journals stay converged.
             # `join-request` and election proposals/votes are authority-LESS device-signed acts (already
             # verified above by _verify_entry); their weight is decided in `_governance_state`.
+            # `announce` (kind-discriminated, e.g. kind:key) is likewise authority-less and grants
+            # NOTHING — it is deliberately projection-invisible. Its whole value is to EXIST as a
+            # device-signed entry carrying `pub`, so _recipient_pubkeys can harvest an identity-bound
+            # capsule key for a device that never authored anything (direct owner admit). The security
+            # boundary is the pub↔device_id fingerprint binding at harvest, not this ingest gate; the
+            # payload of an announce is never trusted. Unknown announce kinds are accepted and ignored,
+            # so future kinds ride through this contract's nodes with no version-skew rejection window.
             rejected += 1
             continue
         existing.add((nid, seq))
@@ -3367,6 +3375,27 @@ def _identity_init(force):
     print("  Share the device_id + pubkey with peers (add them to .peers.json).")
 
 
+def _key_announce():
+    """Publish this device's signing key as a signed journal entry (`announce` kind:key), so peers
+    can harvest an identity-bound capsule key for it. Needed only by a device that never authored
+    anything (e.g. admitted directly by the owner without a join-request); a device that ever wrote
+    a signed entry is already harvestable, and the guard makes this a no-op then. Works
+    pre-admission and pre-owner by design (manual intent; ingest accepts it like a join-request)."""
+    if _ensure_device_key():
+        print(f"Device key created. device_id: {NODE_ID}")
+    if _ed25519 is None or _device_seed() is None:
+        print("No device key — this device uses its legacy hostname identity, so there is no key")
+        print("to announce. Mint one with `hv key init` (or migrate: `hv migrate-device-identity`).")
+        return
+    if not _announce_needed(merkle.read_all_entries(JOURNAL_DIR)):
+        print(f"This device's key is already harvestable (a signed entry by {NODE_ID} exists) — "
+              "nothing to announce.")
+        return
+    _emit_key_announce()
+    print(f"Announced this device's signing key ({NODE_ID}) — propagates on the next sync.")
+    print("  Owner: run `hv capsule rotate` afterwards to re-seal existing capsules to it.")
+
+
 def _ensure_device_key():
     """Auto-mint a device key on first use if this is a FRESH node, so joining/capsules work without a
     manual `hv key init`. Returns True iff it just minted one (caller can notify). Safe by construction:
@@ -3401,6 +3430,8 @@ def key_cmd(args):
     action = getattr(args, "key_action", None) or "show"
     if action == "init":
         _identity_init(getattr(args, "force", False))
+    elif action == "announce":
+        _key_announce()
     else:
         _identity_show()
 
@@ -4548,7 +4579,9 @@ def _doctor_status():
             elif missing:
                 checks.append({"name": "device-keys", "status": "warn",
                                "detail": f"{len(missing)} admitted device(s) have no synced device key yet "
-                                         f"(can't receive capsules until they sync): {', '.join(missing)}"})
+                                         f"(can't receive capsules until they sync): {', '.join(missing)} — "
+                                         f"they self-announce via `doctor --fix` within ~15 min once on "
+                                         f"contract ≥1.18, or run `hv key announce` on that device"})
             else:
                 checks.append({"name": "device-keys", "status": "ok",
                                "detail": "all admitted devices have an identity-derived capsule key"})
@@ -4772,6 +4805,24 @@ def doctor_cmd(args):
                     print(f"\n--fix: FAILED to tighten {', '.join(failed)} — these private key(s) are "
                           f"STILL group/other-readable; fix manually (`chmod 600`) NOW.")
 
+        # Self-announce this device's signing key: a device admitted directly by the owner that
+        # never authored an entry has no harvestable pub (the device-keys advisory above), so it
+        # can never receive capsules. One authority-less `announce` (kind:key) fixes that, and the
+        # 15-min doctor timer makes it unattended fleet-wide. Gated on an established owner so a
+        # standalone / pre-owner node never auto-appends governance noise (`hv key announce`
+        # covers deliberate pre-owner use).
+        try:
+            _es = merkle.read_all_entries(JOURNAL_DIR)
+            if _announce_needed(_es) and _governance_state(_es)["owner_id"]:
+                if dry:
+                    print("\n  would announce this device's signing key (one `announce` journal entry).")
+                else:
+                    _emit_key_announce()
+                    print(f"\n--fix: announced this device's signing key ({NODE_ID}) — "
+                          f"propagates on the next sync.")
+        except Exception as e:
+            print(f"\n--fix: key-announce heal error: {e}")
+
         orphans = [p for c in checks for p in (c.get("orphans") or [])]
         if not orphans:
             print("\n--fix: no orphan daemons to clear.")
@@ -4867,6 +4918,35 @@ def _append_governance_device(action_payload):
     entry = append_journal("governance", action_payload, timestamp=os.environ.get("HIVE_NOW") or None)
     rebuild_db()
     return entry
+
+
+def _announce_needed(entries):
+    """True iff this device has a key but the journal holds NO entry whose `pub` is identity-BOUND
+    to NODE_ID — i.e. _recipient_pubkeys cannot harvest this device yet. Mirrors the harvest check
+    exactly: _verify_entry grandfathers UNSIGNED entries, so a spoofed unsigned entry with
+    node_id=us and a planted pub could otherwise land in the journal — but a planted pub can never
+    fingerprint-match NODE_ID, so it can't suppress the announcement (only the real key holder can
+    mint a binding entry, and then suppression == already-harvestable, which is correct)."""
+    if _ed25519 is None or _device_seed() is None:
+        return False
+    for e in entries:
+        if e.get("node_id") == NODE_ID and e.get("pub"):
+            try:
+                pub = base64.b64decode(e["pub"])
+                if len(pub) == 32 and _device_id_for_pub(pub) == NODE_ID:
+                    return False   # already harvestable — one announce ever
+            except Exception:
+                pass
+    return True
+
+
+def _emit_key_announce():
+    """Author the kind:key announce — a device-signed governance no-op whose whole value is to
+    exist as a signed entry carrying `pub` (the capsule key source _recipient_pubkeys harvests).
+    Fixed envelope (action, kind); kind-specific fields ride under `data` so future announce
+    kinds never collide. The payload itself is advisory and NEVER trusted as a key source."""
+    return _append_governance_device({"action": "announce", "kind": "key",
+                                      "data": {"device_id": NODE_ID, "label": NODE_LABEL}})
 
 
 def owner_cmd(args):
@@ -5489,6 +5569,8 @@ def config_cmd(args):
         sub = getattr(args, "config_identity_action", None) or "show"
         if sub == "init":
             _identity_init(getattr(args, "force", False))
+        elif sub == "announce":
+            _key_announce()
         else:
             _identity_show()
     elif action == "confidence":
@@ -6152,6 +6234,7 @@ def build_parser():
 
     key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
     key_sub = key_parser.add_subparsers(dest="key_action")
+    key_sub.add_parser("announce", help="Publish this device's signing key as a signed journal entry (makes it capsule-addressable)")
     key_sub.add_parser("show", help="Show this device's device_id and pubkey")
     key_init = key_sub.add_parser("init", help="Mint a device key (fresh install)")
     key_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
@@ -6224,6 +6307,7 @@ def build_parser():
     # canonical: identity (this device's key) + confidence (owner-signed hive params)
     config_id = config_sub.add_parser("identity", help="Show or mint this device's identity key")
     config_id_sub = config_id.add_subparsers(dest="config_identity_action")
+    config_id_sub.add_parser("announce", help="Publish this device's signing key as a signed journal entry (makes it capsule-addressable)")
     config_id_sub.add_parser("show", help="Show this device's device_id and pubkey")
     config_id_init = config_id_sub.add_parser("init", help="Mint a device key (fresh install)")
     config_id_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")

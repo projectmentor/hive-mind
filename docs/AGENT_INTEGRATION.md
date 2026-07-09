@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.17`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.18`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -209,6 +209,19 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.18` — **capsule-addressability for silent devices (`announce`)**. New authority-less,
+  device-signed, kind-discriminated governance act `announce` — fixed envelope `{action, kind}`,
+  kind-specific fields under `data`; first kind: `key`. Its only purpose is to *exist* as a signed
+  entry carrying the device's pub, so a device the owner admitted directly (no join-request, zero
+  writes) becomes a capsule recipient; previously it could never receive capsules and `doctor`
+  warned forever. Ingest allowlists `announce` beside `join-request`; the projection ignores it
+  entirely (grants nothing); the trust model is unchanged — a payload-carried key is still never a
+  key source. Unknown announce *kinds* are accepted and ignored, so future kinds ride through 1.18
+  nodes with no skew window. `hv key announce` (alias `hv config identity announce`) emits it,
+  guarded to once-ever per device; `hv doctor --fix` auto-emits on an owned hive, so the 15-minute
+  doctor timer self-heals the fleet. Version skew: a pre-1.18 peer rejects an announce on ingest
+  and shows an advisory `diverged` until *it* upgrades — nothing is lost (stateless Merkle-diff
+  re-pull); upgrade always-on nodes first, the emitting device last, for a zero-noise rollout.
 - `1.17` — **cell/comb write-authorization at the projection**. `_cell_state`/`_comb_state` now apply
   the same projection authorization as capsules (1.16), but under a **separate `cell_writers` policy**
   (default `owner`; `fertile` = any admitted device) — so a hive can keep executable definitions

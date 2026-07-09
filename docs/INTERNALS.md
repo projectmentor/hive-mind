@@ -248,6 +248,19 @@ emits a self-signed `join-request`; the owner sees it in their session-start dig
 and runs `hv group admit`). Joining is non-blocking — the joiner syncs immediately; its
 writes are stored but count zero until admitted.
 
+A join-request has a quiet second job: being a *signed* entry, it carries the joiner's
+pubkey, which is the only key source capsules trust (harvested with a pub↔device_id
+fingerprint binding — a payload-carried key is never used). A device the owner admits
+*directly*, with no join-request and no writes, therefore has no harvestable key at all —
+contract 1.18's `announce` act closes that gap: an authority-less, device-signed no-op
+(kind-discriminated: `{action: announce, kind: key, data: {…}}`) whose whole value is to
+exist as a signed entry. The projection ignores it; unknown future kinds are accepted and
+ignored, so extensions ride through 1.18 nodes without a rejection window. `hv doctor
+--fix` (the 15-minute timer) emits it on any keyed device of an owned hive that has never
+authored a signed entry, so the fleet self-heals; a pre-1.18 peer rejects the entry on
+ingest and shows an advisory `diverged` until it upgrades — nothing is lost, the stateless
+Merkle-diff re-pull lands it on the peer's first post-upgrade round.
+
 ---
 
 ## Remote administration (Tailscale SSH)

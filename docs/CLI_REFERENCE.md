@@ -53,6 +53,7 @@ cd ~/projects/hive-mind
 `hv key`, kept as an alias):
 
 ```
+hv config identity announce            # publish this device's key as a signed journal entry
 hv config identity show                # this device's device_id + pubkey
 hv config identity init [--force]      # mint a device key (fresh install)
 ```
@@ -180,7 +181,10 @@ The `sync-daemon` check also flags **orphan daemons** — a stale `hv sync daemo
 left running outside systemd (for example, the unit died but an old process still
 holds the port and serves stale code, so the port answers while nothing is
 actually managed). `hv doctor --fix` kills those orphans and restarts the managed
-unit. It also **re-asserts the agent integration**: Claude Code is wired with a single
+unit. It also **announces this device's signing key** (one `announce` journal entry,
+see `hv key announce`) when the device has never authored a signed entry — so a
+directly-admitted device becomes capsule-addressable without anyone touching it.
+It also **re-asserts the agent integration**: Claude Code is wired with a single
 stable *dispatch shim* (`hive_dispatch.sh <event>`, one per lifecycle event) rather
 than a hook per behavior — what runs for each event is decided inside that script, in
 source control, so new behaviors arrive by update, not by editing `~/.claude`. If the
@@ -457,8 +461,10 @@ inflate confidence. Your `node_id` is the key's fingerprint, like
 is kept as a silent alias.
 
 ```
+hv config identity announce # publish this device's key as a signed journal entry
 hv config identity show     # show this device's device_id and public key
 hv config identity init     # mint a device key (fresh install only)
+hv key announce             # alias of the above
 hv key show                 # alias of the above
 ```
 
@@ -468,6 +474,15 @@ split its identity; use `hv migrate-device-identity` for an existing node instea
 The private seed lives at `HIVE_HOME/.device-key` — keep it secret, never commit
 or sync it. Share your `device_id` and public key with peers (they go in
 `.peers.json`).
+
+`hv key announce` publishes the key as a signed journal entry (an authority-less
+`announce` act, kind `key`). Capsules can only be sealed to a device whose public
+key peers can *harvest from an entry that device signed* — a payload-carried key is
+never trusted. A device that ever wrote anything (even its `hv join` request) is
+already harvestable, and `announce` says so and does nothing. It exists for the one
+device that never wrote: admitted directly by the owner, silent since. You rarely
+need to run it — `hv doctor --fix` (the 15-minute timer) emits it automatically on
+any device of an owned hive that needs it.
 
 ---
 

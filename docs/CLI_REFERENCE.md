@@ -733,10 +733,13 @@ decisions — search, filter by tag, sort by salience or recency, filter on stat
 like contested/forgotten/volatile, paginated), **Hive** (peers + health, with live
 sync status), and **Telemetry** (this node's sessions, tokens, and cost over time).
 It's served by the **sync daemon** itself (no extra process): the daemon
-already runs on your sync port, so the dashboard is reachable wherever sync is —
-always on `localhost`, and on your **tailnet IP** so you can open it from another
-device on your tailnet (your laptop, your phone). Nothing is exposed to the public
-internet; it rides the same private path your sync already uses.
+already runs on your sync port, so the dashboard is reachable on `localhost`
+(loopback) on the machine running it. The dashboard SPA and its `/api/*` data
+layer are **loopback-only** — an unauthenticated remote host is refused (they
+carry journal content). To view a node's dashboard from another device, run
+`hv dash` locally on that node, or reach it through a signed peer proxy. Nothing
+is exposed to the public internet; it rides the same private tailnet path your
+sync uses.
 
 `hv dash` prints the URL(s) and tries to open your browser. On a headless box (or
 Android/Termux, or WSL) where it can't, the printed URL is the point — open it
@@ -792,6 +795,7 @@ sets this up for you.
 ```
 hv sync now
 hv sync daemon
+hv sync auth [off|permissive|enforce]
 ```
 
 **Sub-commands:**
@@ -800,11 +804,30 @@ hv sync daemon
 |---|---|
 | `now` | Sync with all peers right now and exit. Good for a manual check. |
 | `daemon` | Run continuously — sync automatically every 5 minutes. This is what the background service runs. |
+| `auth [off\|permissive\|enforce]` | Show or set this node's **read-authentication** enforcement mode. With no argument, prints the current mode. |
+
+**Read authentication (`hv sync auth`).** Since sync protocol version 2, a
+**remote** peer that reads your journal (`/sync/hello`, `/sync/chunk`) must sign
+the request with its device key, and be an admitted device. Local access on
+`127.0.0.1` (your `hv` CLI and dashboard) stays unauthenticated. `hv sync auth`
+controls how strictly your node enforces this:
+
+| Mode | Behavior |
+|---|---|
+| `off` | Legacy — all reads open, no signing required. |
+| `permissive` (default) | Clients sign; your daemon verifies and logs a failure but still serves. Safe while a mixed-version fleet upgrades. |
+| `enforce` | Reject an unauthenticated or invalid remote read with `401`. |
+
+**Rolling it out:** update every node (each reaches protocol 2 in `permissive`
+automatically) → confirm all peers report protocol 2
+(`curl -s http://<peer>:9876/hive/info | jq .protocol_version`) → then
+`hv sync auth enforce` on each node. An offline node keeps syncing under
+`permissive` when it returns, so there's no rush. See `docs/SYNC_API.md` for the
+`Hive-Auth-*` request envelope and the endpoint auth classification.
 
 **`.peers.json` format:**
 ```json
 {
-  "bind": "0.0.0.0",
   "port": 9876,
   "peers": [
     {
@@ -817,7 +840,12 @@ hv sync daemon
 
 - `peers[].url` — your peer's address. Use the WSL Tailscale IP (run `tailscale ip` on the peer to get it).
 - `peers[].node_id` — a label for logs. Optional but helpful.
-- `bind` and `port` — what address and port to listen on. Defaults are fine for most setups.
+- `port` — what port to listen on. The default is fine for most setups.
+- `bind` — optional; what address to listen on. **Omit it** and the daemon binds
+  your own Tailscale IP (`100.64.0.0/10`), else `127.0.0.1` — never `0.0.0.0`. It
+  always also binds loopback so the local CLI/dashboard work. Override with the
+  `HIVE_BIND` env var; a legacy `"bind": "0.0.0.0"` here is auto-upgraded to the
+  tailnet address on restart.
 
 This file is not synced to git — it's specific to each machine.
 
@@ -927,6 +955,9 @@ On the next `hive-mind install`, if a preserved identity is found it offers to *
 | `HIVE_HOME` | The folder containing `hv` | Where your data lives. Override to point `hv` at a different location. |
 | `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this device's identity. Normally a node identifies by its Ed25519 device key (see `hv key`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
 | `HIVE_NODE_LABEL` | Your machine's hostname | A human-friendly display label shown next to the `device_id` in `hv stats` and sync logs. Cosmetic; does not affect identity. |
+| `HIVE_BIND` | Auto: your Tailscale IP (`100.64.0.0/10`), else `127.0.0.1` | The address the sync daemon binds. Overrides the auto-detected default and any `bind` in `.peers.json`. Set `HIVE_BIND=0.0.0.0` as a deliberate escape hatch for unusual NAT/interface setups. The daemon always also binds loopback. |
+| `HIVE_SYNC_AUTH` | `permissive` | Read-authentication enforcement mode (`off` \| `permissive` \| `enforce`) — same as `hv sync auth`. `enforce` rejects unauthenticated/invalid remote reads with `401`; `permissive` verifies but still serves. |
+| `HIVE_SYNC_AUTH_WINDOW` | `300` | Freshness window, in seconds, for a signed read request's timestamp. A request whose `Hive-Auth-Ts` is outside `±` this window is stale (replay guard). |
 | `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
 
 ---

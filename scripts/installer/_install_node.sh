@@ -550,7 +550,9 @@ print(f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port
     # ── Bootstrap: become the owner (queen bee) ──
     ask "Your name (principal tag for your devices): "
     read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$THIS_USER}"
-    python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
+    # No 'bind' key (GHSA-242f): the daemon's resolve_bind() picks the tailnet IP (else loopback),
+    # never 0.0.0.0. Set HIVE_BIND or a .peers.json 'bind' to override.
+    python3 -c "import json,sys;json.dump({'self':sys.argv[1],'port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
     ./hv owner init >/dev/null && ok "New hive created — you are the queen bee!"
     ./hv group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
     ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
@@ -562,7 +564,8 @@ print(f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port
     fi
   else
     # ── Join: configure the chosen/pasted hive node as a peer, sync, request admission ──
-    python3 -c "import json,sys;json.dump({'self':sys.argv[1],'bind':'0.0.0.0','port':9876,'peers':[{'id':sys.argv[2].replace('.','-'),'url':'http://'+sys.argv[2]+':'+sys.argv[3]}]},open(sys.argv[4],'w'),indent=2)" "$THIS_DEVICE" "$PEER_IP" "$PEER_PORT" "$PEERS_FILE"
+    # No 'bind' key (GHSA-242f): resolve_bind() picks the tailnet IP (else loopback), never 0.0.0.0.
+    python3 -c "import json,sys;json.dump({'self':sys.argv[1],'port':9876,'peers':[{'id':sys.argv[2].replace('.','-'),'url':'http://'+sys.argv[2]+':'+sys.argv[3]}]},open(sys.argv[4],'w'),indent=2)" "$THIS_DEVICE" "$PEER_IP" "$PEER_PORT" "$PEERS_FILE"
     ok "Peer configured: $PEER_IP:$PEER_PORT"
     info "Syncing the hive (pulling its journal + owner declaration)..."
     ./hv sync now >/dev/null 2>&1 || true

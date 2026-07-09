@@ -12,6 +12,8 @@ Endpoints:
   POST /sync/ingest       -> append foreign entries (G-Set dedup), rebuild, {accepted, duplicates}
 """
 
+import base64
+import collections
 import errno
 import json
 import os
@@ -40,8 +42,28 @@ _STATIC = {
 }
 
 # Sync wire-protocol version. Advertised in /sync/hello and /hive/info so additive handshake
-# changes (e.g. later read-gating) can be negotiated without a journal-schema break.
-PROTOCOL_VERSION = 1
+# changes can be negotiated without a journal-schema break. Bumped to 2 with read-authentication
+# (GHSA-242f): a peer reporting >= 2 understands the Hive-Auth-* signed-request envelope, which
+# gates the enforce-flip during a phased rollout.
+PROTOCOL_VERSION = 2
+
+# The address:port the daemon actually bound, filled in by make_server() so the handler can
+# advertise a reachable endpoint to peers in /sync/hello and /hive/info.
+_ADVERTISED = {"addr": None}
+
+# ── read-auth endpoint classification (GHSA-242f) ────────────────────────────────────────────────
+# open-discovery : reachable unauthenticated — no journal/corpus content; a joiner/health check needs
+#                  them BEFORE admission (hive id, owner id, genesis, node id, root hash, verdict).
+# remote-auth    : a remote reader must present a valid signed envelope (honors permissive→enforce).
+# loopback-only  : local operator (dashboard/hv) OR a valid signed peer proxy; remote-unsigned = 403
+#                  even in permissive (this is corpus/telemetry/dashboard data — the disclosure).
+_OPEN_DISCOVERY = frozenset({"/hive/info", "/sync/merkle-root", "/api/verify"})
+_REMOTE_AUTH = frozenset({"/sync/hello", "/sync/chunk"})
+_LOOPBACK_ONLY = frozenset({
+    "/api/overview", "/api/search", "/api/tags", "/api/related", "/api/audit",
+    "/api/status", "/api/telemetry", "/api/peers",
+    "/", "/index.html", "/dashboard", "/dashboard/", "/logo.svg", "/favicon.svg",
+})
 
 # Serialize journal-mutating ingests so an inbound POST and the periodic
 # outbound sync (M5) don't rebuild SQLite concurrently.
@@ -116,6 +138,86 @@ def _api_status():
             "doctor": _run_hv_text(["doctor"], 30)}
 
 
+# ── read-authentication (GHSA-242f) ──────────────────────────────────────────────────────────────
+# A bounded, per-process nonce cache gives replay protection within the freshness window. Growth is
+# capped by the rate limiter × window; on overflow we drop expired entries, then clear (which only
+# re-opens a <=window replay chance for already-captured requests — self-healing). A daemon restart
+# also clears it; the timestamp window bounds the risk either way.
+_nonce_lock = threading.Lock()
+_nonce_cache = {}                 # nonce_hex -> expiry_monotonic
+_NONCE_CACHE_MAX = 100_000
+
+# Permissive-mode observability: count would-be-blocked remote reads so an operator can see there is
+# pre-enforcement traffic before flipping to enforce.
+_auth_flag_lock = threading.Lock()
+_auth_flags = collections.Counter()
+
+
+def _nonce_seen(nonce, ttl):
+    """Record `nonce`; return True iff it was already recorded within its TTL (a replay)."""
+    now = time.monotonic()
+    with _nonce_lock:
+        exp = _nonce_cache.get(nonce)
+        if exp is not None and exp > now:
+            return True
+        if len(_nonce_cache) > _NONCE_CACHE_MAX:
+            for k in [k for k, e in _nonce_cache.items() if e <= now]:
+                _nonce_cache.pop(k, None)
+            if len(_nonce_cache) > _NONCE_CACHE_MAX:
+                _nonce_cache.clear()
+        _nonce_cache[nonce] = now + ttl
+        return False
+
+
+def _auth_flag(reason):
+    with _auth_flag_lock:
+        _auth_flags[reason] += 1
+        n = _auth_flags[reason]
+    if n <= 3 or n % 100 == 0:   # don't spam the journal
+        print(f"sync-auth[permissive]: served a remote read that would be blocked under enforce "
+              f"({reason}); count={n}. Flip to enforce once all peers report protocol "
+              f"{PROTOCOL_VERSION}.", file=sys.stderr)
+
+
+def _verify_sync_request(headers, method, path, query, body_bytes, gov):
+    """Return (ok, reason, device_id). ok iff the Hive-Auth-* envelope is a valid Ed25519 signature,
+    by an ADMITTED device, over THIS exact request, with a fresh (non-replayed) timestamp+nonce.
+    Reuses hv's device-key identity. Pre-owner hives (no owner yet) accept any valid signature so the
+    genesis/owner declaration can still propagate during bootstrap (deeper bootstrap hardening is a
+    deferred follow-up)."""
+    if hv._ed25519 is None:
+        return (False, "no-verifier", None)
+    alg = headers.get("Hive-Auth-Alg")
+    device_id = headers.get("Hive-Auth-Device")
+    pub_b64 = headers.get("Hive-Auth-Pub")
+    ts_raw = headers.get("Hive-Auth-Ts")
+    nonce = headers.get("Hive-Auth-Nonce")
+    sig_b64 = headers.get("Hive-Auth-Sig")
+    if not all((alg, device_id, pub_b64, ts_raw, nonce, sig_b64)):
+        return (False, "missing-auth-headers", None)
+    if alg != sync_common.HIVE_AUTH_ALG:
+        return (False, "bad-alg", None)
+    try:
+        pub = base64.b64decode(pub_b64)
+        sig = base64.b64decode(sig_b64)
+        ts = int(ts_raw)
+    except Exception:
+        return (False, "malformed-auth", None)
+    if len(pub) != 32 or hv._device_id_for_pub(pub) != device_id:
+        return (False, "pub-fingerprint-mismatch", device_id)
+    if abs(int(time.time()) - ts) > sync_common.SYNC_AUTH_WINDOW:
+        return (False, "stale-timestamp", device_id)
+    msg = sync_common.sync_signing_bytes(method, path, query, body_bytes or b"", ts, nonce)
+    if not hv._ed25519.verify(msg, sig, pub):
+        return (False, "bad-signature", device_id)
+    if _nonce_seen(nonce, sync_common.SYNC_AUTH_WINDOW * 2):
+        return (False, "replayed-nonce", device_id)
+    if gov.get("owner_id"):
+        if device_id not in gov.get("admitted", set()) or device_id in gov.get("purged", set()):
+            return (False, "not-admitted", device_id)
+    return (True, "ok", device_id)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hive-sync/2.0"
     timeout = SOCKET_TIMEOUT             # honored by socketserver setup() → socket read timeout
@@ -173,15 +275,69 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def _is_loopback(self):
+        """True iff the request arrived on the loopback interface (local operator / dashboard / hv).
+        Sound as a trust signal ONLY because the daemon no longer binds 0.0.0.0 — a remote peer's
+        source address is its tailnet IP, never 127.x/::1."""
+        ip = self.client_address[0] if self.client_address else ""
+        return ip in ("127.0.0.1", "::1") or ip.startswith("127.")
+
+    def _gov(self):
+        return hv._governance_state(_entries())
+
+    def _authorized(self, u, body=b""):
+        """Gate a REMOTE-AUTH read (/sync/hello, /sync/chunk, /sync/ingest). Loopback is always
+        allowed. Otherwise honor the node's sync_auth mode: off → allow; permissive → allow but flag;
+        enforce → require a valid signed envelope from an admitted device (else 401). Returns False
+        (and sends the response) when it blocks."""
+        if self._is_loopback():
+            return True
+        mode = sync_common.sync_auth_mode()
+        if mode == "off":
+            return True
+        ok, reason, _dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
+        if ok:
+            return True
+        if mode == "permissive":
+            _auth_flag(reason)
+            return True
+        self._send(401, {"error": "authentication required", "detail": reason})
+        return False
+
+    def _local_or_signed(self, u, body=b""):
+        """Gate a LOOPBACK-ONLY endpoint (dashboard SPA + /api/* corpus/telemetry data). Allow the
+        local operator, or a valid SIGNED request from an admitted peer (the per-node /api proxy).
+        A remote-unsigned request is 403 even in permissive mode — this data is never for anonymous
+        remotes, which is the disclosure the advisory flags."""
+        if self._is_loopback():
+            return True
+        if sync_common.sync_auth_mode() == "off":
+            return True
+        ok, reason, _dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
+        if ok:
+            return True
+        self._send(403, {"error": "forbidden", "detail": reason})
+        return False
+
     def do_GET(self):
         if not self._enter():
             return
         u = urlparse(self.path)
         q = parse_qs(u.query)
         try:
+            # Read-auth gate (GHSA-242f): classify the path once. open-discovery falls through;
+            # remote-auth and loopback-only are enforced here (the /api/* proxy paths are in
+            # loopback-only, so they're gated here too, then the outbound proxy re-signs below).
+            if u.path in _REMOTE_AUTH:
+                if not self._authorized(u):
+                    return
+            elif u.path in _LOOPBACK_ONLY:
+                if not self._local_or_signed(u):
+                    return
             # Per-node proxy: these read endpoints can be served for a SPECIFIC node — self = local,
             # a peer = proxied over the tailnet. hv resolves the address from the admitted-peer probe
             # (never from the client), so the proxy can't be aimed at an arbitrary host (no SSRF).
+            # This serves /api/* data, so gate it loopback-only-or-signed like the local /api routes.
             node = q.get("node", [None])[0]
             if node and node != hv.NODE_ID and u.path in (
                     "/api/overview", "/api/search", "/api/status", "/api/telemetry"):
@@ -194,8 +350,12 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     # generous timeout: a slow mobile node computes /api/overview (merkle + governance
                     # over the whole journal in pure Python) in ~10-15s; the SPA shows a spinner meanwhile.
-                    with urllib.request.urlopen(
-                            f"http://{addr}{u.path}" + (f"?{qs}" if qs else ""), timeout=20) as rr:
+                    # Sign the proxied read with THIS node's device key so the admitted peer accepts it.
+                    fwd_qs = qs if qs else ""
+                    hdrs = sync_common.sign_sync_request("GET", u.path, fwd_qs, b"")
+                    req = urllib.request.Request(
+                        f"http://{addr}{u.path}" + (f"?{fwd_qs}" if fwd_qs else ""), headers=hdrs)
+                    with urllib.request.urlopen(req, timeout=20) as rr:
                         body = rr.read()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")
@@ -206,32 +366,36 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, {"available": False, "reachable": False, "node_id": node,
                                      "error": str(e)[:90]})
                 return
-            if u.path == "/sync/hello":
+            if u.path == "/sync/hello":            # remote-auth (gated above): per-node maxima + hashes
                 es = _entries()
                 self._send(200, {
                     "node_id": hv.NODE_ID,
                     "hive_id": hv._local_hive_id(),
                     "protocol_version": PROTOCOL_VERSION,
+                    "advertised_addr": _ADVERTISED["addr"],
                     "journal_summary": {"total": len(es), "by_node": merkle.node_max_seq(es)},
                     "chunks": merkle.node_chunk_hashes(es),
                 })
             elif u.path == "/hive/info":
-                # Discovery: minimal hive metadata + the signed genesis (for verification). NEVER
-                # the journal — so listing stays open even if reads are gated later.
+                # Open discovery: minimal hive metadata + the signed genesis (for verification) + the
+                # node_id/advertised address a joiner or probe needs BEFORE it is admitted. NEVER the
+                # journal — so listing stays open while reads are gated.
                 es = _entries()
                 gov = hv._governance_state(es)
                 self._send(200, {
+                    "node_id": hv.NODE_ID,
                     "hive_id": gov["hive_id"],
                     "owner_id": gov["owner_id"],
                     "label": hv.NODE_LABEL,
                     "node_count": len(gov["admitted"]) or len({e.get("node_id") for e in es}),
                     "protocol_version": PROTOCOL_VERSION,
+                    "advertised_addr": _ADVERTISED["addr"],
                     "genesis": hv._owner_declaration(es),
                 })
             elif u.path == "/sync/merkle-root":
-                es = _entries()
+                es = _entries()                     # open discovery: a single root hash, no content
                 self._send(200, {"root_hash": merkle.merkle_root(merkle.chunk_hashes(es))})
-            elif u.path == "/sync/chunk":
+            elif u.path == "/sync/chunk":          # remote-auth (gated above): the journal itself
                 node = q.get("node", [None])[0]
                 start = int(q.get("start", ["1"])[0])
                 end = int(q.get("end", ["0"])[0])
@@ -310,7 +474,12 @@ class Handler(BaseHTTPRequestHandler):
             if length < 0 or length > MAX_BODY_BYTES:
                 self._send(413, {"error": "request too large", "max_bytes": MAX_BODY_BYTES})
                 return
-            body = json.loads((self.rfile.read(length) if length else b"{}") or b"{}")
+            raw = self.rfile.read(length) if length else b""
+            # remote-auth: read-auth gate over the exact body bytes, so an unadmitted device can't
+            # even attempt an ingest under enforce (entries are still per-entry verified below).
+            if not self._authorized(u, body=raw):
+                return
+            body = json.loads(raw or b"{}")
             # Refuse a cross-hive push: if both sides have a hive_id and they differ, this is a
             # different hive's journal and must not merge into ours.
             local_hive, sender_hive = hv._local_hive_id(), body.get("hive_id", "")
@@ -368,10 +537,28 @@ def _persist_port(port):
         pass
 
 
+def _advertised_addr(bind, port):
+    """The host:port to advertise to peers (a reachable endpoint), or None when the bind isn't
+    peer-reachable. Loopback → None (single-node/local only). All-interfaces → the tailnet IP if
+    discoverable. A specific bind (tailnet IP) → itself."""
+    if bind in ("127.0.0.1", "::1", "localhost") or str(bind).startswith("127."):
+        return None
+    host = bind
+    if bind in ("0.0.0.0", "::", ""):
+        host = sync_common.tailscale_ip()
+    return f"{host}:{port}" if host else None
+
+
 def make_server(bind=None, port=None):
     cfg = sync_common.load_peers()
-    bind = bind if bind is not None else cfg.get("bind", "0.0.0.0")
+    # Default bind is no longer 0.0.0.0 (GHSA-242f): resolve_bind picks HIVE_BIND / explicit
+    # .peers.json bind / the tailnet IP / loopback — so the daemon never listens on all interfaces
+    # by default. Loopback-trust in the handler is sound precisely because of this.
+    bind = bind if bind is not None else sync_common.resolve_bind(cfg)
     base = port if port is not None else cfg.get("port", sync_common.PORT_DEFAULT)
+    if os.environ.get("HIVE_BIND") == "0.0.0.0":
+        print("sync daemon: WARNING bound to 0.0.0.0 (all interfaces) via HIVE_BIND — loopback-trust "
+              "is weaker here; prefer a tailnet-IP bind and 'hv sync auth enforce'.", file=sys.stderr)
     # Bind the base port, or fall back to the next few if a NON-hive service squats it — so a port
     # conflict degrades gracefully instead of failing the install. A healthy hive on the base port
     # still means "already running" (redundant launch → clean no-op).
@@ -379,6 +566,7 @@ def make_server(bind=None, port=None):
         try:
             srv = ThreadingHTTPServer((bind, p), Handler)
             sync_common.clamp_mss(srv.socket)   # accepted connections inherit the clamped MSS (Linux)
+            _ADVERTISED["addr"] = _advertised_addr(bind, p)
             if p != base:
                 print(f"sync daemon: :{base} is held by a non-hive service; using :{p}")
                 _persist_port(p)
@@ -392,16 +580,49 @@ def make_server(bind=None, port=None):
     raise OSError(f"no free port in {base}..{base + 4} for the hive sync daemon")
 
 
+def _needs_loopback_alias(bind):
+    """True iff the primary bind is a SPECIFIC non-loopback address (e.g. the tailnet IP). In that
+    case loopback is otherwise unserved — which would break the local dashboard/hv and force the
+    operator through remote auth on their own node — so we ALSO bind 127.0.0.1. Not needed when the
+    bind already covers loopback (0.0.0.0) or IS loopback."""
+    return (bind not in ("0.0.0.0", "::", "", None, "127.0.0.1", "::1", "localhost")
+            and not str(bind).startswith("127."))
+
+
+def _extra_servers(primary_bind, port):
+    """Best-effort loopback listener (same port) so LOCAL access is always trusted-unauthenticated
+    even when the daemon's primary bind is the tailnet IP. Returns a list of extra servers to run."""
+    extra = []
+    if _needs_loopback_alias(primary_bind):
+        try:
+            s = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            sync_common.clamp_mss(s.socket)
+            extra.append(s)
+        except OSError as e:
+            print(f"sync daemon: could not also bind 127.0.0.1:{port} ({e}); "
+                  f"local access must use {primary_bind}:{port}", file=sys.stderr)
+    return extra
+
+
 def serve_forever(bind=None, port=None):
-    """Run the HTTP server in the foreground (blocks)."""
+    """Run the HTTP server(s) in the foreground (blocks). Serves the primary bind plus a loopback
+    alias so local access works when the primary is a specific (tailnet) address."""
     hv.init_db()
     try:
         server, bind, port = make_server(bind, port)
     except AlreadyRunning as e:
         print(f"sync daemon: {e}; nothing to do")
         return
-    print(f"sync daemon: serving on {bind}:{port} as {hv.NODE_ID}")
-    server.serve_forever()
+    extra = _extra_servers(bind, port)
+    for s in extra:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    also = " (+127.0.0.1)" if extra else ""
+    print(f"sync daemon: serving on {bind}:{port}{also} as {hv.NODE_ID}")
+    try:
+        server.serve_forever()
+    finally:
+        for s in extra:
+            s.shutdown()
 
 
 def run_daemon(interval=300):
@@ -415,9 +636,12 @@ def run_daemon(interval=300):
     except AlreadyRunning as e:
         print(f"sync daemon: {e}; nothing to do")
         return
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    print(f"sync daemon: serving on {bind}:{port} as {hv.NODE_ID}; outbound every {interval}s")
+    extra = _extra_servers(bind, port)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    for s in extra:
+        threading.Thread(target=s.serve_forever, daemon=True).start()
+    also = " (+127.0.0.1)" if extra else ""
+    print(f"sync daemon: serving on {bind}:{port}{also} as {hv.NODE_ID}; outbound every {interval}s")
     try:
         while True:
             try:
@@ -428,6 +652,8 @@ def run_daemon(interval=300):
     except KeyboardInterrupt:
         print("\nsync daemon: shutting down")
         server.shutdown()
+        for s in extra:
+            s.shutdown()
 
 
 if __name__ == "__main__":

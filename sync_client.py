@@ -11,8 +11,10 @@ Runs a bidirectional round with each configured peer:
   4. PUSH the windows the peer lacks/differs on to its /sync/ingest.
 """
 
+import json
 import os
 import socket
+from urllib.parse import urlencode
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -70,13 +72,22 @@ def _local_entries():
 
 
 def _get(base, path, **params):
-    r = _sess().get(f"{base}{path}", params=params or None, timeout=15)
+    # Sign the request with this device's key so an enforce-mode peer accepts the read (GHSA-242f).
+    # Canonicalize the same query the server will receive; sign_sync_request returns {} pre-key-init.
+    qs = urlencode(params) if params else ""
+    headers = sync_common.sign_sync_request("GET", path, qs, b"")
+    r = _sess().get(f"{base}{path}", params=params or None, timeout=15, headers=headers or None)
     r.raise_for_status()
     return r.json()
 
 
 def _post(base, path, payload):
-    r = _sess().post(f"{base}{path}", json=payload, timeout=60)
+    # Serialize the body ourselves (not requests' json=) so the SIGNED body hash matches the exact
+    # transmitted bytes; then sign over those bytes.
+    body = json.dumps(payload).encode()
+    headers = {"Content-Type": "application/json"}
+    headers.update(sync_common.sign_sync_request("POST", path, "", body))
+    r = _sess().post(f"{base}{path}", data=body, headers=headers, timeout=60)
     r.raise_for_status()
     return r.json()
 

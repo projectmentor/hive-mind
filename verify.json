@@ -1,5 +1,5 @@
 {
-  "digest": "386ca260f5d48b2c5ae7fe4e4765faebfea16b731ce8563e9844e9eb22db38e1",
+  "digest": "b9b93b323e37a4e21498e645a5bcfb6224c1ef6a8d3fd2666692b4f10f60fa77",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -59,7 +59,7 @@
     "scripts/installer/_invite.sh": "2371c0c9c61ae4d9b82faa0ec1673bdac5f238d273b05981c1bd6ade1bb7ff6e",
     "scripts/installer/_reset.sh": "5f4d94026b73f656271f6783602eb1ba3a898a5f1a6c85b900bd035d06639207",
     "scripts/installer/_service.sh": "5ffc35a271320e0739216d3fd759fef8be096098ef32299ee1e90cd55be44055",
-    "scripts/installer/_status.sh": "da62f74c22c90993c8dcb5abaf47debf53d1336570dc47b688d72b278fc1a5dc",
+    "scripts/installer/_status.sh": "468c860c0b14040fdd94c6bfc343a37596f949776a939d833b165031913b3378",
     "scripts/installer/_uninstall.sh": "128b40308202cc44771c327abe3f92017fb485d5b60050281095ae61eb6d72e5",
     "scripts/installer/_update.sh": "7ab73c3d09743ded72130e78e16a9a6ef8f5f145cf35c7accc44bd54c3679f29",
     "scripts/installer/cleanup.sh": "f66f4929108fafa28245f5460bc14e6b6f420fc75ec810195453939c220b1f20",

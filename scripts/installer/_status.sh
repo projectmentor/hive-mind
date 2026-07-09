@@ -28,7 +28,7 @@ fi
 # /sync/hello
 HELLO=$(curl -sf http://127.0.0.1:9876/sync/hello 2>/dev/null) && {
   NODE=$(echo "$HELLO" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("node_id","?"))')
-  ENT=$(echo "$HELLO" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("journal_entries","?"))')
+  ENT=$(echo "$HELLO" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("journal_summary",{}).get("total", d.get("journal_entries","?")))')
   ok "HTTP: /sync/hello responding  (node=$NODE entries=$ENT)"
 } || warn "HTTP: daemon not responding on :9876"
 
@@ -67,13 +67,20 @@ if not peers:
     print("  No peers configured")
 else:
     for p in peers:
-        url = p["url"] + "/sync/hello"
+        # .peers.json is hand-maintained; the identifier key has never been
+        # canonical (id / node_id / label all appear in the wild). Only `url`
+        # is load-bearing for sync, so fall back through the known keys and
+        # finally the host so status never crashes on a missing 'id'.
+        name = p.get("id") or p.get("node_id") or p.get("label") \
+            or p.get("url", "").split("://", 1)[-1] or "?"
+        url = p.get("url", "") + "/sync/hello"
         try:
             r = urllib.request.urlopen(url, timeout=5)
             d = json.loads(r.read())
-            print(f"  \033[0;32m[ok]\033[0m  peer {p['id']}: {d.get('journal_entries','?')} entries")
+            entries = d.get("journal_summary", {}).get("total", d.get("journal_entries", "?"))
+            print(f"  \033[0;32m[ok]\033[0m  peer {name}: {entries} entries")
         except Exception as e:
-            print(f"  \033[1;33m[!!]\033[0m  peer {p['id']}: unreachable ({e})")
+            print(f"  \033[1;33m[!!]\033[0m  peer {name}: unreachable ({e})")
 PYEOF
 fi
 

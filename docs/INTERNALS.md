@@ -189,6 +189,21 @@ escrow passphrase is truly remediated only by rotating the owner key via success
 
 ---
 
+## Salience layers
+
+"Salience" names a three-layer pipeline, not a field. The layers are sequential, never summed:
+
+| Layer | Where | Question | Sees | Output |
+|---|---|---|---|---|
+| **L1 — agent rubric** | inside the agent/adapter, before any `hv` call (Hermes `_salience_gate`, the Claude Code skill rubric) | should I say this at all? | the situation: decision+rationale, correction, outcome, constraint, first-hand tool result → write; intermediate reasoning, restatement, pleasantry → don't | write / don't write |
+| **L2 — admission gate** | `hv` core, `_is_admissible`, opt-in via `remember --gate` | is this even a statement? | the content string only | admit / reject |
+| **L3 — importance** | rebuild-time projection over the journal (planned) | did it turn out to matter? | the asserted value, `link` in-degree from *other* identities, tags, timestamps | float in [0, 1] |
+
+L1 and L2 decide what **enters** the journal; L3 exists only for what got in. L2 is deliberately
+content-neutral and stateless: it may never look at topic, meaning or importance, and it is never
+learned — a learned classifier at the write boundary would reintroduce a capturable authority.
+`_is_salient` remains as a back-compat alias for `_is_admissible`.
+
 ## Merkle sync
 
 The sync protocol uses a Merkle tree over journal chunks (100 entries per chunk)

@@ -597,7 +597,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--tags` | Comma-separated labels to help you find it later, e.g. `--tags infrastructure,todo`. No spaces. |
 | `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
 | `--importance` | A numeric hint for how significant this fact is. Recorded for future use but not currently applied to search ranking. |
-| `--gate` | Filter this write through the **salience gate** — a quality check that silently drops low-value entries (too short, no meaningful content, likely noise). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
+| `--gate` | Filter this write through the **admission gate** (salience layer 2) — a content-neutral structural check that silently drops writes that are not knowledge-shaped (trivially short, a bare question, a greeting). It never judges topic or importance; that judgment stays with the agent (layer 1). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
 | `--resolves ID` | Mark this write as the correction of an earlier fact. It records a **durable link** (the resolved fact's `(node_id, seq)` journal identity, stable across rebuilds and nodes) and **soft-retracts** fact `ID` (registers negative evidence so it stops surfacing as canonical), keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract ID --owner`. The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves #N`, `supersedes #N`) but never reconciled it — but a prose `#N` is a **local id** that drifts across rebuilds and nodes, so treat the flagged target id as best-effort and reconcile with `--resolves` (which never drifts). |
 
 **What you get back:**
@@ -632,7 +632,7 @@ source — self-repetition does nothing.
     --tags ops \
     --importance 0.9
 
-# With salience gate — low-quality entries are silently dropped
+# With the admission gate — non-statements are silently dropped
 ./hv remember "daemon binds on 9876" \
     --tags infrastructure \
     --source "hermes:primary/claude-sonnet/abc12345" \

@@ -156,7 +156,8 @@ Your adapter **must**:
 - **Be best-effort.** Never block, never error, never slow a session. Wrap everything; the hook
   process must `exit 0` even on failure. A missing/broken `hv` must be a no-op, not a crash.
 - **Hint, never act.** Nudges and audits only *prompt*. You never auto-write and never
-  auto-delete. **You remain the salience judge**; erasing/forgetting is the **owner's** decision.
+  auto-delete. **You remain the salience judge** (salience layer 1 — the agent rubric; `--gate` is
+  the hive's content-neutral layer 2); erasing/forgetting is the **owner's** decision.
 - **Install once, persist.** Wire your adapter a single time and keep it. Do **not** regenerate
   the live hook every session — re-wire only when §0 detects a `Contract-Version` MAJOR bump. (Stability +
   safety: a per-turn hook that must never break the session cannot be a fresh guess each boot.)

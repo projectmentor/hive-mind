@@ -11,7 +11,7 @@ WRITES (on_memory_write)
   - Epistemic status tag: writer records speculation|observation|confirmed,
     NOT a self-declared trust number (confidence stays a derived projection).
   - Novelty gate: suppress re-ingestion of content recalled from hive this
-    session (anti-echo at the write boundary, Salience Layer 3).
+    session (anti-echo at the write boundary; part of salience L1, the agent-side rubric).
   - Skip: removes (append-only), non-primary contexts (cron/subagent noise).
 
 READS (prefetch + system_prompt_block + hive_search tool)
@@ -340,7 +340,7 @@ class HiveMindMemoryProvider(MemoryProvider):
 
         self._source_id = _build_source_id(self._agent_identity, session_id, self._context_class)
 
-        # Track content recalled from hive this session (anti-re-ingest gate, Salience Layer 3)
+        # Track content recalled from hive this session (anti-re-ingest gate; salience L1, agent-side)
         self._recall_set: Set[str] = set()
 
         # Track content written this session (anti-self-amplification on read side)
@@ -608,11 +608,13 @@ class HiveMindMemoryProvider(MemoryProvider):
         - Source identity: hermes:<context>/<agent>/<session> for Phase B2/B3 weighting
         - Epistemic status tag: speculation|observation (not a self-declared trust score)
 
-        DEFERRED (Salience Layers 2-5 from async-inventing-shore.md):
-        - Structural auto-capture: classify by form (decision/correction/outcome/constraint)
-          not topic — only write high-reuse shapes. Stub: _salience_gate() below.
-        - Surprise + consequence weighting
-        - Provisional tier + earn-your-keep promotion
+        SALIENCE LAYERS (hv core vocabulary; see the L2 header above `_is_admissible` in `hv`):
+        - L1  agent rubric — THIS adapter's job: `_salience_gate()` below (stub, passes all) +
+              the novelty gate. Judges the structure of the SITUATION, never topic.
+        - L2  `hv remember --gate` — the hive's content-neutral structural gate on the TEXT.
+        - L3  importance — a learned projection over the journal (planned; earned from links by
+              other identities, never self-asserted). Surprise/consequence weighting and
+              earn-your-keep promotion live HERE, not in the adapter.
         MVP stays: mirror every explicit memory() call + novelty gate.
         """
         if self._agent_context not in ("primary", ""):
@@ -622,7 +624,7 @@ class HiveMindMemoryProvider(MemoryProvider):
         if not self.is_available():
             return
 
-        # Novelty gate (Salience Layer 3): don't re-ingest what we recalled
+        # Novelty gate (salience L1, agent-side): don't re-ingest what we recalled
         if content in self._recall_set:
             logger.debug("hive-mind: novelty gate suppressed re-ingest of recalled content")
             return
@@ -682,20 +684,23 @@ class HiveMindMemoryProvider(MemoryProvider):
             self._written_this_session = set()
 
     def _salience_gate(self, content: str, metadata: Optional[Dict[str, Any]]) -> bool:
-        """Structural salience filter — stub for Salience Layers 2-5.
+        """Salience L1 — the agent rubric: "should I say this at all?"
 
-        STUB — always returns True (pass) until implemented.
+        STUB — always returns True (pass). Explicit memory() calls are already intentional.
 
-        When implemented (S-A phase per async-inventing-shore.md), this will:
-        - Return True for high-reuse structural forms: decisions+rationale,
-          corrections (esp. owner corrections), outcomes/results, constraints/
-          preferences/commitments, new entities/relationships, first-hand tool results.
-        - Return False for: intermediate reasoning, restatements of known facts,
-          speculation/opinion, pleasantries, anything already in the corpus.
-        - Classification is by STRUCTURE, never by content/topic (content-neutral).
+        The rubric, when implemented, judges the structure of the SITUATION (never the topic):
+        - PASS high-reuse structural forms: decisions+rationale, corrections (esp. owner
+          corrections), outcomes/results, constraints/preferences/commitments, new
+          entities/relationships, first-hand tool results.
+        - REJECT: intermediate reasoning, restatements of known facts, speculation/opinion,
+          pleasantries, anything already in the corpus (the novelty gate handles the last).
 
-        Do NOT implement a learned importance classifier here — that reintroduces
-        the capturable authority the confidence model is designed to prevent.
+        L1 is owned by the agent author and runs before any `hv` call. L2 (`hv remember --gate`,
+        `_is_admissible`) is the hive's content-neutral check on the TEXT and is shared by every
+        agent. L3 (importance) is a projection over the journal and is not the adapter's concern.
+
+        Do NOT implement a learned importance classifier here — that reintroduces the
+        capturable authority the confidence model is designed to prevent.
         """
         return True  # MVP: pass everything (explicit memory() calls are already intentional)
 

@@ -73,6 +73,19 @@ at once). Concretely:
   authority (a hive can keep cells owner-only while running capsules fertile). `hv wire --add` refuses
   an unauthorized write and the projection declines a non-owner-signed cell/comb entry; `hv doctor`
   (`cell-authz`) surfaces any it declines.
+- **Erasing knowledge with a forged relationship (contract 1.19 `link`).** A `supersedes` or
+  `resolves` link is the new denial-of-knowledge surface: honoured blindly, a compromised admitted
+  device could retire any decision or soft-retract any fact by appending one entry. Links are
+  therefore **evidence, not commands**: a link COMMANDS (sets `superseded_by`, writes `facts.resolves`)
+  only if its payload carries an owner signature valid for the owner AS OF that journal position — the
+  same `_is_authorized_writer` proof capsules and cells require; a device key is never the owner key —
+  or its verified signer is the target's author (self-correction). From any other admitted device it is
+  downgraded to weigh-only: it still moves the target's confidence like a `retract` would, so a real
+  correction from a peer is not silenced, but it cannot hide or replace. There is deliberately no
+  `link_writers` knob (a fertile hive needs every agent to link). Unknown link kinds project to
+  nothing. `hv doctor` (`link-authz`) lists every downgraded link; the owner ratifies by re-issuing it
+  owner-signed. Grounding: a `supports`/`contradicts` link whose `channel` is `introspect` weighs
+  `introspect_support_weight` (default 0), so no agent can talk a claim up or down by reasoning alone.
 - **Forged clock to trip succession early.** A quorum election's dead-man timer is anchored on the
   proposal's `basis_ts`. A proposal whose `basis_ts` leads its OWN entry timestamp by more than a
   small skew allowance is rejected — a deterministic, entry-time-only check (no wall-clock), so the

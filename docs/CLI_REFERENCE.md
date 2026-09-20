@@ -58,13 +58,21 @@ hv config identity show                # this device's device_id + pubkey
 hv config identity init [--force]      # mint a device key (fresh install)
 ```
 
-`hv config confidence set` tunes the two owner-signed, journaled knobs (identical on every
+`hv config confidence set` tunes the owner-signed, journaled knobs (identical on every
 device, which is what keeps confidence converging):
 
 ```
-hv config confidence set same_device_lambda 0.5   # weight of EACH extra agent on one device (default 0.5)
-hv config confidence set cap_self 0.70            # ceiling when all corroboration is one principal (default 0.70)
+hv config confidence set same_device_lambda 0.5          # weight of EACH extra agent on one device (default 0.5)
+hv config confidence set cap_self 0.70                   # ceiling when all corroboration is one principal (default 0.70)
+hv config confidence set introspect_support_weight 0.0   # 1.19: weight of a supports/contradicts LINK whose channel
+                                                         # is `introspect` (default 0 — reasoning never moves confidence)
 ```
+
+> **Links (1.19).** The journal has a generic `link` entry type (`supports`, `contradicts`,
+> `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`; unknown kinds are ignored). No
+> `hv` verb emits one yet — `--supersedes`, `--resolves` and `entity link` keep writing their
+> legacy fields until the whole fleet is on 1.19. `hv doctor` reports downgraded
+> `supersedes`/`resolves` links under `link-authz`. See `docs/INTERNALS.md` → *Links*.
 
 `hv config quorum set` tunes the owner-signed quorum-election knobs (the dead-owner recovery
 path; see `hv owner`). All default to elections **off**:

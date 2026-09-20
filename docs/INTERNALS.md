@@ -279,6 +279,41 @@ paths are never emitted together for one act).
 
 ---
 
+## Importance and utility (1.19 PR6)
+
+Two learned, projection-written columns beside `confidence` (design §3, §7.1–7.3). Both are pure
+over the journal + governance, written only in `rebuild_db` (and inline after `remember` /
+`decide`), stored **undecayed**, and decayed at query time. `access_count` / `last_accessed` are
+never read — node-local state never enters a projection.
+
+```
+squash(x)      = 1 − 2^(−x)                                   # 0 at 0, 0.5 at one unit, → 1
+importance     = clamp( prior + w_links × squash(A) + w_volatile × volatile , 0, 1 )
+    prior      = min(asserted --importance, importance_self_cap)      # facts; 0 for an idea
+    A          = governed Σ weight of inbound links from OTHER principals   (_link_attention)
+utility        = squash( governed Σ  w_signer × (0.25 + 0.75 × max(0, outcome_score(decision))) )
+                 over `informed` links whose from_ref is a decision            (_utility_evidence)
+```
+
+- **Attention is attention:** every inbound `link` kind counts toward `A`, but only when the link's
+  signer is a *different* principal from the target entry's author (`_same_principal`), so nobody can
+  raise their own importance; one identity's repeated links of one kind count once; kinds sum. The sum
+  goes through `_governed_side` — the same admission gate and same-device discount as confidence.
+- **Utility** credits "was used" (the 0.25 prior) before "worked out" is known; the decision's **base**
+  outcome score (`_decision_evidence` → `_content_confidence`, undecayed) keeps the projection
+  time-invariant; a negative outcome floors at the prior. A corroborated fact aggregates over all its
+  entries (`_salience_rows`).
+- **Query-time decay** (`_effective_salience`): the part above a floor decays from `last_link_at` (the
+  most recent contributing link; NULL = nothing to decay). Importance uses floor
+  `min(base, importance_self_cap)`, so stale links settle a fact back to what its author could claim
+  alone — never below an unlinked peer; utility uses floor 0.
+- **Per-class half-lives** (`_halflife(gov, cls)`): `halflife_fact` 180 d (= the old `HALFLIFE_DAYS`),
+  `halflife_idea` 90 d, `halflife_volatile` 14 d (a fact tagged `volatile`). They govern confidence,
+  importance and utility decay alike; decisions have none — outcome evidence decays under `fact`.
+- **Knobs** (all journaled `set-config`, identical on every node): `importance_self_cap` 0.3, `w_links`
+  0.6, `w_volatile` 0.1 and the three half-lives. Search: `hv search --sort importance|utility`;
+  `api_search(sort=…)` likewise (`salience` is a legacy alias of `confidence`).
+
 ## Stable short ids (1.19 PR3b)
 
 Local ids are SQLite rowids: correct as store.db's internal keys and join columns, wrong as *names*
@@ -361,7 +396,7 @@ before any NORMAL → CAUTION → RESTRICTED state machine is considered.
 |---|---|---|---|---|
 | **L1 — agent rubric** | inside the agent/adapter, before any `hv` call (Hermes `_salience_gate`, the Claude Code skill rubric) | should I say this at all? | the situation: decision+rationale, correction, outcome, constraint, first-hand tool result → write; intermediate reasoning, restatement, pleasantry → don't | write / don't write |
 | **L2 — admission gate** | `hv` core, `_is_admissible`, opt-in via `remember --gate` | is this even a statement? | the content string only | admit / reject |
-| **L3 — importance** | rebuild-time projection over the journal (planned) | did it turn out to matter? | the asserted value, `link` in-degree from *other* identities, tags, timestamps | float in [0, 1] |
+| **L3 — importance** | rebuild-time projection over the journal (`_recompute_importance`, 1.19 PR6) | did it turn out to matter? | the asserted value (capped), `link` in-degree from *other* identities, the `volatile` tag, link timestamps | float in [0, 1] — see *Importance and utility* |
 
 L1 and L2 decide what **enters** the journal; L3 exists only for what got in. L2 is deliberately
 content-neutral and stateless: it may never look at topic, meaning or importance, and it is never
@@ -531,6 +566,7 @@ Key tables in `store.db`:
 | `links` | 1.19 generic edge table projected from `link` entries: `kind, from_kind, from_id, to_kind, to_id, signer, authority, channel, created_at` |
 | `ideas` | 1.20 hypotheses: `content, tags, source_agent, created_at, confidence, contested, last_evidence_at, utility` — one row per `idea` entry, confidence earned from links only |
 | `journal_index` | Index of ingested journal entries by `(node_id, seq)` → `(kind, local_id, sid)`; `sid` (1.19 PR3b) is the indexed short id `h:` + `sha256("node_id:seq")[:10]` |
+| `facts.importance` / `facts.utility` / `facts.last_link_at` | 1.19 PR6: projection-written salience (L3) and utility; `ideas` carry the same three |
 | `node_chunk_hashes` | Merkle chunk hashes per node, used by sync |
 
 ### WAL mode

@@ -409,7 +409,9 @@ def init_db():
         confidence REAL DEFAULT 0.0,
         contested INTEGER DEFAULT 0,
         last_evidence_at TIMESTAMP,
-        utility REAL DEFAULT 0.0
+        utility REAL DEFAULT 0.0,
+        importance REAL DEFAULT 0.0,   -- 1.19 PR6: projection-written (no asserted prior for an idea)
+        last_link_at TIMESTAMP         -- 1.19 PR6: most recent other-identity inbound link (query-time decay)
     );
     CREATE INDEX IF NOT EXISTS idx_ideas_created ON ideas(created_at);
     """)
@@ -435,6 +437,15 @@ def init_db():
         conn.execute("ALTER TABLE decisions ADD COLUMN outcome_score REAL DEFAULT 0.0")
     if "last_outcome_at" not in dcols:          # 1.19 PR4: most-recent sense-channel outcome (drives decay)
         conn.execute("ALTER TABLE decisions ADD COLUMN last_outcome_at TIMESTAMP")
+    if "utility" not in fcols:
+        conn.execute("ALTER TABLE facts ADD COLUMN utility REAL DEFAULT 0.0")          # 1.19 PR6
+    if "last_link_at" not in fcols:
+        conn.execute("ALTER TABLE facts ADD COLUMN last_link_at TIMESTAMP")            # 1.19 PR6
+    icols = {r[1] for r in conn.execute("PRAGMA table_info(ideas)")}
+    if icols and "importance" not in icols:
+        conn.execute("ALTER TABLE ideas ADD COLUMN importance REAL DEFAULT 0.0")       # 1.19 PR6
+    if icols and "last_link_at" not in icols:
+        conn.execute("ALTER TABLE ideas ADD COLUMN last_link_at TIMESTAMP")            # 1.19 PR6
     jcols = {r[1] for r in conn.execute("PRAGMA table_info(journal_index)")}
     if "sid" not in jcols:
         conn.execute("ALTER TABLE journal_index ADD COLUMN sid TEXT")
@@ -888,7 +899,46 @@ def _confidence_for(net):
     return mag if net > 0 else -mag
 
 
-HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence
+HALFLIFE_DAYS = 180.0     # Phase C: confidence half-life when not refreshed by new evidence (= `halflife_fact` default)
+# 1.19 PR6 (design §7): per-CLASS half-lives (governed knobs; HALFLIFE_DAYS stays the `fact` default) and
+# the salience-L3 / utility weights. All journaled `set-config` knobs — identical on every node.
+HALFLIFE_IDEA_DAYS = 90.0          # `halflife_idea`: a hypothesis nobody tests fades faster than an observation
+HALFLIFE_VOLATILE_DAYS = 14.0      # `halflife_volatile`: a `volatile`-tagged fact (transient status)
+CONF_IMPORTANCE_SELF_CAP = 0.3     # `importance_self_cap`: the most a writer's own `--importance` can claim
+CONF_W_LINKS = 0.6                 # `w_links`: weight of squashed other-identity link in-degree in importance
+CONF_W_VOLATILE = 0.1              # `w_volatile`: a volatile fact matters a little more while it is fresh
+_HALFLIFE_KNOBS = {"fact": ("halflife_fact", HALFLIFE_DAYS), "idea": ("halflife_idea", HALFLIFE_IDEA_DAYS),
+                   "volatile": ("halflife_volatile", HALFLIFE_VOLATILE_DAYS)}
+_PR6_KNOB_DEFAULTS = {"halflife_fact": HALFLIFE_DAYS, "halflife_idea": HALFLIFE_IDEA_DAYS,
+                      "halflife_volatile": HALFLIFE_VOLATILE_DAYS, "importance_self_cap": CONF_IMPORTANCE_SELF_CAP,
+                      "w_links": CONF_W_LINKS, "w_volatile": CONF_W_VOLATILE}
+
+
+def _halflife(gov, cls):
+    """Half-life in days for a salience class (`fact` | `idea` | `volatile`) under this hive's governed
+    config; unknown class → fact. Decisions have no half-life of their own — their outcome evidence
+    decays under `fact`."""
+    key, default = _HALFLIFE_KNOBS.get(cls, _HALFLIFE_KNOBS["fact"])
+    try:
+        v = float(((gov or _DEFAULT_GOV).get("config") or {}).get(key, default))
+    except (TypeError, ValueError):
+        v = default
+    return v if v > 0 else default
+
+
+def _fact_class(tags):
+    """`volatile` when the fact carries the volatile tag (auto- or hand-applied), else `fact`."""
+    try:
+        tl = [str(t).strip().lower() for t in (json.loads(tags) if isinstance(tags, str) else (tags or []))]
+    except Exception:
+        tl = []
+    return "volatile" if "volatile" in tl else "fact"
+
+
+def _squash(x):
+    """Monotone saturation for evidence sums: 0 at 0, 0.5 at one full-weight unit, → 1. Same family as
+    `_confidence_for` (1 − BASE^x) with BASE = ½ and no cap: `1 − 2^(−x)`."""
+    return 0.0 if x <= 0 else 1.0 - 2.0 ** (-x)
 
 
 def _projection_latest(entries, want_type, authz=None):
@@ -1093,7 +1143,8 @@ def _governance_state_uncached(entries):
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
                                         "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
                                         "trust_long_days": GOV_TRUST_LONG_DAYS, "trust_short_days": GOV_TRUST_SHORT_DAYS,
-                                        "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD}}
+                                        "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD,
+                                        **_PR6_KNOB_DEFAULTS}}
     govs = []
     for e in entries:
         if e.get("type") != "governance":
@@ -1279,7 +1330,8 @@ def _governance_state_uncached(entries):
             key, raw = p.get("key"), p.get("value")
             try:
                 if key in ("same_device_lambda", "cap_self", "dead_man_days", "introspect_support_weight",
-                           "trust_long_days", "trust_short_days", "trust_drift_threshold"):
+                           "trust_long_days", "trust_short_days", "trust_drift_threshold") \
+                        or key in _PR6_KNOB_DEFAULTS:
                     gov["config"][key] = float(raw)
                 elif key == "quorum_m":
                     gov["config"][key] = int(raw)
@@ -1461,7 +1513,8 @@ _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": s
                            "dead_man_days": GOV_DEAD_MAN_DAYS,
                            "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
                                         "trust_long_days": GOV_TRUST_LONG_DAYS, "trust_short_days": GOV_TRUST_SHORT_DAYS,
-                                        "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD}}
+                                        "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD,
+                           **_PR6_KNOB_DEFAULTS}}
 
 
 def _governed_side(weights, gov):
@@ -1784,6 +1837,199 @@ def _trust_drifting(entries, gov, now):
     return out
 
 
+def _same_principal(gov, dev_a, dev_b):
+    """True when two devices are the same device or map to the same admitted principal."""
+    if dev_a == dev_b:
+        return True
+    prins = (gov or _DEFAULT_GOV).get("principals") or {}
+    pa, pb = prins.get(dev_a), prins.get(dev_b)
+    return pa is not None and pa == pb
+
+
+def _link_attention(entries, gov=None):
+    """Salience L3 input (design §7.2): target (node_id, seq) -> {'weights': {identity: w}, 'last_ts'}
+    from every verified inbound `link` (ANY kind — attention is attention) whose signer is a DIFFERENT
+    principal from the target entry's author (self-links never raise one's own importance). One
+    identity's repeated links of one kind count once (max weight per (identity, kind)); kinds sum.
+    Admission and the same-device discount are applied by the caller via `_governed_side`.
+    `access_count` / `last_accessed` are never read — node-local state never enters a projection."""
+    gov = gov or _DEFAULT_GOV
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    per = {}
+    for e in entries:
+        if e.get("type") != "link":
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload", {}) or {}
+        to_ref, frm = p.get("to_ref"), p.get("from_ref")
+        if not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in by_ref):
+            continue
+        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in by_ref):
+            continue
+        target = by_ref[tuple(to_ref)]
+        if _same_principal(gov, e.get("node_id"), target.get("node_id")):
+            continue
+        key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        if w <= 0:
+            continue
+        slot = per.setdefault(tuple(to_ref), {"by_kind": {}, "last_ts": ""})
+        k = (key, str(p.get("kind")))
+        if w > slot["by_kind"].get(k, 0.0):
+            slot["by_kind"][k] = w
+        ts = e.get("timestamp", "")
+        if ts > slot["last_ts"]:
+            slot["last_ts"] = ts
+    out = {}
+    for ref, slot in per.items():
+        weights = {}
+        for (key, _kind), w in slot["by_kind"].items():
+            weights[key] = weights.get(key, 0.0) + w
+        out[ref] = {"weights": weights, "by_kind": slot["by_kind"], "last_ts": slot["last_ts"]}
+    return out
+
+
+def _importance(prior, weights, volatile, gov=None):
+    """§7.2: prior + w_links × squash(governed other-identity link weight) + w_volatile × volatile,
+    clamped to [0, 1]. Time-invariant (decay is query-time, `_effective_salience`)."""
+    gov = gov or _DEFAULT_GOV
+    cfg = gov.get("config") or {}
+    total, _devs = _governed_side(weights, gov) if weights else (0.0, set())
+    w_links = float(cfg.get("w_links", CONF_W_LINKS))
+    w_vol = float(cfg.get("w_volatile", CONF_W_VOLATILE))
+    return round(max(0.0, min(1.0, prior + w_links * _squash(total) + w_vol * (1.0 if volatile else 0.0))), 6)
+
+
+def _utility_evidence(entries, gov=None):
+    """§3 / §7.2: target (node_id, seq) -> {'weights': {identity: Σw}, 'last_ts'} over every verified
+    `informed` link whose from_ref is a DECISION. Weight = identity weight of the decision's signer ×
+    (0.25 + 0.75 × max(0, outcome_score)) — "was used" counts the 0.25 prior before "worked out" is
+    known; a negative outcome floors at the prior. Uses the decision's base (undecayed) outcome score
+    from `_decision_evidence`, so the projection stays time-invariant."""
+    gov = gov or _DEFAULT_GOV
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    dscore = {ref: _content_confidence(ev, gov) for ref, ev in _decision_evidence(entries, gov).items()}
+    out = {}
+    for e in entries:
+        if e.get("type") != "link":
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload", {}) or {}
+        if p.get("kind") != "informed":
+            continue
+        to_ref, frm = p.get("to_ref"), p.get("from_ref")
+        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in by_ref):
+            continue
+        if by_ref[tuple(frm)].get("type") != "decision":
+            continue
+        if not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in by_ref):
+            continue
+        key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        mult = 0.25 + 0.75 * max(0.0, dscore.get(tuple(frm), 0.0))
+        slot = out.setdefault(tuple(to_ref), {"weights": {}, "last_ts": ""})
+        slot["weights"][key] = slot["weights"].get(key, 0.0) + w * mult
+        ts = e.get("timestamp", "")
+        if ts > slot["last_ts"]:
+            slot["last_ts"] = ts
+    return out
+
+
+def _utility(weights, gov=None):
+    """squash(governed Σ informed-link weight) in [0, 1)."""
+    total, _devs = _governed_side(weights, (gov or _DEFAULT_GOV)) if weights else (0.0, set())
+    return round(_squash(total), 6)
+
+
+def _salience_rows(conn, entries, gov):
+    """(fact rows by content, idea rows by ref) with their journal entries, shared by the two
+    projections so a corroborated fact (many entries → one row) is aggregated once."""
+    facts = {}                                   # content -> {'id', 'tags', 'refs': [...], 'asserted': float}
+    for r in conn.execute("SELECT id, content, tags FROM facts"):
+        facts[r["content"]] = {"id": r["id"], "tags": r["tags"], "refs": [], "asserted": None}
+    for e in entries:
+        if e.get("type") != "fact":
+            continue
+        p = e.get("payload", {}) or {}
+        f = facts.get(p.get("content"))
+        if f is None:
+            continue
+        f["refs"].append((e.get("node_id"), e.get("seq")))
+        try:
+            a = float(p.get("importance", 0.5))
+        except (TypeError, ValueError):
+            a = 0.5
+        f["asserted"] = a if f["asserted"] is None else max(f["asserted"], a)
+    ideas = {}
+    for e in entries:
+        if e.get("type") == "idea":
+            row = _index_row(conn, [e.get("node_id"), e.get("seq")])
+            if row and row[0] == "idea":
+                ideas[(e.get("node_id"), e.get("seq"))] = row[1]
+    return facts, ideas
+
+
+def _recompute_importance(conn, entries):
+    """The ONLY writer of facts.importance / ideas.importance / *.last_link_at (1.19 PR6, salience L3).
+    The journal keeps what the agent ASSERTED (`payload.importance`); the column is what the hive
+    learned: prior = min(asserted, importance_self_cap) for a fact (0 for an idea — no asserted value),
+    raised only by link in-degree from OTHER identities. Pure over the journal + governance."""
+    gov = _governance_state(entries)
+    cap = float((gov.get("config") or {}).get("importance_self_cap", CONF_IMPORTANCE_SELF_CAP))
+    att = _link_attention(entries, gov)
+    uev = _utility_evidence(entries, gov)
+    facts, ideas = _salience_rows(conn, entries, gov)
+
+    def merged(refs):
+        """One row, possibly many entries (a corroborated fact): re-aggregate per (identity, kind) with
+        max, then sum kinds per identity — the same rule `_link_attention` applies within one entry."""
+        by_kind, last = {}, ""
+        for ref in refs:
+            a = att.get(ref)
+            if a:
+                for k, w in a["by_kind"].items():
+                    by_kind[k] = max(by_kind.get(k, 0.0), w)
+                last = max(last, a["last_ts"])
+            u = uev.get(ref)
+            if u:
+                last = max(last, u["last_ts"])
+        weights = {}
+        for (key, _kind), w in by_kind.items():
+            weights[key] = weights.get(key, 0.0) + w
+        return weights, (last or None)
+
+    for content, f in facts.items():
+        weights, last = merged(f["refs"])
+        prior = min(f["asserted"] if f["asserted"] is not None else 0.5, cap)
+        imp = _importance(prior, weights, _fact_class(f["tags"]) == "volatile", gov)
+        conn.execute("UPDATE facts SET importance = ?, last_link_at = ? WHERE id = ?", (imp, last, f["id"]))
+    for ref, iid in ideas.items():
+        weights, last = merged([ref])
+        conn.execute("UPDATE ideas SET importance = ?, last_link_at = ? WHERE id = ?",
+                     (_importance(0.0, weights, False, gov), last, iid))
+
+
+def _recompute_utility(conn, entries):
+    """The ONLY writer of facts.utility / ideas.utility (1.19 PR6, design §3): how much recorded
+    decision-making relied on this entry, weighted by how those decisions turned out."""
+    gov = _governance_state(entries)
+    uev = _utility_evidence(entries, gov)
+    facts, ideas = _salience_rows(conn, entries, gov)
+    conn.execute("UPDATE facts SET utility = 0.0")
+    conn.execute("UPDATE ideas SET utility = 0.0")
+    for content, f in facts.items():
+        weights = {}
+        for ref in f["refs"]:
+            for k, w in (uev.get(ref) or {"weights": {}})["weights"].items():
+                weights[k] = weights.get(k, 0.0) + w
+        if weights:
+            conn.execute("UPDATE facts SET utility = ? WHERE id = ?", (_utility(weights, gov), f["id"]))
+    for ref, iid in ideas.items():
+        weights = (uev.get(ref) or {"weights": {}})["weights"]
+        if weights:
+            conn.execute("UPDATE ideas SET utility = ? WHERE id = ?", (_utility(weights, gov), iid))
+
+
 def _to_dt(s):
     from datetime import datetime
     try:
@@ -1820,17 +2066,36 @@ def _election_id(new_owner_pub_b64, basis_ts):
                                               "basis_ts": basis_ts})).hexdigest()[:16]
 
 
-def _effective_confidence(base, last_evidence_at, now):
+def _effective_confidence(base, last_evidence_at, now, halflife=None):
     """Query-time confidence: base decayed by recency. Owner-forget (FORGET_FLOOR) does NOT
     decay (stays gone). Deterministic given (base, last_evidence_at, now) — `now` is injectable
-    via $HIVE_NOW so every node computes identical effective confidence for the same instant."""
+    via $HIVE_NOW so every node computes identical effective confidence for the same instant.
+    `halflife` (days; 1.19 PR6) selects the entry's CLASS half-life — `_halflife(gov, cls)`; the
+    default is the fact half-life, so pre-PR6 callers are unchanged."""
     if base == FORGET_FLOOR or not last_evidence_at:
         return base
     a, b = _to_dt(last_evidence_at), _to_dt(now)
     if a is None or b is None:
         return base
     age_days = max(0.0, (b - a).total_seconds() / 86400.0)
-    return round(base * (0.5 ** (age_days / HALFLIFE_DAYS)), 6)
+    return round(base * (0.5 ** (age_days / (halflife or HALFLIFE_DAYS))), 6)
+
+
+def _salience_floor(cls, importance, cap):
+    """What an entry keeps when its links go stale: a fact settles to what its author could claim alone
+    (min(importance, importance_self_cap)); an idea has no self-assertion, so it settles to 0."""
+    return 0.0 if cls == "idea" else min(importance, cap)
+
+
+def _effective_salience(base, last_link_at, now, halflife, floor=0.0):
+    """Query-time importance / utility (1.19 PR6): the part of `base` above `floor` decays from the most
+    recent contributing link (`last_link_at`; NULL = nothing to decay — an unlinked fact keeps its
+    capped self-assertion). Importance passes floor = min(base, importance_self_cap) so a fact whose
+    links have gone stale settles back to what its author could claim alone, never below an unlinked
+    peer; utility passes floor 0."""
+    if not last_link_at or base <= floor:
+        return round(base, 6)
+    return round(floor + _effective_confidence(base - floor, last_link_at, now, halflife), 6)
 
 
 def persist_decision(conn, entry):
@@ -2417,6 +2682,9 @@ def remember(args):
     if resolved_content is not None:
         ev2 = cev.get(resolved_content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
         _apply_content_confidence(conn, resolved_content, ev2, gov)
+    _recompute_importance(conn, all_entries)          # 1.19 PR6: the column is learned, never the raw hint
+    if outcome_link is not None:
+        _recompute_utility(conn, all_entries)         # an outcome changes what the informing facts earned
     conn.commit()
     conn.close()
 
@@ -2506,7 +2774,8 @@ def _fts_query(raw):
     return " ".join('"' + t.replace('"', '""') + '"' for t in terms)
 
 
-_FACT_COLS = "id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at"
+_FACT_COLS = ("id, content, tags, confidence, contested, last_evidence_at, source_agent, created_at, "
+              "importance, utility, last_link_at")
 
 
 def _query_facts(conn, query, limit=200):
@@ -2541,7 +2810,8 @@ def _query_ideas(conn, query, limit=200):
     effective confidence in the caller."""
     like = f"%{query}%"
     return conn.execute(
-        "SELECT id, content, tags, source_agent, created_at, confidence, contested, last_evidence_at "
+        "SELECT id, content, tags, source_agent, created_at, confidence, contested, last_evidence_at, "
+        "importance, utility, last_link_at "
         "FROM ideas WHERE content LIKE ? OR tags LIKE ? ORDER BY created_at DESC LIMIT ?",
         (like, like, limit)).fetchall()
 
@@ -2555,25 +2825,45 @@ def search(args):
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
     kind = getattr(args, "kind", None) or "all"
+    sort = getattr(args, "sort", None) or "confidence"
     rows = _query_facts(conn, args.query) if kind in ("all", "fact") else []
     dec_rows = _query_decisions(conn, args.query) if kind in ("all", "decision") else []
     idea_rows = _query_ideas(conn, args.query) if kind in ("all", "idea") else []
+    # 1.19 PR6: decay runs under the entry's CLASS half-life (governed: halflife_fact / _idea / _volatile),
+    # and every fact/idea row carries learned `importance` + `utility` (stored undecayed, decayed here).
+    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    cap = float((gov.get("config") or {}).get("importance_self_cap", CONF_IMPORTANCE_SELF_CAP))
+
+    def sal(r, cls):
+        hl = _halflife(gov, cls)
+        imp = r["importance"] if r["importance"] is not None else 0.0
+        return (_effective_salience(imp, r["last_link_at"], now, hl, floor=_salience_floor(cls, imp, cap)),
+                _effective_salience(r["utility"] or 0.0, r["last_link_at"], now, hl))
+
+    def rank(items, cls_of):
+        keyf = {"recency": lambda t: (t[1]["created_at"] or "",),
+                "importance": lambda t: (sal(t[1], cls_of(t[1]))[0], t[0], t[1]["created_at"] or ""),
+                "utility": lambda t: (sal(t[1], cls_of(t[1]))[1], t[0], t[1]["created_at"] or "")}.get(
+            sort, lambda t: (t[0], t[1]["created_at"] or ""))
+        items.sort(key=keyf, reverse=True)
+        return items
 
     # Decay + threshold + rank in Python (effective confidence depends on `now`).
-    scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
+    scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now, _halflife(gov, _fact_class(r["tags"]))), r)
+              for r in rows]
     scored = [(eff, r) for eff, r in scored if eff >= args.min_confidence]
-    scored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
-    scored = scored[:10]
+    scored = rank(scored, lambda r: _fact_class(r["tags"]))[:10]
     # 1.19 PR3: every row carries its STABLE identity `ref` (node_id:seq) beside the rebuild-unstable
     # local id; decisions also expose what they relied on (`informed_by`, refs + this node's local ids).
     # 1.20: ideas rank like facts but sit at 0.0 until they earn confidence; under `all` only earned
     # ideas surface (a raw hypothesis is not knowledge yet), `--kind idea` lists them all.
-    iscored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in idea_rows]
+    iscored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now, _halflife(gov, "idea")), r)
+               for r in idea_rows]
     if kind == "all":
         iscored = [(eff, r) for eff, r in iscored if eff > 0]
     iscored = [(eff, r) for eff, r in iscored if eff >= args.min_confidence or kind == "idea"]
-    iscored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
-    iscored = iscored[:10]
+    iscored = rank(iscored, lambda r: "idea")[:10]
+    hl_fact = _halflife(gov, "fact")
     fids = _ids_for(conn, "fact", [r["id"] for _e, r in scored])
     dids = _ids_for(conn, "decision", [r["id"] for r in dec_rows])
     iids = _ids_for(conn, "idea", [r["id"] for _e, r in iscored])
@@ -2592,23 +2882,28 @@ def search(args):
         # Stays a flat list (back-compat) with a new `kind` discriminator; decisions carry no
         # confidence, so a min_confidence>0 consumer naturally drops them.
         out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"]),
-                "sid": fsids.get(r["id"])} for eff, r in scored]
+                "sid": fsids.get(r["id"]),
+                "effective_importance": sal(r, _fact_class(r["tags"]))[0],
+                "effective_utility": sal(r, _fact_class(r["tags"]))[1]} for eff, r in scored]
         # Decisions carry `outcome_score` (stored, undecayed) + `effective_outcome_score` (evidence decayed
         # under the fact half-life at `now`); both stay absent-from-confidence, so --min-confidence
         # consumers still drop decisions. `last_outcome_at` NULL = no outcome yet.
         out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
                  "ref": drefs.get(r["id"]), "sid": dsids.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
-                 "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
+                 "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact)
                                              if r["last_outcome_at"] else None)} for r in dec_rows]
         out += [{**dict(r), "kind": "idea", "effective_confidence": eff, "ref": irefs.get(r["id"]),
-                 "sid": isids.get(r["id"])} for eff, r in iscored]
+                 "sid": isids.get(r["id"]),
+                 "effective_importance": sal(r, "idea")[0], "effective_utility": sal(r, "idea")[1]}
+                for eff, r in iscored]
         print(json.dumps(out, indent=2))
     else:
         for eff, r in scored:
             tags = json.loads(r["tags"]) if r["tags"] else []
             flag = "  ⚠ CONTESTED" if r["contested"] else ""
+            imp, util = sal(r, _fact_class(r["tags"]))
             print(f"[{fsids.get(r['id'])} · {r['id']}] {r['content']}")
-            print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  From: {r['source_agent']}{flag}")
+            print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  Imp: {imp:.2f}  Util: {util:.2f}  From: {r['source_agent']}{flag}")
             print(f"     ref: {frefs.get(r['id'])}")
             print()
         if dec_rows:
@@ -2619,7 +2914,7 @@ def search(args):
                 sup = "  ⚠ SUPERSEDED" if r["superseded_by"] else ""
                 outc = ""
                 if r["last_outcome_at"]:
-                    eff_o = _effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
+                    eff_o = _effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact)
                     outc = f"  outcome {eff_o:+.2f}"
                 print(f"  {dsids.get(r['id'])} (#{r['id']}) {r['content']}{tagstr}{sup}{outc}")
                 if r["rationale"]:
@@ -2637,7 +2932,8 @@ def search(args):
                 itags = json.loads(r["tags"]) if r["tags"] else []
                 tagstr = f"  [{', '.join(itags)}]" if itags else ""
                 flag = "  ⚠ CONTESTED" if r["contested"] else ""
-                print(f"  {isids.get(r['id'])} (i{r['id']}) {r['content']}{tagstr}  Conf: {eff:.2f}{flag}")
+                imp, util = sal(r, "idea")
+                print(f"  {isids.get(r['id'])} (i{r['id']}) {r['content']}{tagstr}  Conf: {eff:.2f}  Imp: {imp:.2f}  Util: {util:.2f}{flag}")
                 print(f"       ref: {irefs.get(r['id'])}")
             print()
 
@@ -2725,6 +3021,8 @@ def decide(args):
         by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
         for le in link_entries:
             resolve_link(conn, le, gov, by_ref)
+        _recompute_importance(conn, all_entries)      # 1.19 PR6: `informed` links are attention + utility
+        _recompute_utility(conn, all_entries)
     conn.commit()
     conn.close()
 
@@ -2780,17 +3078,37 @@ def api_overview():
 def api_search(query="", tag=None, kind="all", min_confidence=0.0,
                limit=50, offset=0, sort="salience", status="all"):
     """Facts + decisions for `query`, mirroring `hv search` but PAGINATED and sortable/filterable.
-    `sort`: salience (effective confidence, default) | recency (created). `status` (facts): all (live,
+    `sort`: confidence (effective confidence, default; `salience` is a legacy alias) | recency (created) |
+    importance | utility (1.19 PR6, learned projections decayed at query time). `status` (facts): all (live,
     >= min_confidence) | contested | forgotten (owner-forgotten, normally hidden) | volatile. Returns
     the page slice plus `*_total` so the UI can page; empty query browses everything."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
+    sort = "confidence" if sort in (None, "", "salience") else sort
+    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+    cap = float((gov.get("config") or {}).get("importance_self_cap", CONF_IMPORTANCE_SELF_CAP))
+    hl_fact = _halflife(gov, "fact")
+
+    def sal(r, cls):
+        hl = _halflife(gov, cls)
+        imp = r["importance"] if r["importance"] is not None else 0.0
+        return (round(_effective_salience(imp, r["last_link_at"], now, hl, floor=_salience_floor(cls, imp, cap)), 2),
+                round(_effective_salience(r["utility"] or 0.0, r["last_link_at"], now, hl), 2))
+
+    def order(items):
+        k = {"recency": lambda f: (f["created"], f["confidence"]),
+             "importance": lambda f: (f["importance"], f["confidence"], f["created"]),
+             "utility": lambda f: (f["utility"], f["confidence"], f["created"])}.get(
+            sort, lambda f: (f["confidence"], f["created"]))
+        items.sort(key=k, reverse=True)
+
     facts, decisions, facts_total, dec_total = [], [], 0, 0
     if kind != "decision":
         matched = []
         for r in _query_facts(conn, query or "", limit=10000):
             base = r["confidence"]
-            eff = _effective_confidence(base, r["last_evidence_at"], now)
+            cls = _fact_class(r["tags"])
+            eff = _effective_confidence(base, r["last_evidence_at"], now, _halflife(gov, cls))
             tags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in tags:
                 continue
@@ -2807,18 +3125,16 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             else:  # all live facts at/above the floor (forgotten ones stay hidden here)
                 if eff < min_confidence:
                     continue
+            imp, util = sal(r, cls)
             matched.append({"id": r["id"], "content": r["content"], "tags": tags,
                             "confidence": round(eff, 2), "contested": bool(r["contested"]),
-                            "forgotten": base <= FORGET_FLOOR,
+                            "forgotten": base <= FORGET_FLOOR, "importance": imp, "utility": util,
                             "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
         fids = _ids_for(conn, "fact", [m["id"] for m in matched])
         for m in matched:
             m["ref"] = (fids.get(m["id"]) or {}).get("ref")
             m["sid"] = (fids.get(m["id"]) or {}).get("sid")
-        if sort == "recency":
-            matched.sort(key=lambda f: (f["created"], f["confidence"]), reverse=True)
-        else:  # salience
-            matched.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
+        order(matched)
         facts_total = len(matched)
         facts = matched[offset:offset + limit]
     if kind != "fact":
@@ -2831,7 +3147,7 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
                              "tags": tags, "superseded": bool(r["superseded_by"]),
                              "created": (r["created_at"] or "")[:10],
                              "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])],
-                             "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now), 2)
+                             "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact), 2)
                                                if r["last_outcome_at"] else None),
                              "last_outcome_at": r["last_outcome_at"]})
         dids = _ids_for(conn, "decision", [m["id"] for m in dmatched])
@@ -2844,20 +3160,22 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
     if kind in ("all", "idea"):
         imatched = []
         for r in _query_ideas(conn, query or "", limit=10000):
-            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
+            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now, _halflife(gov, "idea"))
             if kind == "all" and eff <= 0:
                 continue                      # raw hypotheses surface only under kind=idea
             itags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in itags:
                 continue
+            imp, util = sal(r, "idea")
             imatched.append({"id": r["id"], "content": r["content"], "tags": itags,
                              "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                             "importance": imp, "utility": util,
                              "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
         iids = _ids_for(conn, "idea", [m["id"] for m in imatched])
         for m in imatched:
             m["ref"] = (iids.get(m["id"]) or {}).get("ref")
             m["sid"] = (iids.get(m["id"]) or {}).get("sid")
-        imatched.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
+        order(imatched)
         ideas_total = len(imatched)
         ideas = imatched[offset:offset + limit]
     conn.close()
@@ -2902,14 +3220,25 @@ def api_item(sid):
         if row is None or kind not in ("fact", "decision", "idea"):
             return {"error": f"{sid!r} is not a fact/decision/idea on this node"}
         now = os.environ.get("HIVE_NOW") or _now_iso()
+        gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+        cap = float((gov.get("config") or {}).get("importance_self_cap", CONF_IMPORTANCE_SELF_CAP))
+
+        def sal(r, cls):
+            hl = _halflife(gov, cls)
+            imp = r["importance"] if r["importance"] is not None else 0.0
+            return (round(_effective_salience(imp, r["last_link_at"], now, hl, floor=_salience_floor(cls, imp, cap)), 2),
+                    round(_effective_salience(r["utility"] or 0.0, r["last_link_at"], now, hl), 2))
         item = {}
         if kind == "fact":
             r = conn.execute(f"SELECT {_FACT_COLS} FROM facts WHERE id = ?", (row[1],)).fetchone()
             if r:
                 base = r["confidence"]
+                cls = _fact_class(r["tags"])
+                imp, util = sal(r, cls)
                 item = {"id": r["id"], "content": r["content"], "tags": json.loads(r["tags"]) if r["tags"] else [],
-                        "confidence": round(_effective_confidence(base, r["last_evidence_at"], now), 2),
+                        "confidence": round(_effective_confidence(base, r["last_evidence_at"], now, _halflife(gov, cls)), 2),
                         "contested": bool(r["contested"]), "forgotten": base <= FORGET_FLOOR,
+                        "importance": imp, "utility": util,
                         "source": r["source_agent"], "created": (r["created_at"] or "")[:10]}
         elif kind == "decision":
             r = conn.execute("SELECT id, content, rationale, tags, created_at, superseded_by, informed_by, "
@@ -2919,17 +3248,18 @@ def api_item(sid):
                         "tags": json.loads(r["tags"]) if r["tags"] else [], "superseded": bool(r["superseded_by"]),
                         "created": (r["created_at"] or "")[:10],
                         "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])],
-                        "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now), 2)
+                        "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, _halflife(gov, "fact")), 2)
                                           if r["last_outcome_at"] else None),
                         "last_outcome_at": r["last_outcome_at"]}
         else:
             r = conn.execute("SELECT id, content, tags, source_agent, created_at, confidence, contested, "
-                             "last_evidence_at FROM ideas WHERE id = ?", (row[1],)).fetchone()
+                             "last_evidence_at, importance, utility, last_link_at FROM ideas WHERE id = ?", (row[1],)).fetchone()
             if r:
+                imp, util = sal(r, "idea")
                 item = {"id": r["id"], "content": r["content"], "tags": json.loads(r["tags"]) if r["tags"] else [],
-                        "confidence": round(_effective_confidence(r["confidence"], r["last_evidence_at"], now), 2),
-                        "contested": bool(r["contested"]), "source": r["source_agent"],
-                        "created": (r["created_at"] or "")[:10]}
+                        "confidence": round(_effective_confidence(r["confidence"], r["last_evidence_at"], now, _halflife(gov, "idea")), 2),
+                        "contested": bool(r["contested"]), "importance": imp, "utility": util,
+                        "source": r["source_agent"], "created": (r["created_at"] or "")[:10]}
         canon = _ids_for(conn, kind, [row[1]]).get(row[1]) or {}
         if item:
             item["ref"], item["sid"] = canon.get("ref"), canon.get("sid")
@@ -3431,6 +3761,8 @@ def rebuild_db():
     _recompute_confidence(conn, entries)
     _recompute_decision_outcome(conn, entries)      # 1.19 PR4: decisions.outcome_score (vindication)
     _recompute_idea_confidence(conn, entries)       # 1.20 PR5: ideas.confidence (earned from links only)
+    _recompute_importance(conn, entries)            # 1.19 PR6: salience L3 — learned, never asserted
+    _recompute_utility(conn, entries)               # 1.19 PR6: what recorded decisions relied on
     conn.commit()
 
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
@@ -3662,7 +3994,7 @@ def _print_digest(cwd, cap=1200):
             return
         conn = get_conn()
         now = os.environ.get("HIVE_NOW") or _now_iso()
-        cols = "id, content, confidence, last_evidence_at, created_at"
+        cols = "id, content, confidence, last_evidence_at, created_at, tags"
         rows = None
         expr = _fts_query(key)
         if expr is not None:
@@ -3677,7 +4009,9 @@ def _print_digest(cwd, cap=1200):
             rows = conn.execute(f"SELECT {cols} FROM facts WHERE content LIKE ? LIMIT 200",
                                 (f"%{key}%",)).fetchall()
         conn.close()
-        scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
+        gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+        scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now, _halflife(gov, _fact_class(r["tags"]))), r)
+                  for r in rows]
         scored = [t for t in scored if t[0] > 0]
         scored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
         if not scored:
@@ -3702,7 +4036,8 @@ def _print_open_ideas(cfg, cap=3):
                             "FROM ideas JOIN journal_index ON journal_index.kind = 'idea' "
                             "AND journal_index.local_id = ideas.id ORDER BY created_at DESC LIMIT 50").fetchall()
         conn.close()
-        opened = [(r, _effective_confidence(r["confidence"], r["last_evidence_at"], now)) for r in rows]
+        hl = _halflife(_governance_state(merkle.read_all_entries(JOURNAL_DIR)), "idea")
+        opened = [(r, _effective_confidence(r["confidence"], r["last_evidence_at"], now, hl)) for r in rows]
         opened = [(r, eff) for r, eff in opened if eff < thr][:cap]
         if not opened:
             return
@@ -4005,7 +4340,7 @@ def _compute_audit(depth=None, session=""):
                 recheck.append((r, age_h, ttl_h))
             continue
         base = r["confidence"]
-        eff = _effective_confidence(base, r["last_evidence_at"], now)
+        eff = _effective_confidence(base, r["last_evidence_at"], now, _halflife(_governance_state(entries), "fact"))
         if base <= FORGET_FLOOR:
             forgotten_contents.add(r["content"])  # owner-forgotten: keep it out of EVERY bucket
             continue   # decisively settled, no action
@@ -6579,7 +6914,8 @@ def _config_set(key, value):
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
                 "capsule_putters": str, "cell_writers": str,
                 "introspect_support_weight": float,
-                "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float}
+                "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float,
+                **{k: float for k in _PR6_KNOB_DEFAULTS}}
     if key not in coercers:
         print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
         return
@@ -6605,6 +6941,13 @@ def _config_set(key, value):
         return
     if key == "trust_drift_threshold" and not (-1.0 <= val <= 0.0):
         print("trust_drift_threshold must be in [-1, 0] (a negative delta = reliability falling)")
+        return
+    if key.startswith("halflife_") and not (val > 0):
+        print(f"{key} must be > 0 days (defaults: fact {HALFLIFE_DAYS:g}, idea {HALFLIFE_IDEA_DAYS:g}, "
+              f"volatile {HALFLIFE_VOLATILE_DAYS:g})")
+        return
+    if key in ("importance_self_cap", "w_links", "w_volatile") and not (0.0 <= val <= 1.0):
+        print(f"{key} must be in [0, 1]")
         return
     if _append_governance({"action": "set-config", "key": key, "value": val}):
         print(f"set {key} = {val}")
@@ -7235,6 +7578,9 @@ def build_parser():
     search_parser.add_argument("--kind", choices=["all", "fact", "decision", "idea"], default="all",
                                help="What to search (default all). Under `all` an idea appears only once it has "
                                     "earned confidence > 0; `--kind idea` lists every idea")
+    search_parser.add_argument("--sort", choices=["confidence", "importance", "utility", "recency"], default="confidence",
+                               help="Rank facts/ideas by effective confidence (default), learned importance, learned "
+                                    "utility, or recency (1.19 PR6). Decisions always list newest-first")
 
     propose_parser = subparsers.add_parser("propose", help="Record an idea — a hypothesis the hive can support or contradict (1.20)")
     propose_parser.add_argument("content", help="The hypothesis, stated so it can be supported or contradicted")

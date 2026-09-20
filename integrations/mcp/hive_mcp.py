@@ -119,7 +119,8 @@ def hive_search(query: str, min_confidence: float = 0.0) -> list[dict]:
 
 
 @mcp.tool()
-def hive_remember(content: str, tags: str = "", epistemic_status: str = "observation") -> str:
+def hive_remember(content: str, tags: str = "", epistemic_status: str = "observation",
+                  outcome_of: str = "", polarity: int = 1, channel: str = "") -> str:
     """Record a durable, checkable fact to the shared corpus (source=claude-ai).
 
     SEARCH FIRST (hive_search) — only write if it's genuinely new. Write outcomes,
@@ -129,6 +130,12 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
 
     tags: comma-separated. epistemic_status (observation|confirmed|speculation) is folded
     into the tags so readers can weigh the claim.
+
+    outcome_of: when this fact is the OUTCOME of a decision you acted on, pass that decision's
+    `ref` (from hive_search, `node_id:seq`). polarity: +1 it worked out (default), -1 it did
+    not, 0 observed and neutral — ternary on purpose. channel: leave empty for an observation
+    of the world (the default, counted); pass "introspect" if this is your own reasoning rather
+    than something observed — it is recorded but never counted toward the decision's outcome.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if epistemic_status and epistemic_status not in tag_list:
@@ -136,6 +143,10 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     args = ["remember", content, "--source", "claude-ai"]
     if tag_list:
         args += ["--tags", ",".join(tag_list)]
+    if outcome_of:
+        args += ["--outcome-of", outcome_of.strip(), "--polarity", str(int(polarity))]
+    if channel:
+        args += ["--channel", channel]
     return _run_hv(args)
 
 

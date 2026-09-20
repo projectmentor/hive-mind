@@ -197,6 +197,30 @@ discount and admission apply unchanged. **Grounding rule:** a link whose
 default `0`) — reasoning never corroborates or contradicts an observation; an
 absent channel means `sense`.
 
+### Outcomes and `decisions.outcome_score` (1.19 PR4)
+
+Decisions are **confidence-free by design**: "is this the decision" is settled by supersede, not
+by corroboration. "Did it work out" is a separate, learned axis — the **outcome score**, a
+vindication signal that informs the human who might supersede and never demotes a decision on
+its own.
+
+An outcome is not a new type. It is an ordinary fact plus a `link` of kind `outcome-of` whose
+`data.polarity` is +1, 0 or −1 (ternary at the CLI/MCP; numeric in the schema so a future
+machine writer may use a float in [−1, 1]). `_decision_evidence` is a deliberate clone of
+`_content_evidence` keyed by the decision's journal identity: each `outcome-of` link is one
+identity's report, weighted `identity weight × |polarity|`, positive or negative by sign; a
+polarity of 0 records "observed, neutral" (moves `last_outcome_at`, not the score), which is
+distinct from "no outcome yet" (score 0, `last_outcome_at` NULL). `_content_confidence` scores it
+unchanged — governed pos − neg, `cap_self` when every reporter shares one principal, so a device
+cannot vindicate its own decisions. **Sense-only:** a link whose `channel` is not `sense` (absent
+= sense) is ignored, and the link's channel decides, never the fact's — an agent cannot grade its
+own decision by reflection. Stored undecayed in `decisions.outcome_score`; the read path decays
+the evidence under the fact half-life while the decision's standing never decays.
+
+Both evidence projections now retain the ordered sequence `evidence: [(ts, sign, identity), …]`
+per target. Nothing reads it yet; it is the prerequisite for a future per-fact adaptive
+half-life (design D-2).
+
 ### Phase roadmap
 
 - **Phase A** (shipped): derived corroboration confidence, multi-source
@@ -233,7 +257,7 @@ One journal type, an open vocabulary, one resolver.
 | `resolves` | fact → fact | **hard:** `facts.resolves` provenance + retract-equivalent evidence; **evidence:** evidence only |
 | `entity` | entity → fact | `entity_facts` row |
 | `informed` | decision → fact/decision | written by `hv decide --informed` (PR3); the decision's payload also carries `informed_by` as the human-legible record; utility projection lands with PR6 |
-| `outcome-of` | fact → decision | edge row (outcome_score lands with PR4) |
+| `outcome-of` | fact → decision | written by `hv remember --outcome-of`; scored into `decisions.outcome_score` (PR4) |
 
 **Links are evidence, not commands.** `_link_authority` returns `hard` only when the payload
 carries an `owner_sig` valid for the owner **as of that journal position** (the same

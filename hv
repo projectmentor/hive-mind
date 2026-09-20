@@ -413,6 +413,10 @@ def init_db():
         conn.execute("ALTER TABLE decisions ADD COLUMN tags TEXT")
     if "informed_by" not in dcols:              # 1.19 PR3: journal refs the decision relied on (JSON list)
         conn.execute("ALTER TABLE decisions ADD COLUMN informed_by TEXT")
+    if "outcome_score" not in dcols:            # 1.19 PR4: vindication axis (NOT confidence) — projection-written
+        conn.execute("ALTER TABLE decisions ADD COLUMN outcome_score REAL DEFAULT 0.0")
+    if "last_outcome_at" not in dcols:          # 1.19 PR4: most-recent sense-channel outcome (drives decay)
+        conn.execute("ALTER TABLE decisions ADD COLUMN last_outcome_at TIMESTAMP")
     conn.commit()
     # Index created here (not in the schema script above) so it works on both
     # fresh and migrated DBs — the column is guaranteed to exist by this point.
@@ -1289,8 +1293,10 @@ def _probe_hive(ip, port, timeout=3):
 
 
 def _content_evidence(entries, gov=None):
-    """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str}.
-    Facts add positive identity-evidence; `retract` entries add negative (peer) evidence or set
+    """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str,
+    'evidence': [(ts, sign, identity), ...]}. `evidence` is the ORDERED sequence of every evidence
+    event (sign +1/-1), sorted by timestamp — retained since 1.19 as the prerequisite for a future
+    per-fact adaptive half-life (design D-2); nothing reads it yet. Facts add positive identity-evidence; `retract` entries add negative (peer) evidence or set
     owner-forget (governance, decisive). last_ts = most-recent fact/retract timestamp (drives
     decay). Pure projection over the journal.
 
@@ -1309,11 +1315,12 @@ def _content_evidence(entries, gov=None):
         if content is None:
             continue
         seq_content[(e.get("node_id"), e.get("seq"))] = content
-        ev = out.setdefault(content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+        ev = out.setdefault(content, {"pos": {}, "neg": {}, "forget": False, "last_ts": "", "evidence": []})
         key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
         if w > ev["pos"].get(key, 0.0):
             ev["pos"][key] = w
         ts = e.get("timestamp", "")
+        ev["evidence"].append((ts, 1, key))
         if ts > ev["last_ts"]:
             ev["last_ts"] = ts
     for e in entries:
@@ -1340,6 +1347,7 @@ def _content_evidence(entries, gov=None):
             w = SRC_CLASS_WEIGHT.get(ctx, 1.0)
             if w > ev["neg"].get(key, 0.0):
                 ev["neg"][key] = w
+            ev["evidence"].append((e.get("timestamp", ""), -1, key))
         ts = e.get("timestamp", "")
         if ts > ev["last_ts"]:
             ev["last_ts"] = ts
@@ -1374,8 +1382,11 @@ def _content_evidence(entries, gov=None):
         if w > ev[side].get(key, 0.0):
             ev[side][key] = w
         ts = e.get("timestamp", "")
+        ev["evidence"].append((ts, 1 if side == "pos" else -1, key))
         if ts > ev["last_ts"]:
             ev["last_ts"] = ts
+    for ev in out.values():
+        ev["evidence"].sort()
     return out
 
 
@@ -1447,6 +1458,72 @@ def _recompute_confidence(conn, entries):
     gov = _governance_state(entries)
     for content, ev in _content_evidence(entries, gov).items():
         _apply_content_confidence(conn, content, ev, gov)
+
+
+def _decision_evidence(entries, gov=None):
+    """decision (node_id, seq) -> {'pos': {id: w}, 'neg': {id: w}, 'forget': False, 'last_ts': str,
+    'evidence': [(ts, sign, identity), ...]}. A deliberate clone of `_content_evidence` keyed by the
+    DECISION's journal identity instead of a content string (design §4): every `outcome-of` link is one
+    identity's report that the decision worked out (polarity > 0 → pos), did not (< 0 → neg) or was
+    observed and neutral (0 → recorded on pos with weight 0, so `last_ts` moves without the score).
+    Weight = identity weight × |polarity| (ternary at the CLI, numeric in the schema, §4.1).
+    SENSE-ONLY (§0.1): a link whose `channel` is not `sense` (absent = sense) is ignored — an agent
+    cannot grade its own decision by reflection; the LINK's channel decides, never the fact's.
+    Pure over the journal; `_content_confidence` scores it unchanged (governed pos − neg, cap_self when
+    every reporter shares one principal — a device cannot vindicate its own decisions)."""
+    gov = gov or _DEFAULT_GOV
+    known = {(e.get("node_id"), e.get("seq")) for e in entries}
+    out = {}
+    for e in entries:
+        if e.get("type") != "link":
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload", {}) or {}
+        if p.get("kind") != "outcome-of":
+            continue
+        if (p.get("channel") or "sense") != "sense":
+            continue                                   # no self-grading: only observed outcomes count
+        to_ref, frm = p.get("to_ref"), p.get("from_ref")
+        if not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in known):
+            continue
+        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in known):
+            continue
+        try:
+            pol = float((p.get("data") or {}).get("polarity", 1))
+        except (TypeError, ValueError):
+            continue
+        pol = max(-1.0, min(1.0, pol))
+        ev = out.setdefault(tuple(to_ref), {"pos": {}, "neg": {}, "forget": False, "last_ts": "", "evidence": []})
+        key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        side = "neg" if pol < 0 else "pos"
+        w = w * abs(pol)
+        if w > ev[side].get(key, 0.0) or key not in ev[side]:
+            ev[side][key] = max(w, ev[side].get(key, 0.0))
+        ts = e.get("timestamp", "")
+        ev["evidence"].append((ts, -1 if pol < 0 else (1 if pol > 0 else 0), key))
+        if ts > ev["last_ts"]:
+            ev["last_ts"] = ts
+    for ev in out.values():
+        ev["evidence"].sort()
+    return out
+
+
+def _recompute_decision_outcome(conn, entries):
+    """The ONLY writer of decisions.outcome_score / last_outcome_at (design §4). NOT confidence —
+    decisions have none, by design: "is this the decision" is settled by supersede; "did it work out"
+    is this separate, learned VINDICATION axis. Stored undecayed; the read path decays the evidence
+    under the fact half-life (`_effective_confidence`) while the decision's standing never decays.
+    A decision with no `outcome-of` links keeps 0.0 / NULL ("no outcome yet"), distinct from an
+    observed-neutral outcome (0.0 with a `last_outcome_at`)."""
+    gov = _governance_state(entries)
+    conn.execute("UPDATE decisions SET outcome_score = 0.0, last_outcome_at = NULL")
+    for ref, ev in _decision_evidence(entries, gov).items():
+        row = _index_row(conn, list(ref))
+        if row is None or row[0] != "decision":
+            continue
+        conn.execute("UPDATE decisions SET outcome_score = ?, last_outcome_at = ? WHERE id = ?",
+                     (_content_confidence(ev, gov), ev.get("last_ts") or None, row[1]))
 
 
 def _to_dt(s):
@@ -1917,6 +1994,29 @@ def remember(args):
         else:
             resolved_content = row0["content"]
 
+    # --outcome-of (1.19 PR4): this fact is an OUTCOME of a decision. Resolve the decision BEFORE any
+    # write — a wrong or missing reference aborts (no orphan fact, no dangling link). Stable refs
+    # `node_id:seq` are primary; a bare integer or `dN` is a kind-checked local decision id.
+    outcome_ref = None
+    channel = getattr(args, "channel", None) or None
+    if getattr(args, "outcome_of", None):
+        tok = str(args.outcome_of).strip()
+        if tok.isdigit():
+            tok = "d" + tok                                   # an outcome can only be OF a decision
+        conn0 = get_conn()
+        try:
+            okind, outcome_ref = _parse_ref_arg(conn0, tok, default_kind="decision")
+        except ValueError as e:
+            conn0.close()
+            print(f"--outcome-of: {e}", file=sys.stderr)
+            sys.exit(1)
+        conn0.close()
+        if okind != "decision":
+            print(f"--outcome-of: {args.outcome_of!r} is a {okind}, not a decision — an outcome is of a decision",
+                  file=sys.stderr)
+            sys.exit(1)
+    polarity = int(getattr(args, "polarity", 1) if getattr(args, "polarity", None) is not None else 1)
+
     payload = {
         "content": args.content,
         "tags": tags,
@@ -1925,7 +2025,17 @@ def remember(args):
     }
     if resolves_ref:
         payload["resolves_ref"] = resolves_ref
+    if channel:
+        payload["channel"] = channel                          # additive; absent = sense
     entry = append_journal("fact", payload)
+    outcome_link = None
+    if outcome_ref:
+        # Same channel stamped on the fact and the link; the projection reads the LINK's (§4 Shape).
+        lp = {"kind": "outcome-of", "from_ref": [entry["node_id"], entry["seq"]], "to_ref": outcome_ref,
+              "data": {"polarity": polarity}, "source": source}
+        if channel:
+            lp["channel"] = channel
+        outcome_link = append_journal("link", lp)
 
     conn = get_conn()
     res = persist_fact(conn, entry)
@@ -1942,6 +2052,10 @@ def remember(args):
     # (keeps the live path consistent with rebuild without a full rebuild).
     all_entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(all_entries)
+    if outcome_link is not None:
+        by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
+        resolve_link(conn, outcome_link, gov, by_ref)
+        _recompute_decision_outcome(conn, all_entries)
     cev = _content_evidence(all_entries, gov)
     ev = cev.get(args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
     n = len(ev["pos"])
@@ -1961,6 +2075,10 @@ def remember(args):
     if resolves_ref:
         print(f"  ↩ resolved fact #{args.resolves} (soft retract — reversible; "
               f"`hv retract {args.resolves} --owner` to forget it decisively)")
+    if outcome_ref:
+        sign = "+1" if polarity > 0 else ("−1" if polarity < 0 else "0")
+        print(f"  ↗ outcome ({sign}) of decision {_ref_str(outcome_ref)}"
+              + ("" if (channel or "sense") == "sense" else f"  [channel {channel}: not counted toward outcome_score]"))
     if auto_volatile:
         print("  ↻ tagged volatile (transient status — the audit will flag it to re-check; "
               "use --no-volatile to opt out)")
@@ -2044,7 +2162,8 @@ def _query_decisions(conn, query, limit=10):
     confidence projection — the table is small. Superseded ones are included (flagged by caller)."""
     like = f"%{query}%"
     return conn.execute(
-        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by, informed_by "
+        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by, informed_by, "
+        "outcome_score, last_outcome_at "
         "FROM decisions WHERE content LIKE ? OR rationale LIKE ? OR tags LIKE ? "
         "ORDER BY created_at DESC LIMIT ?", (like, like, like, limit)).fetchall()
 
@@ -2078,8 +2197,13 @@ def search(args):
         # confidence, so a min_confidence>0 consumer naturally drops them.
         out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"])}
                for eff, r in scored]
+        # Decisions carry `outcome_score` (stored, undecayed) + `effective_outcome_score` (evidence decayed
+        # under the fact half-life at `now`); both stay absent-from-confidence, so --min-confidence
+        # consumers still drop decisions. `last_outcome_at` NULL = no outcome yet.
         out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
-                 "ref": drefs.get(r["id"]), "informed_by": dinformed.get(r["id"], [])} for r in dec_rows]
+                 "ref": drefs.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
+                 "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
+                                             if r["last_outcome_at"] else None)} for r in dec_rows]
         print(json.dumps(out, indent=2))
     else:
         for eff, r in scored:
@@ -2095,7 +2219,11 @@ def search(args):
                 dtags = json.loads(r["tags"]) if r["tags"] else []
                 tagstr = f"  [{', '.join(dtags)}]" if dtags else ""
                 sup = "  ⚠ SUPERSEDED" if r["superseded_by"] else ""
-                print(f"  #{r['id']} {r['content']}{tagstr}{sup}")
+                outc = ""
+                if r["last_outcome_at"]:
+                    eff_o = _effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
+                    outc = f"  outcome {eff_o:+.2f}"
+                print(f"  #{r['id']} {r['content']}{tagstr}{sup}{outc}")
                 if r["rationale"]:
                     print(f"       ↳ {r['rationale']}")
                 inf = dinformed.get(r["id"]) or []
@@ -2269,7 +2397,10 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             dmatched.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
                              "tags": tags, "superseded": bool(r["superseded_by"]),
                              "created": (r["created_at"] or "")[:10],
-                             "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])]})
+                             "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])],
+                             "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now), 2)
+                                               if r["last_outcome_at"] else None),
+                             "last_outcome_at": r["last_outcome_at"]})
         drefs = _refs_for(conn, "decision", [m["id"] for m in dmatched])
         for m in dmatched:
             m["ref"] = drefs.get(m["id"])
@@ -2791,6 +2922,7 @@ def rebuild_db():
     # Phase A: confidence is a derived projection over the journal — recompute it
     # here so every node converges to identical values over the same journal.
     _recompute_confidence(conn, entries)
+    _recompute_decision_outcome(conn, entries)      # 1.19 PR4: decisions.outcome_score (vindication)
     conn.commit()
 
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
@@ -6484,6 +6616,19 @@ def build_parser():
                                  help="Do not auto-tag transient operational-status claims as volatile")
     remember_parser.add_argument("--resolves", type=int,
                                  help="ID of a prior fact this write resolves/closes (soft-retracts it)")
+    remember_parser.add_argument("--outcome-of", metavar="DECISION",
+                                 help="This fact is an OUTCOME of a decision: its stable ref `node_id:seq` (the `ref` "
+                                      "from `hv search --format json`, preferred) or a local decision id (`17` / `d17`); "
+                                      "resolved and kind-checked before anything is written. Emits an `outcome-of` link "
+                                      "that feeds the decision's outcome_score (vindication, not confidence)")
+    remember_parser.add_argument("--polarity", type=int, choices=[-1, 0, 1], default=1,
+                                 help="With --outcome-of: +1 worked out (default), -1 did not, 0 observed and neutral. "
+                                      "Ternary on purpose — magnitude comes from how many independent identities report, "
+                                      "not from one agent's claimed intensity")
+    remember_parser.add_argument("--channel", choices=["sense", "act", "introspect"],
+                                 help="Which experience signal this write is: sense (an observation of the world — the "
+                                      "default when absent), act (an action taken), introspect (the agent's own reasoning "
+                                      "or plan; never counted toward a decision's outcome_score)")
 
     search_parser = subparsers.add_parser("search", help="Search facts")
     search_parser.add_argument("query", help="Search query")

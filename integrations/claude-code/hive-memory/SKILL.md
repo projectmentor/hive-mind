@@ -30,7 +30,10 @@ Write durable, checkable, reusable knowledge:
 - **Decisions** (`hv decide`) with rationale — architectural / process choices. **Pass `--informed`
   with the refs of the facts you searched and relied on**: that is how the hive later learns which
   knowledge proved useful once the decision's outcomes are recorded.
-- **Outcomes / results** of actions ("did X → got Y") — checkable ground truth.
+- **Outcomes / results** of actions ("did X → got Y") — checkable ground truth. When the action
+  carried out a recorded decision, write the outcome with `--outcome-of <decision ref> --polarity +1|0|-1`
+  so the decision earns an outcome score and the facts it relied on earn utility. Only observed
+  outcomes count; if it is your own assessment rather than something observed, add `--channel introspect`.
 - **Corrections** — something was wrong and is now right.
 - **Constraints / preferences / commitments** that shape future work.
 - **New entities / relationships** worth remembering.

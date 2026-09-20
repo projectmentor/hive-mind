@@ -235,13 +235,13 @@ def test_retract_is_pure_projection_across_rebuild(hive):
     assert abs(before - after) < 1e-9 and abs(before - (-0.45)) < 1e-6
 
 
-def test_salience_gate_passes_substantive(hive):
+def test_admission_gate_passes_substantive(hive):
     r = hive.run("remember", "The node-b deploy succeeded at commit abc123.", "--gate", "--source", "alice")
     assert "Remembered" in r.stdout
     assert hive.query("SELECT count(*) c FROM facts WHERE content LIKE 'The node-b%'")[0]["c"] == 1
 
 
-def test_salience_gate_rejects_noise(hive):
+def test_admission_gate_rejects_noise(hive):
     for junk in ("hi there", "ok", "What now?"):
         assert "Skipped" in hive.run("remember", junk, "--gate", "--source", "alice").stdout
     assert hive.query(
@@ -550,3 +550,19 @@ def test_is_daemon_cmdline_excludes_shells():
     assert g(["/bin/bash", "-c", "nohup", "./hv", "sync", "daemon"]) is False   # shell ending in the string
     assert g(["python3", "./hv", "doctor"]) is False
     assert g(["hv", "sync", "now"]) is False
+
+
+def test_is_salient_shim_is_the_admission_gate():
+    """`_is_salient` is kept as a back-compat alias of `_is_admissible` (1.19 rename): same
+    object, same verdicts. Load the extensionless script the way test_doc_sync does."""
+    import importlib.util
+    from importlib.machinery import SourceFileLoader
+    from pathlib import Path as _P
+    loader = SourceFileLoader("hv_cli_gate", str(_P(__file__).resolve().parents[1] / "hv"))
+    spec = importlib.util.spec_from_loader("hv_cli_gate", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    assert mod._is_salient is mod._is_admissible
+    assert mod._is_admissible("The node-b deploy succeeded at commit abc123.")
+    assert not mod._is_admissible("hi there")
+    assert not mod._is_admissible("What now?")

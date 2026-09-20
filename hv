@@ -1565,17 +1565,22 @@ def _index_lookup(conn, kind, local_id):
 # Commands
 # --------------------------------------------------------------------------
 
-# Salience Layer 2 (structural gate). CONSERVATIVE + CONTENT-NEUTRAL: it rejects clear
-# non-knowledge FORMS (trivially short, bare questions, short greetings) and passes
-# everything else — explicit writes are intentional. It is NOT a learned/importance
-# classifier (that would reintroduce a capturable authority); the rich judgment of "is
-# this a decision/outcome/correction worth keeping" stays with the AGENT (its rubric).
+# Salience L2 — the structural ADMISSION gate. "Salience" names a three-layer subsystem:
+#   L1  agent rubric (Hermes hook / Claude Code skill): "should I say this" — structure of
+#       the SITUATION (decision+rationale, correction, outcome, constraint, first-hand result)
+#   L2  this function: "is this even a statement" — structure of the TEXT only
+#   L3  importance: "did it turn out to matter" — a learned projection over the journal (planned)
+# L1/L2 decide what ENTERS the journal; L3 exists only for what got in. Layers are sequential,
+# never summed. L2 is CONSERVATIVE + CONTENT-NEUTRAL: it rejects clear non-knowledge FORMS
+# (trivially short, bare questions, short greetings) and passes everything else — explicit
+# writes are intentional. It is NOT a learned/importance classifier (that would reintroduce a
+# capturable authority) and holds no state; it may never look at topic, meaning or importance.
 # Opt-in via `remember --gate`; the shared core hosts it so every agent gates identically.
 _GREETINGS = ("hi ", "hi,", "hi!", "hello", "hey ", "thanks", "thank you",
               "greetings", "good morning", "good afternoon", "good evening", "yo ")
 
 
-def _is_salient(content):
+def _is_admissible(content):
     c = (content or "").strip()
     if len(c) < 15:                                   # trivially short → noise
         return False
@@ -1585,6 +1590,10 @@ def _is_salient(content):
     if len(c) < 60 and any(cl.startswith(g) for g in _GREETINGS):  # short pleasantry
         return False
     return True
+
+
+_is_salient = _is_admissible   # back-compat shim (the `_wire_claude_hooks` pattern, 1.13): the old
+                               # name read as the whole subsystem; it only ever meant "passed L2".
 
 
 # Structural markers of a TRANSIENT operational-status claim — a state that will change, so the
@@ -1633,8 +1642,8 @@ def remember(args):
     Transient operational-status claims are auto-tagged `volatile` so the audit re-checks them.
     `--resolves N` links this write to a prior fact it corrects and soft-retracts N (deliberate
     negative evidence, reversible) so the corpus reconciles instead of asserting both at once."""
-    if getattr(args, "gate", False) and not _is_salient(args.content):
-        print(f"Skipped (low salience): {args.content[:60]}")
+    if getattr(args, "gate", False) and not _is_admissible(args.content):
+        print(f"Skipped (admission gate): {args.content[:60]}")
         return
     tags = args.tags.split(",") if args.tags else []
     tl = [t.strip().lower() for t in tags]
@@ -6124,7 +6133,7 @@ def build_parser():
         epilog=(
             "examples:\n"
             '  hv remember "X happened" --tags a,b --source claude-code   # store a fact\n'
-            '  hv remember "..." --gate                                  # skip low-salience writes\n'
+            '  hv remember "..." --gate                                  # admission gate: skip non-statements\n'
             '  hv search "X" [--min-confidence -1] [--format json]        # ranked by effective confidence\n'
             '  hv decide "chose Y" --rationale "because"                  # record a decision\n'
             "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
@@ -6144,7 +6153,8 @@ def build_parser():
     remember_parser.add_argument("--importance", type=float, default=0.5)
     remember_parser.add_argument("--source", help="Source agent")
     remember_parser.add_argument("--gate", action="store_true",
-                                 help="Apply the content-neutral salience gate; skip low-salience writes")
+                                 help="Apply the content-neutral admission gate (salience L2): skip writes that are "
+                                      "not knowledge-shaped (trivially short, bare question, greeting)")
     remember_parser.add_argument("--no-volatile", action="store_true",
                                  help="Do not auto-tag transient operational-status claims as volatile")
     remember_parser.add_argument("--resolves", type=int,

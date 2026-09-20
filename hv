@@ -411,6 +411,8 @@ def init_db():
     dcols = {r[1] for r in conn.execute("PRAGMA table_info(decisions)")}
     if "tags" not in dcols:                     # 1.15: project/topic tags on a decision (JSON list)
         conn.execute("ALTER TABLE decisions ADD COLUMN tags TEXT")
+    if "informed_by" not in dcols:              # 1.19 PR3: journal refs the decision relied on (JSON list)
+        conn.execute("ALTER TABLE decisions ADD COLUMN informed_by TEXT")
     conn.commit()
     # Index created here (not in the schema script above) so it works on both
     # fresh and migrated DBs — the column is guaranteed to exist by this point.
@@ -1501,14 +1503,15 @@ def persist_decision(conn, entry):
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     cur.execute("""
-        INSERT INTO decisions (content, rationale, source_agent, created_at, tags)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO decisions (content, rationale, source_agent, created_at, tags, informed_by)
+        VALUES (?, ?, ?, ?, ?, ?)
     """, (
         payload["content"],
         payload.get("rationale"),
         payload.get("source", "manual"),
         payload.get("created_at", ts),
         json.dumps(payload.get("tags", [])),
+        json.dumps(payload.get("informed_by") or []),   # pre-1.19 decisions read back as []
     ))
     did = cur.lastrowid
     _record_index(conn, entry, "decision", did)
@@ -1739,6 +1742,68 @@ def _index_lookup(conn, kind, local_id):
         (kind, local_id),
     ).fetchone()
     return [r["node_id"], r["seq"]] if r else None
+
+
+# 1.19 PR3: identity references at the CLI/MCP boundary. The STABLE form is the journal identity
+# written `node_id:seq` (e.g. `k1:597b3e0f5fb92d37:401`) — it never changes across rebuilds or nodes
+# and is what `hv search --format json` returns as `ref`. Bare local ids (`118`, `d17`, `i5`) are a
+# human convenience only: they are SQLite rowids reassigned on every rebuild (after every write and
+# sync), so an id read before a sync can point at a different row by the time it is used. Bare ids
+# are therefore resolved at write time AND kind-checked against the prefix, and any failure aborts
+# BEFORE anything is journaled.
+_ID_KIND_PREFIX = {"": "fact", "d": "decision", "i": "idea"}
+
+
+def _ref_str(ref):
+    """`[node_id, seq]` -> `node_id:seq` (the form agents should carry around)."""
+    return f"{ref[0]}:{ref[1]}" if ref else None
+
+
+def _parse_ref_arg(conn, token, default_kind="fact"):
+    """Resolve one CLI/MCP identity token to (kind, [node_id, seq]) or raise ValueError.
+    Accepts `node_id:seq` (stable; must exist in journal_index), or a bare local id with an optional
+    kind prefix: `118` (fact), `d17` (decision), `i5` (idea). A bare id must resolve to a row of the
+    prefixed kind — a mismatch is an error, not a silent re-target."""
+    t = str(token).strip()
+    if not t:
+        raise ValueError("empty reference")
+    if ":" in t and not t.isdigit():
+        node_id, _, seq = t.rpartition(":")
+        if not node_id or not seq.isdigit():
+            raise ValueError(f"{t!r} is not a `node_id:seq` reference")
+        row = _index_row(conn, [node_id, int(seq)])
+        if row is None:
+            raise ValueError(f"{t!r} does not resolve to any fact/decision/idea in this node's index")
+        return row[0], [node_id, int(seq)]
+    prefix, digits = ("", t) if t.isdigit() else (t[:1], t[1:])
+    if prefix not in _ID_KIND_PREFIX or not digits.isdigit():
+        raise ValueError(f"{t!r}: expected `node_id:seq`, a fact id, `d<N>` (decision) or `i<N>` (idea)")
+    kind = _ID_KIND_PREFIX[prefix]
+    ref = _index_lookup(conn, kind, int(digits))
+    if ref is None:
+        raise ValueError(f"{t!r} does not resolve to a {kind} on this node (local ids shift on rebuild — "
+                         f"prefer the `ref` shown by `hv search --format json`)")
+    return kind, ref
+
+
+def _refs_for(conn, kind, local_ids):
+    """{local_id: 'node_id:seq'} for rows of `kind` — the stable identity beside each rowid in output."""
+    ids = [int(i) for i in local_ids if i is not None]
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    return {r["local_id"]: f"{r['node_id']}:{r['seq']}" for r in conn.execute(
+        f"SELECT local_id, node_id, seq FROM journal_index WHERE kind = ? AND local_id IN ({q})", (kind, *ids))}
+
+
+def _local_ids_for_refs(conn, refs):
+    """[{'ref': 'node:seq', 'kind': k, 'id': local_id|None}] for stored refs — local id is THIS node's
+    current rowid (rebuild-unstable, display only) and None if the target has not landed here yet."""
+    out = []
+    for ref in refs or []:
+        row = _index_row(conn, ref) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None
+        out.append({"ref": _ref_str(ref), "kind": row[0] if row else None, "id": row[1] if row else None})
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -1979,7 +2044,7 @@ def _query_decisions(conn, query, limit=10):
     confidence projection — the table is small. Superseded ones are included (flagged by caller)."""
     like = f"%{query}%"
     return conn.execute(
-        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by "
+        "SELECT id, content, rationale, tags, source_agent, created_at, superseded_by, informed_by "
         "FROM decisions WHERE content LIKE ? OR rationale LIKE ? OR tags LIKE ? "
         "ORDER BY created_at DESC LIMIT ?", (like, like, like, limit)).fetchall()
 
@@ -1994,19 +2059,27 @@ def search(args):
     now = os.environ.get("HIVE_NOW") or _now_iso()
     rows = _query_facts(conn, args.query)
     dec_rows = _query_decisions(conn, args.query)
-    conn.close()
 
     # Decay + threshold + rank in Python (effective confidence depends on `now`).
     scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
     scored = [(eff, r) for eff, r in scored if eff >= args.min_confidence]
     scored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
     scored = scored[:10]
+    # 1.19 PR3: every row carries its STABLE identity `ref` (node_id:seq) beside the rebuild-unstable
+    # local id; decisions also expose what they relied on (`informed_by`, refs + this node's local ids).
+    frefs = _refs_for(conn, "fact", [r["id"] for _e, r in scored])
+    drefs = _refs_for(conn, "decision", [r["id"] for r in dec_rows])
+    dinformed = {r["id"]: _local_ids_for_refs(conn, json.loads(r["informed_by"]) if r["informed_by"] else [])
+                 for r in dec_rows}
+    conn.close()
 
     if args.format == "json":
         # Stays a flat list (back-compat) with a new `kind` discriminator; decisions carry no
         # confidence, so a min_confidence>0 consumer naturally drops them.
-        out = [{**dict(r), "kind": "fact", "effective_confidence": eff} for eff, r in scored]
-        out += [{**dict(r), "kind": "decision"} for r in dec_rows]
+        out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"])}
+               for eff, r in scored]
+        out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
+                 "ref": drefs.get(r["id"]), "informed_by": dinformed.get(r["id"], [])} for r in dec_rows]
         print(json.dumps(out, indent=2))
     else:
         for eff, r in scored:
@@ -2014,6 +2087,7 @@ def search(args):
             flag = "  ⚠ CONTESTED" if r["contested"] else ""
             print(f"[{r['id']}] {r['content']}")
             print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  From: {r['source_agent']}{flag}")
+            print(f"     ref: {frefs.get(r['id'])}")
             print()
         if dec_rows:
             print("Decisions:")
@@ -2024,6 +2098,12 @@ def search(args):
                 print(f"  #{r['id']} {r['content']}{tagstr}{sup}")
                 if r["rationale"]:
                     print(f"       ↳ {r['rationale']}")
+                inf = dinformed.get(r["id"]) or []
+                if inf:
+                    shown = ", ".join((("d" if i["kind"] == "decision" else "i" if i["kind"] == "idea" else "#")
+                                       + str(i["id"])) if i["id"] is not None else i["ref"] for i in inf)
+                    print(f"       informed by: {shown}")
+                print(f"       ref: {drefs.get(r['id'])}")
             print()
 
 
@@ -2034,31 +2114,64 @@ def decide(args):
     # Resolve --supersedes (a local id) to a journal-identity reference so the
     # supersedes link survives rebuilds and cross-node merges.
     supersedes_ref = None
+    informed = []                     # 1.19 PR3: [(kind, [node_id, seq]), ...] the decision relied on
+    conn0 = get_conn()
     if args.supersedes:
-        conn0 = get_conn()
         supersedes_ref = _index_lookup(conn0, "decision", args.supersedes)
-        conn0.close()
+    # Resolve EVERY --informed reference before anything is journaled: an unresolvable or wrong-kind id
+    # aborts the whole write (no partial decision, no dangling links). Stable `node_id:seq` refs are
+    # the primary form; bare ids are a kind-checked convenience (see _parse_ref_arg).
+    for tok in (getattr(args, "informed", None) or []):
+        try:
+            informed.append(_parse_ref_arg(conn0, tok))
+        except ValueError as e:
+            conn0.close()
+            print(f"--informed: {e}", file=sys.stderr)
+            sys.exit(1)
+    conn0.close()
+    seen = set()
+    informed_refs = []
+    for _kind, ref in informed:               # de-dup, keep order
+        if tuple(ref) not in seen:
+            seen.add(tuple(ref))
+            informed_refs.append(ref)
 
     tags = [t.strip() for t in args.tags.split(",")] if getattr(args, "tags", None) else []
     tags = [t for t in tags if t]
+    source = os.environ.get("HERMES_AGENT", "manual")
     payload = {
         "content": args.content,
         "rationale": args.rationale,
         "supersedes_ref": supersedes_ref,
         "tags": tags,
-        "source": os.environ.get("HERMES_AGENT", "manual"),
+        "source": source,
     }
+    if informed_refs:
+        payload["informed_by"] = informed_refs   # additive (1.15 `tags` precedent): the human-legible record
     entry = append_journal("decision", payload)
+    # One `informed` link per ref — what the utility projection reads (design §3). Same source as the
+    # decision; no channel (a decision is neither an observation nor introspection about one).
+    link_entries = [append_journal("link", {"kind": "informed", "from_ref": [entry["node_id"], entry["seq"]],
+                                            "to_ref": ref, "data": {}, "source": source})
+                    for ref in informed_refs]
 
     conn = get_conn()
     res = persist_decision(conn, entry)
     if supersedes_ref:
         resolve_supersedes(conn, entry)
+    if link_entries:
+        all_entries = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(all_entries)
+        by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
+        for le in link_entries:
+            resolve_link(conn, le, gov, by_ref)
     conn.commit()
     conn.close()
 
     tagnote = f"  [{', '.join(tags)}]" if tags else ""
-    print(f"Decided as decision #{res['id']}{tagnote}")
+    infnote = f"  informed by {len(informed_refs)} ref(s)" if informed_refs else ""
+    print(f"Decided as decision #{res['id']}{tagnote}{infnote}")
+    print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
 
 
 # ── Dashboard read API (operator-facing; reused by the sync daemon's /api/* and by `hv dash`) ──
@@ -2138,6 +2251,9 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
                             "confidence": round(eff, 2), "contested": bool(r["contested"]),
                             "forgotten": base <= FORGET_FLOOR,
                             "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        frefs = _refs_for(conn, "fact", [m["id"] for m in matched])
+        for m in matched:
+            m["ref"] = frefs.get(m["id"])
         if sort == "recency":
             matched.sort(key=lambda f: (f["created"], f["confidence"]), reverse=True)
         else:  # salience
@@ -2152,7 +2268,11 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
                 continue
             dmatched.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
                              "tags": tags, "superseded": bool(r["superseded_by"]),
-                             "created": (r["created_at"] or "")[:10]})
+                             "created": (r["created_at"] or "")[:10],
+                             "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])]})
+        drefs = _refs_for(conn, "decision", [m["id"] for m in dmatched])
+        for m in dmatched:
+            m["ref"] = drefs.get(m["id"])
         dec_total = len(dmatched)
         decisions = dmatched[offset:offset + limit]
     conn.close()
@@ -6376,6 +6496,10 @@ def build_parser():
     decide_parser.add_argument("--rationale", help="Why this decision")
     decide_parser.add_argument("--tags", help="Comma-separated tags (e.g. project scope), like `remember`")
     decide_parser.add_argument("--supersedes", type=int, help="ID of decision this replaces")
+    decide_parser.add_argument("--informed", nargs="+", metavar="REF",
+                               help="What this decision relied on: stable refs `node_id:seq` (the `ref` from "
+                                    "`hv search --format json`, preferred) or local ids — bare N (fact), dN "
+                                    "(decision), iN (idea) — resolved and kind-checked before anything is written")
 
     retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")
     retract_parser.add_argument("fact_id", type=int, help="Local fact id to retract")

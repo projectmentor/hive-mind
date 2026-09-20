@@ -48,7 +48,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 |---|---|
 | `hv search "<q>" [--format json] [--min-confidence N]` | Read the corpus (ranked by effective confidence) |
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
-| `hv decide "<decision>" --rationale "<why>"` | Record a decision |
+| `hv decide "<decision>" --rationale "<why>" --informed <ref>…` | Record a decision, naming the `ref`s it relied on *(1.19)* |
 | `hv retract <id> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
@@ -222,6 +222,12 @@ when it must re-wire.
   version skew** (a 1.18 node lands a `link` and ignores it); **no write-path change** — no verb
   emits links yet, the first writers arrive with `--informed` and `--outcome-of`. Adapters
   unaffected.
+  - *PR3 (same contract):* **`informed_by` on decisions.** `hv decide --informed <ref>…` /
+    `hive_decide(informed_by="ref,ref")` records what a decision relied on: an additive payload
+    list of journal refs plus one `informed` link per ref. `hv search` (text + JSON) and
+    `hive_search` now return **`ref`** (`node_id:seq`) on every fact and decision — the stable
+    identity agents should carry; bare local ids are accepted but kind-checked and discouraged.
+    Rubric: when you call `hive_decide`, pass the refs of the facts you retrieved and relied on.
 - `1.18` — **capsule-addressability for silent devices (`announce`)**. New authority-less,
   device-signed, kind-discriminated governance act `announce` — fixed envelope `{action, kind}`,
   kind-specific fields under `data`; first kind: `key`. Its only purpose is to *exist* as a signed

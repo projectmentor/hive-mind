@@ -102,7 +102,7 @@ them. You can link a new decision to an older one it replaces, so you always
 have a clear trail of what changed and why.
 
 ```
-hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID] [--informed REF ...]
+hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes DECISION] [--informed REF ...]
 ```
 
 **Arguments:**
@@ -112,8 +112,8 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID] [--infor
 | `content` | The decision, stated clearly. Required. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
 | `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision ids (`#N`) are node-local and shift on rebuild, so don't reference a decision by its number; find it by tag or text. |
-| `--supersedes` | The ID of a previous decision this replaces. The old decision stays on record; this one is linked to it. |
-| `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable form is the `ref` shown by `hv search` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — identical on every node, never changes. Bare local ids are accepted as a convenience — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
+| `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. |
+| `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable forms are the **`sid`** shown by `hv search` (`h:3f9a1c0b2d` — the form to type) and the `ref` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — both identical on every node, never change. Bare local ids are still accepted — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time, prints a one-line deprecation warning, and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
 
 **Examples:**
 ```bash
@@ -399,7 +399,7 @@ hv entity {add,list,show,link} [options]
 | `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
 | `list` | List all entities. |
 | `show` | Show an entity and all facts linked to it. Needs `--name`. |
-| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id`. Optionally set `--confidence` to indicate how strongly the fact relates. |
+| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id` (the fact's `sid` `h:…` or `ref`; a bare local id is *deprecated*). Optionally set `--confidence` to indicate how strongly the fact relates. |
 
 **Examples:**
 ```bash
@@ -659,7 +659,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's stable `ref` (`node_id:seq`, as shown by `hv search`; preferred) or a local decision id (`17` / `d17`), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and, later, the utility of the facts that informed it. |
 | `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
 | `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`; an `introspect` `supports`/`contradicts` link weighs `introspect_support_weight` (default 0). |
-| `--resolves ID` | Mark this write as the correction of an earlier fact. It records a **durable link** (the resolved fact's `(node_id, seq)` journal identity, stable across rebuilds and nodes) and **soft-retracts** fact `ID` (registers negative evidence so it stops surfacing as canonical), keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract ID --owner`. The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves #N`, `supersedes #N`) but never reconciled it — but a prose `#N` is a **local id** that drifts across rebuilds and nodes, so treat the flagged target id as best-effort and reconcile with `--resolves` (which never drifts). |
+| `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It records a **durable link** (the resolved fact's journal identity, stable across rebuilds and nodes) and **soft-retracts** that fact (registers negative evidence so it stops surfacing as canonical), keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
 
 **What you get back:**
 
@@ -717,36 +717,36 @@ retracted and won't show up in normal search results. Think of it as
 "this was wrong" rather than "this never happened."
 
 ```
-hv retract <fact_id> [--reason TEXT] [--source SOURCE] [--owner]
+hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
 ```
 
 **Arguments:**
 
 | Argument | What it does |
 |---|---|
-| `fact_id` | The ID of the fact to retract. Get it from `hv search` output. Required. |
+| `fact` | The fact to retract, named by its **`sid`** (`h:3f9a1c0b2d`, shown by `hv search` — the same on every node, never changes) or its `ref` (`node_id:seq`). A bare local id (`4`) is still accepted but **deprecated**: it is this node's rowid, reassigned on every rebuild (after every write and every sync), so an id read from `hv search` can name a *different* fact by the time you retract it. It prints a warning; it stops being accepted at the next MAJOR contract bump. The target is kind-checked — a decision id is an error, never a silent re-target. Required. |
 | `--reason` | Why you're retracting it. Saved for reference. |
 | `--source` | Who is doing the retracting. Defaults to `manual`. |
 | `--owner` | Mark this as an authoritative retraction. Use when the fact is definitively wrong, not just uncertain. Immediately drives confidence to the floor. Once you have an owner (see `hv owner`), this requires the **owner key** and is cryptographically signed, so a forget can't be forged; run it on the owner machine. |
 
 **Examples:**
 ```bash
-# Minimal — fact ID only
-./hv retract 4
+# Minimal — by short id (from `hv search`)
+./hv retract h:3f9a1c0b2d
 
 # With a reason
-./hv retract 4 --reason "Was a test probe, not a real observation"
+./hv retract h:3f9a1c0b2d --reason "Was a test probe, not a real observation"
 
 # With reason and source
-./hv retract 7 \
+./hv retract h:7c01d2e9aa \
     --reason "Portproxy is no longer used — architecture changed" \
     --source "hermes:primary/claude-sonnet/abc12345"
 
 # Owner retraction — authoritative, immediately floors confidence
-./hv retract 12 --reason "Definitively wrong" --owner
+./hv retract h:9be4410f37 --reason "Definitively wrong" --owner
 
-# All options together
-./hv retract 15 \
+# All options together (a raw journal ref works too)
+./hv retract k1:597b3e0f5fb92d37:15 \
     --reason "Superseded by Tailscale-in-WSL architecture" \
     --source "claude-code" \
     --owner
@@ -764,10 +764,12 @@ alongside its facts. Decisions have no confidence, so `--min-confidence` does no
 filter them in text mode.
 
 
-> *(1.19)* Every result — text and `--format json` — carries **`ref`**, the entry's stable journal identity
-> `node_id:seq`. Use `ref` wherever you cite an entry to another command (`--informed`, later `--outcome-of`);
-> the bracketed `[N]` / `#N` is this node's rowid and shifts on rebuild. Decisions also show `informed by:`
-> (the refs they relied on, rendered with this node's current local ids) and, once any outcome has been
+> *(1.19)* Every result — text and `--format json` — carries two stable identities: **`sid`**, the short id
+> (`h:3f9a1c0b2d` — what you type into other commands) and **`ref`**, the raw journal identity `node_id:seq`.
+> Use either wherever you cite an entry to another command (`--informed`, `--outcome-of`, `--supersedes`,
+> `--resolves`, `hv retract`, `hv entity link`); the `· N` / `#N` beside it is this node's rowid and shifts
+> on rebuild (see [Stable ids](#stable-ids-sid-vs-local-id)). Decisions also show `informed by:`
+> (the sids they relied on, with this node's current local ids in brackets) and, once any outcome has been
 > recorded, `outcome ±0.xx` — the decision's outcome score with its evidence decayed under the fact half-life
 > (JSON: `outcome_score`, `effective_outcome_score`, `last_outcome_at`; `null` = no outcome yet). Outcome score
 > is **not** confidence: `--min-confidence` still never filters decisions.
@@ -807,6 +809,25 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,
 # All options together
 ./hv search "infrastructure" --format json --min-confidence 0.5
 ```
+
+---
+
+### Stable ids: `sid` vs local id
+
+*(1.19 PR3b)* Every fact, decision and idea has three names:
+
+| Name | Example | Stable? | Use it for |
+|---|---|---|---|
+| **`sid`** — short id | `h:3f9a1c0b2d` | **Yes** — identical on every node, never changes | Typing into any command that takes an id: `--informed`, `--outcome-of`, `--supersedes`, `--resolves`, `hv retract`, `hv entity link --fact-id`; prose references (`resolves h:3f9a1c0b2d`); dashboard deep links (`/#h:3f9a1c0b2d`). |
+| **`ref`** — journal identity | `k1:597b3e0f5fb92d37:401` | **Yes** — the identity `sid` is derived from | Machine use; accepted everywhere `sid` is. |
+| local id / rowid | `118`, `d17`, `i5` | **No** — a store.db rowid, reassigned on every rebuild (after every write and every sync) and different on every node | Nothing durable. **Deprecated as an input as of this release**: still accepted (kind-checked, with a one-line warning) and **removed at the next MAJOR contract bump**. |
+
+`sid` is `h:` + the first 10 hex characters of `sha256("node_id:seq")` — derived purely from the
+journal identity, never stored in an entry, rebuilt with everything else into the indexed column
+`journal_index.sid`. Resolution is an **exact** lookup (never a prefix match). A fact corroborated by
+several entries has one canonical `sid` (its first asserting entry, the same on every node), but each
+corroborating entry's own `sid` resolves to the same row. Rowids are *not* removed from `store.db` —
+they remain its internal keys and join columns; they just stop leaking out as names.
 
 ---
 

@@ -372,6 +372,7 @@ def init_db():
         seq      INTEGER NOT NULL,
         kind     TEXT NOT NULL,        -- fact | decision | entity | idea (1.20)
         local_id INTEGER NOT NULL,
+        sid      TEXT,                 -- 1.19 PR3b: `h:` + sha256("node_id:seq")[:10], the human-stable id
         PRIMARY KEY (node_id, seq)
     );
     CREATE INDEX IF NOT EXISTS idx_jidx_local ON journal_index(kind, local_id);
@@ -434,6 +435,10 @@ def init_db():
         conn.execute("ALTER TABLE decisions ADD COLUMN outcome_score REAL DEFAULT 0.0")
     if "last_outcome_at" not in dcols:          # 1.19 PR4: most-recent sense-channel outcome (drives decay)
         conn.execute("ALTER TABLE decisions ADD COLUMN last_outcome_at TIMESTAMP")
+    jcols = {r[1] for r in conn.execute("PRAGMA table_info(journal_index)")}
+    if "sid" not in jcols:
+        conn.execute("ALTER TABLE journal_index ADD COLUMN sid TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_jidx_sid ON journal_index(sid)")
     conn.commit()
     # Index created here (not in the schema script above) so it works on both
     # fresh and migrated DBs — the column is guaranteed to exist by this point.
@@ -754,9 +759,20 @@ def append_foreign_entries(entries):
 
 def _record_index(conn, entry, kind, local_id):
     conn.execute(
-        "INSERT OR REPLACE INTO journal_index(node_id, seq, kind, local_id) VALUES (?,?,?,?)",
-        (entry.get("node_id"), entry.get("seq"), kind, local_id),
+        "INSERT OR REPLACE INTO journal_index(node_id, seq, kind, local_id, sid) VALUES (?,?,?,?,?)",
+        (entry.get("node_id"), entry.get("seq"), kind, local_id, _short_id(entry.get("node_id"), entry.get("seq"))),
     )
+
+
+def _short_id(node_id, seq):
+    """1.19 PR3b: the human-stable id of a journal entry — `h:` + sha256("node_id:seq")[:10]. Derived
+    purely from journal identity, so it is identical on every node, forever, and never changes on a
+    rebuild (unlike the SQLite rowid it is shown beside). 40 bits: a collision inside one hive's
+    lifetime is negligible, and resolution is EXACT (an equality lookup on journal_index.sid, never a
+    prefix match). Facts, decisions and ideas only — it is never stored in an entry."""
+    if node_id is None or seq is None:
+        return None
+    return "h:" + hashlib.sha256(f"{node_id}:{seq}".encode()).hexdigest()[:10]
 
 
 def persist_fact(conn, entry):
@@ -2075,7 +2091,7 @@ def _links_unauthorized(entries, gov):
 def _index_lookup(conn, kind, local_id):
     """Reverse map: local row id -> its journal identity [node_id, seq]."""
     r = conn.execute(
-        "SELECT node_id, seq FROM journal_index WHERE kind = ? AND local_id = ? LIMIT 1",
+        "SELECT node_id, seq FROM journal_index WHERE kind = ? AND local_id = ? ORDER BY node_id, seq LIMIT 1",
         (kind, local_id),
     ).fetchone()
     return [r["node_id"], r["seq"]] if r else None
@@ -2089,6 +2105,18 @@ def _index_lookup(conn, kind, local_id):
 # are therefore resolved at write time AND kind-checked against the prefix, and any failure aborts
 # BEFORE anything is journaled.
 _ID_KIND_PREFIX = {"": "fact", "d": "decision", "i": "idea"}
+_SID_RE = re.compile(r"^h:[0-9a-f]{10}$")
+_BARE_ID_WARNING = ("bare local ids drift across rebuilds; use h:… (shown in hv search) — bare integers are "
+                    "deprecated and stop being accepted at the next MAJOR contract bump")
+_bare_id_warned = False
+
+
+def _warn_bare_id():
+    """One stderr line per process the first time a bare local id is used as an identity argument."""
+    global _bare_id_warned
+    if not _bare_id_warned:
+        _bare_id_warned = True
+        print(f"  ⚠ {_BARE_ID_WARNING}", file=sys.stderr)
 
 
 def _ref_str(ref):
@@ -2104,6 +2132,14 @@ def _parse_ref_arg(conn, token, default_kind="fact"):
     t = str(token).strip()
     if not t:
         raise ValueError("empty reference")
+    if t.startswith("h:"):
+        # 1.19 PR3b: the short stable id — an EXACT equality lookup on the projection-written column.
+        if not _SID_RE.match(t):
+            raise ValueError(f"{t!r} is not a short id (`h:` + 10 hex chars, as shown by `hv search`)")
+        r = conn.execute("SELECT kind, node_id, seq FROM journal_index WHERE sid = ?", (t,)).fetchone()
+        if r is None:
+            raise ValueError(f"{t!r} does not resolve to any fact/decision/idea in this node's index")
+        return r["kind"], [r["node_id"], r["seq"]]
     if ":" in t and not t.isdigit():
         node_id, _, seq = t.rpartition(":")
         if not node_id or not seq.isdigit():
@@ -2119,18 +2155,56 @@ def _parse_ref_arg(conn, token, default_kind="fact"):
     ref = _index_lookup(conn, kind, int(digits))
     if ref is None:
         raise ValueError(f"{t!r} does not resolve to a {kind} on this node (local ids shift on rebuild — "
-                         f"prefer the `ref` shown by `hv search --format json`)")
+                         f"prefer the `sid`/`ref` shown by `hv search`)")
+    _warn_bare_id()
     return kind, ref
 
 
-def _refs_for(conn, kind, local_ids):
-    """{local_id: 'node_id:seq'} for rows of `kind` — the stable identity beside each rowid in output."""
+def _id_label(token):
+    """How a user-supplied identity token reads back in a message: `#4` for a bare rowid, else as given."""
+    t = str(token).strip()
+    return f"#{t}" if t.isdigit() else t
+
+
+def _resolve_id_arg(conn, token, kind, what):
+    """Resolve a CLI identity token that MUST be of `kind` (fact|decision|idea) to [node_id, seq].
+    Accepts `h:<sid>`, `node_id:seq`, or a bare/prefixed local id (bare digits are read as `kind`).
+    Raises ValueError with a message naming the option (`what`) on any failure — callers abort
+    before writing anything."""
+    t = str(token).strip()
+    if t.isdigit():
+        t = {"fact": "", "decision": "d", "idea": "i"}[kind] + t
+    k, ref = _parse_ref_arg(conn, t, default_kind=kind)
+    if k != kind:
+        raise ValueError(f"{token!r} is a {k}, not a {kind}")
+    return ref
+
+
+def _ids_for(conn, kind, local_ids):
+    """{local_id: {'ref': 'node_id:seq', 'sid': 'h:…'}} for rows of `kind` — the stable identities shown
+    beside each rowid in output. A corroborated fact maps SEVERAL journal entries to one row; its
+    canonical name is the FIRST by (node_id, seq) — the same on every node — while every entry's own
+    sid still resolves to the row."""
     ids = [int(i) for i in local_ids if i is not None]
     if not ids:
         return {}
     q = ",".join("?" * len(ids))
-    return {r["local_id"]: f"{r['node_id']}:{r['seq']}" for r in conn.execute(
-        f"SELECT local_id, node_id, seq FROM journal_index WHERE kind = ? AND local_id IN ({q})", (kind, *ids))}
+    out = {}
+    for r in conn.execute(f"SELECT local_id, node_id, seq, sid FROM journal_index WHERE kind = ? "
+                          f"AND local_id IN ({q}) ORDER BY node_id, seq", (kind, *ids)):
+        out.setdefault(r["local_id"], {"ref": f"{r['node_id']}:{r['seq']}",
+                                       "sid": r["sid"] or _short_id(r["node_id"], r["seq"])})
+    return out
+
+
+def _refs_for(conn, kind, local_ids):
+    """{local_id: 'node_id:seq'} — see _ids_for."""
+    return {k: v["ref"] for k, v in _ids_for(conn, kind, local_ids).items()}
+
+
+def _sid_of(conn, kind, local_id):
+    """The canonical short id of one row (or None)."""
+    return (_ids_for(conn, kind, [local_id]).get(local_id) or {}).get("sid")
 
 
 def _local_ids_for_refs(conn, refs):
@@ -2139,7 +2213,8 @@ def _local_ids_for_refs(conn, refs):
     out = []
     for ref in refs or []:
         row = _index_row(conn, ref) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None
-        out.append({"ref": _ref_str(ref), "kind": row[0] if row else None, "id": row[1] if row else None})
+        out.append({"ref": _ref_str(ref), "sid": _short_id(ref[0], ref[1]) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None,
+                    "kind": row[0] if row else None, "id": row[1] if row else None})
     return out
 
 
@@ -2206,16 +2281,20 @@ def _detect_volatile(content):
 # A fact written as a correction usually names what it contravenes in prose, e.g.
 # "resolves #119" / "CORRECTION to fact #275". The audit parses these so it can flag a
 # correction whose target is still live (the agent appended but never reconciled).
-_REFERENCE_RE = re.compile(r"(?:resolves|supersedes|obsoletes|corrects?|correction to)\s+(?:fact\s+)?#(\d+)",
+_REFERENCE_RE = re.compile(r"(?:resolves|supersedes|obsoletes|corrects?|correction to)\s+(?:fact\s+)?(#\d+|h:[0-9a-f]{10})",
                            re.IGNORECASE)
 
 
 def _parse_fact_references(content):
-    """Local fact ids this content claims to resolve/supersede/obsolete/correct (see _REFERENCE_RE)."""
+    """References this content claims to resolve/supersede/obsolete/correct (see _REFERENCE_RE): an int
+    for a prose `#N` (a LOCAL id — best-effort, it drifts) or a `h:…` short id string (exact; 1.19 PR3b)."""
+    out = []
     try:
-        return [int(m) for m in _REFERENCE_RE.findall(content or "")]
+        for m in _REFERENCE_RE.findall(content or ""):
+            out.append(int(m[1:]) if m.startswith("#") else m.lower())
     except Exception:
-        return []
+        pass
+    return out
 
 
 def remember(args):
@@ -2244,14 +2323,28 @@ def remember(args):
     # `decide --supersedes`). A missing target is a warning, not an error — never lose content.
     resolves_ref = resolved_content = None
     if getattr(args, "resolves", None):
+        # 1.19 PR3b: `h:` short id / `node_id:seq` / bare local id (deprecated), kind-checked. A WRONG-kind
+        # reference aborts (it names something that is not a fact); an unresolvable one stays a warning.
         conn0 = get_conn()
-        resolves_ref = _index_lookup(conn0, "fact", args.resolves)
-        row0 = conn0.execute("SELECT content FROM facts WHERE id = ?", (args.resolves,)).fetchone()
-        conn0.close()
-        if resolves_ref is None or row0 is None:
-            print(f"  ⚠ no fact #{args.resolves} to resolve — writing the fact without a resolve link")
+        try:
+            resolves_ref = _resolve_id_arg(conn0, args.resolves, "fact", "--resolves")
+        except ValueError as e:
+            conn0.close()
+            if " is a " in str(e):
+                print(str(e), file=sys.stderr)
+                sys.exit(1)
+            print(f"  ⚠ no fact {_id_label(args.resolves)} to resolve — writing the fact without a resolve link")
             resolves_ref = None
-        else:
+            conn0 = get_conn()
+        row0 = None
+        if resolves_ref is not None:
+            rid = _index_row(conn0, resolves_ref)
+            row0 = conn0.execute("SELECT content FROM facts WHERE id = ?", (rid[1],)).fetchone() if rid else None
+        conn0.close()
+        if resolves_ref is not None and row0 is None:
+            print(f"  ⚠ no fact {_id_label(args.resolves)} to resolve — writing the fact without a resolve link")
+            resolves_ref = None
+        elif row0 is not None:
             resolved_content = row0["content"]
 
     # --outcome-of (1.19 PR4): this fact is an OUTCOME of a decision. Resolve the decision BEFORE any
@@ -2328,13 +2421,18 @@ def remember(args):
     conn.close()
 
     src_word = "identity" if n == 1 else "identities"
+    conn = get_conn()
+    sid = _sid_of(conn, "fact", res["id"])           # the row's canonical short id (first asserting entry)
+    rsid = _short_id(*resolves_ref) if resolves_ref else None
+    conn.close()
     if res["inserted"]:
-        print(f"Remembered as fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+        print(f"Remembered as {sid} (fact #{res['id']}, confidence {conf:.2f}, {n} {src_word})")
     else:
-        print(f"Corroborated fact #{res['id']} (confidence {conf:.2f}, {n} {src_word})")
+        print(f"Corroborated {sid} (fact #{res['id']}, confidence {conf:.2f}, {n} {src_word})")
+    print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
     if resolves_ref:
-        print(f"  ↩ resolved fact #{args.resolves} (soft retract — reversible; "
-              f"`hv retract {args.resolves} --owner` to forget it decisively)")
+        print(f"  ↩ resolved fact {rsid} (soft retract — reversible; "
+              f"`hv retract {rsid} --owner` to forget it decisively)")
     if outcome_ref:
         sign = "+1" if polarity > 0 else ("−1" if polarity < 0 else "0")
         print(f"  ↗ outcome ({sign}) of decision {_ref_str(outcome_ref)}"
@@ -2349,13 +2447,23 @@ def retract(args):
     projection: a peer retract counts negative (can drive 'rejected'); --owner forgets it
     (governance — to the forget floor, regardless of corroboration). Never a self-set number.
     The journal keeps the fact + the retract (auditable; reversible by re-corroboration)."""
+    # 1.19 PR3b (closes hive #58): the target is named by its `h:` short id or `node_id:seq` ref — both
+    # stable across the rebuild that follows every write and sync — or a bare local id (deprecated,
+    # warned). Kind-checked: a decision id is an error, never a silent re-target.
     conn = get_conn()
-    ref = _index_lookup(conn, "fact", args.fact_id)
-    row = conn.execute("SELECT content FROM facts WHERE id = ?", (args.fact_id,)).fetchone()
+    try:
+        ref = _resolve_id_arg(conn, args.fact_id, "fact", "retract")
+    except ValueError as e:
+        conn.close()
+        print(f"retract: {e}", file=sys.stderr)
+        sys.exit(1)
+    rid = _index_row(conn, ref)
+    row = conn.execute("SELECT id, content FROM facts WHERE id = ?", (rid[1],)).fetchone() if rid else None
+    sid = _sid_of(conn, "fact", rid[1]) if rid else None
     conn.close()
-    if ref is None or row is None:
-        print(f"No fact #{args.fact_id}")
-        return
+    if row is None:
+        print(f"retract: no fact {args.fact_id}", file=sys.stderr)
+        sys.exit(1)
     content = row["content"]
     if args.owner:
         # Owner-forget. Once an owner is established it must be cryptographically authorized:
@@ -2385,7 +2493,7 @@ def retract(args):
     conn.commit()
     conn.close()
     kind = "FORGOTTEN (owner)" if args.owner else "retracted"
-    print(f"Fact #{args.fact_id} {kind} → confidence {conf:.2f}")
+    print(f"Fact {sid} (#{row['id']}) {kind} → confidence {conf:.2f}")
 
 
 def _fts_query(raw):
@@ -2466,9 +2574,16 @@ def search(args):
     iscored = [(eff, r) for eff, r in iscored if eff >= args.min_confidence or kind == "idea"]
     iscored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
     iscored = iscored[:10]
-    frefs = _refs_for(conn, "fact", [r["id"] for _e, r in scored])
-    drefs = _refs_for(conn, "decision", [r["id"] for r in dec_rows])
-    irefs = _refs_for(conn, "idea", [r["id"] for _e, r in iscored])
+    fids = _ids_for(conn, "fact", [r["id"] for _e, r in scored])
+    dids = _ids_for(conn, "decision", [r["id"] for r in dec_rows])
+    iids = _ids_for(conn, "idea", [r["id"] for _e, r in iscored])
+    # 1.19 PR3b: `sid` (the `h:` short id) is the human form of `ref`; both are stable, `id` is not.
+    frefs = {k: v["ref"] for k, v in fids.items()}
+    drefs = {k: v["ref"] for k, v in dids.items()}
+    irefs = {k: v["ref"] for k, v in iids.items()}
+    fsids = {k: v["sid"] for k, v in fids.items()}
+    dsids = {k: v["sid"] for k, v in dids.items()}
+    isids = {k: v["sid"] for k, v in iids.items()}
     dinformed = {r["id"]: _local_ids_for_refs(conn, json.loads(r["informed_by"]) if r["informed_by"] else [])
                  for r in dec_rows}
     conn.close()
@@ -2476,23 +2591,23 @@ def search(args):
     if args.format == "json":
         # Stays a flat list (back-compat) with a new `kind` discriminator; decisions carry no
         # confidence, so a min_confidence>0 consumer naturally drops them.
-        out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"])}
-               for eff, r in scored]
+        out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"]),
+                "sid": fsids.get(r["id"])} for eff, r in scored]
         # Decisions carry `outcome_score` (stored, undecayed) + `effective_outcome_score` (evidence decayed
         # under the fact half-life at `now`); both stay absent-from-confidence, so --min-confidence
         # consumers still drop decisions. `last_outcome_at` NULL = no outcome yet.
         out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
-                 "ref": drefs.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
+                 "ref": drefs.get(r["id"]), "sid": dsids.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
                  "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
                                              if r["last_outcome_at"] else None)} for r in dec_rows]
-        out += [{**dict(r), "kind": "idea", "effective_confidence": eff, "ref": irefs.get(r["id"])}
-                for eff, r in iscored]
+        out += [{**dict(r), "kind": "idea", "effective_confidence": eff, "ref": irefs.get(r["id"]),
+                 "sid": isids.get(r["id"])} for eff, r in iscored]
         print(json.dumps(out, indent=2))
     else:
         for eff, r in scored:
             tags = json.loads(r["tags"]) if r["tags"] else []
             flag = "  ⚠ CONTESTED" if r["contested"] else ""
-            print(f"[{r['id']}] {r['content']}")
+            print(f"[{fsids.get(r['id'])} · {r['id']}] {r['content']}")
             print(f"     Tags: {', '.join(tags)}  Conf: {eff:.2f}  From: {r['source_agent']}{flag}")
             print(f"     ref: {frefs.get(r['id'])}")
             print()
@@ -2506,13 +2621,13 @@ def search(args):
                 if r["last_outcome_at"]:
                     eff_o = _effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
                     outc = f"  outcome {eff_o:+.2f}"
-                print(f"  #{r['id']} {r['content']}{tagstr}{sup}{outc}")
+                print(f"  {dsids.get(r['id'])} (#{r['id']}) {r['content']}{tagstr}{sup}{outc}")
                 if r["rationale"]:
                     print(f"       ↳ {r['rationale']}")
                 inf = dinformed.get(r["id"]) or []
                 if inf:
-                    shown = ", ".join((("d" if i["kind"] == "decision" else "i" if i["kind"] == "idea" else "#")
-                                       + str(i["id"])) if i["id"] is not None else i["ref"] for i in inf)
+                    shown = ", ".join((i["sid"] or i["ref"]) + (f" ({i['kind'][0]}{i['id']})" if i["id"] is not None else " (not landed here)")
+                                      for i in inf)
                     print(f"       informed by: {shown}")
                 print(f"       ref: {drefs.get(r['id'])}")
             print()
@@ -2522,7 +2637,7 @@ def search(args):
                 itags = json.loads(r["tags"]) if r["tags"] else []
                 tagstr = f"  [{', '.join(itags)}]" if itags else ""
                 flag = "  ⚠ CONTESTED" if r["contested"] else ""
-                print(f"  i{r['id']} {r['content']}{tagstr}  Conf: {eff:.2f}{flag}")
+                print(f"  {isids.get(r['id'])} (i{r['id']}) {r['content']}{tagstr}  Conf: {eff:.2f}{flag}")
                 print(f"       ref: {irefs.get(r['id'])}")
             print()
 
@@ -2542,8 +2657,8 @@ def propose(args):
     conn.commit()
     conn.close()
     tagnote = f"  [{', '.join(tags)}]" if tags else ""
-    print(f"Proposed idea i{res['id']}{tagnote}  (confidence 0.00 — earned only from sense-channel "
-          f"supports/contradicts links by other identities)")
+    print(f"Proposed idea i{res['id']} {_short_id(entry['node_id'], entry['seq'])}{tagnote}  (confidence 0.00 — "
+          f"earned only from sense-channel supports/contradicts links by other identities)")
     print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
 
 
@@ -2557,7 +2672,12 @@ def decide(args):
     informed = []                     # 1.19 PR3: [(kind, [node_id, seq]), ...] the decision relied on
     conn0 = get_conn()
     if args.supersedes:
-        supersedes_ref = _index_lookup(conn0, "decision", args.supersedes)
+        try:
+            supersedes_ref = _resolve_id_arg(conn0, args.supersedes, "decision", "--supersedes")
+        except ValueError as e:
+            conn0.close()
+            print(f"--supersedes: {e}", file=sys.stderr)
+            sys.exit(1)
     # Resolve EVERY --informed reference before anything is journaled: an unresolvable or wrong-kind id
     # aborts the whole write (no partial decision, no dangling links). Stable `node_id:seq` refs are
     # the primary form; bare ids are a kind-checked convenience (see _parse_ref_arg).
@@ -2610,7 +2730,7 @@ def decide(args):
 
     tagnote = f"  [{', '.join(tags)}]" if tags else ""
     infnote = f"  informed by {len(informed_refs)} ref(s)" if informed_refs else ""
-    print(f"Decided as decision #{res['id']}{tagnote}{infnote}")
+    print(f"Decided as {_short_id(entry['node_id'], entry['seq'])} (decision #{res['id']}){tagnote}{infnote}")
     print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
 
 
@@ -2691,9 +2811,10 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
                             "confidence": round(eff, 2), "contested": bool(r["contested"]),
                             "forgotten": base <= FORGET_FLOOR,
                             "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
-        frefs = _refs_for(conn, "fact", [m["id"] for m in matched])
+        fids = _ids_for(conn, "fact", [m["id"] for m in matched])
         for m in matched:
-            m["ref"] = frefs.get(m["id"])
+            m["ref"] = (fids.get(m["id"]) or {}).get("ref")
+            m["sid"] = (fids.get(m["id"]) or {}).get("sid")
         if sort == "recency":
             matched.sort(key=lambda f: (f["created"], f["confidence"]), reverse=True)
         else:  # salience
@@ -2713,9 +2834,10 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
                              "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now), 2)
                                                if r["last_outcome_at"] else None),
                              "last_outcome_at": r["last_outcome_at"]})
-        drefs = _refs_for(conn, "decision", [m["id"] for m in dmatched])
+        dids = _ids_for(conn, "decision", [m["id"] for m in dmatched])
         for m in dmatched:
-            m["ref"] = drefs.get(m["id"])
+            m["ref"] = (dids.get(m["id"]) or {}).get("ref")
+            m["sid"] = (dids.get(m["id"]) or {}).get("sid")
         dec_total = len(dmatched)
         decisions = dmatched[offset:offset + limit]
     ideas, ideas_total = [], 0
@@ -2731,9 +2853,10 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             imatched.append({"id": r["id"], "content": r["content"], "tags": itags,
                              "confidence": round(eff, 2), "contested": bool(r["contested"]),
                              "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
-        irefs = _refs_for(conn, "idea", [m["id"] for m in imatched])
+        iids = _ids_for(conn, "idea", [m["id"] for m in imatched])
         for m in imatched:
-            m["ref"] = irefs.get(m["id"])
+            m["ref"] = (iids.get(m["id"]) or {}).get("ref")
+            m["sid"] = (iids.get(m["id"]) or {}).get("sid")
         imatched.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
         ideas_total = len(imatched)
         ideas = imatched[offset:offset + limit]
@@ -2763,6 +2886,56 @@ def api_tags():
                 continue
     conn.close()
     return {"tags": sorted(tags)}
+
+
+def api_item(sid):
+    """1.19 PR3b: resolve a short id `h:…` (or a `node_id:seq` ref) through journal_index to the row it
+    names on THIS node — {kind, id, ref, sid, item} — so a dashboard deep link `/#h:…` survives rebuilds
+    and works on every node. `item` is the same row shape `api_search` returns; {} when unknown."""
+    conn = get_conn()
+    try:
+        try:
+            kind, ref = _parse_ref_arg(conn, str(sid or ""))
+        except ValueError as e:
+            return {"error": str(e)}
+        row = _index_row(conn, ref)
+        if row is None or kind not in ("fact", "decision", "idea"):
+            return {"error": f"{sid!r} is not a fact/decision/idea on this node"}
+        now = os.environ.get("HIVE_NOW") or _now_iso()
+        item = {}
+        if kind == "fact":
+            r = conn.execute(f"SELECT {_FACT_COLS} FROM facts WHERE id = ?", (row[1],)).fetchone()
+            if r:
+                base = r["confidence"]
+                item = {"id": r["id"], "content": r["content"], "tags": json.loads(r["tags"]) if r["tags"] else [],
+                        "confidence": round(_effective_confidence(base, r["last_evidence_at"], now), 2),
+                        "contested": bool(r["contested"]), "forgotten": base <= FORGET_FLOOR,
+                        "source": r["source_agent"], "created": (r["created_at"] or "")[:10]}
+        elif kind == "decision":
+            r = conn.execute("SELECT id, content, rationale, tags, created_at, superseded_by, informed_by, "
+                             "outcome_score, last_outcome_at FROM decisions WHERE id = ?", (row[1],)).fetchone()
+            if r:
+                item = {"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
+                        "tags": json.loads(r["tags"]) if r["tags"] else [], "superseded": bool(r["superseded_by"]),
+                        "created": (r["created_at"] or "")[:10],
+                        "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])],
+                        "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now), 2)
+                                          if r["last_outcome_at"] else None),
+                        "last_outcome_at": r["last_outcome_at"]}
+        else:
+            r = conn.execute("SELECT id, content, tags, source_agent, created_at, confidence, contested, "
+                             "last_evidence_at FROM ideas WHERE id = ?", (row[1],)).fetchone()
+            if r:
+                item = {"id": r["id"], "content": r["content"], "tags": json.loads(r["tags"]) if r["tags"] else [],
+                        "confidence": round(_effective_confidence(r["confidence"], r["last_evidence_at"], now), 2),
+                        "contested": bool(r["contested"]), "source": r["source_agent"],
+                        "created": (r["created_at"] or "")[:10]}
+        canon = _ids_for(conn, kind, [row[1]]).get(row[1]) or {}
+        if item:
+            item["ref"], item["sid"] = canon.get("ref"), canon.get("sid")
+        return {"kind": kind, "id": row[1], "ref": canon.get("ref"), "sid": canon.get("sid"), "item": item}
+    finally:
+        conn.close()
 
 
 def api_related(kind, item_id, limit=25):
@@ -3152,11 +3325,12 @@ def entity(args):
             conn.close()
             return
         entity_ref = _index_lookup(conn, "entity", erow["id"])
-        fact_ref = _index_lookup(conn, "fact", args.fact_id)
-        if fact_ref is None:
-            print(f"No fact #{args.fact_id}")
+        try:
+            fact_ref = _resolve_id_arg(conn, args.fact_id, "fact", "--fact-id")
+        except ValueError as e:
             conn.close()
-            return
+            print(f"--fact-id: {e}", file=sys.stderr)
+            sys.exit(1)
         payload = {
             "entity_ref": entity_ref,
             "fact_ref": fact_ref,
@@ -3166,7 +3340,7 @@ def entity(args):
         resolve_entity_fact(conn, entry)
         conn.commit()
         conn.close()
-        print(f"Linked fact #{args.fact_id} → entity '{args.name}'")
+        print(f"Linked fact {_short_id(*fact_ref)} → entity '{args.name}'")
         return
 
     # Read-only actions
@@ -3199,9 +3373,10 @@ def entity(args):
             WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
         """, (row["id"],)).fetchall()
         if linked:
+            lsids = _ids_for(conn, "fact", [lf["id"] for lf in linked])
             print(f"  Linked facts ({len(linked)}):")
             for lf in linked:
-                print(f"    [{lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+                print(f"    [{(lsids.get(lf['id']) or {}).get('sid')} · {lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
         conn.close()
 
 
@@ -3523,7 +3698,7 @@ def _print_open_ideas(cfg, cap=3):
         thr = float(cfg.get("OPEN_IDEA_THRESHOLD", 0.3))
         conn = get_conn()
         now = os.environ.get("HIVE_NOW") or _now_iso()
-        rows = conn.execute("SELECT id, content, confidence, last_evidence_at, created_at, node_id, seq "
+        rows = conn.execute("SELECT id, content, confidence, last_evidence_at, created_at, node_id, seq, sid "
                             "FROM ideas JOIN journal_index ON journal_index.kind = 'idea' "
                             "AND journal_index.local_id = ideas.id ORDER BY created_at DESC LIMIT 50").fetchall()
         conn.close()
@@ -3534,8 +3709,8 @@ def _print_open_ideas(cfg, cap=3):
         lines = ["[hive] Open ideas — hypotheses awaiting evidence (support or contradict with a "
                  "sense-channel link; restating them is not evidence):"]
         for r, eff in opened:
-            lines.append(f"  • i{r['id']} {r['content'].splitlines()[0][:140]} (conf {eff:.2f})  "
-                         f"ref {r['node_id']}:{r['seq']}")
+            lines.append(f"  • i{r['id']} {r['sid'] or _short_id(r['node_id'], r['seq'])} "
+                         f"{r['content'].splitlines()[0][:140]} (conf {eff:.2f})  ref {r['node_id']}:{r['seq']}")
         print("\n".join(lines))
     except Exception:
         return
@@ -3865,15 +4040,24 @@ def _compute_audit(depth=None, session=""):
             if cid is not None:
                 reconciled_ids.add(cid)
     contravened = []
+    conn = get_conn()
     for r in frows:
         # Skip a referrer that is itself reconciled (soft-retracted / owner-forgotten / resolved):
         # it no longer asserts the correction, so a dangling reference in its text needs no action.
         if r["id"] in reconciled_ids:
             continue
-        for ref_id in _parse_fact_references(r["content"]):
-            if ref_id != r["id"] and ref_id in id_to_row and ref_id not in reconciled_ids:
-                contravened.append((r, ref_id))
+        for tok in _parse_fact_references(r["content"]):
+            # 1.19 PR3b: an `h:` reference resolves EXACTLY through journal_index; a prose `#N` is a local
+            # id and stays best-effort. Both yield this node's current rowid for the audit line.
+            if isinstance(tok, str):
+                hit = conn.execute("SELECT local_id FROM journal_index WHERE sid = ? AND kind = 'fact'", (tok,)).fetchone()
+                ref_id = hit["local_id"] if hit else None
+            else:
+                ref_id = tok
+            if ref_id is not None and ref_id != r["id"] and ref_id in id_to_row and ref_id not in reconciled_ids:
+                contravened.append((r, ref_id, isinstance(tok, str)))
                 break
+    conn.close()
 
     missing_note = None
     if session:
@@ -3900,21 +4084,31 @@ def audit(args):
     contravened = a["contravened"]
     missing_note = a["missing_note"]
 
+    # 1.19 PR3b: every id in the audit is shown with its `h:` short id (stable) beside the rowid.
+    conn = get_conn()
+    asids = {k: v["sid"] for k, v in _ids_for(conn, "fact", [r["id"] for r, *_x in forgotten + contested + decayed + recheck + contravened]
+                                             + [ref_id for _r, ref_id, _e in contravened]).items()}
+    conn.close()
+
+    def hid(i):
+        return f"{asids.get(i) or '?'} (#{i})"
+
     if args.format == "json":
         print(json.dumps({
             "depth": depth,
             "redundant": [{"content": c, "asserts": n, "identities": d} for c, n, d in redundant[:cap]],
             "paraphrase": [{"a": a, "b": b, "overlap": o} for a, b, o in paraphrase[:cap]],
             "obsolete": {
-                "forgotten": [{"id": r["id"], "content": r["content"]} for r, _e in forgotten[:cap]],
-                "contested": [{"id": r["id"], "content": r["content"]} for r, _e in contested[:cap]],
-                "decayed": [{"id": r["id"], "content": r["content"], "eff": e} for r, e in decayed[:cap]],
+                "forgotten": [{"id": r["id"], "sid": asids.get(r["id"]), "content": r["content"]} for r, _e in forgotten[:cap]],
+                "contested": [{"id": r["id"], "sid": asids.get(r["id"]), "content": r["content"]} for r, _e in contested[:cap]],
+                "decayed": [{"id": r["id"], "sid": asids.get(r["id"]), "content": r["content"], "eff": e} for r, e in decayed[:cap]],
             },
-            "recheck": [{"id": r["id"], "content": r["content"],
+            "recheck": [{"id": r["id"], "sid": asids.get(r["id"]), "content": r["content"],
                          "age_hours": (round(a, 1) if a is not None else None), "ttl_hours": t}
                         for r, a, t in recheck[:cap]],
-            "contravened": [{"id": r["id"], "content": r["content"], "references": ref_id}
-                            for r, ref_id in contravened[:cap]],
+            "contravened": [{"id": r["id"], "sid": asids.get(r["id"]), "content": r["content"], "references": ref_id,
+                             "references_sid": asids.get(ref_id), "exact": exact}
+                            for r, ref_id, exact in contravened[:cap]],
             "well_corroborated": len(corroborated),
             "missing": missing_note,
         }, indent=2))
@@ -3932,23 +4126,24 @@ def audit(args):
         print("  (none)")
     print(f"\nOBSOLETE — forgotten {len(forgotten)}, contested {len(contested)}, decayed {len(decayed)}")
     for r, _e in forgotten[:cap]:
-        print(f"  [forgotten] #{r['id']} {short(r['content'])} → already soft-gone")
+        print(f"  [forgotten] {hid(r['id'])} {short(r['content'])} → already soft-gone")
     for r, _e in contested[:cap]:
-        print(f"  [contested] #{r['id']} {short(r['content'])} → needs adjudication")
+        print(f"  [contested] {hid(r['id'])} {short(r['content'])} → needs adjudication")
     for r, e in decayed[:cap]:
-        print(f"  [decayed eff {e:.2f}] #{r['id']} {short(r['content'])} → re-confirm or `hv retract {r['id']}`")
+        print(f"  [decayed eff {e:.2f}] {hid(r['id'])} {short(r['content'])} → re-confirm or `hv retract {asids.get(r['id'])}`")
     if not (forgotten or contested or decayed):
         print("  (none)")
     if recheck:
         print(f"\nRECHECK (volatile facts past freshness) — {len(recheck)}")
         for r, a, t in recheck[:cap]:
             age = f"{a:.0f}h" if a is not None else "unknown"
-            print(f"  #{r['id']} {short(r['content'])} (age {age} > ttl {t}h) → re-verify")
+            print(f"  {hid(r['id'])} {short(r['content'])} (age {age} > ttl {t}h) → re-verify")
     if contravened:
         print(f"\nCONTRAVENED (a correction whose target is still live) — {len(contravened)}")
-        for r, ref_id in contravened[:cap]:
-            print(f"  #{r['id']} {short(r['content'])} → names fact #{ref_id}, still live; "
-                  f"reconcile (`hv remember ... --resolves {ref_id}` or `hv retract {ref_id}`)")
+        for r, ref_id, exact in contravened[:cap]:
+            how = "" if exact else " (a prose #N is a local id — best-effort match)"
+            print(f"  {hid(r['id'])} {short(r['content'])} → names fact {hid(ref_id)}, still live{how}; "
+                  f"reconcile (`hv remember ... --resolves {asids.get(ref_id)}` or `hv retract {asids.get(ref_id)}`)")
     if missing_note:
         print(f"\nMISSING (session proxy)\n  {missing_note}")
     print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
@@ -7016,7 +7211,7 @@ def build_parser():
                                       "not knowledge-shaped (trivially short, bare question, greeting)")
     remember_parser.add_argument("--no-volatile", action="store_true",
                                  help="Do not auto-tag transient operational-status claims as volatile")
-    remember_parser.add_argument("--resolves", type=int,
+    remember_parser.add_argument("--resolves", metavar="FACT",
                                  help="ID of a prior fact this write resolves/closes (soft-retracts it)")
     remember_parser.add_argument("--outcome-of", metavar="DECISION",
                                  help="This fact is an OUTCOME of a decision: its stable ref `node_id:seq` (the `ref` "
@@ -7053,14 +7248,16 @@ def build_parser():
     decide_parser.add_argument("content", help="Decision content")
     decide_parser.add_argument("--rationale", help="Why this decision")
     decide_parser.add_argument("--tags", help="Comma-separated tags (e.g. project scope), like `remember`")
-    decide_parser.add_argument("--supersedes", type=int, help="ID of decision this replaces")
+    decide_parser.add_argument("--supersedes", metavar="DECISION",
+                               help="The decision this replaces: its `h:` short id or `ref` (preferred) or a local id")
     decide_parser.add_argument("--informed", nargs="+", metavar="REF",
                                help="What this decision relied on: stable refs `node_id:seq` (the `ref` from "
                                     "`hv search --format json`, preferred) or local ids — bare N (fact), dN "
                                     "(decision), iN (idea) — resolved and kind-checked before anything is written")
 
     retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")
-    retract_parser.add_argument("fact_id", type=int, help="Local fact id to retract")
+    retract_parser.add_argument("fact_id", metavar="FACT",
+                                help="The fact to retract: its `h:` short id or `ref` (preferred) or a bare local id (deprecated)")
     retract_parser.add_argument("--reason", help="Why")
     retract_parser.add_argument("--source", help="Retractor identity (default: env/manual)")
     retract_parser.add_argument("--owner", action="store_true",
@@ -7071,7 +7268,7 @@ def build_parser():
     entity_parser.add_argument("--name", help="Entity name")
     entity_parser.add_argument("--type", help="Entity type (person, project, concept)")
     entity_parser.add_argument("--attr", help="JSON attributes")
-    entity_parser.add_argument("--fact-id", type=int, help="Fact ID to link")
+    entity_parser.add_argument("--fact-id", metavar="FACT", help="Fact to link: `h:` short id, `ref`, or a local id")
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
 
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")

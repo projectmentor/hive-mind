@@ -279,6 +279,32 @@ paths are never emitted together for one act).
 
 ---
 
+## Stable short ids (1.19 PR3b)
+
+Local ids are SQLite rowids: correct as store.db's internal keys and join columns, wrong as *names*
+carried across time or nodes — `rebuild_db` reassigns them (after every write and every sync,
+ordered by `node_id, seq`), and each node assigns its own. `sid` gives humans a name they can type:
+
+```
+sid = "h:" + sha256(f"{node_id}:{seq}").hexdigest()[:10]        # _short_id
+```
+
+- **Derived, never stored in an entry.** `_record_index` writes it into `journal_index.sid`
+  (indexed; ALTER-if-missing on an existing store) beside `local_id`, so lookup is O(1) and it is
+  rebuilt with everything else. Nothing on the wire changes.
+- **Exact resolution.** `_parse_ref_arg` resolves `h:…` by equality on that column — never a prefix
+  match. 40 bits: a collision within one hive's lifetime is negligible, and a collision would be
+  visible (two index rows, one sid) rather than silent.
+- **One canonical name per row.** A corroborated fact maps several journal entries to one rowid;
+  `_ids_for` names the row by its first entry in `(node_id, seq)` order — the same on every node —
+  while every entry's own `sid` still resolves to the row. `_index_lookup` orders the same way.
+- **Boundary only.** `_resolve_id_arg(conn, token, kind, what)` is the one path every accepting verb
+  uses (`--informed` via `_parse_ref_arg`, `--outcome-of`, `--supersedes`, `--resolves`, `retract`,
+  `entity link`): `h:` / `node_id:seq` / bare local id, kind-checked, resolved **before** any write.
+  A bare integer prints `_BARE_ID_WARNING` once per process; it is removed at the next MAJOR.
+- **Audit.** `_REFERENCE_RE` parses a prose `h:…` beside `#N`; CONTRAVENED marks the former `exact`
+  and the latter best-effort. `api_item(sid)` resolves a dashboard deep link (`/#h:…`) server-side.
+
 ## Ideas (contract 1.20)
 
 An **idea** is a hypothesis: "perhaps X relates to Y". It is modelled as its own journal type
@@ -504,7 +530,7 @@ Key tables in `store.db`:
 | `entity_facts` | Many-to-many fact-to-entity links |
 | `links` | 1.19 generic edge table projected from `link` entries: `kind, from_kind, from_id, to_kind, to_id, signer, authority, channel, created_at` |
 | `ideas` | 1.20 hypotheses: `content, tags, source_agent, created_at, confidence, contested, last_evidence_at, utility` — one row per `idea` entry, confidence earned from links only |
-| `journal_index` | Index of ingested journal entries by `(node_id, seq)` |
+| `journal_index` | Index of ingested journal entries by `(node_id, seq)` → `(kind, local_id, sid)`; `sid` (1.19 PR3b) is the indexed short id `h:` + `sha256("node_id:seq")[:10]` |
 | `node_chunk_hashes` | Merkle chunk hashes per node, used by sync |
 
 ### WAL mode

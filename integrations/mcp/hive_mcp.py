@@ -104,9 +104,12 @@ def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> l
     with provenance, not truth: weigh confidence and how many independent sources agree.
     If results conflict, surface both — do not pick a winner.
 
-    Every row carries `ref` (`node_id:seq`), the STABLE identity of that entry — use it when you
-    cite the entry to another tool (hive_decide informed_by, hive_retract). The numeric `id` is
-    this node's rebuild-unstable rowid; never carry it across a sync or a session.
+    Every row carries two STABLE identities of that entry: `sid` (the short id, `h:` + 10 hex —
+    the form to pass to other tools: hive_decide informed_by, hive_remember outcome_of, hive_retract,
+    hive_entity fact_id) and `ref` (`node_id:seq`, the raw journal identity). Both are identical on
+    every node and never change. The numeric `id` is this node's rebuild-unstable rowid; it is
+    DEPRECATED as an input and stops being accepted at the next MAJOR contract bump — never carry it
+    across a sync or a session.
 
     min_confidence filters out facts below the given derived confidence (0.0 = everything).
     """
@@ -138,7 +141,7 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     into the tags so readers can weigh the claim.
 
     outcome_of: when this fact is the OUTCOME of a decision you acted on, pass that decision's
-    `ref` (from hive_search, `node_id:seq`). polarity: +1 it worked out (default), -1 it did
+    `sid` (from hive_search, `h:…`; its `ref` `node_id:seq` also works). polarity: +1 it worked out (default), -1 it did
     not, 0 observed and neutral — ternary on purpose. channel: leave empty for an observation
     of the world (the default, counted); pass "introspect" if this is your own reasoning rather
     than something observed — it is recorded but never counted toward the decision's outcome.
@@ -167,7 +170,8 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     `hv search` by tag/text instead of by an unstable, node-local decision id.
 
     informed_by: comma-separated references to the facts/decisions you retrieved and RELIED ON
-    for this decision — pass the `ref` values from hive_search results (`node_id:seq`, stable
+    for this decision — pass the `sid` values from hive_search results (`h:…`; `ref` `node_id:seq`
+    also works — both stable
     across nodes and rebuilds). Bare local ids (`118`, `d17`) are accepted but drift; prefer
     `ref`. An unresolvable reference aborts the whole write. This is what lets the hive learn
     which knowledge turns out to matter once the decision's outcomes are recorded.
@@ -208,17 +212,22 @@ def hive_stats() -> str:
 
 
 @mcp.tool()
-def hive_retract(fact_id: int, reason: str = "") -> str:
+def hive_retract(fact_id: str, reason: str = "") -> str:
     """Record SOFT negative evidence against a fact (a reversible soft-forget), source=claude-ai.
+
+    fact_id: the fact's `sid` from hive_search (`h:…`, stable on every node) — or its `ref`
+    (`node_id:seq`). A bare numeric id is still accepted but DEPRECATED: it is this node's rowid,
+    reassigned on every rebuild (after every write and every sync), so it can silently name a
+    different fact by the time you use it. The target is kind-checked (a decision aborts).
 
     Use when you find a fact is wrong or stale and want to down-weight it without destroying it.
     This is deliberate, reversible negative evidence — NOT a deletion. The decisive owner-forget
     (`hv retract --owner`) is intentionally NOT exposed here; it stays a CLI/owner action.
 
-    Prefer `hive_remember(..., )` with a prose `resolves #<id>` when you are replacing the fact with
+    Prefer `hive_remember(...)` with a prose `resolves <sid>` when you are replacing the fact with
     a correction; use this when you just want to retract.
     """
-    args = ["retract", str(fact_id), "--source", "claude-ai"]
+    args = ["retract", str(fact_id).strip(), "--source", "claude-ai"]
     if reason:
         args += ["--reason", reason]
     return _run_hv(args)
@@ -226,14 +235,15 @@ def hive_retract(fact_id: int, reason: str = "") -> str:
 
 @mcp.tool()
 def hive_entity(action: str, name: str = "", type: str = "", attr: str = "",
-                fact_id: int | None = None, confidence: float | None = None) -> str:
+                fact_id: str | int | None = None, confidence: float | None = None) -> str:
     """Manage entities (people, projects, concepts) and link facts to them.
 
     action:
     - "list"  — list known entities.
     - "show"  — show one entity and its linked facts (pass name).
     - "add"   — create/upsert an entity (pass name, optional type, optional attr as a JSON string).
-    - "link"  — attach a fact to an entity (pass name + fact_id, optional confidence).
+    - "link"  — attach a fact to an entity (pass name + fact_id — the fact's `sid` from hive_search,
+      `h:…`, or its `ref`; a bare numeric rowid is deprecated — optional confidence).
 
     Entities are the corpus's nouns; linking facts to them makes recall by subject reliable.
     """
@@ -244,8 +254,8 @@ def hive_entity(action: str, name: str = "", type: str = "", attr: str = "",
         args += ["--type", type]
     if attr:
         args += ["--attr", attr]
-    if fact_id is not None:
-        args += ["--fact-id", str(fact_id)]
+    if fact_id is not None and str(fact_id).strip():
+        args += ["--fact-id", str(fact_id).strip()]
     if confidence is not None:
         args += ["--confidence", str(confidence)]
     return _run_hv(args)

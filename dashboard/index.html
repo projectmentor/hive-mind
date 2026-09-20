@@ -175,7 +175,7 @@ document.addEventListener('click', e=>{
   $('#hHelp').onclick=()=>openModal('Help','<p>A built-in AI assistant for the dashboard is on the way. For now, use the <code>hv</code> CLI or <a href="https://hivemind.projectmentor.org/dev/" target="_blank" rel="noopener">the docs</a>.</p>');
   getJSON('/api/verify').then(v=>{const a=$('#hAuth'); if(v.ok){a.textContent='✓ v'+(v.version||META.contract)+' authentic';a.className='badge link ok';}else{a.textContent='⚠ modified locally';a.className='badge link warn';}}).catch(()=>{});
   document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>goTab(b.dataset.v));
-  render();
+  if(!(await openHash())) render();
 })();
 function goTab(v){state.view=v;state.node=null;state.detail=null;if(v==='corpus'){C.fpage=1;C.dpage=1;}if(v==='telemetry')TP=1;
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v===v));render();}
@@ -232,7 +232,7 @@ function factRow(f){
      <span style="margin-left:auto">${esc(f.source)} · ${esc(f.created)}</span></div></div>`;
 }
 function decRow(d){
-  return `<div class="row link" data-onclick="openDecision(${d.id})"><div class="content">#${d.id} ${esc((d.content||'').slice(0,240))}
+  return `<div class="row link" data-onclick="openDecision(${d.id})"><div class="content"><span class="mono muted">${esc(d.sid||('#'+d.id))}</span> ${esc((d.content||'').slice(0,240))}
      ${d.superseded?'<span class="pill superseded">SUPERSEDED</span>':''}</div>
    ${d.rationale?`<div class="rationale">${esc(d.rationale.slice(0,300))}</div>`:''}
    <div class="meta">${(d.tags||[]).map(t=>`<span class="chip proj" data-onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
@@ -250,28 +250,42 @@ function pager(cur,total,per,fn){
 }
 
 /* ---------- detail views (fact / decision / session) ---------- */
-window.openFact=id=>{const f=LAST.facts.find(x=>x.id===id); if(f){state.detail={kind:'fact',data:f}; render();}};
-window.openDecision=id=>{const d=LAST.decisions.find(x=>x.id===id); if(d){state.detail={kind:'decision',data:d}; render();}};
+window.openFact=id=>{const f=LAST.facts.find(x=>x.id===id); if(f){state.detail={kind:'fact',data:f}; setHash(f.sid); render();}};
+window.openDecision=id=>{const d=LAST.decisions.find(x=>x.id===id); if(d){state.detail={kind:'decision',data:d}; setHash(d.sid); render();}};
 window.openSession=i=>{const s=LAST.sessions[i]; if(s){state.detail={kind:'session',data:s}; render();}};
-window.closeDetail=()=>{state.detail=null; render();};
+window.closeDetail=()=>{state.detail=null; setHash(''); render();};
+// 1.19 PR3b: a detail view is addressable by the entry's STABLE short id — `/#h:…` — resolved server-side
+// through journal_index (`/api/item`), so the link survives rebuilds and works on every node. The rowid
+// never appears in a URL.
+function setHash(sid){ try{ if(sid){ if(location.hash!=='#'+sid) history.replaceState(null,'','#'+sid); } else if(location.hash) history.replaceState(null,'',location.pathname+location.search); }catch(e){} }
+async function openHash(){
+  const h=(location.hash||'').slice(1); if(!/^h:[0-9a-f]{10}$/.test(h)) return false;
+  let r; try{ r=await getJSON('/api/item?sid='+encodeURIComponent(h)); }catch(e){ return false; }
+  if(!r||r.error||!r.item||!(r.kind==='fact'||r.kind==='decision')) return false;
+  if(r.kind==='fact') LAST.facts=[r.item]; else LAST.decisions=[r.item];
+  state.detail={kind:r.kind,data:r.item}; render(); return true;
+}
+window.addEventListener('hashchange',()=>{ openHash(); });
 function kv(k,v){return `<div class="kv"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`;}
 function renderDetail(){
   const d=state.detail;
   const crumb=`<div class="crumb"><button class="back" data-onclick="closeDetail()">‹ Back</button><span class="who">${esc({fact:'Fact',decision:'Decision',session:'Session'}[d.kind])} detail</span></div>`;
   if(d.kind==='fact'){const f=d.data;
-    $('#app').innerHTML=crumb+`<div class="panel"><h2>Fact #${f.id}</h2><div class="full">${esc(f.content)}</div></div>
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Fact <span class="mono">${esc(f.sid||('#'+f.id))}</span> <small class="muted">#${f.id} on this node</small></h2><div class="full">${esc(f.content)}</div></div>
       <div class="panel"><h2>Details</h2>
         ${kv('Confidence',`<span class="bar"><i style="width:${Math.round((f.confidence||0)*100)}%"></i></span> <span style="color:${confColor(f.confidence||0)}">${(f.confidence||0).toFixed(2)}</span>`)}
         ${kv('State', (f.contested?'<span class="pill contested">CONTESTED</span> ':'')+(f.forgotten?'<span class="pill forgotten">FORGOTTEN</span>':'')||'live')}
         ${kv('Tags', (f.tags||[]).map(t=>`<span class="chip" data-onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'<span class="muted">—</span>')}
-        ${kv('Source', esc(f.source))}${kv('Created', esc(f.created))}</div>
+        ${kv('Source', esc(f.source))}${kv('Created', esc(f.created))}
+        ${f.ref?kv('Identity', '<span class="mono">'+esc(f.ref)+'</span>'+(f.sid?' · <a href="#'+esc(f.sid)+'" class="mono">#'+esc(f.sid)+'</a>':'')):''}</div>
       <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
   } else if(d.kind==='decision'){const x=d.data;
-    $('#app').innerHTML=crumb+`<div class="panel"><h2>Decision #${x.id}${x.superseded?' <span class="pill superseded">SUPERSEDED</span>':''}</h2><div class="full">${esc(x.content)}</div></div>
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Decision <span class="mono">${esc(x.sid||('#'+x.id))}</span> <small class="muted">#${x.id} on this node</small>${x.superseded?' <span class="pill superseded">SUPERSEDED</span>':''}</h2><div class="full">${esc(x.content)}</div></div>
       ${x.rationale?`<div class="panel"><h2>Rationale</h2><div class="full" style="color:var(--dim)">${esc(x.rationale)}</div></div>`:''}
       <div class="panel"><h2>Details</h2>
         ${kv('Tags',(x.tags||[]).map(t=>`<span class="chip proj" data-onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'—')}
-        ${kv('Created',esc(x.created))}</div>
+        ${kv('Created',esc(x.created))}
+        ${x.ref?kv('Identity', '<span class="mono">'+esc(x.ref)+'</span>'+(x.sid?' · <a href="#'+esc(x.sid)+'" class="mono">#'+esc(x.sid)+'</a>':'')):''}</div>
       <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
   } else {const s=d.data;
     const models=Object.entries(s.models||{});

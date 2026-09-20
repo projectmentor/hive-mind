@@ -239,7 +239,8 @@ when it must re-wire.
     list of journal refs plus one `informed` link per ref. `hv search` (text + JSON) and
     `hive_search` now return **`ref`** (`node_id:seq`) on every fact and decision — the stable
     identity agents should carry; bare local ids are accepted but kind-checked and discouraged.
-    Rubric: when you call `hive_decide`, pass the refs of the facts you retrieved and relied on.
+    Rubric: when you call `hive_decide`, pass the `sid`s (PR3b) or refs of the facts you retrieved
+    and relied on.
   - *PR4 (same contract):* **outcomes → `decisions.outcome_score`.** `hv remember --outcome-of
     <decision ref> [--polarity 1|0|-1] [--channel …]` / `hive_remember(outcome_of=…, polarity=…)`
     records what happened after a decision was acted on: an ordinary fact plus an `outcome-of`
@@ -248,6 +249,19 @@ when it must re-wire.
     a *vindication* axis; decisions still carry **no confidence** and `--min-confidence` still
     excludes them. Only `sense`-channel outcomes count (absent = sense); an `introspect` outcome
     is recorded, never counted. Both evidence projections now retain an ordered evidence sequence.
+  - *PR3b (same contract):* **stable short ids.** Every fact/decision/idea now carries **`sid`** —
+    `h:` + `sha256("node_id:seq")[:10]` (e.g. `h:3f9a1c0b2d`), the human form of `ref`: identical on
+    every node, never changes on rebuild, resolved **exactly** through the projection-written column
+    `journal_index.sid`. It is shown wherever a rowid was shown (`hv search` text + JSON, write
+    confirmations, `hv audit`, the open-ideas digest, `hive_search` rows, the dashboard — detail
+    views are addressable as `/#h:…`) and accepted wherever an id is accepted (`--informed`,
+    `--outcome-of`, `--supersedes`, `--resolves`, `hv retract`, `hv entity link`; MCP `informed_by`,
+    `outcome_of`, `fact_id`). **Deprecation:** bare local ids (`118`, `d17`, `i5`) are rowids that
+    drift across rebuilds and nodes; they remain accepted (kind-checked) but print a one-line
+    warning and **stop being accepted at the next MAJOR contract bump** — adapters must pass `sid`
+    (or `ref`). `hive_retract(fact_id)` and `hive_entity(fact_id)` now take the `sid` string. The
+    audit's CONTRAVENED check parses a prose `h:…` exactly (a prose `#N` stays best-effort).
+    Closes the `hv retract` wrong-target hazard (hive #58). No wire change; nothing new is journaled.
     Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
   - *PR7 (same contract):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
     devices, decisions' outcome mean) over governed short/long windows (`trust_short_days`,

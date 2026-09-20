@@ -17,7 +17,9 @@ corroboration and checkable outcomes are what matter.
 (do not `cd`). Run it via the shell:
 - Search:   `~/projects/hive-mind/hv search "<query>"`   (add `--format json` for structured results)
 - Remember: `~/projects/hive-mind/hv remember "<fact>" --tags <t1,t2> --source claude-code`
-- Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>"`
+- Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>" --informed <ref> [<ref>…]`
+  (`<ref>` = the `ref` field, `node_id:seq`, of each fact/decision you retrieved and relied on —
+  stable across nodes and rebuilds; bare local ids like `118`/`d17` drift, avoid them)
 - Sync:     `~/projects/hive-mind/hv sync now`
 
 **ALWAYS pass `--source claude-code`** on `remember` so the hive can distinguish your writes
@@ -25,7 +27,9 @@ from other agents' — this is what makes corroboration and provenance work.
 
 ## When to WRITE (be disciplined — the corpus is shared and permanent)
 Write durable, checkable, reusable knowledge:
-- **Decisions** (`hv decide`) with rationale — architectural / process choices.
+- **Decisions** (`hv decide`) with rationale — architectural / process choices. **Pass `--informed`
+  with the refs of the facts you searched and relied on**: that is how the hive later learns which
+  knowledge proved useful once the decision's outcomes are recorded.
 - **Outcomes / results** of actions ("did X → got Y") — checkable ground truth.
 - **Corrections** — something was wrong and is now right.
 - **Constraints / preferences / commitments** that shape future work.

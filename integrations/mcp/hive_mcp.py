@@ -101,6 +101,10 @@ def hive_search(query: str, min_confidence: float = 0.0) -> list[dict]:
     with provenance, not truth: weigh confidence and how many independent sources agree.
     If results conflict, surface both — do not pick a winner.
 
+    Every row carries `ref` (`node_id:seq`), the STABLE identity of that entry — use it when you
+    cite the entry to another tool (hive_decide informed_by, hive_retract). The numeric `id` is
+    this node's rebuild-unstable rowid; never carry it across a sync or a session.
+
     min_confidence filters out facts below the given derived confidence (0.0 = everything).
     """
     out = _run_hv(["search", query, "--format", "json"])
@@ -136,7 +140,7 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
 
 
 @mcp.tool()
-def hive_decide(content: str, rationale: str = "", tags: str = "") -> str:
+def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: str = "") -> str:
     """Record an architectural or process DECISION with its rationale.
 
     Use for choices that shape future work. Search first to avoid duplicating an existing
@@ -144,6 +148,12 @@ def hive_decide(content: str, rationale: str = "", tags: str = "") -> str:
 
     tags: comma-separated (e.g. the project) so the decision is findable by hive_search /
     `hv search` by tag/text instead of by an unstable, node-local decision id.
+
+    informed_by: comma-separated references to the facts/decisions you retrieved and RELIED ON
+    for this decision — pass the `ref` values from hive_search results (`node_id:seq`, stable
+    across nodes and rebuilds). Bare local ids (`118`, `d17`) are accepted but drift; prefer
+    `ref`. An unresolvable reference aborts the whole write. This is what lets the hive learn
+    which knowledge turns out to matter once the decision's outcomes are recorded.
     """
     args = ["decide", content]
     if rationale:
@@ -151,6 +161,9 @@ def hive_decide(content: str, rationale: str = "", tags: str = "") -> str:
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if tag_list:
         args += ["--tags", ",".join(tag_list)]
+    refs = [r.strip() for r in informed_by.split(",") if r.strip()]
+    if refs:
+        args += ["--informed", *refs]
     return _run_hv(args)
 
 

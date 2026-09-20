@@ -66,6 +66,10 @@ Cross-row links (e.g. a retraction pointing at a fact, a decision superseding
 another) use `(node_id, seq)` journal identity — not local SQLite IDs. This
 ensures links survive cross-node merge correctly.
 
+A decision payload may carry `informed_by`: a list of `[node_id, seq]` refs it relied on
+(additive, 1.19 PR3; projected to `decisions.informed_by`). The stable identity of any entry is
+`node_id:seq`, surfaced as `ref` by `hv search`; local ids are rowids and shift on every rebuild.
+
 Since contract 1.19 new relationships are expressed by ONE generic `link` type
 with an open `kind` vocabulary (see *Links* below); the three legacy mechanisms
 (`entity_fact`, `retract`, decision `supersedes_ref`) keep their resolvers forever
@@ -228,7 +232,7 @@ One journal type, an open vocabulary, one resolver.
 | `supersedes` | decision → decision | **hard:** `decisions.superseded_by`; **evidence:** row only |
 | `resolves` | fact → fact | **hard:** `facts.resolves` provenance + retract-equivalent evidence; **evidence:** evidence only |
 | `entity` | entity → fact | `entity_facts` row |
-| `informed` | decision → fact/decision | edge row (utility projection lands with PR3/PR6) |
+| `informed` | decision → fact/decision | written by `hv decide --informed` (PR3); the decision's payload also carries `informed_by` as the human-legible record; utility projection lands with PR6 |
 | `outcome-of` | fact → decision | edge row (outcome_score lands with PR4) |
 
 **Links are evidence, not commands.** `_link_authority` returns `hard` only when the payload

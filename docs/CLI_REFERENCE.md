@@ -99,7 +99,7 @@ them. You can link a new decision to an older one it replaces, so you always
 have a clear trail of what changed and why.
 
 ```
-hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID]
+hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID] [--informed REF ...]
 ```
 
 **Arguments:**
@@ -110,6 +110,7 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID]
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
 | `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision ids (`#N`) are node-local and shift on rebuild, so don't reference a decision by its number; find it by tag or text. |
 | `--supersedes` | The ID of a previous decision this replaces. The old decision stays on record; this one is linked to it. |
+| `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable form is the `ref` shown by `hv search` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — identical on every node, never changes. Bare local ids are accepted as a convenience — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
 
 **Examples:**
 ```bash
@@ -710,6 +711,11 @@ rationale, or tags — so `hv search hive-mind` surfaces that project's decision
 alongside its facts. Decisions have no confidence, so `--min-confidence` does not
 filter them in text mode.
 
+
+> *(1.19)* Every result — text and `--format json` — carries **`ref`**, the entry's stable journal identity
+> `node_id:seq`. Use `ref` wherever you cite an entry to another command (`--informed`, later `--outcome-of`);
+> the bracketed `[N]` / `#N` is this node's rowid and shifts on rebuild. Decisions also show `informed by:`
+> (the refs they relied on, rendered with this node's current local ids).
 ```
 hv search <query> [--format {text,json}] [--min-confidence N]
 ```

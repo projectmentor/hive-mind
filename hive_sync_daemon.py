@@ -60,7 +60,7 @@ _ADVERTISED = {"addr": None}
 _OPEN_DISCOVERY = frozenset({"/hive/info", "/sync/merkle-root", "/api/verify"})
 _REMOTE_AUTH = frozenset({"/sync/hello", "/sync/chunk"})
 _LOOPBACK_ONLY = frozenset({
-    "/api/overview", "/api/search", "/api/tags", "/api/related", "/api/audit",
+    "/api/overview", "/api/search", "/api/tags", "/api/related", "/api/item", "/api/audit",
     "/api/status", "/api/telemetry", "/api/peers",
     "/", "/index.html", "/dashboard", "/dashboard/", "/logo.svg", "/favicon.svg",
 })
@@ -417,6 +417,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, hv.api_related(
                     kind=q.get("kind", ["fact"])[0],
                     item_id=int(q.get("id", ["0"])[0] or 0)))
+            elif u.path == "/api/item":               # 1.19 PR3b: resolve a `h:` short id / ref (deep links)
+                self._send(200, hv.api_item(q.get("sid", [""])[0]))
             elif u.path == "/api/audit":
                 self._send(200, hv.api_audit())
             elif u.path == "/api/status":

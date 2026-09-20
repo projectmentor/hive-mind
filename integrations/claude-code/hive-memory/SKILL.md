@@ -18,8 +18,10 @@ corroboration and checkable outcomes are what matter.
 - Search:   `~/projects/hive-mind/hv search "<query>"`   (add `--format json` for structured results)
 - Remember: `~/projects/hive-mind/hv remember "<fact>" --tags <t1,t2> --source claude-code`
 - Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>" --informed <ref> [<ref>…]`
-  (`<ref>` = the `ref` field, `node_id:seq`, of each fact/decision you retrieved and relied on —
-  stable across nodes and rebuilds; bare local ids like `118`/`d17` drift, avoid them)
+  (`<ref>` = the `sid` field — `h:` + 10 hex, e.g. `h:3f9a1c0b2d` — of each fact/decision you
+  retrieved and relied on; the raw `ref` `node_id:seq` also works. Both are stable across nodes and
+  rebuilds. Bare local ids like `118`/`d17` are rowids that drift on every rebuild: deprecated, warned,
+  and dropped at the next MAJOR — never pass one)
 - Propose:  `~/projects/hive-mind/hv propose "<hypothesis>" --tags <t1,t2> --source claude-code`
   (an IDEA, not a fact: starts at 0.00 and earns confidence only from other identities' sense-channel
   `supports`/`contradicts` links — use it for "perhaps X relates to Y", never for something observed)

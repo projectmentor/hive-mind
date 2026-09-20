@@ -44,7 +44,7 @@ Each line in a `.jsonl` file is a JSON object:
 |---|---|
 | `node_id` | The authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)` |
 | `seq` | Per-node monotonic sequence number |
-| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact`, `link` (1.19), `governance` |
+| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact`, `link` (1.19), `idea` (1.20), `governance` |
 | `timestamp` | ISO8601 wall clock at write time |
 | `payload` | Type-specific data |
 | `prev_hash` | Hash of the previous entry — forms a hash chain per node |
@@ -251,8 +251,8 @@ One journal type, an open vocabulary, one resolver.
 
 | kind | from → to | effect |
 |---|---|---|
-| `supports` | fact → fact | positive evidence on the target (`_content_evidence`) |
-| `contradicts` | fact → fact | negative evidence on the target |
+| `supports` | fact/idea → fact/idea | positive evidence on the target (`_content_evidence` for facts, `_idea_evidence` for ideas) |
+| `contradicts` | fact/idea → fact/idea | negative evidence on the target |
 | `supersedes` | decision → decision | **hard:** `decisions.superseded_by`; **evidence:** row only |
 | `resolves` | fact → fact | **hard:** `facts.resolves` provenance + retract-equivalent evidence; **evidence:** evidence only |
 | `entity` | entity → fact | `entity_facts` row |
@@ -278,6 +278,32 @@ legacy fields until the whole fleet is on 1.19 (the write-path switch is a separ
 paths are never emitted together for one act).
 
 ---
+
+## Ideas (contract 1.20)
+
+An **idea** is a hypothesis: "perhaps X relates to Y". It is modelled as its own journal type
+and table rather than a tagged fact for one reason — the fact projection treats identical
+content from two identities as corroboration, and two agents repeating the same guess is not
+two observations.
+
+- `persist_idea` writes one row per entry with **no content de-dup**: identity is the journal
+  entry `(node_id, seq)`, never the text.
+- Initial confidence is **0.0** and only `_recompute_idea_confidence` writes the column, from
+  `_idea_evidence`: a clone of the fact evidence projection keyed by the idea's journal identity,
+  fed only by `supports` (+) and `contradicts` (−) links whose source resolves. The idea's own
+  assertion contributes nothing; identical text elsewhere contributes nothing; an idea never adds
+  positive evidence to a fact.
+- **Grounding rule.** A link whose `channel` is `introspect` weighs `introspect_support_weight`
+  (governed, default 0). `hv propose` stamps the idea itself `introspect` by default. So the only
+  way a hypothesis gains confidence is a `sense`-channel link from another identity: an
+  observation. The LLM proposes; it cannot promote.
+- Same governance as facts through `_content_confidence`: admission, same-device discount,
+  `cap_self`.
+- **Attention, not announcement.** Under `hv search` (`--kind all`) an idea appears only once its
+  effective confidence exceeds 0; `--kind idea` lists them all. The session-start digest prints up
+  to three *open* ideas (below the local `OPEN_IDEA_THRESHOLD`, default 0.3). When a peer's
+  `idea` lands on ingest, one `idea-arrived` line is appended to `$HIVE_HOME/.bus/introspect.log`
+  — a local, non-journaled bus event on the `introspect` channel; no consumer is required.
 
 ## Salience layers
 
@@ -455,6 +481,7 @@ Key tables in `store.db`:
 | `entities` | Named entities |
 | `entity_facts` | Many-to-many fact-to-entity links |
 | `links` | 1.19 generic edge table projected from `link` entries: `kind, from_kind, from_id, to_kind, to_id, signer, authority, channel, created_at` |
+| `ideas` | 1.20 hypotheses: `content, tags, source_agent, created_at, confidence, contested, last_evidence_at, utility` — one row per `idea` entry, confidence earned from links only |
 | `journal_index` | Index of ingested journal entries by `(node_id, seq)` |
 | `node_chunk_hashes` | Merkle chunk hashes per node, used by sync |
 

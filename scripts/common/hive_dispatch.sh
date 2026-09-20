@@ -12,6 +12,11 @@
 # passes through unchanged, so SessionStart / UserPromptSubmit context injection still works.
 #
 # Usage (from settings.json):  hive_dispatch.sh {session-start|user-prompt|precompact|sessionend}
+#
+# Bus (1.20): `hv` appends `introspect`-channel events to $HIVE_HOME/.bus/introspect.log (today:
+# `idea-arrived <node_id:seq> <text>` when a PEER's idea lands on ingest). Non-journaled, local,
+# best-effort. No consumer is wired here yet — session-start surfaces open ideas from store.db via
+# `hv nudge --event session-start` regardless. A future consumer is a git change to this file.
 
 event="${1:-}"
 SCRIPTS="${HIVE_HOME:-$HOME/projects/hive-mind}/scripts/common"

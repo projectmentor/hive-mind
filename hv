@@ -290,7 +290,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.19"   # 1.19: generic `link` journal type — ONE content type with an OPEN `kind` vocabulary replaces the three bespoke link mechanisms for new relationships: payload `{kind, from_ref, to_ref, data, source, channel?, owner_sig?}` where refs are journal identities `[node_id, seq]` (never local ids); ONE pass-2 resolver (`resolve_link`/`_LINK_RESOLVERS`) folds the seven kinds it knows (`supports`, `contradicts`, `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`) into a new generic `links` edge table and an UNKNOWN kind lands and projects to nothing (the `announce` rule — a 1.19 and a 1.20 node never diverge over vocabulary). LINKS ARE EVIDENCE, NOT COMMANDS (design §5): `_link_authority` returns `hard` only when the payload carries an `owner_sig` valid for the owner AS OF that journal position (`_is_authorized_writer`, the 1.16/1.17 check — a device key is never the owner key) or the verified signer is the target's author; from any other admitted device a `supersedes`/`resolves` is DOWNGRADED to weigh-only (recorded as `links.authority = evidence`, surfaced by the new advisory `link-authz` doctor check, ratified by re-issuing owner-signed), so a compromised admitted device can never erase, only weigh. `supports`/`contradicts`/`resolves` fold into `_content_evidence` as identity-weighted ± evidence on the target fact (cap_self, same-device discount and admission apply unchanged); grounding rule: a link whose `channel` is `introspect` weighs the new governed knob `introspect_support_weight` (default 0 — reasoning never moves confidence; absent channel = `sense`). `informed`/`outcome-of` are edge rows only (projected by 1.19 PR3/PR4). NO INGEST CHANGE (content is gated by admission, not type) and NO WRITE-PATH CHANGE: `--supersedes`/`--resolves`/`entity link` keep emitting their legacy fields (PR2b switches them once the fleet is on 1.19; never dual-emit), old resolvers stay forever, nothing is migrated. NO WIRE CHANGE, NO VERSION SKEW: a 1.18 node accepts and persists a `link` (valid signature, admitted device), its rebuild skips the unknown type, Merkle stays converged. 1.18: capsule-addressability for silent devices — new authority-less, DEVICE-signed, kind-discriminated governance act `announce` (fixed envelope {action, kind}; kind-specific fields under `data`; first kind: `key`), whose only purpose is to EXIST as a signed entry carrying the device's pub so `_recipient_pubkeys` can harvest an identity-bound Curve25519 key for an admitted device that never authored an entry (direct owner admit, zero writes — it could never receive capsules and `doctor` warned forever; join-request devices were always fine, their request is signed). Ingest allowlists `announce` beside `join-request` (the ONE wire change); the projection ignores it entirely (grants nothing, deliberately projection-invisible); the trust model is UNCHANGED — a payload-carried key is still never a source, the pub is harvested off the signed entry under the same fingerprint binding. Unknown announce KINDS are accepted and ignored, so future kinds ride through 1.18 nodes with no skew window. `hv key announce` (alias `hv config identity announce`) emits it, guarded to once-ever per device — the guard uses the same pub↔device_id binding as harvest, so a planted pub on a spoofed unsigned entry can never suppress it; `hv doctor --fix` auto-emits on an owned hive (the 15-min timer self-heals the fleet). VERSION SKEW: a pre-1.18 peer deterministically REJECTS an announce on ingest (not in its allowlist, no owner_sig) and shows an advisory `diverged` against upgraded peers; nothing is lost — sync is stateless Merkle-diff re-pull, so the entry lands automatically on that peer's next round after IT upgrades (`hv sync now` alone won't clear it before then). Upgrade always-on nodes first, the emitting device last for a zero-noise rollout. 1.17: cell/comb write-authorization at the PROJECTION — `_cell_state`/`_comb_state` now apply the same projection authorization as capsules (hive #58), but under a SEPARATE `cell_writers` policy (default `owner`; `fertile` = any admitted device), so a hive can keep executable definitions owner-only while running capsules fertile or vice versa (hive #60). A cell DEFINES what an agent/tool runs, so a malicious redefinition is code-injection-equivalent; previously `hv wire --add` appended cell/comb entries with NO write gate, so any admitted device could redefine a cell. BEHAVIOR CHANGE: under the default `cell_writers=owner` only the owner may publish cells/combs — `hv wire --add` now refuses a non-owner write and the projection declines a non-owner-signed cell/comb entry (it still LANDS in the journal; every node folds it away, convergence-safe). Cells/combs are owner-signed on write like capsules; new advisory `cell-authz` doctor check surfaces any now-unhonored definition. Migration-safe on hives with no non-owner cells (the doctor check makes any change visible). 1.16: capsule write-authorization at the PROJECTION — `_capsule_state` now declines to honor a `capsule` entry whose signer was not the authorized writer (the owner AS OF that entry's journal position under the default `capsule_putters=owner`; any admitted device under `fertile`), closing a hole where a compromised ADMITTED device could supersede or tombstone ANY capsule by appending a journal entry directly, bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the entry still LANDS in every journal/Merkle; every node deterministically folds it away — no ingest/sync/admission change. Owner authority is POINT-IN-TIME via an additive read-only `gov['owner_timeline']`, so a prior owner's seals survive a transfer/succession/election (hive #58). Unsigned capsule entries are declined once an owner exists; a crypto-less (stripped) build keeps honoring (it already hard-fails the `crypto-modules` doctor check) rather than silently emptying capsules (hive #61). New advisory `capsule-authz` doctor check surfaces any now-unhonored entry. cell/comb authz + a separate `cell_writers` policy land in a follow-up PR (hive #60). 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
+CONTRACT_VERSION = "1.20"   # 1.20: `idea` journal type — a hypothesis whose confidence is EARNED, never asserted (design §6). Fourth `_PASS1` type → new `ideas` table (facts minus importance/access_count, plus utility); `hv propose "…" [--tags] [--channel]` / MCP `hive_propose`; an idea starts at confidence 0.0 and moves ONLY via `supports`/`contradicts` links (`_idea_evidence`, a clone of `_content_evidence` keyed by the idea's JOURNAL IDENTITY, not its content — two agents restating the same guess are two ideas, never corroboration; ideas never add positive evidence to a fact with identical text). Grounding rule made explicit for ideas: a link whose `channel` is `introspect` weighs `introspect_support_weight` (default 0), and an idea's own write-path channel defaults to `introspect` (a hypothesis is internal state), so two LLM sessions cannot talk a hypothesis into confidence — only `sense`-channel observations can. Read surface: `hv search --kind {all,fact,decision,idea}`; under `all` an idea appears only once it has earned confidence > 0, `--kind idea` lists them all; JSON rows gain `kind: idea`; `i<N>` local-id prefix is a kind-checked CLI convenience, `ref` is the stable form. Attention, not announcement: ingest of a PEER's idea appends an `idea-arrived` line to the local, non-journaled bus log `$HIVE_HOME/.bus/introspect.log`, and the session-start digest prints up to 3 open ideas (effective confidence below the local display knob `OPEN_IDEA_THRESHOLD`, default 0.3, newest first) as a standing invitation to weigh in. NO WIRE CHANGE, NO VERSION SKEW (a 1.19/1.18 node lands an `idea` and ignores it). 1.19: generic `link` journal type — ONE content type with an OPEN `kind` vocabulary replaces the three bespoke link mechanisms for new relationships: payload `{kind, from_ref, to_ref, data, source, channel?, owner_sig?}` where refs are journal identities `[node_id, seq]` (never local ids); ONE pass-2 resolver (`resolve_link`/`_LINK_RESOLVERS`) folds the seven kinds it knows (`supports`, `contradicts`, `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`) into a new generic `links` edge table and an UNKNOWN kind lands and projects to nothing (the `announce` rule — a 1.19 and a 1.20 node never diverge over vocabulary). LINKS ARE EVIDENCE, NOT COMMANDS (design §5): `_link_authority` returns `hard` only when the payload carries an `owner_sig` valid for the owner AS OF that journal position (`_is_authorized_writer`, the 1.16/1.17 check — a device key is never the owner key) or the verified signer is the target's author; from any other admitted device a `supersedes`/`resolves` is DOWNGRADED to weigh-only (recorded as `links.authority = evidence`, surfaced by the new advisory `link-authz` doctor check, ratified by re-issuing owner-signed), so a compromised admitted device can never erase, only weigh. `supports`/`contradicts`/`resolves` fold into `_content_evidence` as identity-weighted ± evidence on the target fact (cap_self, same-device discount and admission apply unchanged); grounding rule: a link whose `channel` is `introspect` weighs the new governed knob `introspect_support_weight` (default 0 — reasoning never moves confidence; absent channel = `sense`). `informed`/`outcome-of` are edge rows only (projected by 1.19 PR3/PR4). NO INGEST CHANGE (content is gated by admission, not type) and NO WRITE-PATH CHANGE: `--supersedes`/`--resolves`/`entity link` keep emitting their legacy fields (PR2b switches them once the fleet is on 1.19; never dual-emit), old resolvers stay forever, nothing is migrated. NO WIRE CHANGE, NO VERSION SKEW: a 1.18 node accepts and persists a `link` (valid signature, admitted device), its rebuild skips the unknown type, Merkle stays converged. 1.18: capsule-addressability for silent devices — new authority-less, DEVICE-signed, kind-discriminated governance act `announce` (fixed envelope {action, kind}; kind-specific fields under `data`; first kind: `key`), whose only purpose is to EXIST as a signed entry carrying the device's pub so `_recipient_pubkeys` can harvest an identity-bound Curve25519 key for an admitted device that never authored an entry (direct owner admit, zero writes — it could never receive capsules and `doctor` warned forever; join-request devices were always fine, their request is signed). Ingest allowlists `announce` beside `join-request` (the ONE wire change); the projection ignores it entirely (grants nothing, deliberately projection-invisible); the trust model is UNCHANGED — a payload-carried key is still never a source, the pub is harvested off the signed entry under the same fingerprint binding. Unknown announce KINDS are accepted and ignored, so future kinds ride through 1.18 nodes with no skew window. `hv key announce` (alias `hv config identity announce`) emits it, guarded to once-ever per device — the guard uses the same pub↔device_id binding as harvest, so a planted pub on a spoofed unsigned entry can never suppress it; `hv doctor --fix` auto-emits on an owned hive (the 15-min timer self-heals the fleet). VERSION SKEW: a pre-1.18 peer deterministically REJECTS an announce on ingest (not in its allowlist, no owner_sig) and shows an advisory `diverged` against upgraded peers; nothing is lost — sync is stateless Merkle-diff re-pull, so the entry lands automatically on that peer's next round after IT upgrades (`hv sync now` alone won't clear it before then). Upgrade always-on nodes first, the emitting device last for a zero-noise rollout. 1.17: cell/comb write-authorization at the PROJECTION — `_cell_state`/`_comb_state` now apply the same projection authorization as capsules (hive #58), but under a SEPARATE `cell_writers` policy (default `owner`; `fertile` = any admitted device), so a hive can keep executable definitions owner-only while running capsules fertile or vice versa (hive #60). A cell DEFINES what an agent/tool runs, so a malicious redefinition is code-injection-equivalent; previously `hv wire --add` appended cell/comb entries with NO write gate, so any admitted device could redefine a cell. BEHAVIOR CHANGE: under the default `cell_writers=owner` only the owner may publish cells/combs — `hv wire --add` now refuses a non-owner write and the projection declines a non-owner-signed cell/comb entry (it still LANDS in the journal; every node folds it away, convergence-safe). Cells/combs are owner-signed on write like capsules; new advisory `cell-authz` doctor check surfaces any now-unhonored definition. Migration-safe on hives with no non-owner cells (the doctor check makes any change visible). 1.16: capsule write-authorization at the PROJECTION — `_capsule_state` now declines to honor a `capsule` entry whose signer was not the authorized writer (the owner AS OF that entry's journal position under the default `capsule_putters=owner`; any admitted device under `fertile`), closing a hole where a compromised ADMITTED device could supersede or tombstone ANY capsule by appending a journal entry directly, bypassing the CLI-only `capsule_putters` gate (a targeted denial-of-secret). Convergence-safe: the entry still LANDS in every journal/Merkle; every node deterministically folds it away — no ingest/sync/admission change. Owner authority is POINT-IN-TIME via an additive read-only `gov['owner_timeline']`, so a prior owner's seals survive a transfer/succession/election (hive #58). Unsigned capsule entries are declined once an owner exists; a crypto-less (stripped) build keeps honoring (it already hard-fails the `crypto-modules` doctor check) rather than silently emptying capsules (hive #61). New advisory `capsule-authz` doctor check surfaces any now-unhonored entry. cell/comb authz + a separate `cell_writers` policy land in a follow-up PR (hive #60). 1.15: decisions become first-class taggable + searchable — `hv decide --tags` records project/topic tags on a decision (journaled additively in the decision payload; projected to a new `decisions.tags` column; pre-1.15 decisions read back untagged), and `hv search` now ALSO returns matching decisions (LIKE over content/rationale/tags, newest-first, superseded ones flagged) alongside facts, so a project decision is findable by tag/text instead of by its node-local, rebuild-unstable `#id`. `hv search --format json` stays a flat list but each row gains a `kind` discriminator (`fact`|`decision`); a `min_confidence>0` consumer naturally drops decisions (they carry no confidence). MCP `hive_decide` gains a `tags` arg (parity). Additive journal field, wire-compatible; no sync/admission/CLI-removal change. 1.14: standards-anchored crypto — the bundled symmetric layer moved from a hand-rolled SHA-256-CTR keystream + HMAC encrypt-then-MAC to pure-Python ChaCha20-Poly1305 (RFC 8439, `chacha20poly1305.py`), so the self-test pins the RFC's PUBLISHED vector instead of a self-minted byte string and the crypto reviewer audits one analyzed AEAD, not a bespoke composition. `_kdf_keystream` is DELETED. Capsules: alg → `x25519-hkdf-chacha20poly1305-v1` (HKDF-SHA256 over the X25519 ECDH stays; only the cipher changed). Owner-seal: `enc` → `scrypt-chacha20poly1305-v2` (scrypt n 2^15→2^16, params bound as AEAD AAD); the v1 read path is REMOVED (breaking for any pre-1.14 escrow/passphrase-export) — `hv owner restore` skips a retired-scheme escrow with a re-`escrow` hint instead of crashing. New hard-fail `keyperm` doctor check: the raw device/owner seeds at rest must be 0600 (the threat model rests on it); `hv doctor --fix` re-tightens. crypto self-test gains the RFC 8439 AEAD KAT (the symmetric layer previously had NO pinned vector). 1.13: self-wiring primitives, phase 0 — `cell`/`comb` first-class, kind-discriminated journal types (deterministic `_cell_state`/`_comb_state` projections like `_governance_state`; NOT added to `_PASS1`/store.db; they ride sync admission-gated as content). `_wire_claude_hooks` generalized to `_wire_agent(cell)` driven by a built-in Claude `kind:agent` cell (byte-identical; `_wire_claude_hooks` kept as a back-compat shim). New top-level `hv wire <name>|--comb|--list|--show|--add` auto-dispatches by the cell's kind (agent→reconcile foreign config; tool→Phase-1 executor) and ABSORBS `hv doctor wire-agent` (kept as a hidden deprecated alias for one release); installer/updater delegate to `hv wire claude`. Additive journal types are wire-compatible; the wire-verb move is the only CLI break. (Phase 1 tool executor + 5 cells, Phase 2 encrypt-to-device capsules, Phase 3 crypto watchdog land next.) 1.12: self-healing agent integration via a STABLE shim — the Claude Code hooks live in a FOREIGN config (~/.claude/settings.json) the daemon self-heal never owned, so a node updated from before a hook existed could run "healthy" yet silently miss half its hooks. Now ~/.claude registers only a stable shim (`scripts/common/hive_dispatch.sh <event>`, one per lifecycle event); WHICH behaviors run per event is decided inside that script — source-controlled, under `hv verify`'s signature — so new behaviors ship by `git pull`, never by re-wiring ~/.claude (only a new event TYPE changes the spec). `hv` holds the ONE shim spec (`_CLAUDE_HOOK_SPEC`/`_wire_claude_hooks`); `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min `hive-doctor.timer`) reconciles: adds missing shims AND prunes legacy direct hooks (so behaviors never double-fire) + relinks the skill, surgically (own hooks untouched, `.bak.doctor` backup first). `hv doctor wire-agent` exposes it; install.sh + the updater delegate to it (no second definition to drift). Foreign-config integrations only (Claude Code today; Codex later reuses the same dispatcher) — plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim. Additive, no wire change; adapters unaffected. 1.11: reconciliation verbs — `hv remember --resolves <id>` links a write to a prior fact it corrects and SOFT-RETRACTS that fact (deliberate negative evidence, reversible, never an owner-forget), recording the link on the new row (`facts.resolves`); a new `hv audit` category CONTRAVENED parses prose references (`resolves/supersedes/obsoletes/corrects #N`) and flags any whose target is still live (un-reconciled), surfaced in the session-start boot summary. Additive, no wire change; adapters unaffected. 1.10: sync robustness — the Merkle index now de-dups the journal by (node_id, seq) before hashing (merkle.read_all_entries), so a physically-repeated journal line can no longer shift a chunk hash and fake a permanent peer "divergence" that ordinary sync cannot heal (append_foreign_entries also de-dups by that key, so a peer's correct copy is rejected as a duplicate and the stray row is never removed); deterministic lexicographic tie-break on the canonical encoding so every node picks the same representative. No wire/CLI change. 1.9: owner resilience pt.3 — QUORUM ELECTION + dead-man switch (Stage C in `_governance_state`): admitted devices `hv owner propose-election`/`vote` to elect a new owner when the chain-current owner has gone dark past `dead_man_days`; device-signed proposals/votes, content-addressed `proposal_id`, deterministic earliest-crossing tie-break; `hv owner heartbeat` refreshes owner liveness (a live owner is never unseated); `hv config quorum set quorum_m|quorum_by|dead_man_days` (quorum_m=0 = OFF, back-compat); `hv owner elections` lists tallies; 1.8: footprint trim — `hv rebuild` folded into `hv doctor rebuild` (top-level `hv rebuild` kept as a hidden deprecated alias, still works); 1.7: owner resilience pt.2 — nominated SUCCESSION (`hv owner nominate`/`claim`) + immediate `hv owner transfer` (the owner-chain in `_governance_state`; a live owner is never unseated, post-handoff old-owner acts drop) + `hv owner revoke-escrow` (logical tombstone so `restore` skips a compromised escrow) + a `doctor` owner check; 1.6: owner resilience pt.1 — `hv owner export/import` (off-device backup/restore; same owner_id resumes) + `hv owner escrow/restore` (passphrase-encrypted owner key stored IN the hive, syncs everywhere) + `hv owner standby` (advisory); 1.5: membership lifecycle (`hv group`) + `hv config` identity/confidence sub-namespaces; 1.4: D0-v2 corroboration — journaled governance, same-device discount, admission gate, CAP_self; 1.3: device identity; 1.2: volatile auto-tag; 1.1: telemetry verb
 
 
 # --------------------------------------------------------------------------
@@ -370,7 +370,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS journal_index (
         node_id  TEXT NOT NULL,
         seq      INTEGER NOT NULL,
-        kind     TEXT NOT NULL,        -- fact | decision | entity
+        kind     TEXT NOT NULL,        -- fact | decision | entity | idea (1.20)
         local_id INTEGER NOT NULL,
         PRIMARY KEY (node_id, seq)
     );
@@ -394,6 +394,23 @@ def init_db():
         PRIMARY KEY (kind, from_kind, from_id, to_kind, to_id, signer)
     );
     CREATE INDEX IF NOT EXISTS idx_links_to ON links(to_kind, to_id, kind);
+
+    -- 1.20: ideas — hypotheses whose confidence is EARNED from links (never asserted, never
+    -- corroborated by restatement). facts minus importance/access_count/last_accessed, plus utility.
+    -- Two identical idea texts are two rows: identity is the journal entry, not the content.
+    CREATE TABLE IF NOT EXISTS ideas (
+        id INTEGER PRIMARY KEY,
+        content TEXT NOT NULL,
+        tags TEXT,
+        source_agent TEXT NOT NULL,
+        source_session TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        confidence REAL DEFAULT 0.0,
+        contested INTEGER DEFAULT 0,
+        last_evidence_at TIMESTAMP,
+        utility REAL DEFAULT 0.0
+    );
+    CREATE INDEX IF NOT EXISTS idx_ideas_created ON ideas(created_at);
     """)
     conn.commit()
 
@@ -635,6 +652,7 @@ def append_foreign_entries(entries):
     if accepted > 0. Returns (accepted, duplicates)."""
     existing = journal_keys()
     accepted = duplicates = rejected = 0
+    arrived_ideas = []
 
     def _persist(e):
         _append_line(_journal_path_for(e.get("timestamp", _now_iso())), json.dumps(e))
@@ -697,6 +715,23 @@ def append_foreign_entries(entries):
         existing.add((nid, seq))
         _persist(e)
         accepted += 1
+        if e.get("type") == "idea" and nid != NODE_ID:
+            arrived_ideas.append(e)
+
+    # 1.20: attention, not announcement — a peer's idea landing here is an `introspect`-channel event
+    # on the local bus (internal state arriving, not an observation). Non-journaled, best-effort, one
+    # line per idea in $HIVE_HOME/.bus/introspect.log for whatever consumer is wired; the session-start
+    # digest independently surfaces open ideas from store.db, so no consumer is required.
+    if arrived_ideas:
+        try:
+            bus = HIVE_HOME / ".bus"
+            bus.mkdir(exist_ok=True)
+            with open(bus / "introspect.log", "a") as f:
+                for e in arrived_ideas:
+                    f.write(f"{_now_iso()} idea-arrived {e.get('node_id')}:{e.get('seq')} "
+                            f"{(e.get('payload') or {}).get('content', '')[:120]!r}\n")
+        except Exception:
+            pass
 
     if rejected:
         print(f"append_foreign_entries: rejected {rejected} entr"
@@ -1526,6 +1561,60 @@ def _recompute_decision_outcome(conn, entries):
                      (_content_confidence(ev, gov), ev.get("last_ts") or None, row[1]))
 
 
+def _idea_evidence(entries, gov=None):
+    """idea (node_id, seq) -> {'pos', 'neg', 'forget': False, 'last_ts', 'evidence'} — the fact-confidence
+    evidence shape, keyed by the idea's JOURNAL IDENTITY (design §6). Only `supports` (+) and
+    `contradicts` (−) links move it; the idea's own assertion contributes NOTHING (initial confidence
+    0.0) and identical text elsewhere is never corroboration. Grounding rule: a link whose `channel` is
+    `introspect` weighs `introspect_support_weight` (governed, default 0) — reasoning cannot promote a
+    hypothesis; only `sense`-channel observation can. Same admission / same-device / cap_self governance
+    as facts via `_content_confidence`."""
+    gov = gov or _DEFAULT_GOV
+    isw = float((gov.get("config") or {}).get("introspect_support_weight", CONF_INTROSPECT_SUPPORT_WEIGHT))
+    ideas = {(e.get("node_id"), e.get("seq")) for e in entries if e.get("type") == "idea"}
+    known = {(e.get("node_id"), e.get("seq")) for e in entries}
+    out = {ref: {"pos": {}, "neg": {}, "forget": False, "last_ts": "", "evidence": []} for ref in ideas}
+    for e in entries:
+        if e.get("type") != "link":
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload", {}) or {}
+        side = {"supports": "pos", "contradicts": "neg"}.get(p.get("kind"))
+        to_ref, frm = p.get("to_ref"), p.get("from_ref")
+        if side is None or not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in ideas):
+            continue
+        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in known):
+            continue
+        key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
+        if (p.get("channel") or "sense") == "introspect":
+            w = w * isw
+        if w <= 0:
+            continue
+        ev = out[tuple(to_ref)]
+        if w > ev[side].get(key, 0.0):
+            ev[side][key] = w
+        ts = e.get("timestamp", "")
+        ev["evidence"].append((ts, 1 if side == "pos" else -1, key))
+        if ts > ev["last_ts"]:
+            ev["last_ts"] = ts
+    for ev in out.values():
+        ev["evidence"].sort()
+    return out
+
+
+def _recompute_idea_confidence(conn, entries):
+    """The ONLY writer of ideas.confidence/contested/last_evidence_at (1.20). Pure projection."""
+    gov = _governance_state(entries)
+    for ref, ev in _idea_evidence(entries, gov).items():
+        row = _index_row(conn, list(ref))
+        if row is None or row[0] != "idea":
+            continue
+        contested = 1 if (ev["pos"] and ev["neg"]) else 0
+        conn.execute("UPDATE ideas SET confidence = ?, contested = ?, last_evidence_at = ? WHERE id = ?",
+                     (_content_confidence(ev, gov), contested, ev.get("last_ts") or None, row[1]))
+
+
 def _to_dt(s):
     from datetime import datetime
     try:
@@ -1595,6 +1684,23 @@ def persist_decision(conn, entry):
     return {"id": did}
 
 
+def persist_idea(conn, entry):
+    """Pass 1 (1.20): one row per `idea` ENTRY — deliberately NO content de-dup (unlike persist_fact):
+    a hypothesis restated by another agent is another hypothesis, not corroboration. Confidence starts
+    at 0.0 and is written only by `_recompute_idea_confidence`."""
+    payload = entry["payload"]
+    ts = entry.get("timestamp", _now_iso())
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO ideas (content, tags, source_agent, source_session, created_at, confidence)
+        VALUES (?, ?, ?, ?, ?, 0.0)
+    """, (payload["content"], json.dumps(payload.get("tags", [])), payload.get("source", "manual"),
+          payload.get("source_session"), payload.get("created_at", ts)))
+    iid = cur.lastrowid
+    _record_index(conn, entry, "idea", iid)
+    return {"id": iid}
+
+
 def persist_entity(conn, entry):
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
@@ -1624,6 +1730,7 @@ _PASS1 = {
     "fact": persist_fact,
     "decision": persist_decision,
     "entity": persist_entity,
+    "idea": persist_idea,          # 1.20
 }
 
 
@@ -2168,6 +2275,16 @@ def _query_decisions(conn, query, limit=10):
         "ORDER BY created_at DESC LIMIT ?", (like, like, like, limit)).fetchall()
 
 
+def _query_ideas(conn, query, limit=200):
+    """Ideas matching `query` (LIKE over content/tags). No FTS — the table is small; ranking is by
+    effective confidence in the caller."""
+    like = f"%{query}%"
+    return conn.execute(
+        "SELECT id, content, tags, source_agent, created_at, confidence, contested, last_evidence_at "
+        "FROM ideas WHERE content LIKE ? OR tags LIKE ? ORDER BY created_at DESC LIMIT ?",
+        (like, like, limit)).fetchall()
+
+
 def search(args):
     """Search facts AND decisions. Facts rank/filter by EFFECTIVE confidence (the time-invariant base
     projection decayed by recency, computed at query time with $HIVE_NOW) and surface contested claims.
@@ -2176,8 +2293,10 @@ def search(args):
     node-local `#id`."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
-    rows = _query_facts(conn, args.query)
-    dec_rows = _query_decisions(conn, args.query)
+    kind = getattr(args, "kind", None) or "all"
+    rows = _query_facts(conn, args.query) if kind in ("all", "fact") else []
+    dec_rows = _query_decisions(conn, args.query) if kind in ("all", "decision") else []
+    idea_rows = _query_ideas(conn, args.query) if kind in ("all", "idea") else []
 
     # Decay + threshold + rank in Python (effective confidence depends on `now`).
     scored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in rows]
@@ -2186,8 +2305,17 @@ def search(args):
     scored = scored[:10]
     # 1.19 PR3: every row carries its STABLE identity `ref` (node_id:seq) beside the rebuild-unstable
     # local id; decisions also expose what they relied on (`informed_by`, refs + this node's local ids).
+    # 1.20: ideas rank like facts but sit at 0.0 until they earn confidence; under `all` only earned
+    # ideas surface (a raw hypothesis is not knowledge yet), `--kind idea` lists them all.
+    iscored = [(_effective_confidence(r["confidence"], r["last_evidence_at"], now), r) for r in idea_rows]
+    if kind == "all":
+        iscored = [(eff, r) for eff, r in iscored if eff > 0]
+    iscored = [(eff, r) for eff, r in iscored if eff >= args.min_confidence or kind == "idea"]
+    iscored.sort(key=lambda x: (x[0], x[1]["created_at"]), reverse=True)
+    iscored = iscored[:10]
     frefs = _refs_for(conn, "fact", [r["id"] for _e, r in scored])
     drefs = _refs_for(conn, "decision", [r["id"] for r in dec_rows])
+    irefs = _refs_for(conn, "idea", [r["id"] for _e, r in iscored])
     dinformed = {r["id"]: _local_ids_for_refs(conn, json.loads(r["informed_by"]) if r["informed_by"] else [])
                  for r in dec_rows}
     conn.close()
@@ -2204,6 +2332,8 @@ def search(args):
                  "ref": drefs.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
                  "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now)
                                              if r["last_outcome_at"] else None)} for r in dec_rows]
+        out += [{**dict(r), "kind": "idea", "effective_confidence": eff, "ref": irefs.get(r["id"])}
+                for eff, r in iscored]
         print(json.dumps(out, indent=2))
     else:
         for eff, r in scored:
@@ -2233,6 +2363,35 @@ def search(args):
                     print(f"       informed by: {shown}")
                 print(f"       ref: {drefs.get(r['id'])}")
             print()
+        if iscored:
+            print("Ideas (hypotheses — confidence is earned from sense-channel links, never asserted):")
+            for eff, r in iscored:
+                itags = json.loads(r["tags"]) if r["tags"] else []
+                tagstr = f"  [{', '.join(itags)}]" if itags else ""
+                flag = "  ⚠ CONTESTED" if r["contested"] else ""
+                print(f"  i{r['id']} {r['content']}{tagstr}  Conf: {eff:.2f}{flag}")
+                print(f"       ref: {irefs.get(r['id'])}")
+            print()
+
+
+def propose(args):
+    """1.20: record an IDEA — a hypothesis the hive can support or contradict. It starts at confidence
+    0.0 and earns confidence only from `sense`-channel `supports`/`contradicts` links by other identities;
+    restating it never counts. Channel defaults to `introspect` (a hypothesis is internal state)."""
+    tags = [t.strip() for t in args.tags.split(",")] if getattr(args, "tags", None) else []
+    tags = [t for t in tags if t]
+    source = getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual")
+    payload = {"content": args.content, "tags": tags, "source": source,
+               "channel": getattr(args, "channel", None) or "introspect"}
+    entry = append_journal("idea", payload)
+    conn = get_conn()
+    res = persist_idea(conn, entry)
+    conn.commit()
+    conn.close()
+    tagnote = f"  [{', '.join(tags)}]" if tags else ""
+    print(f"Proposed idea i{res['id']}{tagnote}  (confidence 0.00 — earned only from sense-channel "
+          f"supports/contradicts links by other identities)")
+    print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
 
 
 def decide(args):
@@ -2406,9 +2565,28 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             m["ref"] = drefs.get(m["id"])
         dec_total = len(dmatched)
         decisions = dmatched[offset:offset + limit]
+    ideas, ideas_total = [], 0
+    if kind in ("all", "idea"):
+        imatched = []
+        for r in _query_ideas(conn, query or "", limit=10000):
+            eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now)
+            if kind == "all" and eff <= 0:
+                continue                      # raw hypotheses surface only under kind=idea
+            itags = json.loads(r["tags"]) if r["tags"] else []
+            if tag and tag not in itags:
+                continue
+            imatched.append({"id": r["id"], "content": r["content"], "tags": itags,
+                             "confidence": round(eff, 2), "contested": bool(r["contested"]),
+                             "source": r["source_agent"], "created": (r["created_at"] or "")[:10]})
+        irefs = _refs_for(conn, "idea", [m["id"] for m in imatched])
+        for m in imatched:
+            m["ref"] = irefs.get(m["id"])
+        imatched.sort(key=lambda f: (f["confidence"], f["created"]), reverse=True)
+        ideas_total = len(imatched)
+        ideas = imatched[offset:offset + limit]
     conn.close()
-    return {"facts": facts, "decisions": decisions,
-            "facts_total": facts_total, "decisions_total": dec_total,
+    return {"facts": facts, "decisions": decisions, "ideas": ideas,
+            "facts_total": facts_total, "decisions_total": dec_total, "ideas_total": ideas_total,
             "offset": offset, "limit": limit}
 
 
@@ -2889,6 +3067,7 @@ def rebuild_db():
         DROP TABLE IF EXISTS facts_fts;
         DELETE FROM entity_facts;
         DELETE FROM links;
+        DELETE FROM ideas;
         DELETE FROM facts;
         DELETE FROM decisions;
         DELETE FROM entities;
@@ -2923,6 +3102,7 @@ def rebuild_db():
     # here so every node converges to identical values over the same journal.
     _recompute_confidence(conn, entries)
     _recompute_decision_outcome(conn, entries)      # 1.19 PR4: decisions.outcome_score (vindication)
+    _recompute_idea_confidence(conn, entries)       # 1.20 PR5: ideas.confidence (earned from links only)
     conn.commit()
 
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
@@ -2935,6 +3115,7 @@ def rebuild_db():
         "entities": conn.execute("SELECT count(*) FROM entities").fetchone()[0],
         "links": conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0],
         "edges": conn.execute("SELECT count(*) FROM links").fetchone()[0],
+        "ideas": conn.execute("SELECT count(*) FROM ideas").fetchone()[0],
     }
     conn.close()
     return counts
@@ -2975,6 +3156,11 @@ def stats(args):
     ).fetchone()[0]
     entities = conn.execute("SELECT count(*) FROM entities").fetchone()[0]
     links = conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+    try:
+        ideas_n = conn.execute("SELECT count(*) FROM ideas").fetchone()[0]
+        ideas_earned = conn.execute("SELECT count(*) FROM ideas WHERE confidence > 0").fetchone()[0]
+    except sqlite3.OperationalError:
+        ideas_n = ideas_earned = 0
     avg_conf = conn.execute(
         "SELECT round(avg(confidence), 2) FROM facts WHERE confidence > ?", (FORGET_FLOOR,)).fetchone()[0] or 0
     top_tags = conn.execute("""
@@ -2997,6 +3183,8 @@ def stats(args):
     print(f"  Facts:              {facts_line}")
     print(f"  Decisions:          {decisions}  ({active_decisions} active)")
     print(f"  Entities:           {entities}  ({links} fact-links)")
+    if ideas_n:
+        print(f"  Ideas:              {ideas_n}  ({ideas_earned} with earned confidence)")
     print(f"  Journal entries:    {len(entries)}  ({', '.join(f'{k}={v}' for k, v in sorted(by_node.items())) or 'empty'})")
     if top_tags:
         print(f"  Top tag groups:")
@@ -3051,6 +3239,7 @@ _NUDGE_DEFAULTS = {
     "AUDIT_ON": "precompact,sessionend",
     "AUDIT_DEPTH": "light",
     "VOLATILE_TTL_HOURS": "24",   # default freshness window for facts tagged `volatile`
+    "OPEN_IDEA_THRESHOLD": "0.3", # 1.20: ideas below this effective confidence are "open" (boot summary)
     # Seeds inferred from real session history (see scripts/common/infer-phrases.py).
     "HIVE_NUDGE_PHRASES": ("we need,we should,i want,idea,wait,before we,keep,"
                            "remember,decision,the issue,lesson,wrong"),
@@ -3169,6 +3358,32 @@ def _print_digest(cwd, cap=1200):
         for eff, r in scored[:5]:
             lines.append(f"  • [{r['id']}] {r['content'].splitlines()[0][:150]} (conf {eff:.2f})")
         print("\n".join(lines)[:cap])
+    except Exception:
+        return
+
+
+def _print_open_ideas(cfg, cap=3):
+    """SessionStart (1.20): the standing invitation to weigh in. Up to `cap` ideas whose effective
+    confidence is below OPEN_IDEA_THRESHOLD (a LOCAL display knob — it changes nothing projected),
+    newest first. An idea nobody sees dies at 0.0; this is how it gets attention."""
+    try:
+        thr = float(cfg.get("OPEN_IDEA_THRESHOLD", 0.3))
+        conn = get_conn()
+        now = os.environ.get("HIVE_NOW") or _now_iso()
+        rows = conn.execute("SELECT id, content, confidence, last_evidence_at, created_at, node_id, seq "
+                            "FROM ideas JOIN journal_index ON journal_index.kind = 'idea' "
+                            "AND journal_index.local_id = ideas.id ORDER BY created_at DESC LIMIT 50").fetchall()
+        conn.close()
+        opened = [(r, _effective_confidence(r["confidence"], r["last_evidence_at"], now)) for r in rows]
+        opened = [(r, eff) for r, eff in opened if eff < thr][:cap]
+        if not opened:
+            return
+        lines = ["[hive] Open ideas — hypotheses awaiting evidence (support or contradict with a "
+                 "sense-channel link; restating them is not evidence):"]
+        for r, eff in opened:
+            lines.append(f"  • i{r['id']} {r['content'].splitlines()[0][:140]} (conf {eff:.2f})  "
+                         f"ref {r['node_id']}:{r['seq']}")
+        print("\n".join(lines))
     except Exception:
         return
 
@@ -3348,6 +3563,7 @@ def nudge(args):
         event = args.event
         if event == "session-start":
             _print_digest(getattr(args, "cwd", "") or os.getcwd())
+            _print_open_ideas(cfg)
             _print_pending_admissions()
             _print_self_status()
             _spec_update_check(getattr(args, "agent", "agent") or "agent")
@@ -6635,6 +6851,17 @@ def build_parser():
     search_parser.add_argument("--format", choices=["text", "json"], default="text")
     search_parser.add_argument("--min-confidence", type=float, default=0.0,
                                help="Hide facts below this confidence (default 0.0 = show all)")
+    search_parser.add_argument("--kind", choices=["all", "fact", "decision", "idea"], default="all",
+                               help="What to search (default all). Under `all` an idea appears only once it has "
+                                    "earned confidence > 0; `--kind idea` lists every idea")
+
+    propose_parser = subparsers.add_parser("propose", help="Record an idea — a hypothesis the hive can support or contradict (1.20)")
+    propose_parser.add_argument("content", help="The hypothesis, stated so it can be supported or contradicted")
+    propose_parser.add_argument("--tags", help="Comma-separated tags, like `remember`")
+    propose_parser.add_argument("--source", help="Source agent (default: manual)")
+    propose_parser.add_argument("--channel", choices=["sense", "act", "introspect"],
+                                help="Experience signal of the proposal itself (default introspect: a hypothesis is "
+                                     "internal state). Does not affect how the idea earns confidence")
 
     decide_parser = subparsers.add_parser("decide", help="Record a decision")
     decide_parser.add_argument("content", help="Decision content")
@@ -6872,6 +7099,8 @@ def main():
         search(args)
     elif args.command == "decide":
         decide(args)
+    elif args.command == "propose":
+        propose(args)
     elif args.command == "retract":
         retract(args)
     elif args.command == "entity":

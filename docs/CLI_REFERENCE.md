@@ -139,6 +139,32 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes ID] [--infor
 
 ---
 
+### `hv propose` — Record an idea (a hypothesis) *(1.20)*
+
+An **idea** is not a fact. It is a hypothesis — "perhaps X relates to Y" — that the hive can
+support or contradict over time. It starts at confidence **0.00** and earns confidence **only**
+from `supports`/`contradicts` links written by *other* identities on the `sense` channel (an
+observation). Restating it, or a second agent proposing the same text, creates a second idea; it
+never corroborates the first. An LLM proposes; it cannot promote.
+
+```
+hv propose <content> [--tags a,b,c] [--source SOURCE] [--channel sense|act|introspect]
+```
+
+| Argument | What it does |
+|---|---|
+| `content` | The hypothesis, stated so it can be supported or contradicted. Required. |
+| `--tags` | Comma-separated tags, like `hv remember`. |
+| `--source` | Who is proposing. Defaults to `manual`. |
+| `--channel` | The experience signal of the proposal itself; defaults to `introspect` (a hypothesis is internal state). Does not affect how the idea earns confidence. |
+
+Ideas get **attention, not announcement**: the session-start digest lists up to three *open*
+ideas (effective confidence below the local `OPEN_IDEA_THRESHOLD` knob in `nudge.env`, default
+0.3, newest first) as a standing invitation to weigh in, and when a peer's idea arrives by sync
+an `idea-arrived` line is appended to the local bus log `$HIVE_HOME/.bus/introspect.log`. Find
+ideas with `hv search --kind idea`; cite one with its `ref` or the `i<N>` local-id prefix
+(`hv decide --informed i7`).
+
 ### `hv discover` — Find hives on your tailnet
 
 Lists every device on your Tailscale network that's running a hive, with its
@@ -724,7 +750,7 @@ filter them in text mode.
 > (JSON: `outcome_score`, `effective_outcome_score`, `last_outcome_at`; `null` = no outcome yet). Outcome score
 > is **not** confidence: `--min-confidence` still never filters decisions.
 ```
-hv search <query> [--format {text,json}] [--min-confidence N]
+hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,decision,idea}]
 ```
 
 **Arguments:**
@@ -734,6 +760,7 @@ hv search <query> [--format {text,json}] [--min-confidence N]
 | `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. Matches facts (content/tags) and decisions (content/rationale/tags). |
 | `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. JSON is a flat list; each row carries a `kind` field (`fact` or `decision`). |
 | `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. (In JSON, decisions carry no confidence, so a `min_confidence > 0` consumer drops them.) |
+| `--kind` | *(1.20)* What to search: `all` (default), `fact`, `decision`, `idea`. Under `all` an **idea** appears only once it has earned confidence above 0 — a raw hypothesis is not knowledge yet; `--kind idea` lists every idea. JSON rows carry `kind: idea` with `confidence`, `effective_confidence` and `ref`. |
 
 **Examples:**
 ```bash

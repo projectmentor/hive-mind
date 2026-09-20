@@ -372,6 +372,7 @@ class Handler(BaseHTTPRequestHandler):
                     "node_id": hv.NODE_ID,
                     "hive_id": hv._local_hive_id(),
                     "protocol_version": PROTOCOL_VERSION,
+                    "contract": hv.CONTRACT_VERSION,
                     "advertised_addr": _ADVERTISED["addr"],
                     "journal_summary": {"total": len(es), "by_node": merkle.node_max_seq(es)},
                     "chunks": merkle.node_chunk_hashes(es),
@@ -389,6 +390,7 @@ class Handler(BaseHTTPRequestHandler):
                     "label": hv.NODE_LABEL,
                     "node_count": len(gov["admitted"]) or len({e.get("node_id") for e in es}),
                     "protocol_version": PROTOCOL_VERSION,
+                    "contract": hv.CONTRACT_VERSION,       # 1.19 PR2b: the agent contract, for `doctor fleet-contract`
                     "advertised_addr": _ADVERTISED["addr"],
                     "genesis": hv._owner_declaration(es),
                 })

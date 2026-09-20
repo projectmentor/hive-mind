@@ -273,6 +273,17 @@ when it must re-wire.
     (`halflife_fact` 180, `halflife_idea` 90, `halflife_volatile` 14 days) are governed knobs and now
     drive confidence decay too. JSON search rows gain `importance`, `effective_importance`,
     `utility`, `effective_utility`, `last_link_at`. No wire change; nothing new is journaled.
+  - *PR2b (same contract):* **the write-path switch.** `hv decide --supersedes`, `hv remember
+    --resolves` and `hv entity link` now emit **one `link`** (`supersedes` / `resolves` / `entity`)
+    instead of their legacy field or entry (`supersedes_ref`; `resolves_ref` + `retract`;
+    `entity_fact`) — never both. On the owner machine the link is owner-signed (hard everywhere);
+    elsewhere it is hard only where the device authored the target, evidence otherwise (§5). The
+    CLI/MCP surface is unchanged; only the journal output of those three verbs changed. **Version
+    skew:** a pre-1.19 peer lands such a link but does not honour it, so `hv doctor` gains the
+    advisory `fleet-contract` check (peers below 1.19, or unreachable and unverifiable; read from
+    `/hive/info.contract`, which the daemon now advertises alongside `/sync/hello`, or from an older
+    peer's `/api/verify.version`). Upgrade every always-on node
+    before relying on these verbs across the fleet. Legacy entries keep projecting forever.
     Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
   - *PR7 (same contract):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
     devices, decisions' outcome mean) over governed short/long windows (`trust_short_days`,

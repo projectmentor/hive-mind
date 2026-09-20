@@ -85,10 +85,12 @@ hv config confidence set halflife_volatile 14            # … of a `volatile`-t
 > See `docs/INTERNALS.md` → *Importance and utility*.
 
 > **Links (1.19).** The journal has a generic `link` entry type (`supports`, `contradicts`,
-> `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`; unknown kinds are ignored). No
-> `hv` verb emits one yet — `--supersedes`, `--resolves` and `entity link` keep writing their
-> legacy fields until the whole fleet is on 1.19. `hv doctor` reports downgraded
-> `supersedes`/`resolves` links under `link-authz`. See `docs/INTERNALS.md` → *Links*.
+> `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`; unknown kinds are ignored).
+> *(PR2b)* `--supersedes`, `--resolves` and `entity link` now each write **one** such link instead
+> of their legacy field/entry (never both); on the owner machine the link is owner-signed and
+> therefore *hard* everywhere, elsewhere it is hard only where this device authored the target.
+> `hv doctor` reports downgraded `supersedes`/`resolves` links under `link-authz`, and peers that
+> cannot yet honour links under `fleet-contract`. See `docs/INTERNALS.md` → *Links*.
 
 `hv config quorum set` tunes the owner-signed quorum-election knobs (the dead-owner recovery
 path; see `hv owner`). All default to elections **off**:
@@ -125,7 +127,7 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes DECISION] [-
 | `content` | The decision, stated clearly. Required. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
 | `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision ids (`#N`) are node-local and shift on rebuild, so don't reference a decision by its number; find it by tag or text. |
-| `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. |
+| `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. *(1.19 PR2b)* Journaled as one `supersedes` **link** (owner-signed when this device holds the owner key → hard everywhere; otherwise hard only where this device authored the old decision — see `hv doctor` `link-authz`). |
 | `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable forms are the **`sid`** shown by `hv search` (`h:3f9a1c0b2d` — the form to type) and the `ref` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — both identical on every node, never change. Bare local ids are still accepted — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time, prints a one-line deprecation warning, and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
 
 **Examples:**
@@ -218,8 +220,14 @@ needs attention. It looks at:
 
 A few checks appear only when there is something to report: **crypto-modules** (a bundled
 cryptography module failed to load, so signature checking is degraded), **journal-integrity**
-(garbled or truncated journal lines were skipped on read), and **capsule-conflicts** (two
-devices sealed the same capsule version before syncing, so one value lost a deterministic tie).
+(garbled or truncated journal lines were skipped on read), **capsule-conflicts** (two
+devices sealed the same capsule version before syncing, so one value lost a deterministic tie),
+**link-authz** (a `supersedes`/`resolves` link was downgraded to evidence — re-issue it owner-signed),
+**trust-drift** (a device's recent reliability fell well below its baseline; advisory, see `hv peers`)
+and *(1.19 PR2b)* **fleet-contract** (an admitted peer advertises an agent contract below 1.19, or
+is unreachable so it cannot be verified — such a peer lands but does not honour the `link` entries
+that `--supersedes`, `--resolves` and `entity link` now write; upgrade it with `git pull`, or
+`hv group purge` a dead device; `--fix` never touches this).
 
 ```
 hv doctor
@@ -412,7 +420,7 @@ hv entity {add,list,show,link} [options]
 | `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
 | `list` | List all entities. |
 | `show` | Show an entity and all facts linked to it. Needs `--name`. |
-| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id` (the fact's `sid` `h:…` or `ref`; a bare local id is *deprecated*). Optionally set `--confidence` to indicate how strongly the fact relates. |
+| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id` (the fact's `sid` `h:…` or `ref`; a bare local id is *deprecated*). Optionally set `--confidence` to indicate how strongly the fact relates. *(1.19 PR2b)* Journaled as one `entity` **link** (evidence-class: it never hides anything, so it needs no authority). |
 
 **Examples:**
 ```bash
@@ -672,7 +680,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's stable `ref` (`node_id:seq`, as shown by `hv search`; preferred) or a local decision id (`17` / `d17`), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and, later, the utility of the facts that informed it. |
 | `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
 | `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`; an `introspect` `supports`/`contradicts` link weighs `introspect_support_weight` (default 0). |
-| `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It records a **durable link** (the resolved fact's journal identity, stable across rebuilds and nodes) and **soft-retracts** that fact (registers negative evidence so it stops surfacing as canonical), keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
+| `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It journals one `resolves` **link** *(1.19 PR2b — no separate `retract` entry any more)* from the new fact to the resolved fact's journal identity (stable across rebuilds and nodes); the projection folds it as negative evidence that **soft-retracts** the old fact (so it stops surfacing as canonical) and, when the link is hard, records the chain on the new row — keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
 
 **What you get back:**
 

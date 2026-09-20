@@ -114,7 +114,9 @@ def test_informed_combines_with_supersedes_and_survives_rebuild(hive):
     row = hive.query("SELECT superseded_by FROM decisions WHERE content='base decision about deploys'")[0]
     assert row["superseded_by"] is not None
     assert hive.query("SELECT count(*) c FROM links WHERE kind='informed'")[0]["c"] == 1
-    assert [e["type"] for e in hive.entries()].count("link") == 1     # --supersedes still legacy (no link), PR2b
+    kinds = sorted(e["payload"]["kind"] for e in hive.entries() if e["type"] == "link")
+    assert kinds == ["informed", "supersedes"]                          # 1.19 PR2b: --supersedes is a link too
+    assert not any(e["type"] == "decision" and "supersedes_ref" in e["payload"] for e in hive.entries())
 
 
 def test_mcp_hive_decide_informed_by_matches_cli(hive, monkeypatch):

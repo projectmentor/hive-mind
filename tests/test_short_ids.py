@@ -139,12 +139,15 @@ def test_every_accepting_verb_takes_sid_ref_and_bare_id_identically(hive):
     # --supersedes
     outs = [payloads_after(lambda t=t: hive.run("decide", "v2", "--rationale", "r", "--supersedes", t))
             for t in (dec["sid"], dec["ref"], str(dec["id"]))]
-    assert outs[0][1] == outs[1][1] == outs[2][1] and outs[0][1][0][1]["supersedes_ref"] == [dec["ref"].rpartition(":")[0], int(dec["ref"].rpartition(":")[2])]
+    assert outs[0][1] == outs[1][1] == outs[2][1]
+    sup = [pl for t, pl in outs[0][1] if t == "link" and pl["kind"] == "supersedes"]      # 1.19 PR2b: a link, not a field
+    assert len(sup) == 1 and sup[0]["to_ref"] == [dec["ref"].rpartition(":")[0], int(dec["ref"].rpartition(":")[2])]
     # entity link --fact-id
     hive.run("entity", "add", "--name", "Deploys", "--type", "project")
     outs = [payloads_after(lambda t=t: hive.run("entity", "link", "--name", "Deploys", "--fact-id", t))
             for t in (f2["sid"], f2["ref"], str(f2["id"]))]
-    assert outs[0][1] == outs[1][1] == outs[2][1] and outs[0][1][0][0] == "entity_fact"
+    assert outs[0][1] == outs[1][1] == outs[2][1]
+    assert outs[0][1][0][0] == "link" and outs[0][1][0][1]["kind"] == "entity"          # 1.19 PR2b: an `entity` link
     assert f"Linked fact {f2['sid']}" in outs[0][0].stdout
     # two bare ids in ONE command → the warning prints exactly once
     r = hive.run("decide", "twice", "--rationale", "r", "--informed", str(f1["id"]), str(f2["id"]))

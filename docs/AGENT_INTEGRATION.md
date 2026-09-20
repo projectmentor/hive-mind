@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.19`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.20`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -50,6 +50,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
 | `hv remember "<outcome>" --source <you> --outcome-of <decision ref> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
 | `hv decide "<decision>" --rationale "<why>" --informed <ref>…` | Record a decision, naming the `ref`s it relied on *(1.19)* |
+| `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — earns confidence from others' evidence, never from you *(1.20)* |
 | `hv retract <id> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
@@ -211,6 +212,16 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.20` — **`idea` journal type.** A hypothesis whose confidence is *earned*, never asserted:
+  `hv propose` / `hive_propose` journal an `idea` (channel defaults to `introspect`); it starts at
+  confidence 0.0 in a new `ideas` table and moves only via `supports`/`contradicts` links from other
+  identities on the `sense` channel (`introspect` links weigh `introspect_support_weight`, default 0).
+  Identity is the journal entry, not the text — a restated idea is a second idea, never
+  corroboration, and ideas never corroborate facts. `hv search --kind {all,fact,decision,idea}` /
+  `hive_search(kind=…)`: under `all` an idea surfaces only once it has earned confidence > 0. The
+  session-start digest lists up to three open ideas; a peer's idea arriving by sync appends an
+  `idea-arrived` line to the local bus log. **No wire change, no version skew** (older nodes land an
+  `idea` and ignore it). Rubric: a hypothesis worth testing is an idea, not a fact.
 - `1.19` — **generic `link` journal type (read side).** One content type with an open `kind`
   vocabulary for relationships between entries: `{kind, from_ref, to_ref, data, source, channel?}`
   with journal-identity refs. The projection knows `supports`, `contradicts`, `supersedes`,

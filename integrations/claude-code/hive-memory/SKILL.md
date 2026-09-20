@@ -20,6 +20,9 @@ corroboration and checkable outcomes are what matter.
 - Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>" --informed <ref> [<ref>…]`
   (`<ref>` = the `ref` field, `node_id:seq`, of each fact/decision you retrieved and relied on —
   stable across nodes and rebuilds; bare local ids like `118`/`d17` drift, avoid them)
+- Propose:  `~/projects/hive-mind/hv propose "<hypothesis>" --tags <t1,t2> --source claude-code`
+  (an IDEA, not a fact: starts at 0.00 and earns confidence only from other identities' sense-channel
+  `supports`/`contradicts` links — use it for "perhaps X relates to Y", never for something observed)
 - Sync:     `~/projects/hive-mind/hv sync now`
 
 **ALWAYS pass `--source claude-code`** on `remember` so the hive can distinguish your writes
@@ -38,8 +41,9 @@ Write durable, checkable, reusable knowledge:
 - **Constraints / preferences / commitments** that shape future work.
 - **New entities / relationships** worth remembering.
 
-Do **NOT** write: your chain-of-thought, restatements of things already in the corpus, or
-speculation/opinion. Mark epistemic status with `--tags` (e.g. `observation`, `confirmed`,
+Do **NOT** write as facts: your chain-of-thought, restatements of things already in the corpus, or
+speculation/opinion. A hypothesis worth testing goes through `hv propose` as an **idea** instead
+(it earns confidence from evidence; it cannot borrow it from you). Mark epistemic status with `--tags` (e.g. `observation`, `confirmed`,
 `speculation`) so readers can weigh it — but **never assert your own confidence/trust number**;
 confidence is derived, not declared.
 

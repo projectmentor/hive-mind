@@ -93,8 +93,11 @@ def _run_hv(args: list[str], timeout: int = 30, stdin_text: str | None = None) -
 
 # ── Tools ────────────────────────────────────────────────────────────────────
 @mcp.tool()
-def hive_search(query: str, min_confidence: float = 0.0) -> list[dict]:
+def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> list[dict]:
     """Search the shared corpus. Returns facts WITH their confidence and provenance.
+
+    kind: "all" (default: facts + decisions + ideas that have EARNED confidence > 0), or
+    "fact" | "decision" | "idea" ("idea" lists every hypothesis, including raw ones at 0.0).
 
     Use before asserting anything checkable, when starting on a named project/person/
     system, or when you hit an error (someone may have left the fix). Results are signals
@@ -107,7 +110,10 @@ def hive_search(query: str, min_confidence: float = 0.0) -> list[dict]:
 
     min_confidence filters out facts below the given derived confidence (0.0 = everything).
     """
-    out = _run_hv(["search", query, "--format", "json"])
+    args = ["search", query, "--format", "json"]
+    if kind and kind != "all":
+        args += ["--kind", kind]
+    out = _run_hv(args)
     try:
         facts = json.loads(out) if out else []
     except json.JSONDecodeError:
@@ -175,6 +181,23 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     refs = [r.strip() for r in informed_by.split(",") if r.strip()]
     if refs:
         args += ["--informed", *refs]
+    return _run_hv(args)
+
+
+@mcp.tool()
+def hive_propose(content: str, tags: str = "") -> str:
+    """Record an IDEA — a hypothesis the hive can support or contradict (contract 1.20).
+
+    An idea is not a fact: it starts at confidence 0.0 and EARNS confidence only from
+    sense-channel `supports`/`contradicts` links written by other identities against
+    observations. Restating it, or another agent proposing the same text, is a second
+    hypothesis, never corroboration. Use it for "perhaps X relates to Y" — things you want the
+    hive to test over time, not things you observed. Search first (hive_search kind="idea").
+    """
+    args = ["propose", content, "--source", "claude-ai"]
+    tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+    if tag_list:
+        args += ["--tags", ",".join(tag_list)]
     return _run_hv(args)
 
 

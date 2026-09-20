@@ -69,7 +69,20 @@ hv config confidence set introspect_support_weight 0.0   # 1.19: weight of a sup
 hv config confidence set trust_long_days 180             # 1.19: trust-velocity long window (days)
 hv config confidence set trust_short_days 14             # 1.19: trust-velocity short window (days)
 hv config confidence set trust_drift_threshold -0.3      # 1.19: `doctor trust-drift` warns when short − long falls below this
+# 1.19 PR6 — salience (importance / utility) and per-class half-lives, all governed the same way:
+hv config confidence set importance_self_cap 0.3         # the most a writer's own `--importance` can claim (default 0.3)
+hv config confidence set w_links 0.6                     # weight of other-identity link in-degree in importance (default 0.6)
+hv config confidence set w_volatile 0.1                  # extra importance of a `volatile` fact while fresh (default 0.1)
+hv config confidence set halflife_fact 180               # confidence/importance/utility half-life of a fact, days (default 180)
+hv config confidence set halflife_idea 90                # … of an idea (default 90)
+hv config confidence set halflife_volatile 14            # … of a `volatile`-tagged fact (default 14)
 ```
+
+> **Importance is learned (1.19 PR6).** `--importance` is a *hint*: the projection starts a fact at
+> `min(hint, importance_self_cap)` and raises it only through links from **other** identities
+> (`_recompute_importance`); `utility` measures how much recorded decision-making relied on the entry,
+> weighted by how those decisions turned out. Both decay at query time under the entry's class half-life.
+> See `docs/INTERNALS.md` → *Importance and utility*.
 
 > **Links (1.19).** The journal has a generic `link` entry type (`supports`, `contradicts`,
 > `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`; unknown kinds are ignored). No
@@ -654,7 +667,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `content` | The text of the fact. Put it in quotes. Required. |
 | `--tags` | Comma-separated labels to help you find it later, e.g. `--tags infrastructure,todo`. No spaces. |
 | `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
-| `--importance` | A numeric hint for how significant this fact is. Recorded for future use but not currently applied to search ranking. |
+| `--importance` | A numeric **hint** (0–1, default 0.5) for how significant you think this fact is. *(1.19 PR6)* It is journaled as asserted, but the projected `facts.importance` starts at `min(hint, importance_self_cap)` (default cap 0.3) and rises only when **other** identities link to the fact — importance is learned, never self-declared. `hv search --sort importance` ranks by it. |
 | `--gate` | Filter this write through the **admission gate** (salience layer 2) — a content-neutral structural check that silently drops writes that are not knowledge-shaped (trivially short, a bare question, a greeting). It never judges topic or importance; that judgment stays with the agent (layer 1). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
 | `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's stable `ref` (`node_id:seq`, as shown by `hv search`; preferred) or a local decision id (`17` / `d17`), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and, later, the utility of the facts that informed it. |
 | `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
@@ -774,7 +787,7 @@ filter them in text mode.
 > (JSON: `outcome_score`, `effective_outcome_score`, `last_outcome_at`; `null` = no outcome yet). Outcome score
 > is **not** confidence: `--min-confidence` still never filters decisions.
 ```
-hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,decision,idea}]
+hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,decision,idea}] [--sort {confidence,importance,utility,recency}]
 ```
 
 **Arguments:**
@@ -785,6 +798,7 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,
 | `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. JSON is a flat list; each row carries a `kind` field (`fact` or `decision`). |
 | `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. (In JSON, decisions carry no confidence, so a `min_confidence > 0` consumer drops them.) |
 | `--kind` | *(1.20)* What to search: `all` (default), `fact`, `decision`, `idea`. Under `all` an **idea** appears only once it has earned confidence above 0 — a raw hypothesis is not knowledge yet; `--kind idea` lists every idea. JSON rows carry `kind: idea` with `confidence`, `effective_confidence` and `ref`. |
+| `--sort` | *(1.19 PR6)* How to rank facts and ideas: `confidence` (default — effective confidence, unchanged behaviour), `importance` (learned salience: capped self-hint + other-identity link attention), `utility` (how much recorded decisions relied on it, weighted by their outcomes), or `recency`. Decisions always list newest-first. Text rows show `Imp:` / `Util:`; JSON rows carry `importance`, `effective_importance`, `utility`, `effective_utility`, `last_link_at`. Both learned values are stored undecayed and decayed at query time under the entry's **class half-life** (`halflife_fact` / `halflife_idea` / `halflife_volatile`), which now also governs confidence decay. |
 
 **Examples:**
 ```bash

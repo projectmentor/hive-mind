@@ -321,13 +321,13 @@ async function overview(){
 }
 
 /* ---------- Corpus ---------- */
-let C={q:'',kind:'all',tag:'',sort:'salience',status:'all',fpage:1,dpage:1,facts:[],decs:[],ftotal:0,dtotal:0,tagsLoaded:false};
+let C={q:'',kind:'all',tag:'',sort:'confidence',status:'all',fpage:1,dpage:1,facts:[],decs:[],ftotal:0,dtotal:0,tagsLoaded:false};
 function corpus(){
   $('#app').innerHTML=`
    <div class="controls">
      <input type="search" id="q" placeholder="Search facts & decisions…" value="${esc(C.q)}">
      <select id="kind"><option value="all">All</option><option value="fact">Facts</option><option value="decision">Decisions</option></select>
-     <select id="sort"><option value="salience">Sort: salience</option><option value="recency">Sort: recency</option></select>
+     <select id="sort"><option value="confidence">Sort: confidence</option><option value="importance">Sort: importance</option><option value="utility">Sort: utility</option><option value="recency">Sort: recency</option></select>
      <select id="status"><option value="all">Status: live</option><option value="contested">Contested</option><option value="forgotten">Forgotten</option><option value="volatile">Volatile</option></select>
      <select id="tag"><option value="">All tags</option></select>
    </div><div id="results">${spin()}</div>`;
@@ -355,7 +355,7 @@ window.goFacts=async p=>{C.fpage=p;const e=$('#fpanel');if(e)e.innerHTML=`<h2>Fa
 window.goDecs=async p=>{C.dpage=p;const e=$('#dpanel');if(e)e.innerHTML=`<h2>Decisions</h2>${spin()}`;try{await loadDecs();}catch(err){}if($('#dpanel'))$('#dpanel').innerHTML=dpanelHTML();};
 window.filterTag=t=>{if(state.detail||state.node){state.detail=null;state.node=null;}state.view='corpus';C.tag=t;C.q='';C.kind='all';C.status='all';C.fpage=1;C.dpage=1;
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));corpus();};
-window.openContested=()=>{state.node=null;state.detail=null;state.view='corpus';C.q='';C.tag='';C.kind='fact';C.status='contested';C.sort='salience';C.fpage=1;C.dpage=1;
+window.openContested=()=>{state.node=null;state.detail=null;state.view='corpus';C.q='';C.tag='';C.kind='fact';C.status='contested';C.sort='confidence';C.fpage=1;C.dpage=1;
   document.querySelectorAll('nav button').forEach(x=>x.classList.toggle('active',x.dataset.v==='corpus'));corpus();};
 
 /* ---------- Hive ---------- */

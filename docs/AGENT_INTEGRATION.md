@@ -262,6 +262,17 @@ when it must re-wire.
     (or `ref`). `hive_retract(fact_id)` and `hive_entity(fact_id)` now take the `sid` string. The
     audit's CONTRAVENED check parses a prose `h:…` exactly (a prose `#N` stays best-effort).
     Closes the `hv retract` wrong-target hazard (hive #58). No wire change; nothing new is journaled.
+  - *PR6 (same contract):* **importance (salience L3) + utility are learned projections.**
+    `facts.importance` is now written only by `_recompute_importance`: it starts at
+    `min(--importance hint, importance_self_cap)` (default cap **0.3**) and rises only through links
+    from **other** identities; `--importance` is therefore a hint, never a claim — adapters should
+    stop treating it as a ranking lever. New `utility` (facts + ideas): how much recorded
+    decision-making (`informed` links) relied on the entry, weighted by those decisions' outcomes.
+    `hv search --sort importance|utility` / `api_search(sort=…)` rank by them (default ranking
+    unchanged; the dashboard's `salience` sort is now an alias of `confidence`). Per-class half-lives
+    (`halflife_fact` 180, `halflife_idea` 90, `halflife_volatile` 14 days) are governed knobs and now
+    drive confidence decay too. JSON search rows gain `importance`, `effective_importance`,
+    `utility`, `effective_utility`, `last_link_at`. No wire change; nothing new is journaled.
     Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
   - *PR7 (same contract):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
     devices, decisions' outcome mean) over governed short/long windows (`trust_short_days`,

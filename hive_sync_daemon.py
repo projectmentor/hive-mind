@@ -410,7 +410,7 @@ class Handler(BaseHTTPRequestHandler):
                     min_confidence=float(q.get("min_confidence", ["0"])[0] or 0),
                     limit=max(1, min(200, int(q.get("limit", ["50"])[0] or 50))),
                     offset=max(0, int(q.get("offset", ["0"])[0] or 0)),
-                    sort=q.get("sort", ["salience"])[0], status=q.get("status", ["all"])[0]))
+                    sort=q.get("sort", ["confidence"])[0], status=q.get("status", ["all"])[0]))
             elif u.path == "/api/tags":
                 self._send(200, hv.api_tags())
             elif u.path == "/api/related":

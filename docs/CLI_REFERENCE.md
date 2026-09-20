@@ -596,6 +596,7 @@ independent sources agree on the same thing.
 
 ```
 hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] [--resolves ID]
+            [--outcome-of DECISION] [--polarity -1|0|1] [--channel sense|act|introspect]
 ```
 
 **Arguments:**
@@ -607,6 +608,9 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
 | `--importance` | A numeric hint for how significant this fact is. Recorded for future use but not currently applied to search ranking. |
 | `--gate` | Filter this write through the **admission gate** (salience layer 2) — a content-neutral structural check that silently drops writes that are not knowledge-shaped (trivially short, a bare question, a greeting). It never judges topic or importance; that judgment stays with the agent (layer 1). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
+| `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's stable `ref` (`node_id:seq`, as shown by `hv search`; preferred) or a local decision id (`17` / `d17`), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and, later, the utility of the facts that informed it. |
+| `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
+| `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`; an `introspect` `supports`/`contradicts` link weighs `introspect_support_weight` (default 0). |
 | `--resolves ID` | Mark this write as the correction of an earlier fact. It records a **durable link** (the resolved fact's `(node_id, seq)` journal identity, stable across rebuilds and nodes) and **soft-retracts** fact `ID` (registers negative evidence so it stops surfacing as canonical), keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract ID --owner`. The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves #N`, `supersedes #N`) but never reconciled it — but a prose `#N` is a **local id** that drifts across rebuilds and nodes, so treat the flagged target id as best-effort and reconcile with `--resolves` (which never drifts). |
 
 **What you get back:**
@@ -715,7 +719,10 @@ filter them in text mode.
 > *(1.19)* Every result — text and `--format json` — carries **`ref`**, the entry's stable journal identity
 > `node_id:seq`. Use `ref` wherever you cite an entry to another command (`--informed`, later `--outcome-of`);
 > the bracketed `[N]` / `#N` is this node's rowid and shifts on rebuild. Decisions also show `informed by:`
-> (the refs they relied on, rendered with this node's current local ids).
+> (the refs they relied on, rendered with this node's current local ids) and, once any outcome has been
+> recorded, `outcome ±0.xx` — the decision's outcome score with its evidence decayed under the fact half-life
+> (JSON: `outcome_score`, `effective_outcome_score`, `last_outcome_at`; `null` = no outcome yet). Outcome score
+> is **not** confidence: `--min-confidence` still never filters decisions.
 ```
 hv search <query> [--format {text,json}] [--min-confidence N]
 ```

@@ -48,6 +48,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 |---|---|
 | `hv search "<q>" [--format json] [--min-confidence N]` | Read the corpus (ranked by effective confidence) |
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
+| `hv remember "<outcome>" --source <you> --outcome-of <decision ref> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
 | `hv decide "<decision>" --rationale "<why>" --informed <ref>…` | Record a decision, naming the `ref`s it relied on *(1.19)* |
 | `hv retract <id> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
@@ -228,6 +229,15 @@ when it must re-wire.
     `hive_search` now return **`ref`** (`node_id:seq`) on every fact and decision — the stable
     identity agents should carry; bare local ids are accepted but kind-checked and discouraged.
     Rubric: when you call `hive_decide`, pass the refs of the facts you retrieved and relied on.
+  - *PR4 (same contract):* **outcomes → `decisions.outcome_score`.** `hv remember --outcome-of
+    <decision ref> [--polarity 1|0|-1] [--channel …]` / `hive_remember(outcome_of=…, polarity=…)`
+    records what happened after a decision was acted on: an ordinary fact plus an `outcome-of`
+    link carrying a ternary polarity. `_decision_evidence` (a clone of the fact-confidence
+    projection keyed by decision) scores it into `decisions.outcome_score` / `last_outcome_at` —
+    a *vindication* axis; decisions still carry **no confidence** and `--min-confidence` still
+    excludes them. Only `sense`-channel outcomes count (absent = sense); an `introspect` outcome
+    is recorded, never counted. Both evidence projections now retain an ordered evidence sequence.
+    Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
 - `1.18` — **capsule-addressability for silent devices (`announce`)**. New authority-less,
   device-signed, kind-discriminated governance act `announce` — fixed envelope `{action, kind}`,
   kind-specific fields under `data`; first kind: `key`. Its only purpose is to *exist* as a signed

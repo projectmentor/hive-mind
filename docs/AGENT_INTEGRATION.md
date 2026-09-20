@@ -249,6 +249,11 @@ when it must re-wire.
     excludes them. Only `sense`-channel outcomes count (absent = sense); an `introspect` outcome
     is recorded, never counted. Both evidence projections now retain an ordered evidence sequence.
     Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
+  - *PR7 (same contract):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
+    devices, decisions' outcome mean) over governed short/long windows (`trust_short_days`,
+    `trust_long_days`); the delta is a **signal** surfaced by `hv doctor` (`trust-drift`, threshold
+    `trust_drift_threshold`) and a `DRIFT` column on `hv peers`. Advisory only — no effect on
+    admission, purge, corroboration weight or link authority. Adapters unaffected.
 - `1.18` — **capsule-addressability for silent devices (`announce`)**. New authority-less,
   device-signed, kind-discriminated governance act `announce` — fixed envelope `{action, kind}`,
   kind-specific fields under `data`; first kind: `key`. Its only purpose is to *exist* as a signed

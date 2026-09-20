@@ -826,7 +826,11 @@ CONF_INTROSPECT_SUPPORT_WEIGHT = 0.0   # 1.19: weight of a supports/contradicts/
 # chain owner (back-compat). See Stage C in `_governance_state`.
 GOV_QUORUM_M = 0                # admitted voter-units needed to elect a new owner (0 = elections OFF)
 GOV_QUORUM_BY = "device"       # count quorum by "device" or by "principal"
-GOV_DEAD_MAN_DAYS = 30.0       # owner inactivity (no owner-signed act, incl. heartbeat) before an election can install
+GOV_DEAD_MAN_DAYS = 30.0
+# 1.19 PR7: trust-velocity windows + advisory threshold (governed so every node computes the same drift).
+GOV_TRUST_LONG_DAYS = 180.0     # long window for per-signer reliability
+GOV_TRUST_SHORT_DAYS = 14.0     # short window; velocity = short − long (CHANGE is the signal, not the level)
+GOV_TRUST_DRIFT_THRESHOLD = -0.3   # `doctor trust-drift` warns below this delta (advisory only)       # owner inactivity (no owner-signed act, incl. heartbeat) before an election can install
 GOV_ELECTION_SKEW_DAYS = 1.0 / 24.0   # max a proposal's basis_ts may lead its OWN entry timestamp (clock-skew
                                # allowance); a further-future basis_ts is a forged inactivity anchor → rejected
 
@@ -1071,7 +1075,9 @@ def _governance_state_uncached(entries):
            "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
-                                        "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT}}
+                                        "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
+                                        "trust_long_days": GOV_TRUST_LONG_DAYS, "trust_short_days": GOV_TRUST_SHORT_DAYS,
+                                        "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD}}
     govs = []
     for e in entries:
         if e.get("type") != "governance":
@@ -1256,7 +1262,8 @@ def _governance_state_uncached(entries):
         elif action == "set-config":
             key, raw = p.get("key"), p.get("value")
             try:
-                if key in ("same_device_lambda", "cap_self", "dead_man_days", "introspect_support_weight"):
+                if key in ("same_device_lambda", "cap_self", "dead_man_days", "introspect_support_weight",
+                           "trust_long_days", "trust_short_days", "trust_drift_threshold"):
                     gov["config"][key] = float(raw)
                 elif key == "quorum_m":
                     gov["config"][key] = int(raw)
@@ -1436,7 +1443,9 @@ _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": s
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,
-                           "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT}}
+                           "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
+                                        "trust_long_days": GOV_TRUST_LONG_DAYS, "trust_short_days": GOV_TRUST_SHORT_DAYS,
+                                        "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD}}
 
 
 def _governed_side(weights, gov):
@@ -1613,6 +1622,150 @@ def _recompute_idea_confidence(conn, entries):
         contested = 1 if (ev["pos"] and ev["neg"]) else 0
         conn.execute("UPDATE ideas SET confidence = ?, contested = ?, last_evidence_at = ? WHERE id = ?",
                      (_content_confidence(ev, gov), contested, ev.get("last_ts") or None, row[1]))
+
+
+# --------------------------------------------------------------------------
+# 1.19 PR7: trust velocity (design §8) — a DERIVED view of the same evidence, per signer. Advisory
+# only: it feeds `doctor trust-drift` and a `hv peers` column, and by decision it is NOT wired into
+# admission, purge, or link authority (that is a 1.2x call once real drift has been observed).
+# Change over time is the security signal, not the level: a long-reliable device that suddenly starts
+# being contradicted is more interesting than one that was always mediocre.
+# --------------------------------------------------------------------------
+
+def _in_window(ts, now, days):
+    a, b = _to_dt(ts), _to_dt(now)
+    if a is None or b is None:
+        return False
+    delta = (b - a).total_seconds() / 86400.0
+    return 0.0 <= delta <= days
+
+
+def _signer_reliability(entries, gov, window_days, now):
+    """Per node_id, over the trailing `window_days` ending at `now` (ISO; `$HIVE_NOW`-drivable):
+      asserted      — facts this node wrote in the window
+      contradicted  — how many of those were retracted or `contradicts`-linked by a DIFFERENT node
+                      in the window (self-correction is not a reliability hit)
+      reliability   — 1 − contradicted/asserted, or None when nothing was asserted
+      channels      — the same three, split by the contradicted FACT's channel (`sense` observations vs
+                      `introspect` reasoning point at different compromises, §0.1)
+      decisions / outcome_mean — decisions this node wrote in the window that have ≥1 sense-channel
+                      outcome, and the mean of their outcome scores (via `_decision_evidence`), else None
+    Pure over (journal, gov, now). Only admitted devices once an owner exists."""
+    admitted = gov.get("admitted") if gov.get("owner_id") else None
+    facts = {}          # (node, seq) -> (node, channel)
+    out = {}
+
+    def node_rec(n):
+        return out.setdefault(n, {"asserted": 0, "contradicted": 0, "reliability": None,
+                                  "channels": {"sense": {"asserted": 0, "contradicted": 0, "reliability": None},
+                                               "introspect": {"asserted": 0, "contradicted": 0, "reliability": None}},
+                                  "decisions": 0, "outcome_mean": None})
+
+    for e in entries:
+        n = e.get("node_id")
+        if n is None or (admitted is not None and n not in admitted):
+            continue
+        if e.get("type") == "fact" and _in_window(e.get("timestamp", ""), now, window_days):
+            ch = ((e.get("payload") or {}).get("channel") or "sense")
+            ch = ch if ch in ("sense", "introspect") else "sense"
+            facts[(n, e.get("seq"))] = (n, ch)
+            r = node_rec(n)
+            r["asserted"] += 1
+            r["channels"][ch]["asserted"] += 1
+    hit = set()
+    for e in entries:
+        t = e.get("type")
+        if t not in ("retract", "link") or not _in_window(e.get("timestamp", ""), now, window_days):
+            continue
+        if "sig" in e and not _verify_entry(e):
+            continue
+        p = e.get("payload") or {}
+        if t == "retract":
+            ref = p.get("retracts_ref")
+        elif p.get("kind") == "contradicts":
+            ref = p.get("to_ref")
+        else:
+            continue
+        if not (isinstance(ref, (list, tuple)) and len(ref) == 2):
+            continue
+        key = tuple(ref)
+        if key not in facts or facts[key][0] == e.get("node_id"):
+            continue                                       # unknown target, or self-correction
+        hit.add(key)
+    for key in hit:
+        n, ch = facts[key]
+        out[n]["contradicted"] += 1
+        out[n]["channels"][ch]["contradicted"] += 1
+    dev = _decision_evidence(entries, gov)
+    scores = {}
+    for e in entries:
+        n = e.get("node_id")
+        if e.get("type") != "decision" or n not in out and (admitted is not None and n not in admitted):
+            continue
+        if not _in_window(e.get("timestamp", ""), now, window_days):
+            continue
+        ev = dev.get((n, e.get("seq")))
+        if not ev or not ev.get("last_ts"):
+            continue
+        scores.setdefault(n, []).append(_content_confidence(ev, gov))
+    for n, vals in scores.items():
+        r = node_rec(n)
+        r["decisions"] = len(vals)
+        r["outcome_mean"] = round(sum(vals) / len(vals), 6)
+    for r in out.values():
+        if r["asserted"]:
+            r["reliability"] = round(1.0 - r["contradicted"] / r["asserted"], 6)
+        for c in r["channels"].values():
+            if c["asserted"]:
+                c["reliability"] = round(1.0 - c["contradicted"] / c["asserted"], 6)
+    return out
+
+
+def _trust_velocity(entries, gov, now):
+    """Per node: short-window minus long-window reliability (and outcome mean), plus the per-channel
+    deltas. None where either window has nothing to measure. Windows are the governed knobs
+    `trust_long_days` / `trust_short_days`, so every node computes the same drift."""
+    cfg = gov.get("config") or {}
+    L = float(cfg.get("trust_long_days", GOV_TRUST_LONG_DAYS))
+    S = float(cfg.get("trust_short_days", GOV_TRUST_SHORT_DAYS))
+    long, short = _signer_reliability(entries, gov, L, now), _signer_reliability(entries, gov, S, now)
+
+    def d(a, b):
+        return round(b - a, 6) if (a is not None and b is not None) else None
+
+    out = {}
+    for n in set(long) | set(short):
+        lo, sh = long.get(n) or {}, short.get(n) or {}
+        out[n] = {
+            "long": lo.get("reliability"), "short": sh.get("reliability"),
+            "delta": d(lo.get("reliability"), sh.get("reliability")),
+            "outcome_long": lo.get("outcome_mean"), "outcome_short": sh.get("outcome_mean"),
+            "outcome_delta": d(lo.get("outcome_mean"), sh.get("outcome_mean")),
+            "channels": {ch: d((lo.get("channels") or {}).get(ch, {}).get("reliability"),
+                               (sh.get("channels") or {}).get(ch, {}).get("reliability"))
+                         for ch in ("sense", "introspect")},
+            "short_asserted": sh.get("asserted", 0), "long_asserted": lo.get("asserted", 0),
+        }
+    return out
+
+
+def _trust_drifting(entries, gov, now):
+    """Nodes whose velocity (reliability or outcome mean, overall or per channel) fell below the governed
+    `trust_drift_threshold`. Returns ['<node> reliability 0.95→0.40 (Δ-0.55)', ...]. Advisory only."""
+    thr = float((gov.get("config") or {}).get("trust_drift_threshold", GOV_TRUST_DRIFT_THRESHOLD))
+    out = []
+    for n, v in sorted(_trust_velocity(entries, gov, now).items()):
+        parts = []
+        if v["delta"] is not None and v["delta"] < thr:
+            parts.append(f"reliability {v['long']:.2f}→{v['short']:.2f} (Δ{v['delta']:+.2f})")
+        if v["outcome_delta"] is not None and v["outcome_delta"] < thr:
+            parts.append(f"decision outcomes {v['outcome_long']:+.2f}→{v['outcome_short']:+.2f} (Δ{v['outcome_delta']:+.2f})")
+        for ch, cd in (v.get("channels") or {}).items():
+            if cd is not None and cd < thr and v["delta"] is not None and not (v["delta"] < thr):
+                parts.append(f"{ch}-channel reliability Δ{cd:+.2f}")
+        if parts:
+            out.append(f"{n}: " + "; ".join(parts))
+    return out
 
 
 def _to_dt(s):
@@ -5305,6 +5458,19 @@ def _doctor_status():
     except Exception:
         pass
 
+    # 3g. Trust drift (design §8): a device whose short-window reliability or decision-outcome mean fell
+    #     below the governed threshold relative to its long window. A SIGNAL for the human (possible
+    #     compromise, prompt injection, tool failure, drift) — by decision it changes nothing: not admission,
+    #     not purge, not link authority. Advisory.
+    try:
+        drift = _trust_drifting(entries, gov, os.environ.get("HIVE_NOW") or _now_iso())
+        if drift:
+            checks.append({"name": "trust-drift", "status": "warn",
+                           "detail": f"{len(drift)} device(s) with falling reliability: {'; '.join(drift)} — "
+                                     f"inspect recent writes (`hv search`, `hv audit`); nothing is enforced"})
+    except Exception:
+        pass
+
     # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
     try:
         a = _compute_audit(depth="light")
@@ -6217,7 +6383,8 @@ def _config_set(key, value):
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
                 "capsule_putters": str, "cell_writers": str,
-                "introspect_support_weight": float}
+                "introspect_support_weight": float,
+                "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float}
     if key not in coercers:
         print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
         return
@@ -6237,6 +6404,12 @@ def _config_set(key, value):
         return
     if key == "introspect_support_weight" and not (0.0 <= val <= 1.0):
         print("introspect_support_weight must be in [0, 1] (default 0: reasoning never moves confidence)")
+        return
+    if key in ("trust_long_days", "trust_short_days") and val <= 0:
+        print(f"{key} must be > 0 days")
+        return
+    if key == "trust_drift_threshold" and not (-1.0 <= val <= 0.0):
+        print("trust_drift_threshold must be in [-1, 0] (a negative delta = reliability falling)")
         return
     if _append_governance({"action": "set-config", "key": key, "value": val}):
         print(f"set {key} = {val}")
@@ -6353,6 +6526,16 @@ def peers_cmd(args):
     def _short(d):
         return (d[:11] + "…") if len(d) > 12 else d
 
+    velocity = {}
+    try:
+        velocity = _trust_velocity(entries, gov, os.environ.get("HIVE_NOW") or _now_iso())
+    except Exception:
+        velocity = {}
+
+    def _drift(d):
+        v = velocity.get(d) or {}
+        return f"{v['delta']:+.2f}" if v.get("delta") is not None else "—"
+
     rows, stale = [], []
     for d in sorted(gov["admitted"]):
         pr = probed.get(d)
@@ -6370,7 +6553,7 @@ def peers_cmd(args):
             else:
                 addr, status = "—", "no address"
         seen = (last_seen.get(d, "")[:10]) or "—"
-        rows.append((name, _short(d), prin, addr, seen, status))
+        rows.append((name, _short(d), prin, addr, seen, _drift(d), status))
         if d != NODE_ID:
             age = _age_days(last_seen.get(d, ""))
             if age is not None and age > 14:
@@ -6381,10 +6564,13 @@ def peers_cmd(args):
     wp = max([len(str(r[2])) for r in rows] + [len("PRINCIPAL")])
     wa = max([len(str(r[3])) for r in rows] + [len("ADDRESS")])
     ws = max([len(str(r[4])) for r in rows] + [len("LAST SEEN")])
+    wv = max([len(str(r[5])) for r in rows] + [len("DRIFT")])
     print(f"hive {gov['hive_id']} — owner {gov['owner_id']}  ({len(rows)} admitted device(s))")
-    print(f"  {'NAME'.ljust(wn)}  {'DEVICE'.ljust(wd)}  {'PRINCIPAL'.ljust(wp)}  {'ADDRESS'.ljust(wa)}  {'LAST SEEN'.ljust(ws)}  STATUS")
-    for name, dev, prin, addr, seen, status in rows:
-        print(f"  {str(name).ljust(wn)}  {dev.ljust(wd)}  {str(prin).ljust(wp)}  {str(addr).ljust(wa)}  {seen.ljust(ws)}  {status}")
+    print(f"  {'NAME'.ljust(wn)}  {'DEVICE'.ljust(wd)}  {'PRINCIPAL'.ljust(wp)}  {'ADDRESS'.ljust(wa)}  {'LAST SEEN'.ljust(ws)}  {'DRIFT'.ljust(wv)}  STATUS")
+    for name, dev, prin, addr, seen, drift, status in rows:
+        print(f"  {str(name).ljust(wn)}  {dev.ljust(wd)}  {str(prin).ljust(wp)}  {str(addr).ljust(wa)}  {seen.ljust(ws)}  {drift.ljust(wv)}  {status}")
+    if any(r[5] != "—" for r in rows):
+        print("  (DRIFT = short-window minus long-window reliability, design §8; advisory — see `hv doctor` trust-drift)")
     if stale:
         print("\n  Stale candidate(s) — no activity in >14 days. To remove (owner only):")
         for d, name, seen, age in stale:

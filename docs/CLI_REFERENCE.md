@@ -66,6 +66,9 @@ hv config confidence set same_device_lambda 0.5          # weight of EACH extra 
 hv config confidence set cap_self 0.70                   # ceiling when all corroboration is one principal (default 0.70)
 hv config confidence set introspect_support_weight 0.0   # 1.19: weight of a supports/contradicts LINK whose channel
                                                          # is `introspect` (default 0 — reasoning never moves confidence)
+hv config confidence set trust_long_days 180             # 1.19: trust-velocity long window (days)
+hv config confidence set trust_short_days 14             # 1.19: trust-velocity short window (days)
+hv config confidence set trust_drift_threshold -0.3      # 1.19: `doctor trust-drift` warns when short − long falls below this
 ```
 
 > **Links (1.19).** The journal has a generic `link` entry type (`supports`, `contradicts`,
@@ -421,6 +424,25 @@ hv entity {add,list,show,link} [options]
 ```
 
 ---
+
+### `hv peers` — Hive members, reachability, staleness, trust drift
+
+Lists every admitted device with its principal, address, last-seen date, reachability, and
+*(1.19)* a **DRIFT** column: the device's short-window reliability minus its long-window
+reliability (design §8). Reliability is `1 − contradicted/asserted` over the facts that device
+wrote in the window, where "contradicted" means retracted or `contradicts`-linked by a
+**different** device (self-correction never counts). `—` means nothing to measure yet. The
+signal is the *change*, not the level: a long-reliable device that suddenly starts being
+contradicted is worth a look; one that was always mediocre is not news. Windows and the
+warning threshold are the governed knobs `trust_long_days`, `trust_short_days` and
+`trust_drift_threshold` (see `hv config`). `hv doctor` reports devices below the threshold under
+**`trust-drift`**, split by channel (`sense` observations vs `introspect` reasoning) and also on
+the mean outcome score of the device's recent decisions. **Advisory only:** by decision, drift
+changes nothing — not admission, not purge, not link authority.
+
+```
+hv peers
+```
 
 ### `hv group` — Membership lifecycle (owner-only)
 

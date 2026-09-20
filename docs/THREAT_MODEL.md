@@ -86,6 +86,15 @@ at once). Concretely:
   nothing. `hv doctor` (`link-authz`) lists every downgraded link; the owner ratifies by re-issuing it
   owner-signed. Grounding: a `supports`/`contradicts` link whose `channel` is `introspect` weighs
   `introspect_support_weight` (default 0), so no agent can talk a claim up or down by reasoning alone.
+- **Detecting a device that has gone bad (contract 1.19 trust velocity).** Per-signer reliability is a
+  derived view of the same evidence: how often a device's recent facts get retracted or contradicted by
+  *other* devices, and how its recent decisions' outcomes score, each compared against the device's own
+  long-window baseline. A sharply negative velocity is a security **signal** — possible compromise,
+  prompt injection, corrupted state, a model or tool change — surfaced by `hv doctor` (`trust-drift`)
+  and `hv peers`. It is deliberately **not an enforcement input**: it does not change admission, purge,
+  corroboration weight or link authority, and no agent-trust *level* is exposed as a number to rank
+  agents by (information is trusted, not agents). Any automatic response (a CAUTION/RESTRICTED state)
+  is a later decision once real drift has been observed for a release.
 - **Forged clock to trip succession early.** A quorum election's dead-man timer is anchored on the
   proposal's `basis_ts`. A proposal whose `basis_ts` leads its OWN entry timestamp by more than a
   small skew allowance is rejected — a deterministic, entry-time-only check (no wall-clock), so the

@@ -305,6 +305,28 @@ two observations.
   `idea` lands on ingest, one `idea-arrived` line is appended to `$HIVE_HOME/.bus/introspect.log`
   — a local, non-journaled bus event on the `introspect` channel; no consumer is required.
 
+
+## Trust velocity (contract 1.19)
+
+A derived, per-signer view of the evidence the projections already hold (design §8).
+
+- `_signer_reliability(entries, gov, window_days, now)` — per node over the trailing window:
+  facts asserted, facts contradicted by a **different** node (a `retract` or a `contradicts`
+  link in the window), `reliability = 1 − contradicted/asserted`, the same split by the
+  contradicted fact's channel (`sense` vs `introspect`), and the mean outcome score of the
+  node's decisions written in the window that have at least one sense-channel outcome. Only
+  admitted devices once an owner exists. Pure over (journal, governance, `now`).
+- `_trust_velocity(entries, gov, now)` — short window minus long window (governed knobs
+  `trust_short_days` 14 / `trust_long_days` 180) for reliability, for the outcome mean, and per
+  channel; `None` where a window has nothing to measure.
+- `_trust_drifting(...)` — nodes whose delta fell below `trust_drift_threshold` (default −0.3),
+  reported by `hv doctor` as the advisory `trust-drift` check; `hv peers` shows the overall
+  delta as `DRIFT`.
+
+Change over time is the signal, not the level. By decision the velocity is **not** wired into
+admission, purge, corroboration or link authority; it exists to be collected for a release
+before any NORMAL → CAUTION → RESTRICTED state machine is considered.
+
 ## Salience layers
 
 "Salience" names a three-layer pipeline, not a field. The layers are sequential, never summed:

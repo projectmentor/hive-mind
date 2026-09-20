@@ -44,7 +44,7 @@ Each line in a `.jsonl` file is a JSON object:
 |---|---|
 | `node_id` | The authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)` |
 | `seq` | Per-node monotonic sequence number |
-| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact`, `governance` |
+| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact`, `link` (1.19), `governance` |
 | `timestamp` | ISO8601 wall clock at write time |
 | `payload` | Type-specific data |
 | `prev_hash` | Hash of the previous entry — forms a hash chain per node |
@@ -65,6 +65,11 @@ Unsigned entries (pre-migration history, legacy peers) are grandfathered.
 Cross-row links (e.g. a retraction pointing at a fact, a decision superseding
 another) use `(node_id, seq)` journal identity — not local SQLite IDs. This
 ensures links survive cross-node merge correctly.
+
+Since contract 1.19 new relationships are expressed by ONE generic `link` type
+with an open `kind` vocabulary (see *Links* below); the three legacy mechanisms
+(`entity_fact`, `retract`, decision `supersedes_ref`) keep their resolvers forever
+because the journal is append-only and nothing is ever migrated.
 
 ---
 
@@ -177,6 +182,17 @@ escrow passphrase is truly remediated only by rotating the owner key via success
   Once an owner exists it must be **owner-signed** (you can't forge a forget with
   a bare source tag); forgets predating the owner are grandfathered.
 
+### Link evidence (1.19)
+
+A `link` entry of kind `supports`, `contradicts` or `resolves` whose target is a
+fact is folded into the same evidence maps as assertions and retractions:
+`supports` adds the link signer's identity weight to the positive side,
+`contradicts` and `resolves` to the negative side. `cap_self`, the same-device
+discount and admission apply unchanged. **Grounding rule:** a link whose
+`channel` is `introspect` weighs `introspect_support_weight` (governed knob,
+default `0`) — reasoning never corroborates or contradicts an observation; an
+absent channel means `sense`.
+
 ### Phase roadmap
 
 - **Phase A** (shipped): derived corroboration confidence, multi-source
@@ -186,6 +202,52 @@ escrow passphrase is truly remediated only by rotating the owner key via success
 - **Owner resilience** (shipped): pt.1 backup/restore + escrow + standby; pt.2 nominated
   succession + transfer + escrow tombstone (the owner chain above); pt.3 quorum election +
   dead-man switch (contract 1.9) — shipped
+
+---
+
+## Links (contract 1.19)
+
+One journal type, an open vocabulary, one resolver.
+
+```json
+{ "type": "link", "payload": {
+    "kind": "supports",
+    "from_ref": ["k1:…", 401], "to_ref": ["k1:…", 77],
+    "data": {}, "source": "claude-code:primary/host/abcd1234", "channel": "sense" } }
+```
+
+- `from_ref` / `to_ref` are journal identities, never local ids.
+- `kind` is a free string on the wire. The projection knows seven kinds; an unknown kind
+  **lands in the journal and projects to nothing** (the `announce` rule), so a 1.19 node and a
+  later node never diverge over vocabulary.
+
+| kind | from → to | effect |
+|---|---|---|
+| `supports` | fact → fact | positive evidence on the target (`_content_evidence`) |
+| `contradicts` | fact → fact | negative evidence on the target |
+| `supersedes` | decision → decision | **hard:** `decisions.superseded_by`; **evidence:** row only |
+| `resolves` | fact → fact | **hard:** `facts.resolves` provenance + retract-equivalent evidence; **evidence:** evidence only |
+| `entity` | entity → fact | `entity_facts` row |
+| `informed` | decision → fact/decision | edge row (utility projection lands with PR3/PR6) |
+| `outcome-of` | fact → decision | edge row (outcome_score lands with PR4) |
+
+**Links are evidence, not commands.** `_link_authority` returns `hard` only when the payload
+carries an `owner_sig` valid for the owner **as of that journal position** (the same
+`_is_authorized_writer` check capsules and cells use — a device key is never the owner key), or
+the verified signer is the target entry's author. From any other admitted device a
+`supersedes`/`resolves` is **downgraded**: it still weighs on confidence, it cannot hide or
+replace. The verdict is recorded in `links.authority`; `hv doctor` (`link-authz`) lists
+downgraded links so the owner can ratify by re-issuing them owner-signed. Before an owner exists
+only the author rule can grant `hard`.
+
+`links` is rebuilt from the journal on every rebuild (`resolve_link`, dispatching on kind via
+`_LINK_RESOLVERS`). A link whose refs do not resolve through `journal_index` is skipped
+deterministically. Ingest is unchanged: content is gated by admission, not by type, so a
+pre-1.19 node lands a `link` and ignores it — converged journals, no version skew.
+
+No verb emits `link` entries yet: `--supersedes`, `--resolves` and `entity link` keep their
+legacy fields until the whole fleet is on 1.19 (the write-path switch is a separate PR; the two
+paths are never emitted together for one act).
 
 ---
 
@@ -364,6 +426,7 @@ Key tables in `store.db`:
 | `decisions` | Decisions with supersession links |
 | `entities` | Named entities |
 | `entity_facts` | Many-to-many fact-to-entity links |
+| `links` | 1.19 generic edge table projected from `link` entries: `kind, from_kind, from_id, to_kind, to_id, signer, authority, channel, created_at` |
 | `journal_index` | Index of ingested journal entries by `(node_id, seq)` |
 | `node_chunk_hashes` | Merkle chunk hashes per node, used by sync |
 

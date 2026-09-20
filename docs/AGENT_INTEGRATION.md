@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.18`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.19`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -210,6 +210,18 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.19` — **generic `link` journal type (read side).** One content type with an open `kind`
+  vocabulary for relationships between entries: `{kind, from_ref, to_ref, data, source, channel?}`
+  with journal-identity refs. The projection knows `supports`, `contradicts`, `supersedes`,
+  `resolves`, `entity`, `informed`, `outcome-of`; an unknown kind lands and projects to nothing.
+  Links are **evidence, not commands**: `supersedes`/`resolves` command only when owner-signed for
+  the owner-at-that-position or written by the target's author; otherwise they weigh-only
+  (`hv doctor link-authz` lists them). `supports`/`contradicts`/`resolves` fold into confidence as
+  identity-weighted evidence; a link with `channel: introspect` weighs the new governed knob
+  `introspect_support_weight` (default 0). New `links` table in store.db. **No wire change, no
+  version skew** (a 1.18 node lands a `link` and ignores it); **no write-path change** — no verb
+  emits links yet, the first writers arrive with `--informed` and `--outcome-of`. Adapters
+  unaffected.
 - `1.18` — **capsule-addressability for silent devices (`announce`)**. New authority-less,
   device-signed, kind-discriminated governance act `announce` — fixed envelope `{action, kind}`,
   kind-specific fields under `data`; first kind: `key`. Its only purpose is to *exist* as a signed

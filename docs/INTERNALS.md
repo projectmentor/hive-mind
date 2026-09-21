@@ -273,9 +273,23 @@ only the author rule can grant `hard`.
 deterministically. Ingest is unchanged: content is gated by admission, not by type, so a
 pre-1.19 node lands a `link` and ignores it — converged journals, no version skew.
 
-No verb emits `link` entries yet: `--supersedes`, `--resolves` and `entity link` keep their
-legacy fields until the whole fleet is on 1.19 (the write-path switch is a separate PR; the two
-paths are never emitted together for one act).
+**Write path (1.19 PR2b).** `hv decide --supersedes`, `hv remember --resolves` and `hv entity link`
+each emit **one `link`** (`supersedes` / `resolves` / `entity`) instead of their legacy field or
+entry (`supersedes_ref`; `resolves_ref` + a `retract`; `entity_fact`). The two shapes are never
+emitted together for one act. `_link_payload` owner-signs the payload when this device holds the
+owner key, so the link is `hard` wherever it lands; otherwise it is device-signed and `hard` only
+where this device authored the target (`_link_authority`). A `resolves` link is retract-equivalent
+negative evidence in `_content_evidence` (hard or downgraded alike) and, when hard, sets
+`facts.resolves` — numerically the same effect the legacy `retract` had. The legacy resolvers
+(`resolve_supersedes`, `resolve_resolves`, `resolve_entity_fact`) stay forever; nothing is migrated.
+
+**Version-skew gate.** A pre-1.19 peer lands a `link` but does not honour it, so the switch waited
+for the fleet. `hv doctor` → `fleet-contract` (`_fleet_contract`, pure over governance + the peer
+probe) lists admitted peers that advertise a contract below 1.19 (or no version at all) and peers
+that are unreachable and so cannot be verified. The contract is read from `/hive/info.contract`
+(advertised from PR2b on, and on `/sync/hello`) or, on an older build, from `/api/verify.version` —
+the version its signed manifest was cut at — so the gate is evaluable before the fleet runs PR2b.
+Advisory; `--fix` never touches it.
 
 ---
 

@@ -302,21 +302,30 @@ def test_pre_owner_only_the_author_rule_grants_hard(tmp_path, monkeypatch):
 
 # ── legacy write paths are untouched (no dual-emit, resolvers stay) ──────────────────────────────
 
-def test_legacy_verbs_still_emit_legacy_fields_and_no_link(hive):
+def test_verbs_emit_one_link_each_and_no_legacy_field(hive):
+    """1.19 PR2b: the write-path switch. Each verb writes exactly ONE `link` INSTEAD of its legacy field /
+    entry — never both (no dual-emit). The legacy resolvers stay for entries already in journals."""
     hive.run("remember", "the daemon listens on port 9876 today", "--source", "alice")
     fid = hive.query("SELECT id FROM facts")[0]["id"]
     hive.run("remember", "the daemon listens on port 9877 today", "--source", "alice", "--resolves", str(fid))
     hive.run("decide", "ship on friday", "--rationale", "r")
     did = hive.query("SELECT id FROM decisions")[0]["id"]
     hive.run("decide", "ship on monday instead", "--rationale", "r", "--supersedes", str(did))
-    types = [e["type"] for e in hive.entries()]
-    assert "link" not in types                                         # no write path switched (PR2b)
-    assert types.count("retract") == 1                                  # --resolves still soft-retracts
-    assert any(e["type"] == "fact" and e["payload"].get("resolves_ref") for e in hive.entries())
-    assert any(e["type"] == "decision" and e["payload"].get("supersedes_ref") for e in hive.entries())
+    hive.run("entity", "add", "--name", "Daemon", "--type", "project")
+    hive.run("entity", "link", "--name", "Daemon", "--fact-id", str(fid), "--confidence", "0.9")
+    es = hive.entries()
+    types = [e["type"] for e in es]
+    assert types.count("link") == 3 and "retract" not in types and "entity_fact" not in types
+    assert sorted(e["payload"]["kind"] for e in es if e["type"] == "link") == ["entity", "resolves", "supersedes"]
+    assert not any("resolves_ref" in e["payload"] for e in es if e["type"] == "fact")
+    assert not any("supersedes_ref" in e["payload"] for e in es if e["type"] == "decision")
+    # single-device bootstrap hive: this device authored every target → every link is hard → same effects
     hive.run("doctor", "rebuild")
     assert hive.query("SELECT superseded_by FROM decisions WHERE content='ship on friday'")[0]["superseded_by"] is not None
-    assert hive.query("SELECT count(*) c FROM links")[0]["c"] == 0
+    assert hive.query("SELECT resolves FROM facts WHERE content LIKE '%9877%'")[0]["resolves"] == fid
+    assert hive.query("SELECT confidence FROM facts WHERE id = ?", (fid,))[0]["confidence"] <= 0
+    assert hive.query("SELECT count(*) c FROM entity_facts")[0]["c"] == 1
+    assert {r["authority"] for r in hive.query("SELECT authority FROM links")} == {"hard"}
 
 
 def test_config_knob_bounds_via_cli(tmp_path):

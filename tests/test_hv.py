@@ -299,8 +299,11 @@ def test_remember_resolves_links_and_soft_retracts(hive):
     # resolved fact soft-retracted: negative evidence, confidence down to ~0, contested, reversible
     row = hive.query("SELECT confidence, contested FROM facts WHERE id=?", (old,))[0]
     assert row["confidence"] <= 0 and row["contested"] == 1
-    # a retract entry was journaled against the resolved fact
-    assert any(e["type"] == "retract" for e in hive.entries())
+    # 1.19 PR2b: ONE `resolves` link was journaled against the resolved fact — no retract, no resolves_ref
+    links = [e for e in hive.entries() if e["type"] == "link"]
+    assert len(links) == 1 and links[0]["payload"]["kind"] == "resolves"
+    assert not any(e["type"] == "retract" for e in hive.entries())
+    assert not any(e["type"] == "fact" and "resolves_ref" in e["payload"] for e in hive.entries())
     assert "resolved fact" in out
 
 
@@ -329,7 +332,8 @@ def test_entity_add_and_link_are_journaled(hive):
 
     types = [e["type"] for e in hive.entries()]
     assert "entity" in types, "entity add must append a journal entry"
-    assert "entity_fact" in types, "entity link must append a journal entry"
+    assert "entity_fact" not in types                                    # 1.19 PR2b: the legacy entry is gone…
+    assert [e["payload"]["kind"] for e in hive.entries() if e["type"] == "link"] == ["entity"]   # …one `entity` link
     assert hive.query("SELECT count(*) c FROM entity_facts")[0]["c"] == 1
 
 

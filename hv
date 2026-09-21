@@ -2265,6 +2265,12 @@ def _link_authority(entry, target_entry, gov):
         pos = (entry.get("timestamp", ""), str(entry.get("node_id", "")), entry.get("seq", 0))
         if _is_authorized_writer(signer, pos, entry.get("payload", {}) or {}, gov, "owner"):
             return "hard"
+    elif not gov.get("owner_id") and signer is None:
+        # 1.19 PR2b: PRE-OWNER grandfathering, mirroring `_verify_entry` (which accepts unsigned entries
+        # from a key-less node). Before governance exists there is no admission and no authority to
+        # protect, and the legacy verbs these links replace never needed a signature — so the author
+        # rule reads the unsigned entry's node_id. Once an owner exists an unsigned link stays evidence.
+        signer = entry.get("node_id")
     if target_entry is not None and signer is not None and signer == target_entry.get("node_id"):
         return "hard"
     return "evidence"
@@ -2303,6 +2309,22 @@ _LINK_RESOLVERS = {
     "informed": None,
     "outcome-of": None,
 }
+
+
+def _link_payload(kind, from_ref, to_ref, source, data=None, channel=None):
+    """1.19 PR2b: build the payload of a `link` this device is about to write. On a machine that holds
+    the OWNER key the payload is owner-signed (`_sign_governance_payload`), so the projection reads it
+    as `hard` under §5 wherever it lands; otherwise it is device-signed by `append_journal` and is
+    `hard` only where this device is the target's author, `evidence` elsewhere. Never dual-emitted:
+    the verb writes this link INSTEAD of its legacy field/entry."""
+    lp = {"kind": kind, "from_ref": list(from_ref), "to_ref": list(to_ref), "data": dict(data or {}),
+          "source": source}
+    if channel:
+        lp["channel"] = channel
+    seed = _owner_seed()
+    if seed is not None and _ed25519 is not None:
+        lp = _sign_governance_payload(lp, seed, _ed25519.pub_from_seed(seed))
+    return lp
 
 
 def resolve_link(conn, entry, gov, by_ref):
@@ -2641,12 +2663,16 @@ def remember(args):
         "importance": args.importance,
         "source": source,
     }
-    if resolves_ref:
-        payload["resolves_ref"] = resolves_ref
     if channel:
         payload["channel"] = channel                          # additive; absent = sense
     entry = append_journal("fact", payload)
-    outcome_link = None
+    outcome_link = resolves_link = None
+    if resolves_ref:
+        # 1.19 PR2b (write-path switch): ONE `resolves` link instead of the legacy `resolves_ref` field +
+        # `retract` entry. The projection folds it as retract-equivalent negative evidence on the target
+        # (hard or downgraded alike) and, when hard, records `facts.resolves` — the same effect as before.
+        resolves_link = append_journal("link", _link_payload("resolves", [entry["node_id"], entry["seq"]],
+                                                             resolves_ref, source))
     if outcome_ref:
         # Same channel stamped on the fact and the link; the projection reads the LINK's (§4 Shape).
         lp = {"kind": "outcome-of", "from_ref": [entry["node_id"], entry["seq"]], "to_ref": outcome_ref,
@@ -2657,21 +2683,15 @@ def remember(args):
 
     conn = get_conn()
     res = persist_fact(conn, entry)
-    if resolves_ref:
-        resolve_resolves(conn, entry)
-        # Soft retract of the resolved fact: deliberate negative evidence, NOT an owner-forget.
-        append_journal("retract", {
-            "retracts_ref": resolves_ref,
-            "reason": f"resolved by fact #{res['id']}",
-            "source": source,
-        })
 
-    # Read the journal ONCE after both appends, then reproject confidence per affected content
+    # Read the journal ONCE after all appends, then reproject confidence per affected content
     # (keeps the live path consistent with rebuild without a full rebuild).
     all_entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(all_entries)
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
+    if resolves_link is not None:
+        resolve_link(conn, resolves_link, gov, by_ref)
     if outcome_link is not None:
-        by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
         resolve_link(conn, outcome_link, gov, by_ref)
         _recompute_decision_outcome(conn, all_entries)
     cev = _content_evidence(all_entries, gov)
@@ -2998,23 +3018,27 @@ def decide(args):
     payload = {
         "content": args.content,
         "rationale": args.rationale,
-        "supersedes_ref": supersedes_ref,
         "tags": tags,
         "source": source,
     }
     if informed_refs:
         payload["informed_by"] = informed_refs   # additive (1.15 `tags` precedent): the human-legible record
     entry = append_journal("decision", payload)
+    # 1.19 PR2b (write-path switch): `--supersedes` is ONE `supersedes` link (owner-signed on the owner
+    # machine → hard everywhere; else hard only where this device authored the target), never the legacy
+    # `supersedes_ref` field. The legacy resolver stays for entries already in journals.
+    link_entries = []
+    if supersedes_ref:
+        link_entries.append(append_journal("link", _link_payload("supersedes", [entry["node_id"], entry["seq"]],
+                                                                 supersedes_ref, source)))
     # One `informed` link per ref — what the utility projection reads (design §3). Same source as the
     # decision; no channel (a decision is neither an observation nor introspection about one).
-    link_entries = [append_journal("link", {"kind": "informed", "from_ref": [entry["node_id"], entry["seq"]],
-                                            "to_ref": ref, "data": {}, "source": source})
-                    for ref in informed_refs]
+    link_entries += [append_journal("link", {"kind": "informed", "from_ref": [entry["node_id"], entry["seq"]],
+                                             "to_ref": ref, "data": {}, "source": source})
+                     for ref in informed_refs]
 
     conn = get_conn()
     res = persist_decision(conn, entry)
-    if supersedes_ref:
-        resolve_supersedes(conn, entry)
     if link_entries:
         all_entries = merkle.read_all_entries(JOURNAL_DIR)
         gov = _governance_state(all_entries)
@@ -3507,6 +3531,17 @@ def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailn
         nid = info.get("node_id")
         if not nid:
             return None
+        # 1.19 PR2b: the peer's agent contract. `/hive/info` carries `contract` from PR2b on; older builds
+        # don't, so fall back to `/api/verify` (open discovery too), whose `version` IS the contract the
+        # peer's signed manifest was cut at — readable from any 1.14+ peer, which is what makes the
+        # fleet-contract gate evaluable BEFORE the fleet runs PR2b.
+        contract = info.get("contract")
+        if not contract:
+            try:
+                contract = requests.get(url + "/api/verify", timeout=timeout).json().get("version")
+            except Exception:
+                contract = None
+        _PEER_CONTRACTS[nid] = contract
         try:
             root = requests.get(url + "/sync/merkle-root", timeout=timeout).json().get("root_hash")
             st = "in sync" if root == local_root else "diverged"
@@ -3528,6 +3563,39 @@ def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailn
 
 
 _PEER_PROBE_CACHE = {"t": 0.0, "map": {}}
+_PEER_CONTRACTS = {}          # node_id -> the `contract` a reachable peer advertised in /hive/info (1.19 PR2b)
+_LINK_WRITE_PATH_MIN = "1.19"  # every peer must be at least here before verbs that now emit `link` are safe
+
+
+def _contract_tuple(v):
+    try:
+        return tuple(int(x) for x in str(v).strip().split("."))
+    except (TypeError, ValueError):
+        return None
+
+
+def _fleet_contract(gov, probed, contracts, minimum=_LINK_WRITE_PATH_MIN):
+    """1.19 PR2b: the version-skew gate for the `link` write path (design §2, §9). For every admitted
+    device other than this one: `ok` — reachable and advertising a contract ≥ `minimum`; `behind` —
+    reachable but older (or a build so old it advertises no version anywhere — it cannot honour a
+    `link`, so it counts as behind); `unverified` — not reachable, so nothing can be said. The contract
+    comes from `/hive/info.contract` (PR2b+) or `/api/verify.version` (any 1.14+ build). Pure over
+    (gov, probed, contracts) so it is testable without a network."""
+    need = _contract_tuple(minimum)
+    out = {"ok": [], "behind": [], "unverified": []}
+    for d in sorted(gov.get("admitted") or set()):
+        if d == NODE_ID or d in (gov.get("purged") or set()):
+            continue
+        if d not in probed:
+            out["unverified"].append(d)
+            continue
+        c = contracts.get(d)
+        ct = _contract_tuple(c)
+        if ct is None or ct < need:
+            out["behind"].append((d, c or "unknown (no version advertised)"))
+        else:
+            out["ok"].append((d, c))
+    return out
 
 
 def _probe_peer_map_cached(ttl=5):
@@ -3661,13 +3729,14 @@ def entity(args):
             conn.close()
             print(f"--fact-id: {e}", file=sys.stderr)
             sys.exit(1)
-        payload = {
-            "entity_ref": entity_ref,
-            "fact_ref": fact_ref,
-            "confidence": args.confidence if args.confidence is not None else 1.0,
-        }
-        entry = append_journal("entity_fact", payload)
-        resolve_entity_fact(conn, entry)
+        # 1.19 PR2b (write-path switch): ONE `entity` link (evidence-class: `_link_entity` writes the
+        # entity_facts row regardless of authority) instead of the legacy `entity_fact` entry.
+        entry = append_journal("link", _link_payload(
+            "entity", entity_ref, fact_ref, os.environ.get("HERMES_AGENT", "manual"),
+            data={"confidence": args.confidence if args.confidence is not None else 1.0}))
+        all_entries = merkle.read_all_entries(JOURNAL_DIR)
+        resolve_link(conn, entry, _governance_state(all_entries),
+                     {(e.get("node_id"), e.get("seq")): e for e in all_entries})
         conn.commit()
         conn.close()
         print(f"Linked fact {_short_id(*fact_ref)} → entity '{args.name}'")
@@ -4835,10 +4904,16 @@ def migrate_device_identity_cmd(args):
         e = dict(e)
         e["node_id"] = remap(e.get("node_id"))
         p = dict(e.get("payload", {}))
-        for refk in ("entity_ref", "fact_ref", "supersedes_ref"):
+        # Every journal-identity reference a payload can carry: the legacy trio, the 1.11 `resolves_ref`
+        # and `retracts_ref`, and (1.19) a `link`'s `from_ref`/`to_ref` plus a decision's `informed_by`
+        # list — found by PR2b, whose `entity link` now writes a `link` instead of an `entity_fact`.
+        for refk in ("entity_ref", "fact_ref", "supersedes_ref", "resolves_ref", "retracts_ref", "from_ref", "to_ref"):
             r = p.get(refk)
             if isinstance(r, list) and len(r) == 2:
                 p[refk] = [remap(r[0]), r[1]]
+        if isinstance(p.get("informed_by"), list):
+            p["informed_by"] = [[remap(r[0]), r[1]] if isinstance(r, list) and len(r) == 2 else r
+                                for r in p["informed_by"]]
         e["payload"] = p
         e.pop("sig", None)            # node_id changed; historical entries become unsigned
         e.pop("pub", None)
@@ -5998,6 +6073,27 @@ def _doctor_status():
             checks.append({"name": "trust-drift", "status": "warn",
                            "detail": f"{len(drift)} device(s) with falling reliability: {'; '.join(drift)} — "
                                      f"inspect recent writes (`hv search`, `hv audit`); nothing is enforced"})
+    except Exception:
+        pass
+
+    # 3h. Fleet contract (1.19 PR2b, design §9): the verbs `--supersedes` / `--resolves` / `entity link`
+    #     now emit `link` entries, which a pre-1.19 peer lands but does not honour (converged journals,
+    #     divergent views). Lists admitted peers that are behind or cannot be verified. Upgrading is a
+    #     human act — `--fix` never touches it. Advisory.
+    try:
+        if gov.get("owner_id"):
+            fc = _fleet_contract(gov, _probe_peer_map_cached(), _PEER_CONTRACTS)
+            if fc["behind"] or fc["unverified"]:
+                parts = []
+                if fc["behind"]:
+                    parts.append("behind: " + ", ".join(f"{d[:11]}… ({c})" for d, c in fc["behind"]))
+                if fc["unverified"]:
+                    parts.append("unreachable, cannot verify: " + ", ".join(d[:11] + "…" for d in fc["unverified"]))
+                checks.append({"name": "fleet-contract", "status": "warn",
+                               "detail": f"{len(fc['behind'])} peer(s) below contract {_LINK_WRITE_PATH_MIN}, "
+                                         f"{len(fc['unverified'])} unverifiable — {'; '.join(parts)}. A peer on a "
+                                         f"pre-1.19 build lands but does not honour the `link` entries this node's "
+                                         f"verbs now write: upgrade it (`git pull`), or `hv group purge` a dead device"})
     except Exception:
         pass
 

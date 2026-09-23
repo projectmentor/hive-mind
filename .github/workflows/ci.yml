@@ -9,7 +9,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # ubuntu-26.04 is a canary for the ubuntu-latest -> Ubuntu 26.04 migration (Oct 19 - Nov 19, 2026;
+        # actions/runner-images#14748). Remove it once ubuntu-latest is 26.04.
+        os: [ubuntu-latest, ubuntu-26.04, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -66,7 +68,11 @@ jobs:
   # device. What it CANNOT prove (needs a real phone): that `sv`/runsvdir actually
   # supervise the daemon, Termux:Boot fires on reboot, and the app-owned Tailscale tun.
   android-installer-smoke:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-26.04]   # 26.04: migration canary, as in `test` above
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

@@ -1,382 +1,372 @@
 # HiveMind Sync API Reference
 
-The sync daemon (`hive_sync_daemon.py`) exposes a minimal JSON/HTTP API on port
-`:9876` (default). All endpoints are unauthenticated — transport security is
-provided by Tailscale (WireGuard). Only admit Tailscale peers.
+The sync daemon (`hive_sync_daemon.py`) is a Python-stdlib HTTP server on port `9876`. It serves
+three things from one port:
 
-Start the daemon:
+- the **sync protocol** peers use to converge their journals (`/sync/*`);
+- **discovery**, so a new device can find and verify a hive before it is admitted (`/hive/info`);
+- the **dashboard** (`hv dash`) and the JSON data it reads (`/api/*`).
+
+Sync wire-protocol version: **2** (the `protocol_version` field; 2 = understands signed read requests).
+The agent contract version is reported separately as `contract` (see `hv version`).
+
+Start it:
+
 ```bash
-./hv sync daemon          # serve + periodic outbound sync (every 5 min)
-python3 hive_sync_daemon.py    # same, direct
+./hv sync daemon              # serve + outbound sync every 5 minutes (what the background service runs)
+python3 hive_sync_daemon.py   # same, direct
 ```
 
 ---
 
-## Endpoints
+## Binding
 
-### `GET /sync/hello`
+The daemon never listens on all interfaces by default. It binds, in order of priority:
 
-Node identity and journal summary. Used as the handshake and peer-discovery
-step during a sync round.
+1. `HIVE_BIND` (environment) — any value, including `0.0.0.0` if you really want all interfaces (it warns).
+2. `bind` in `.peers.json`, if it is a specific address. A legacy `0.0.0.0`, `::` or empty value (what
+   older installers wrote) is treated as "automatic".
+3. This node's Tailscale IP, if `tailscale ip` finds one.
+4. `127.0.0.1` — loopback only (single node, no tailnet, or Android/Termux where there is no `tailscale` CLI).
 
-**Response:**
-```json
-{
-  "node_id": "node-a",
-  "hive_id": "k1:2a2110f3d8963a9e",
-  "protocol_version": 1,
-  "journal_summary": {
-    "total": 48,
-    "by_node": {
-      "node-a": 46,
-      "node-b": 2
-    }
-  },
-  "chunks": {
-    "node-a": [
-      "sha256:d46957a7b133e438...",
-      "sha256:4bff2b51c9e3a2f0..."
-    ],
-    "node-b": [
-      "sha256:7a3f9c12e8b4d510..."
-    ]
-  }
-}
-```
-
-| Field | Description |
-|---|---|
-| `node_id` | This device's identity — its device-key fingerprint (`HIVE_NODE_ID` overrides) |
-| `hive_id` | The hive this node belongs to (the founding owner's device id). A client refuses to merge across differing hive ids |
-| `protocol_version` | Sync wire-protocol version (currently `1`). Bumped for additive handshake changes so they can be negotiated without a journal-schema break |
-| `journal_summary.by_node` | Highest seq seen per source node — used for quick divergence detection |
-| `chunks` | Per-node array of 100-entry chunk hashes (Merkle leaf hashes). Used to localize which windows need syncing |
+When it binds a specific non-loopback address (the usual case: the tailnet IP), it **also** listens on
+`127.0.0.1`, so the local dashboard and `hv` keep working.
 
 ---
 
-### `GET /sync/merkle-root`
+## Access control
 
-Global Merkle root over the entire journal. The root is computed over the journal
-as a **G-Set** — entries are de-duped by `(node_id, seq)` before hashing, so two
-nodes that hold the same logical set produce the same root even if one has a
-physically-repeated journal line. The O(1) fast-path: if two nodes have identical
-root hashes, they hold the same set of entries and no sync work is needed.
+Every path belongs to one of three classes. A **loopback** caller is a request that arrives on
+`127.0.0.1` / `::1` — that is, from the same device.
 
-**Response:**
-```json
-{
-  "root_hash": "sha256:4bff2b51c9e3a2f0d1e8b7a6c5f4e3d2..."
-}
-```
+| Class | Paths | From this device (loopback) | From another device |
+|---|---|---|---|
+| **Open discovery** | `/hive/info`, `/sync/merkle-root`, `/api/verify` | allowed | allowed — none of these returns journal content |
+| **Remote-auth** | `/sync/hello`, `/sync/chunk`, `/sync/ingest` | allowed | depends on the node's **sync auth mode** (below) |
+| **Local only** | the dashboard (`/`, `/index.html`, `/dashboard`, `/dashboard/`, `/logo.svg`, `/favicon.svg`) and every other `/api/*` path | allowed | only a validly **signed** request from an admitted device (the dashboard's per-node view, below); anything else gets **403**, even in `permissive` mode |
 
-**Sync flow usage:** Client calls this first. If roots match → done (0 bytes
-transferred). If not → call `/sync/hello` to localize differing chunks.
+**Sync auth mode** is set per node and is not journaled, so each node can switch on its own schedule:
 
----
-
-### `GET /sync/chunk`
-
-Fetch a specific 100-entry window of the journal for a given source node.
-
-**Query parameters:**
-
-| Parameter | Type | Description |
+| Mode | Remote-auth paths from another device | Local-only paths from another device |
 |---|---|---|
-| `node` | string | Source node ID to fetch entries for |
-| `start` | integer | First seq in range (1-indexed, inclusive) |
-| `end` | integer | Last seq in range (inclusive) |
+| `off` | allowed | allowed |
+| `permissive` *(default)* | allowed; an unsigned or invalid request is logged as one that `enforce` would block | signed requests only (403 otherwise) |
+| `enforce` | a valid signature from an admitted device is required (**401** otherwise) | signed requests only (403 otherwise) |
 
-**Response:**
-```json
-{
-  "entries": [
-    {
-      "node_id": "node-a",
-      "seq": 1,
-      "type": "fact",
-      "timestamp": "2026-06-04T08:30:00Z",
-      "payload": {
-        "content": "...",
-        "tags": ["infrastructure"],
-        "source": "hermes:primary/claude-sonnet/abc12345"
-      },
-      "prev_hash": "sha256:genesis",
-      "hash": "sha256:..."
-    }
-  ],
-  "hash": "sha256:..."
-}
-```
+Set it with `hv sync auth off|permissive|enforce` (restart the daemon to apply). The mode is read from
+`HIVE_SYNC_AUTH`, then `.peers.json` → `sync_auth`, then defaults to `permissive`. Switch to `enforce`
+once every peer reports `protocol_version` 2 or higher.
 
-`hash` is the Merkle hash of the returned entries — clients verify this matches
-the chunk hash from `/sync/hello` to detect transmission errors.
+**What this means for the dashboard.** Open it on a device that runs a HiveMind node:
+`http://127.0.0.1:9876/` (or `hv dash`). That includes an Android phone running HiveMind in Termux.
+A browser on a device that is *not* running its own node, pointed at another node's tailnet address,
+is refused with 403. To look at another node, use the dashboard's node picker — your own daemon fetches
+that node's data with a signed request.
 
 ---
 
-### `POST /sync/ingest`
+## Authentication (`Hive-Auth-*` headers)
 
-Append foreign journal entries to this device's journal (G-Set union merge).
-Deduplicates by `(node_id, seq)`. After accepting entries, triggers
-`rebuild_db()` to recompute SQLite + confidence projection.
+A signed request carries six headers:
 
-**Request body:**
-```json
-{
-  "hive_id": "k1:2a2110f3d8963a9e",
-  "entries": [
-    {
-      "node_id": "node-b",
-      "seq": 1,
-      "type": "fact",
-      "timestamp": "2026-06-04T10:00:00Z",
-      "payload": { ... },
-      "prev_hash": "sha256:genesis",
-      "hash": "sha256:..."
-    }
-  ]
-}
+| Header | Value |
+|---|---|
+| `Hive-Auth-Alg` | `hive-sig-v1` |
+| `Hive-Auth-Device` | the signer's device id, `k1:` + first 16 hex of `sha256(pubkey)` |
+| `Hive-Auth-Pub` | the signer's Ed25519 public key, base64 (32 bytes) |
+| `Hive-Auth-Ts` | Unix time in seconds |
+| `Hive-Auth-Nonce` | a random nonce (hex) |
+| `Hive-Auth-Sig` | base64 Ed25519 signature over the bytes below |
+
+The signed bytes are these seven lines joined with `\n`:
+
+```
+hive-sig-v1
+<METHOD>                         GET or POST, upper-case
+<path>                           e.g. /sync/chunk
+<canonical query>                the query parameters sorted and URL-encoded ("" if none)
+sha256:<hex digest of the body>  the digest of an empty body for a GET
+<Hive-Auth-Ts>
+<Hive-Auth-Nonce>
 ```
 
-The top-level `hive_id` scopes the push. If both sides carry a `hive_id` and
-they differ, the daemon refuses the merge and returns **409** (see Error
-Responses). An empty `hive_id` on either side is allowed, so the genesis owner
-declaration can propagate during bootstrap.
+The daemon accepts the request only if all six headers are present, the algorithm matches, the public
+key's fingerprint equals `Hive-Auth-Device`, the timestamp is within the freshness window
+(`HIVE_SYNC_AUTH_WINDOW`, default 300 seconds either way), the signature verifies, the nonce has not been
+seen within twice the window (a per-process replay cache), and — once the hive has an owner — the
+device is admitted and not purged. Before an owner exists any valid signature passes, so the genesis
+owner declaration can propagate.
 
-**Response:**
+`hv sync` signs every request with this device's key. A device that has no key yet sends no headers;
+that works only against a node in `off` or `permissive` mode.
+
+---
+
+## Sync endpoints
+
+### `GET /hive/info` — open discovery
+
+Minimal hive metadata plus the signed genesis, for a device deciding whether to join. Never returns
+journal entries.
+
 ```json
 {
-  "accepted": 3,
-  "duplicates": 0
+  "node_id": "k1:10f6b761dd1c2a90",
+  "hive_id": "h1:cf5b2e8adbe05936",
+  "owner_id": "o1:3afa9410be4d1e04",
+  "label": "gregorius",
+  "node_count": 3,
+  "protocol_version": 2,
+  "contract": "1.20",
+  "advertised_addr": "100.84.84.100:9876",
+  "genesis": { "node_id": "k1:…", "seq": 1, "type": "governance", "payload": { "action": "owner", "…": "…" } }
 }
 ```
 
 | Field | Description |
 |---|---|
-| `accepted` | Number of new entries appended to the journal |
-| `duplicates` | Number of entries already present (skipped) |
+| `node_id` | This device's id (`k1:…`, the fingerprint of its Ed25519 device key) |
+| `hive_id` | The hive's id: `h1:` + 8 random bytes, minted by `hv owner init` and carried in the signed genesis. Empty before an owner exists. Nodes refuse to merge journals across different hive ids. |
+| `owner_id` | The current owner's fingerprint (`o1:` + first 16 hex of `sha256(owner pubkey)`), from governance |
+| `label` | This node's display label (`HIVE_NODE_LABEL`, default the hostname) |
+| `node_count` | Number of admitted devices (the count of distinct authoring devices if nothing is admitted yet) |
+| `protocol_version` | Sync wire-protocol version (2) |
+| `contract` | The agent contract version (`hv version`); `hv doctor` reads it for the `fleet-contract` check |
+| `advertised_addr` | The `address:port` this daemon actually bound |
+| `genesis` | The signed owner declaration, so a joiner can verify the hive's origin |
 
-**Concurrency:** Ingest is serialized by a lock inside the daemon. Concurrent
-CLI writes during an ingest are a theoretical race at this scale — noted
-hardening for a future release.
+### `GET /sync/merkle-root` — open discovery
 
----
+```json
+{ "root_hash": "sha256:4bff2b51c9e3a2f0…" }
+```
 
-### `GET /hive/info`
+The root of the Merkle tree over the whole journal, computed over the journal **as a set**: entries are
+de-duplicated by `(node_id, seq)` before hashing, so two nodes holding the same entries always produce
+the same root. Equal roots mean nothing to sync.
 
-Discovery endpoint: minimal hive metadata plus the signed genesis (owner
-declaration) for verification. Never returns journal entries — so listing a
-hive stays open even if reads are gated later.
+### `GET /sync/hello` — remote-auth
 
-**Response:**
+The handshake: per-node sequence maxima and per-node chunk hashes, used to find which windows differ.
+
 ```json
 {
-  "hive_id": "k1:2a2110f3d8963a9e",
-  "owner_id": "k1:2a2110f3d8963a9e",
-  "label": "node-a",
-  "node_count": 2,
-  "protocol_version": 1,
-  "genesis": { "node_id": "k1:...", "seq": 1, "type": "governance", "payload": { ... } }
+  "node_id": "k1:10f6b761dd1c2a90",
+  "hive_id": "h1:cf5b2e8adbe05936",
+  "protocol_version": 2,
+  "contract": "1.20",
+  "advertised_addr": "100.84.84.100:9876",
+  "journal_summary": { "total": 802, "by_node": { "k1:10f6b761dd1c2a90": 335, "k1:597b3e0f5fb92d37": 464 } },
+  "chunks": { "k1:10f6b761dd1c2a90": ["sha256:d46957a7…", "sha256:4bff2b51…"], "k1:597b3e0f5fb92d37": ["…"] }
 }
 ```
 
 | Field | Description |
 |---|---|
-| `hive_id` | The hive's identity (the founding owner's device id) — scopes all sync; cross-hive merges are refused |
-| `owner_id` | Current owner's device id from governance state |
-| `label` | This node's human-readable label (`HIVE_NODE_LABEL`) |
-| `node_count` | Number of admitted nodes (falls back to the count of distinct authoring nodes if no admit set exists) |
-| `protocol_version` | Sync wire-protocol version (see `/sync/hello`) |
-| `genesis` | The signed owner declaration entry, for independent verification of the hive's origin |
+| `journal_summary.by_node` | Highest `seq` held for each authoring device |
+| `chunks` | Per device, the hashes of consecutive 100-entry windows (seq 1–100, 101–200, …) |
+
+### `GET /sync/chunk?node=<device_id>&start=<seq>&end=<seq>` — remote-auth
+
+The journal entries authored by `node` with `start ≤ seq ≤ end` (inclusive, 1-based).
+
+```json
+{ "entries": [ { "node_id": "k1:…", "seq": 1, "type": "fact", "…": "…" } ], "hash": "sha256:…" }
+```
+
+`hash` is the hash of the returned entries, for comparison against the window's hash from `/sync/hello`.
+
+### `POST /sync/ingest` — remote-auth
+
+Push entries this node is missing. Body:
+
+```json
+{ "hive_id": "h1:cf5b2e8adbe05936", "entries": [ { "node_id": "k1:…", "seq": 12, "…": "…" } ] }
+```
+
+- `Content-Length` is required (400 if missing or malformed) and must not exceed 32 MiB (413).
+- The signature check covers the exact body bytes.
+- If both sides have a hive id and they differ, the push is refused with **409**:
+  `{"error": "different hive", "hive_id": "<local>", "accepted": 0}`. An empty hive id on either side is
+  allowed, so the genesis can propagate during bootstrap.
+- Each entry is checked on ingest (see *Journal entries*); entries are de-duplicated by `(node_id, seq)`.
+- Ingests are serialized; the local index is rebuilt after any accepted entry.
+
+Response: `{"accepted": 3, "duplicates": 0}`.
 
 ---
 
-## Sync Protocol Flow
+## A sync round
+
+`hv sync now`, and the daemon every 300 seconds, run one round with each peer in `.peers.json`:
 
 ```
-Client                          Server (peer)
-  |                                |
-  |-- GET /sync/merkle-root -----> |
-  |<- {root_hash} ---------------- |
-  |                                |
-  | [roots match] -> DONE          |
-  |                                |
-  | [roots differ]                 |
-  |-- GET /sync/hello -----------> |
-  |<- {node_id, chunks, summary}-- |
-  |                                |
-  | diff local chunks vs remote    |
-  |                                |
-  | for each differing window:     |
-  |-- GET /sync/chunk?node=X... -> |
-  |<- {entries, hash} ------------ |
-  | append_foreign_entries(...)    |
-  | rebuild_db()                   |
-  |                                |
-  | compute windows peer lacks:    |
-  |-- POST /sync/ingest ---------> |
-  |<- {accepted, duplicates} ----- |
+Client                                   Peer
+  |-- GET /sync/merkle-root ----------->  |   equal to ours → done
+  |-- GET /sync/hello ----------------->  |   refuse if the hive ids differ
+  |   compare per-device chunk hashes      |
+  |-- GET /sync/chunk?node=…&start=…&end=… |   PULL each differing window, in pages of
+  |      (repeated)                        |   HIVE_SYNC_PULL_PAGE entries (default 25)
+  |   append (de-dup) + rebuild            |
+  |-- POST /sync/ingest ---------------->  |   PUSH what the peer lacks, in pages of
+  |      (repeated)                        |   HIVE_SYNC_PUSH_PAGE entries (default 25)
 ```
 
-The sync is **bidirectional in one round**: PULL what we're missing, PUSH what
-the peer is missing. No leader, no Raft, no coordinator.
+Both directions happen in one round; there is no leader or coordinator. Where the platform allows it
+(not macOS), sync connections clamp the TCP segment size (`HIVE_SYNC_MAXSEG`, default 1000) so transfers
+fit tailnet paths with an MTU below 1280.
 
 ---
 
-## Journal Entry Format
+## Dashboard data (`/api/*`) — local only
 
-All journal entries share this structure. The journal is the source of truth —
-`store.db` is a derived cache rebuilt from it.
+These endpoints feed the dashboard. They are listed here so the daemon's surface is fully documented;
+they are the dashboard's internal data layer, not a stable public API.
+
+| Path | Parameters | Returns |
+|---|---|---|
+| `/api/overview` | — | Counts, convergence, contested items, the audit summary |
+| `/api/search` | `q`, `tag`, `kind` = `all`\|`fact`\|`decision`\|`idea`, `min_confidence`, `limit` (1–200, default 50), `offset`, `sort` = `confidence` (default; `salience` is a legacy alias) \| `importance` \| `utility` \| `recency`, `status` = `all` \| `contested` \| `forgotten` (owner-forgotten) \| `volatile` | Paginated facts and decisions, like `hv search` |
+| `/api/tags` | — | Tag counts |
+| `/api/related` | `kind` = `fact`\|`decision`, `id` | Entries related to one item |
+| `/api/item` | `sid` (an `h:…` short id or a `node_id:seq` ref) | One item, for dashboard deep links (`/#h:…`) |
+| `/api/audit` | — | The `hv audit` result |
+| `/api/status` | optional `cmd` = `whoami`\|`stats`\|`doctor` | The text output of those `hv` commands |
+| `/api/verify` | — | The `hv verify` result (**open discovery**, not local only) |
+| `/api/telemetry` | `limit` (1–2000, default 25), `offset`, `sort`, `fproject`, `fagent`, `fnode`, `fday`, `fmodel`, `scope` = `self`\|`hive` | This node's session telemetry, or combined across reachable nodes with `scope=hive` |
+| `/api/peers` | `probe` = `1` (default) \| `0` | Admitted devices with reachability |
+
+**Per-node view.** `/api/overview`, `/api/search`, `/api/status` and `/api/telemetry` accept
+`node=<device_id>`. For another node, the daemon looks up that admitted device's address itself (never
+from the request, so it cannot be pointed at an arbitrary host), fetches the same path from it with a
+signed request, and returns the result. An unreachable node returns
+`{"available": false, "reachable": false, "node_id": "…", "error": "…"}` with status 200.
+
+---
+
+## Journal entries
+
+The journal is the source of truth; `store.db` is an index rebuilt from it. Every entry has these
+top-level fields:
 
 ```json
 {
   "node_id": "k1:2a2110f3d8963a9e",
   "seq": 42,
-  "type": "fact | decision | entity | entity_fact | retract | governance",
-  "timestamp": "2026-06-04T12:00:00Z",
-  "payload": { ... },
-  "prev_hash": "sha256:...",
+  "type": "fact",
+  "timestamp": "2026-09-23T12:00:00.000+00:00",
+  "payload": { },
+  "prev_hash": "sha256:…",
   "pub": "<base64 Ed25519 public key>",
-  "sig": "<base64 signature over the entry minus sig>"
+  "sig": "<base64 signature over the entry without sig>"
 }
 ```
 
 | Field | Description |
 |---|---|
-| `node_id` | Authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)`, not a self-declared name |
-| `seq` | Per-node monotonic sequence number. `(node_id, seq)` is the global unique identity for cross-row links |
-| `type` | Entry type (see below) |
-| `timestamp` | ISO8601 UTC |
-| `payload` | Type-specific data (see below) |
-| `prev_hash` | Hash of the previous entry from this device — forms a per-node hash chain |
-| `pub` | Signer's Ed25519 public key (present on signed entries) |
-| `sig` | Ed25519 signature over the canonical entry minus `sig`; the chain commits to it |
+| `node_id` | The authoring device: `k1:` + first 16 hex of `sha256(pub)` |
+| `seq` | Per-device sequence number. `(node_id, seq)` is an entry's global identity; links between entries use it, never local ids. |
+| `type` | See below |
+| `timestamp` | ISO 8601, UTC |
+| `payload` | Type-specific (see below) |
+| `prev_hash` | Hash of this device's previous entry (a per-device hash chain) |
+| `pub`, `sig` | The signer's public key and Ed25519 signature |
 
-A receiver verifies a signed entry on ingest: the `node_id` must be the fingerprint
-of its embedded `pub`, and the `sig` must check out, or the entry is rejected —
-so a node cannot author entries under another node's `node_id`. Unsigned entries
-(pre-migration history, legacy peers) are accepted as-is. This is the cryptographic
-identity that the earlier "self-declared; Phase B1 transport-attribution" note
-anticipated; identity now travels in the entry itself.
+On ingest a signed entry is rejected if its `node_id` is not the fingerprint of its `pub` or its
+signature fails. Unsigned entries (pre-migration history) are accepted as-is. Once the hive has an
+owner, content from devices that are not admitted is not accepted.
 
-### Entry Types and Payloads
+### Entry types
 
-**`fact`**
-```json
-{
-  "content": "fact text",
-  "tags": ["tag1", "tag2"],
-  "source": "hermes:primary/claude-sonnet/abc12345",
-  "importance": 1
-}
-```
+| `type` | Since | Payload fields |
+|---|---|---|
+| `fact` | 1.0 | `content`, `tags`, `source`, `importance` (a hint, capped by the projection), `created_at`, optional `channel` (`sense`\|`act`\|`introspect`; absent = `sense`). Older entries may also carry `resolves_ref` (written by `--resolves` before contract 1.19 PR2b) and the legacy fields `source_session`, `trust_score`, `access_count`. |
+| `decision` | 1.0 | `content`, `rationale`, `source`, `created_at`, `tags` (1.15), `informed_by` (1.19: list of `[node_id, seq]` refs it relied on). Older entries may carry `supersedes_ref` (written by `--supersedes` before PR2b). |
+| `entity` | 1.0 | `name`, `type`, `attributes`, `created_at` |
+| `retract` | 1.0 | `retracts_ref` (`[node_id, seq]` of the fact), `reason`, `source`; an owner forget also carries `owner_pub` and `owner_sig` |
+| `governance` | 1.4 | `action` plus action-specific fields; authority-bearing actions carry `owner_pub` / `owner_sig` (see below) |
+| `capsule` | 1.13 | A sealed secret: `name`, `capsule_id`, `version`, `kind`, `alg`, `nonce`, `ct`, `tag`, `wraps` (per-recipient key wraps), `signer`, `hive_id`, and `owner_pub` / `owner_sig` when owner-signed |
+| `cell`, `comb` | 1.13 | Self-wiring definitions (`hv wire`); a comb is an ordered list of cells |
+| `link` | 1.19 | `kind`, `from_ref`, `to_ref` (both `[node_id, seq]`), `data`, `source`, optional `channel`; `owner_pub` / `owner_sig` when written on the owner's machine |
+| `idea` | 1.20 | `content`, `tags`, `source`, `channel` (defaults to `introspect`) |
+| `entity_fact` | 1.0 | *Legacy:* `entity_ref`, `fact_ref`, `confidence`. Since PR2b `hv entity link` writes a `link` of kind `entity` instead; existing entries are still read. |
 
-**`decision`**
-```json
-{
-  "content": "decision text",
-  "rationale": "why",
-  "source": "manual",
-  "supersedes_ref": ["node-a", 3]
-}
-```
+`link` kinds the projection understands: `supports`, `contradicts`, `supersedes`, `resolves`, `entity`,
+`informed`, `outcome-of`. An unknown kind is stored and ignored, so nodes on different versions never
+diverge over it. See `docs/INTERNALS.md` → *Links*.
 
-**`entity`**
-```json
-{
-  "name": "EntitlementService",
-  "type": "concept",
-  "attributes": {"project": "realsparkz"}
-}
-```
-
-**`entity_fact`**
-```json
-{
-  "entity_ref": ["node-a", 10],
-  "fact_ref": ["node-b", 1],
-  "confidence": 0.9
-}
-```
-
-**`retract`**
-```json
-{
-  "fact_ref": ["node-a", 4],
-  "reason": "test probe",
-  "source": "hermes:primary/claude-sonnet/abc12345",
-  "owner": false
-}
-```
-
-**`governance`**
-```json
-{
-  "action": "nominate-successor"
-}
-```
-
-Carries owner-resilience actions in `payload.action`. The action is one of:
-`standby`, `owner-escrow`, `revoke-escrow`, `nominate-successor`,
-`revoke-nomination`, `claim-succession`, `transfer`, `heartbeat`,
-`propose-election`, `vote-election`. Additional action-specific fields travel
-alongside `action`.
+**Governance actions** (`payload.action`): `owner` (the genesis declaration), `admit`, `revoke`,
+`deny`, `change`, `purge`, `join-request`, `announce`, `set-config`, `standby`, `owner-escrow`,
+`revoke-escrow`, `nominate-successor`, `revoke-nomination`, `claim-succession`, `transfer`,
+`heartbeat`, `propose-election`, `vote-election`.
 
 ---
 
 ## Configuration: `.peers.json`
 
+Written by the installer; per node and git-ignored.
+
 ```json
 {
+  "self": "k1:10f6b761dd1c2a90",
+  "port": 9876,
   "peers": [
-    {
-      "url": "http://100.64.0.2:9876",
-      "node_id": "k1:10f6b761dd1c2a90"
-    },
-    {
-      "url": "http://100.64.0.1:9876",
-      "node_id": "k1:597b3e0f5fb92d37"
-    }
-  ],
-  "bind": "0.0.0.0",
-  "port": 9876
+    { "id": "100-123-162-114", "url": "http://100.123.162.114:9876" }
+  ]
 }
 ```
 
 | Field | Default | Description |
 |---|---|---|
-| `peers[].url` | required | Base URL of the peer's sync daemon |
-| `peers[].node_id` | optional | The peer's device id (`k1:…`), for logging and the admitted-peer set |
-| `bind` | `0.0.0.0` | Interface to bind the daemon to |
-| `port` | `9876` | Port the daemon listens on |
+| `self` | — | This device's id |
+| `port` | `9876` | Port to listen on |
+| `peers[].url` | required | Base URL of a peer's daemon |
+| `peers[].id` | optional | A label for logs |
+| `bind` | automatic | Optional override of the bind address (see *Binding*); `0.0.0.0` is treated as automatic |
+| `sync_auth` | `permissive` | Optional sync auth mode (`hv sync auth` sets it) |
 
-Get a node's device id and public key with `hv config identity show` on that machine.
+Admitting a device with `hv group admit` also adds a peer entry from the address in its join request.
+To add a device, run `hive-mind invite` on a device already in the hive and paste the line into
+`hive-mind install` on the new one.
 
-`.peers.json` is gitignored (contains Tailscale IPs). Copy from
-`config/.peers.json.example` and edit per node.
+### Environment variables
 
-**WSL + Tailscale note:** Each WSL2 instance gets its own Tailscale IP (appears
-as a separate machine on the tailnet, e.g. `node-a-1`). The sync daemon
-binds `0.0.0.0:9876` and is reachable directly at the WSL Tailscale IP. No
-portproxy or mirrored networking needed. Get the WSL IP with `tailscale ip`.
+| Variable | Default | Effect |
+|---|---|---|
+| `HIVE_BIND` | — | Bind address override (see *Binding*) |
+| `HIVE_SYNC_AUTH` | — | Sync auth mode override (`off`\|`permissive`\|`enforce`) |
+| `HIVE_SYNC_AUTH_WINDOW` | `300` | Signed-request freshness window, seconds |
+| `HIVE_SYNC_PULL_PAGE` | `25` | Entries per `/sync/chunk` request |
+| `HIVE_SYNC_PUSH_PAGE` | `25` | Entries per `/sync/ingest` request |
+| `HIVE_SYNC_MAXSEG` | `1000` | TCP segment-size clamp for sync connections (`0` disables it) |
 
-**macOS note:** Install Tailscale via the app (App Store / standalone) or
-`brew install tailscale`; the app or `brew services` owns `tailscaled` (the
-installer never `sudo systemctl`-starts it on macOS). The daemon runs as a
-launchd LaunchAgent (`com.projectmentor.hive-sync`), logging to
-`~/Library/Logs/hive-mind/`. Get the node's IP with `tailscale ip`.
+### Platform notes
+
+- **WSL2:** each WSL instance is its own machine on the tailnet; the daemon binds that instance's
+  Tailscale IP. Use `tailscale ip -4` inside WSL, not the Windows host's address.
+- **macOS:** Tailscale runs as the app or `brew services`; the daemon runs as the launchd agent
+  `com.projectmentor.hive-sync` and logs to `~/Library/Logs/hive-mind/`.
+- **Android (Termux):** there is no `tailscale` CLI, so the daemon binds `127.0.0.1`. The phone cannot
+  accept inbound sync, but it converges by syncing outbound every 5 minutes, and its own dashboard is
+  at `http://127.0.0.1:9876/`.
 
 ---
 
-## Error Responses
+## Limits and errors
 
-All endpoints return JSON on error:
+Errors are JSON: `{"error": "description"}`.
 
-```json
-{"error": "description"}
-```
+| Status | When |
+|---|---|
+| `200` | Success (also for an unreachable node in the per-node view, with `available: false`) |
+| `400` | `/sync/ingest` without a valid `Content-Length` |
+| `401` | A remote-auth path without a valid signature, in `enforce` mode |
+| `403` | A local-only path from another device without a valid signature (unless the mode is `off`) |
+| `404` | Unknown path |
+| `409` | `/sync/ingest` from a different hive |
+| `413` | `/sync/ingest` body over 32 MiB |
+| `429` | Too many requests from one address (a per-address token bucket: burst 256, 64 per second) |
+| `500` | An internal error; the handler never crashes the server |
+| `503` | More than 32 requests in flight |
 
-HTTP status codes: `200` success, `404` unknown path, `409` cross-hive push
-refused (`POST /sync/ingest` when the sender's `hive_id` differs from this
-node's), `500` internal error. A 409 body carries `{"error": "different hive",
-"hive_id": "<local>", "accepted": 0}`. The daemon never crashes a handler
-thread — all exceptions are caught and returned as 500.
+Each connection has a 30-second read timeout.

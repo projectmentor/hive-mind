@@ -5,4 +5,4 @@ contact_links:
     about: For "how do I…", ideas, and anything that isn't a confirmed bug, please use Discussions.
   - name: Security report
     url: mailto:netadmin@projectmentor.org
-    about: Found a vulnerability? Email it privately (best-effort, no bounty).
+    about: Found a vulnerability? Report it privately, never as an issue (best-effort, no bounty). SECURITY.md also describes GitHub's private reporting.

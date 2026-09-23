@@ -46,12 +46,12 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 
 | Call | Purpose |
 |---|---|
-| `hv search "<q>" [--format json] [--min-confidence N]` | Read the corpus (ranked by effective confidence) |
+| `hv search "<q>" [--format json] [--min-confidence N] [--kind all\|fact\|decision\|idea] [--sort confidence\|importance\|utility\|recency]` | Read the corpus (ranked by effective confidence by default) |
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
-| `hv remember "<outcome>" --source <you> --outcome-of <decision ref> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
-| `hv decide "<decision>" --rationale "<why>" --informed <ref>…` | Record a decision, naming the `ref`s it relied on *(1.19)* |
-| `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — earns confidence from others' evidence, never from you *(1.20)* |
-| `hv retract <id> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
+| `hv remember "<outcome>" --source <you> --outcome-of <decision sid> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
+| `hv decide "<decision>" --rationale "<why>" --informed <sid>…` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
+| `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — it can earn confidence only from others' evidence, never from you; nothing writes that evidence yet ([#71](https://github.com/projectmentor/hive-mind/issues/71)) *(1.20)* |
+| `hv retract <sid> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
 | `hv telemetry record --event=start\|end --agent=<you> --identity=<instance> --session=<id> [--cwd=<dir>]` | **(optional, since 1.1)** record session observability into the LOCAL telemetry lane |
@@ -75,13 +75,24 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
 
 1. **Reorient on start, and audit-on-boot.** At session start: run the §0 self-update check, then
    `hv nudge --event=session-start --cwd="<cwd>"` and inject its stdout. That output carries the
-   project digest **and** a short audit-on-boot line (what the previous session left to re-check,
+   project digest, up to three open ideas, **and** a short audit-on-boot line (what the previous session left to re-check,
    stale, or duplicate). Audit-on-boot is the reliable floor of the whole loop, because session
    start fires on every runtime even when shutdown and per-turn hooks do not. Surface it so the new
    session can reconcile.
-2. **Capture.** When a decision, outcome, correction, or constraint occurs, write it:
-   `hv remember "..." --tags ... --source <you>`. Search first; never write back something you
-   just read this session (no echoes). **Tag time-varying/operational facts `volatile`**
+2. **Capture.** Search first, and never write back something you just read this session (no
+   echoes). Then route by what happened:
+   - a **decision** → `hv decide "<decision>" --rationale "<why>" --informed <sid> [<sid>…]`,
+     naming the entries you searched and relied on (their `sid`, `h:…`, from `hv search`);
+   - the **result of acting on a recorded decision** → `hv remember "<what happened>"
+     --outcome-of <decision sid> --polarity 1|0|-1`. Only observed results count toward the
+     decision's outcome score; if it is your own assessment rather than an observation, add
+     `--channel introspect` (recorded, never counted);
+   - a **hypothesis** worth testing → `hv propose "<hypothesis>"`, an idea, never a fact;
+   - a correction, constraint, observation or new entity → `hv remember "..." --tags ...
+     --source <you>`.
+
+   Label your own reasoning or plans `--channel introspect` if you record them at all: reasoning is
+   not observation. **Tag time-varying/operational facts `volatile`**
    (optionally `ttl:<n>h|d`), for example "service running" or "host reachable", so the audit flags
    them for re-verification instead of trusting them indefinitely. Since 1.2 `hv remember`
    **auto-tags** transient-status claims `volatile` (high-precision, content-neutral; pass
@@ -89,16 +100,15 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    tagging explicitly is still good practice. **Reconcile, do not just append.** When what you
    write *contravenes* a live fact — an issue you closed, a status that flipped, a claim now shown
    wrong — reconcile it rather than leaving both. The clean way is one command:
-   `hv remember "<correction>" --resolves <id>`, which writes the correction, links it on the new
-   row, and soft-retracts the old fact (deliberate negative evidence, reversible). If you instead
-   name the target in prose (`resolves #N`, `supersedes #N`, `obsoletes #N`, `CORRECTION to #N`)
-   without `--resolves`, the audit's **CONTRAVENED** check flags it while the target is still live,
-   so a missed reconcile surfaces at the next session start. Prefer `--resolves`: a prose `#N` is a
-   **local id** that drifts across rebuilds and nodes (so a flagged target id is best-effort), while
-   `--resolves` records the resolved fact's `(node_id, seq)` journal identity, which never drifts. A
-   "resolved" fact written while the "open" fact stays live asserts both at once, which is worse than
-   either alone. `--resolves` and a bare `hv retract` are soft and reversible; a decisive `--owner`
-   forget stays the owner's call (§4).
+   `hv remember "<correction>" --resolves <sid>`, which writes the correction plus one `resolves`
+   link and soft-retracts the old fact (deliberate negative evidence, reversible). If you instead
+   name the target in prose (`resolves h:3f9a1c0b2d`, `supersedes …`, `obsoletes …`,
+   `CORRECTION to …`) without `--resolves`, the audit's **CONTRAVENED** check flags it while the
+   target is still live, so a missed reconcile surfaces at the next session start. Cite targets by
+   `sid`: the audit matches a prose `h:…` exactly, while a prose `#N` is a **local id** that drifts
+   across rebuilds and nodes (best-effort). A "resolved" fact written while the "open" fact stays
+   live asserts both at once, which is worse than either alone. `--resolves` and a bare
+   `hv retract` are soft and reversible; a decisive `--owner` forget stays the owner's call (§4).
 3. **Save-nudge (best-effort, not a guarantee).** Where your runtime has a per-turn pre-prompt
    hook, pipe the user's message to `hv nudge --event=user-prompt --session="<id>"` and inject any
    stdout. Gate cheaply first: skip the call on turns that are neither a phrase hit nor a cadence
@@ -131,7 +141,7 @@ is real, working code in this repo — **study it, then write the equivalent for
   behavior for that event (session telemetry, then the nudge/digest in `scripts/common/nudge_hook.sh`), and
   passes their stdout through so context injection still works. Because the foreign config holds only
   the shim, **what** runs per event is a source-controlled decision, not a `~/.claude` edit — you
-  don't hand-wire it: `hv` owns the shim spec, the installer/update wire it via `hv doctor wire-agent`,
+  don't hand-wire it: `hv` owns the shim spec, the installer/update wire it via `hv wire claude`,
   and `hv doctor --fix` (the 15-min self-heal timer) re-asserts/migrates it. Build the same
   shim-then-reconcile pattern into any foreign-config adapter rather than wiring once and hoping it
   stays; an adapter that *is* plugin code (below) already has its wiring in source and needs no shim.
@@ -139,8 +149,9 @@ is real, working code in this repo — **study it, then write the equivalent for
   `on_session_switch`, `shutdown`). No per-turn pre-prompt hook exists → wire the save-nudge into
   `prefetch`, reorient into `system_prompt_block` (it already searches the hive), and the
   audit-nudge into `on_session_switch`/`shutdown`.
-- **OpenClaw:** plugin SDK hooks — `before_prompt_build` (inject digest/nudge via
-  `prependContext`), `gateway_stop` (audit). Push-capable; maps cleanly.
+- **OpenClaw** (no adapter ships; guidance for writing one): plugin SDK hooks —
+  `before_prompt_build` (inject digest/nudge via `prependContext`), `gateway_stop` (audit).
+  Push-capable; maps cleanly.
 - **MCP host:** pull-only — expose `hive_nudge`/`hive_audit` as tools and call them at your
   checkpoints (you cannot push per-turn).
 - **Any CLI agent:** a thin wrapper that calls `hv` at the points you control.
@@ -157,6 +168,9 @@ Your adapter **must**:
 
 - **Be best-effort.** Never block, never error, never slow a session. Wrap everything; the hook
   process must `exit 0` even on failure. A missing/broken `hv` must be a no-op, not a crash.
+  Today a `hv` write can take about a minute and a search about 15 seconds on a hive of a few
+  hundred entries ([#70](https://github.com/projectmentor/hive-mind/issues/70)): run writes in the
+  background, and never block a turn on one.
 - **Hint, never act.** Nudges and audits only *prompt*. You never auto-write and never
   auto-delete. **You remain the salience judge** (salience layer 1 — the agent rubric; `--gate` is
   the hive's content-neutral layer 2); erasing/forgetting is the **owner's** decision.
@@ -173,7 +187,7 @@ Your adapter **must**:
 
 ## 5. Self-verify checklist — run after (re)wiring
 
-Only record the new `Spec-Version` to your marker file if all pass:
+Only record the new `Contract-Version` to your marker file if all pass:
 
 1. `hv stats` and `hv search test` succeed.
 2. Your session-start path prints a project digest (or nothing, quietly) and the session is unharmed.
@@ -187,10 +201,9 @@ Only record the new `Spec-Version` to your marker file if all pass:
 
 Per-node tuning lives in `nudge.env` (copy from `config/nudge.env.example`; mirrors the `.peers.json`
 convention): `SAVE_EVERY`, `MIN_GAP`, `SAVE_ON_PHRASE`, `AUDIT_ON`, `AUDIT_DEPTH`,
-`HIVE_NUDGE_PHRASES`. `hv` reads it for you — your adapter does not need to parse it. Honor it by
+`VOLATILE_TTL_HOURS` (freshness window for `volatile` facts), `OPEN_IDEA_THRESHOLD` (1.20: ideas
+below this effective confidence are listed as "open" in the digest), `HIVE_NUDGE_PHRASES`. `hv` reads it for you — your adapter does not need to parse it. Honor it by
 simply routing text through `hv nudge`/`hv audit`.
-
----
 
 ---
 
@@ -198,9 +211,12 @@ simply routing text through `hv nudge`/`hv audit`.
 
 The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
 
-- **MINOR** — additive only: new verbs, new *optional* flags, new output fields. Existing behavior
-  never changes within a major, so an adapter written for any `N.x` keeps working on every later
-  `N.y`. No re-integration required.
+- **MINOR** — additive **for the adapter surface**: new verbs, new *optional* flags, new output
+  fields. The verbs, flags and outputs an adapter calls keep working within a major, so an adapter
+  written for any `N.x` keeps working on every later `N.y`; no re-integration required. A MINOR may
+  still change how the hive itself governs, encrypts or authorizes (1.14 retired an old escrow
+  format; 1.17 made publishing cells owner-only); such changes are called out in the changelog below
+  and never require an adapter change.
 - **MAJOR** — breaking (a verb/flag removed or repurposed, an output format changed). Bumped only
   when unavoidable. On a major bump: `hv` keeps the **previous major working as deprecated shims**
   through a migration window; §0 fires a loud re-integrate nudge; and — because every adapter call
@@ -221,7 +237,9 @@ when it must re-wire.
   `hive_search(kind=…)`: under `all` an idea surfaces only once it has earned confidence > 0. The
   session-start digest lists up to three open ideas; a peer's idea arriving by sync appends an
   `idea-arrived` line to the local bus log. **No wire change, no version skew** (older nodes land an
-  `idea` and ignore it). Rubric: a hypothesis worth testing is an idea, not a fact.
+  `idea` and ignore it). Rubric: a hypothesis worth testing is an idea, not a fact. *Current
+  limitation:* no verb writes `supports`/`contradicts` links yet, so ideas stay at 0.00 until one
+  does ([#71](https://github.com/projectmentor/hive-mind/issues/71)).
 - `1.19` — **generic `link` journal type (read side).** One content type with an open `kind`
   vocabulary for relationships between entries: `{kind, from_ref, to_ref, data, source, channel?}`
   with journal-identity refs. The projection knows `supports`, `contradicts`, `supersedes`,
@@ -249,7 +267,7 @@ when it must re-wire.
     a *vindication* axis; decisions still carry **no confidence** and `--min-confidence` still
     excludes them. Only `sense`-channel outcomes count (absent = sense); an `introspect` outcome
     is recorded, never counted. Both evidence projections now retain an ordered evidence sequence.
-  - *PR3b (same contract):* **stable short ids.** Every fact/decision/idea now carries **`sid`** —
+  - *PR3b (1.19 feature set; landed under contract 1.20):* **stable short ids.** Every fact/decision/idea now carries **`sid`** —
     `h:` + `sha256("node_id:seq")[:10]` (e.g. `h:3f9a1c0b2d`), the human form of `ref`: identical on
     every node, never changes on rebuild, resolved **exactly** through the projection-written column
     `journal_index.sid`. It is shown wherever a rowid was shown (`hv search` text + JSON, write
@@ -262,7 +280,7 @@ when it must re-wire.
     (or `ref`). `hive_retract(fact_id)` and `hive_entity(fact_id)` now take the `sid` string. The
     audit's CONTRAVENED check parses a prose `h:…` exactly (a prose `#N` stays best-effort).
     Closes the `hv retract` wrong-target hazard (hive #58). No wire change; nothing new is journaled.
-  - *PR6 (same contract):* **importance (salience L3) + utility are learned projections.**
+  - *PR6 (1.19 feature set; landed under contract 1.20):* **importance (salience L3) + utility are learned projections.**
     `facts.importance` is now written only by `_recompute_importance`: it starts at
     `min(--importance hint, importance_self_cap)` (default cap **0.3**) and rises only through links
     from **other** identities; `--importance` is therefore a hint, never a claim — adapters should
@@ -273,7 +291,7 @@ when it must re-wire.
     (`halflife_fact` 180, `halflife_idea` 90, `halflife_volatile` 14 days) are governed knobs and now
     drive confidence decay too. JSON search rows gain `importance`, `effective_importance`,
     `utility`, `effective_utility`, `last_link_at`. No wire change; nothing new is journaled.
-  - *PR2b (same contract):* **the write-path switch.** `hv decide --supersedes`, `hv remember
+  - *PR2b (1.19 feature set; landed under contract 1.20):* **the write-path switch.** `hv decide --supersedes`, `hv remember
     --resolves` and `hv entity link` now emit **one `link`** (`supersedes` / `resolves` / `entity`)
     instead of their legacy field or entry (`supersedes_ref`; `resolves_ref` + `retract`;
     `entity_fact`) — never both. On the owner machine the link is owner-signed (hard everywhere);
@@ -285,7 +303,7 @@ when it must re-wire.
     peer's `/api/verify.version`). Upgrade every always-on node
     before relying on these verbs across the fleet. Legacy entries keep projecting forever.
     Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
-  - *PR7 (same contract):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
+  - *PR7 (1.19 feature set; landed under contract 1.20):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
     devices, decisions' outcome mean) over governed short/long windows (`trust_short_days`,
     `trust_long_days`); the delta is a **signal** surfaced by `hv doctor` (`trust-drift`, threshold
     `trust_drift_threshold`) and a `DRIFT` column on `hv peers`. Advisory only — no effect on
@@ -312,7 +330,13 @@ when it must re-wire.
   `cell_writers=owner` only the owner may now publish, the CLI refuses a non-owner write, and the
   projection declines a non-owner-signed cell/comb entry (it still lands in the journal — every node
   folds it away, convergence-safe). New advisory `cell-authz` doctor check surfaces any now-unhonored
-  definition. `hv config governance set cell_writers owner|fertile`.
+  definition. Set the policy with `hv config set cell_writers owner|fertile`.
+  **Security fix, 2026-07-08, still under contract 1.17** (GHSA-242f-7fxg-f7wm, PR #42): remote sync
+  reads are signed by an admitted device (`Hive-Auth-*` headers), the dashboard's `/api/*` data
+  answers only local or signed requests, and the daemon binds the Tailscale address instead of all
+  interfaces; sync `protocol_version` is 2. This changes the daemon's wire behavior, not the adapter
+  contract: no verb or flag changed. Only a foreign sync client that reads a peer must adopt the
+  signed-request envelope (the bundled `hv` and daemon already do). See `docs/SYNC_API.md`.
 - `1.16` — **capsule write-authorization at the projection**. `_capsule_state` now declines to honor a
   `capsule` entry whose signer was not the authorized writer — under the default `capsule_putters=owner`
   the entry must carry an owner signature from the owner who was legitimate *as of that entry's journal
@@ -358,7 +382,7 @@ when it must re-wire.
   They project deterministically
   (`_cell_state`/`_comb_state`/`_capsule_state`) rather than indexing into `store.db`. Wiring is
   unified under **`hv wire <name>|--comb <name>|--list|--show <name>|--add`**: `kind:agent` dispatches
-  to the generalized `_wire_agent` (the old `hv doctor wire-agent` is now a hidden deprecated alias
+  to the generalized `_wire_agent` (the old `hv doctor wire-agent` is now a deprecated alias
   with byte-identical output), `kind:tool` runs the platform-aware executor (credentials from a
   capsule, falling back to `--env-file`). New **`hv capsule put|get|ls|rm|rotate`** seals secrets with
   **secure ingestion only** (`--env-file`/`--file`/`--stdin`/interactive `getpass` — never via chat or
@@ -378,9 +402,9 @@ when it must re-wire.
   reconciles — adds the shim, **migrates** any older inline hooks to it (so behaviors never
   double-fire), relinks the `hive-memory` skill — surgically (your own hooks untouched, `.bak.doctor`
   backup first). `hv doctor wire-agent` exposes it; the installer/update delegate to it, no second
-  definition to drift. This applies to foreign-config integrations only (Claude Code today, Codex
-  later via the same dispatcher); plugin agents (Hermes/OpenClaw/MCP) carry their wiring in our signed
-  code and need no shim. Additive, no wire change — adapters unaffected, but a foreign-config adapter
+  definition to drift. This applies to foreign-config integrations only (Claude Code today; any other
+  foreign-config agent can reuse the same dispatcher); plugin agents (Hermes, the MCP server) carry
+  their wiring in our signed code and need no shim. Additive, no wire change — adapters unaffected, but a foreign-config adapter
   should adopt the same shim + reconcile pattern.
 - `1.11` — reconciliation verbs. `hv remember --resolves <id>` writes a correction, links it on the
   new fact row (`facts.resolves`), and **soft-retracts** the prior fact (deliberate negative evidence,
@@ -443,8 +467,6 @@ when it must re-wire.
 
 ---
 
----
-
 ## 8. Cost and inference
 
 The checks use no model, and they should stay that way: the save-nudge gate, the audit (FTS plus
@@ -452,12 +474,11 @@ identity for redundancy, confidence plus TTL for obsolete and recheck), and the 
 all deterministic code, which is cheaper than any model. Gate cheaply before you spend anything: a
 quiet turn should cost a counter and a string scan, not a process.
 
-The one place a model helps is the optional, deferred inference phase: reading a transcript to find
-decisions that were made but never written, semantic dedup, short summaries. When you build it, run
-it on a cheap, configurable model (a `BACKGROUND_MODEL` knob, cheap by default, separate from the
-in-session model), keep it optional and local-first (the deterministic path must work with no model
-and no API key), and treat its output as proposals or low-confidence machine-tagged writes that a
-real agent or the owner confirms. A background model never self-certifies a fact into being trusted.
+If you add model-based help to your own adapter (for example, reading a transcript to find
+decisions that were made but never written, or semantic dedup), keep it optional and local-first,
+run it on a cheap model separate from the in-session one, and make sure the deterministic path works
+with no model and no API key. Treat its output as proposals that a real agent or the owner confirms:
+a background model never self-certifies a fact into being trusted.
 
 ---
 

@@ -23,8 +23,9 @@ corroboration and checkable outcomes are what matter.
   rebuilds. Bare local ids like `118`/`d17` are rowids that drift on every rebuild: deprecated, warned,
   and dropped at the next MAJOR — never pass one)
 - Propose:  `~/projects/hive-mind/hv propose "<hypothesis>" --tags <t1,t2> --source claude-code`
-  (an IDEA, not a fact: starts at 0.00 and earns confidence only from other identities' sense-channel
-  `supports`/`contradicts` links — use it for "perhaps X relates to Y", never for something observed)
+  (an IDEA, not a fact: starts at 0.00 and can earn confidence only from other identities' sense-channel
+  `supports`/`contradicts` links, which no tool writes yet (#71) — use it for "perhaps X relates to Y",
+  never for something observed)
 - Sync:     `~/projects/hive-mind/hv sync now`
 
 **ALWAYS pass `--source claude-code`** on `remember` so the hive can distinguish your writes
@@ -36,17 +37,18 @@ Write durable, checkable, reusable knowledge:
   with the refs of the facts you searched and relied on**: that is how the hive later learns which
   knowledge proved useful once the decision's outcomes are recorded.
 - **Outcomes / results** of actions ("did X → got Y") — checkable ground truth. When the action
-  carried out a recorded decision, write the outcome with `--outcome-of <decision ref> --polarity +1|0|-1`
+  carried out a recorded decision, write the outcome with `--outcome-of <decision sid> --polarity 1|0|-1`
   so the decision earns an outcome score and the facts it relied on earn utility. Only observed
   outcomes count; if it is your own assessment rather than something observed, add `--channel introspect`.
-- **Corrections** — something was wrong and is now right.
+- **Corrections** — something was wrong and is now right. Replace the old fact rather than leaving
+  both live: `hv remember "<correction>" --resolves <sid of the wrong fact>` (soft-retracts it).
 - **Constraints / preferences / commitments** that shape future work.
 - **New entities / relationships** worth remembering.
 
 Do **NOT** write as facts: your chain-of-thought, restatements of things already in the corpus, or
 speculation/opinion. A hypothesis worth testing goes through `hv propose` as an **idea** instead
-(it earns confidence from evidence; it cannot borrow it from you). Mark epistemic status with `--tags` (e.g. `observation`, `confirmed`,
-`speculation`) so readers can weigh it — but **never assert your own confidence/trust number**;
+(it earns confidence from evidence; it cannot borrow it from you). Mark epistemic status with `--tags` (e.g. `observation`,
+`confirmed`) so readers can weigh it — but **never assert your own confidence/trust number**;
 confidence is derived, not declared.
 
 **Search before you write** (`hv search`). If the fact is already there, don't rewrite it — its

@@ -27,8 +27,10 @@ hv wire <name> --env-file PATH # read tool credentials from a dotenv file (defau
 2. **Make the credential available — never via chat.** If a tool `requires` a secret (e.g.
    `CLOUDFLARE_API_TOKEN`, `LOFTY_API_TOKEN`), the user adds it to `~/.claude/.env` themselves
    (e.g. tell them to run `! echo 'NAME=...' >> ~/.claude/.env`). Do **not** ask them to paste a
-   secret into the conversation. Then run `hv wire <name>` — the value flows file→tool, never the
-   transcript. (Phase 2 will seal these into encrypted capsules instead of `.env`.)
+   secret into the conversation. Better still, have them seal it into an encrypted capsule
+   (`hv capsule put <NAME> --env-file ~/.claude/.env --name <VAR>`): `hv wire` reads an opened
+   capsule first and falls back to the `.env` file. Then run `hv wire <name>` — the value flows
+   file or capsule → tool, never the transcript.
 3. **Provision + verify:** `hv wire <name>`. It is idempotent — if `verify` already passes it does
    nothing. A clear message tells you what was missing, what ran, and whether verify passed.
 4. **Author a recipe:** write a cell JSON (`{name, kind:"tool", requires:[…], spec:{obtain,
@@ -37,7 +39,9 @@ hv wire <name> --env-file PATH # read tool credentials from a dotenv file (defau
 
 ## Notes
 - `kind:agent` cells reconcile foreign config (Claude Code hooks today); `hv wire claude` is the
-  modern form of the old `hv doctor wire-agent` (kept as a hidden alias).
+  modern form of the old `hv doctor wire-agent` (kept as a deprecated alias).
 - If a tool's `requires` credential is missing, `hv wire` tells you exactly which one and where to
   put it — surface that to the user rather than guessing.
-- Canonical cells live in the repo's `cells/` dir; check there and via `hv wire --list`.
+- Real cells come from the hive (`hv wire --list`): they can carry private infrastructure details,
+  so they are published to the journal with `hv wire --add`, never committed. The repo's `cells/`
+  holds only a dummy `example-tool.json` to copy from.

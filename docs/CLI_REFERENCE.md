@@ -14,22 +14,30 @@ memory.
 
 | Command | What it does |
 |---|---|
+| `hv audit` | Surface redundant, obsolete, stale or missing facts (used by agent hooks) |
 | `hv config` | Device identity (`identity`) + owner-signed confidence (`confidence`) / quorum (`quorum`) params |
 | `hv dash` | Open the read-only web dashboard (served by the sync daemon) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle` + `migrate-identity` + `rebuild` + `wire-agent` |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `migrate-identity`, `rebuild` (`wire-agent` is a deprecated alias of `hv wire claude`) |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv wire` | Self-wire a tool/agent from a cell or comb; `--list`/`--show`/`--add` manage cell definitions |
 | `hv capsule` | Seal a secret to the authorized device set: `put`/`get`/`ls`/`rm`/`rotate` |
 | `hv join` | Request admission to a hive you've synced |
+| `hv key` | Alias of `hv config identity` |
+| `hv nudge` | Emit a save/audit hint or the session-start digest (used by agent hooks) |
 | `hv owner` | Show or create the governance owner identity |
+| `hv peers` | Hive members, reachability, staleness, trust drift |
+| `hv propose` | Record an idea (a hypothesis) |
 | `hv remember` | Store a fact |
 | `hv retract` | Correct a fact you got wrong |
-| `hv search` | Search stored facts |
+| `hv search` | Search facts, decisions and ideas |
 | `hv stats` | See a summary of your memory |
-| `hv sync` | Sync with peer nodes |
+| `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode |
+| `hv telemetry` | Local-only session observability (never synced) |
+| `hv verify` | Check that this install is the official, signed release |
+| `hv version` | Print the agent contract version |
 | `hv whoami` | Show this device's identity and membership status (sterile/fertile/owner) |
 
 ---
@@ -64,8 +72,8 @@ device, which is what keeps confidence converging):
 ```
 hv config confidence set same_device_lambda 0.5          # weight of EACH extra agent on one device (default 0.5)
 hv config confidence set cap_self 0.70                   # ceiling when all corroboration is one principal (default 0.70)
-hv config confidence set introspect_support_weight 0.0   # 1.19: weight of a supports/contradicts LINK whose channel
-                                                         # is `introspect` (default 0 — reasoning never moves confidence)
+hv config confidence set introspect_support_weight 0.0   # 1.19: weight of a supports/contradicts/resolves LINK (on facts
+                                                         # and ideas) whose channel is `introspect` (default 0)
 hv config confidence set trust_long_days 180             # 1.19: trust-velocity long window (days)
 hv config confidence set trust_short_days 14             # 1.19: trust-velocity short window (days)
 hv config confidence set trust_drift_threshold -0.3      # 1.19: `doctor trust-drift` warns when short − long falls below this
@@ -103,6 +111,15 @@ hv config quorum set dead_man_days 30    # owner silence required before an elec
 
 > `hv config set <key> <value>` is kept as a silent alias for `hv config confidence set …`.
 
+`capsule_putters` and `cell_writers` are the two write policies: who may publish capsules, and who
+may publish cells and combs. Each is `owner` (the default) or `fertile` (any admitted device). Set
+them like any other governed key:
+
+```
+hv config set capsule_putters fertile    # any admitted device may seal and rotate capsules
+hv config set cell_writers owner         # only the owner may publish cells/combs (default)
+```
+
 `same_device_lambda` is why two agents on one machine count for less than two on
 separate machines: the device contributes its strongest agent in full plus this
 fraction of the rest. `0` means a device is one voice no matter how many agents run
@@ -126,7 +143,7 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes DECISION] [-
 |---|---|
 | `content` | The decision, stated clearly. Required. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
-| `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision ids (`#N`) are node-local and shift on rebuild, so don't reference a decision by its number; find it by tag or text. |
+| `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision numbers (`#N`) are node-local and shift on rebuild; to cite a decision, use its `sid` (`h:…`, shown by `hv search`). |
 | `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. *(1.19 PR2b)* Journaled as one `supersedes` **link** (owner-signed when this device holds the owner key → hard everywhere; otherwise hard only where this device authored the old decision — see `hv doctor` `link-authz`). |
 | `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable forms are the **`sid`** shown by `hv search` (`h:3f9a1c0b2d` — the form to type) and the `ref` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — both identical on every node, never change. Bare local ids are still accepted — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time, prints a one-line deprecation warning, and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
 
@@ -147,12 +164,13 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes DECISION] [-
 # Replacing a previous decision
 ./hv decide "Install Tailscale inside WSL — each device gets its own IP" \
     --rationale "Cleaner than portproxy, WSL appears as its own tailnet machine" \
-    --supersedes 5
+    --supersedes h:5d0c1a9e42
 
 # All options together
 ./hv decide "peers.json must use WSL Tailscale IPs, not Windows host IPs" \
     --rationale "WSL gets its own 100.x — Windows host IP is irrelevant to WSL daemon" \
-    --supersedes 3
+    --supersedes h:0b7e21f3c8 \
+    --informed h:3f9a1c0b2d h:7c01d2e9aa
 ```
 
 ---
@@ -164,6 +182,10 @@ support or contradict over time. It starts at confidence **0.00** and earns conf
 from `supports`/`contradicts` links written by *other* identities on the `sense` channel (an
 observation). Restating it, or a second agent proposing the same text, creates a second idea; it
 never corroborates the first. An LLM proposes; it cannot promote.
+
+> **Current limitation.** No `hv` command, MCP tool or adapter writes `supports`/`contradicts` links
+> yet ([#71](https://github.com/projectmentor/hive-mind/issues/71)), so for now every idea stays at
+> 0.00: `hv propose` records the hypothesis and surfaces it for attention, but nothing can confirm it.
 
 ```
 hv propose <content> [--tags a,b,c] [--source SOURCE] [--channel sense|act|introspect]
@@ -180,8 +202,8 @@ Ideas get **attention, not announcement**: the session-start digest lists up to 
 ideas (effective confidence below the local `OPEN_IDEA_THRESHOLD` knob in `nudge.env`, default
 0.3, newest first) as a standing invitation to weigh in, and when a peer's idea arrives by sync
 an `idea-arrived` line is appended to the local bus log `$HIVE_HOME/.bus/introspect.log`. Find
-ideas with `hv search --kind idea`; cite one with its `ref` or the `i<N>` local-id prefix
-(`hv decide --informed i7`).
+ideas with `hv search --kind idea`; cite one by its `sid` (`h:…`) or `ref`, e.g. `hv decide "…"
+--informed h:3f9a1c0b2d` (the `i<N>` local-id form still works but is deprecated like every bare id).
 
 ### `hv discover` — Find hives on your tailnet
 
@@ -222,6 +244,8 @@ A few checks appear only when there is something to report: **crypto-modules** (
 cryptography module failed to load, so signature checking is degraded), **journal-integrity**
 (garbled or truncated journal lines were skipped on read), **capsule-conflicts** (two
 devices sealed the same capsule version before syncing, so one value lost a deterministic tie),
+**capsule-authz** (a `capsule` entry the projection declines because its signer was not authorized
+under `capsule_putters`), **cell-authz** (the same for cells and combs under `cell_writers`),
 **link-authz** (a `supersedes`/`resolves` link was downgraded to evidence — re-issue it owner-signed),
 **trust-drift** (a device's recent reliability fell well below its baseline; advisory, see `hv peers`)
 and *(1.19 PR2b)* **fleet-contract** (an admitted peer advertises an agent contract below 1.19, or
@@ -321,7 +345,10 @@ scripts; new use should prefer `hv doctor rebuild`.)
 
 ---
 
-### `hv doctor wire-agent` — (Re)wire the Claude Code integration
+### `hv doctor wire-agent` — deprecated alias of `hv wire claude`
+
+*Deprecated since contract 1.13: use `hv wire claude`, which does exactly the same thing. The
+alias still works.*
 
 Wires the Claude Code dispatch shim and the `hive-memory` skill into `~/.claude`,
 migrating any older inline hooks to the shim as it goes. It's idempotent — your own
@@ -339,7 +366,7 @@ Honors `CLAUDE_CONFIG_DIR` (same as Claude Code). On a node with no Claude Code 
 a quiet no-op.
 
 Only foreign config files (like Claude Code's `settings.json`) need this shim. Agents
-integrated as our own plugin code — Hermes, OpenClaw, the MCP host — carry their wiring
+integrated as our own plugin code — Hermes and the MCP server — carry their wiring
 in source already, so they have nothing to drift and nothing to re-assert.
 
 ---
@@ -438,10 +465,10 @@ hv entity {add,list,show,link} [options]
 ./hv entity show --name "HiveMind"
 
 # link — attach a fact to an entity (minimal)
-./hv entity link --name "HiveMind" --fact-id 42
+./hv entity link --name "HiveMind" --fact-id h:3f9a1c0b2d
 
 # link — with confidence score
-./hv entity link --name "HiveMind" --fact-id 42 --confidence 0.9
+./hv entity link --name "HiveMind" --fact-id h:3f9a1c0b2d --confidence 0.9
 ```
 
 ---
@@ -677,15 +704,17 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--source` | Who or what is asserting this fact. Helps HiveMind tell independent sources apart. Defaults to `manual`. See [Source identity](#source-identity) below. |
 | `--importance` | A numeric **hint** (0–1, default 0.5) for how significant you think this fact is. *(1.19 PR6)* It is journaled as asserted, but the projected `facts.importance` starts at `min(hint, importance_self_cap)` (default cap 0.3) and rises only when **other** identities link to the fact — importance is learned, never self-declared. `hv search --sort importance` ranks by it. |
 | `--gate` | Filter this write through the **admission gate** (salience layer 2) — a content-neutral structural check that silently drops writes that are not knowledge-shaped (trivially short, a bare question, a greeting). It never judges topic or importance; that judgment stays with the agent (layer 1). Useful when an agent is writing many facts at once and you want to keep your memory clean. |
-| `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's stable `ref` (`node_id:seq`, as shown by `hv search`; preferred) or a local decision id (`17` / `d17`), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and, later, the utility of the facts that informed it. |
+| `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's `sid` (`h:…`, preferred) or `ref` (`node_id:seq`), both shown by `hv search`, or a local decision id (`17` / `d17`, *deprecated*), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and the utility of the facts that informed it. |
 | `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
-| `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`; an `introspect` `supports`/`contradicts` link weighs `introspect_support_weight` (default 0). |
+| `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`; an `introspect` `supports`/`contradicts` link weighs `introspect_support_weight` (default 0). Today an `introspect` *fact* still counts toward corroboration like an observation ([#73](https://github.com/projectmentor/hive-mind/issues/73)). |
 | `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It journals one `resolves` **link** *(1.19 PR2b — no separate `retract` entry any more)* from the new fact to the resolved fact's journal identity (stable across rebuilds and nodes); the projection folds it as negative evidence that **soft-retracts** the old fact (so it stops surfacing as canonical) and, when the link is hard, records the chain on the new row — keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
 
 **What you get back:**
 
-- `Remembered as fact #N` — stored successfully
-- `Already known (fact #N)` — identical content already exists; nothing written
+- `Remembered as h:3f9a1c0b2d (fact #N, confidence 0.45, 1 identity)`, then `ref: <node_id:seq>` —
+  the write is always journaled. If identical content already exists, the new entry corroborates
+  that same fact (same `sid`), and its confidence rises only when the identity behind it is new.
+- `Skipped (admission gate): …` — only with `--gate`, when the text is not statement-shaped.
 
 **How confidence works:**
 
@@ -775,7 +804,7 @@ hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
 
 ---
 
-### `hv search` — Search stored facts and decisions
+### `hv search` — Search facts, decisions and ideas
 
 Find facts by keyword. Results are ranked by confidence — the most corroborated
 facts come first. Matching **decisions** are listed too, under a `Decisions:`
@@ -803,7 +832,7 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,
 | Argument | What it does |
 |---|---|
 | `query` | What to search for. Multiple words all have to match. Use `OR` between words for either/or. Use `"quoted phrases"` for exact matches. Matches facts (content/tags) and decisions (content/rationale/tags). |
-| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. JSON is a flat list; each row carries a `kind` field (`fact` or `decision`). |
+| `--format` | `text` (default) for readable output. `json` for machine-readable output you can pipe to other tools. JSON is a flat list; each row carries a `kind` field (`fact`, `decision` or `idea`). `tags` arrives as a JSON-encoded string (e.g. `"[\"api\", \"payments\"]"`), not a list ([#77](https://github.com/projectmentor/hive-mind/issues/77)). |
 | `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. (In JSON, decisions carry no confidence, so a `min_confidence > 0` consumer drops them.) |
 | `--kind` | *(1.20)* What to search: `all` (default), `fact`, `decision`, `idea`. Under `all` an **idea** appears only once it has earned confidence above 0 — a raw hypothesis is not knowledge yet; `--kind idea` lists every idea. JSON rows carry `kind: idea` with `confidence`, `effective_confidence` and `ref`. |
 | `--sort` | *(1.19 PR6)* How to rank facts and ideas: `confidence` (default — effective confidence, unchanged behaviour), `importance` (learned salience: capped self-hint + other-identity link attention), `utility` (how much recorded decisions relied on it, weighted by their outcomes), or `recency`. Decisions always list newest-first. Text rows show `Imp:` / `Util:`; JSON rows carry `importance`, `effective_importance`, `utility`, `effective_utility`, `last_link_at`. Both learned values are stored undecayed and decayed at query time under the entry's **class half-life** (`halflife_fact` / `halflife_idea` / `halflife_volatile`), which now also governs confidence decay. |
@@ -857,16 +886,18 @@ they remain its internal keys and join columns; they just stop leaking out as na
 
 A read-only dashboard for browsing your hive in a browser. Four tabs: **Overview**
 (counts, convergence, contested, the live audit summary), **Corpus** (facts and
-decisions — search, filter by tag, sort by salience or recency, filter on status
-like contested/forgotten/volatile, paginated), **Hive** (peers + health, with live
-sync status), and **Telemetry** (this node's sessions, tokens, and cost over time).
-It's served by the **sync daemon** itself (no extra process): the daemon
-already runs on your sync port, so the dashboard is reachable wherever sync is —
-always on `localhost`, and on your **tailnet IP** so you can open it from another
-device on your tailnet (your laptop, your phone). Nothing is exposed to the public
-internet; it rides the same private path your sync already uses.
+decisions — search, filter by tag, sort by confidence, importance, utility or recency,
+filter by status: contested, forgotten by the owner, or volatile; paginated), **Hive**
+(peers + health, with live sync status), and **Telemetry** (this node's sessions,
+tokens, and cost over time). It's served by the **sync daemon** itself (no extra
+process) at `http://127.0.0.1:9876/`, and it answers only on the device it runs on:
+open it on any device that runs HiveMind, including an Android phone running it in
+Termux. A browser on a device without its own node, pointed at another node's tailnet
+address, is refused (403) since the July 2026 read-auth fix (PR #42). To see another device's data, pick it
+in the dashboard: your own daemon fetches it with a signed request. Nothing is
+exposed to the public internet.
 
-`hv dash` prints the URL(s) and tries to open your browser. On a headless box (or
+`hv dash` prints the URL and tries to open your browser. On a headless box (or
 Android/Termux, or WSL) where it can't, the printed URL is the point — open it
 yourself.
 
@@ -878,14 +909,14 @@ hv dash [--print]
 
 | Argument | What it does |
 |---|---|
-| `--print` | Print the dashboard URL(s) only; don't try to open a browser. Handy over SSH or in scripts. |
+| `--print` | Print the dashboard URL only; don't try to open a browser. Handy in scripts. |
 
 **Examples:**
 ```bash
 # Open the dashboard in your browser
 ./hv dash
 
-# Just show me the URLs (e.g. over SSH)
+# Just show me the URL
 ./hv dash --print
 ```
 
@@ -928,24 +959,27 @@ hv sync daemon
 |---|---|
 | `now` | Sync with all peers right now and exit. Good for a manual check. |
 | `daemon` | Run continuously — sync automatically every 5 minutes. This is what the background service runs. |
+| `auth [off\|permissive\|enforce]` | Show or set this node's sync read-auth mode (default `permissive`; restart the daemon to apply). `enforce` requires every remote sync read to be signed by an admitted device — switch once all peers report protocol version 2. See [SYNC_API.md](SYNC_API.md#access-control). |
 
-**`.peers.json` format:**
+**`.peers.json` format** (the installer writes it):
 ```json
 {
-  "bind": "0.0.0.0",
+  "self": "k1:10f6b761dd1c2a90",
   "port": 9876,
   "peers": [
-    {
-      "url": "http://100.64.0.2:9876",
-      "node_id": "node-b"
-    }
+    { "id": "100-64-0-2", "url": "http://100.64.0.2:9876" }
   ]
 }
 ```
 
-- `peers[].url` — your peer's address. Use the WSL Tailscale IP (run `tailscale ip` on the peer to get it).
-- `peers[].node_id` — a label for logs. Optional but helpful.
-- `bind` and `port` — what address and port to listen on. Defaults are fine for most setups.
+- `self` — this device's id.
+- `peers[].url` — a peer's address. `hive-mind invite`, run on that peer, prints the address to use;
+  admitting a device with `hv group admit` also adds it from its join request.
+- `peers[].id` — a label for logs. Optional.
+- `port` — the port to listen on (default 9876).
+- Optional: `bind` (override the listen address — by default the daemon binds this device's Tailscale
+  IP, else `127.0.0.1`, never all interfaces; a legacy `0.0.0.0` counts as automatic) and
+  `sync_auth` (the read-auth mode, set by `hv sync auth`).
 
 This file is not synced to git — it's specific to each machine.
 
@@ -991,6 +1025,65 @@ It prints this device's `device_id`, the `hive_id` and `owner`, your `principal`
 - **UNAFFILIATED** — no hive yet (`hv owner init` to start one, or sync one and `hv join`).
 
 If you're sterile, your session-start digest says so too, so your agent isn't left guessing.
+
+---
+
+### `hv verify` — Check that this is the official release
+
+```
+hv verify
+```
+
+Tells you whether this install is the official HiveMind from ProjectMentor. Three independent
+checks, strongest last:
+
+1. **Integrity** — every source file matches the bundled manifest (`verify.json`). Catches local
+   edits and accidental drift.
+2. **Signature** — the manifest carries a valid Ed25519 signature (`verify.json.sig`) under the
+   bundled public key (`hivemind.pub`). A fork that changed code cannot forge it.
+3. **Key anchor** — the bundled public key matches the one published at
+   `https://hivemind.projectmentor.org/.well-known/hivemind.pub`, a different origin from the code
+   host. Catches a fork that ships its own key and a self-signed manifest.
+
+A healthy install prints `✓ Official HiveMind v1.20 from ProjectMentor — verified.` If you edited
+files yourself it says the install was modified locally. `hv doctor` runs the same check as
+**authenticity**, and a peer's result is readable at `/api/verify`. Right after an update the signed
+manifest can lag for a few minutes (the release bot re-signs after each merge to `main`); pull again
+and re-run.
+
+---
+
+### `hv version` — Agent contract version
+
+```
+hv version        # → hv contract-version 1.20
+```
+
+The version of the agent contract (`docs/AGENT_INTEGRATION.md`). Adapters compare it with the
+version they last integrated against: a MINOR bump is additive, a MAJOR bump means re-integrate.
+
+---
+
+### Agent-hook verbs: `hv nudge`, `hv audit`, `hv telemetry`
+
+These are called by agent integrations (the Claude Code hooks, the Hermes plugin, the MCP server)
+rather than typed by hand. `docs/AGENT_INTEGRATION.md` is the full reference.
+
+```
+hv nudge --event session-start|user-prompt|precompact|sessionend [--session ID] [--cwd DIR] [--agent NAME]
+hv audit [--depth light|normal|deep] [--session ID] [--format text|json]
+hv telemetry record|report|list …
+```
+
+- **`hv nudge`** reads recent text on stdin and prints a short hint to stdout, or nothing. With
+  `--event session-start` it prints the session-start digest: project context, what the last
+  session left to re-check, pending join requests, and up to three open ideas. Tuned per node in
+  `nudge.env` (see `config/nudge.env.example`).
+- **`hv audit`** lists facts to reconcile: redundant, obsolete, due for a re-check (`volatile` facts
+  past their freshness window), missing (with `--session`), and CONTRAVENED (a correction that names
+  a still-live fact in prose but never resolved it).
+- **`hv telemetry`** records and reports session observability (duration, tokens, cost) in a
+  local-only store that never enters the journal and never syncs.
 
 ---
 
@@ -1056,6 +1149,19 @@ On the next `hive-mind install`, if a preserved identity is found it offers to *
 | `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this device's identity. Normally a node identifies by its Ed25519 device key (see `hv key`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
 | `HIVE_NODE_LABEL` | Your machine's hostname | A human-friendly display label shown next to the `device_id` in `hv stats` and sync logs. Cosmetic; does not affect identity. |
 | `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
+| `HIVE_BIND` | automatic | Overrides the sync daemon's listen address (default: this device's Tailscale IP, else `127.0.0.1`). `0.0.0.0` listens on all interfaces and is warned about. |
+| `HIVE_SYNC_AUTH` | from `.peers.json`, else `permissive` | Overrides the sync read-auth mode (`off`, `permissive`, `enforce`). |
+
+Advanced, rarely needed:
+
+| Variable | Default | Description |
+|---|---|---|
+| `HIVE_SYNC_AUTH_WINDOW` | `300` | Seconds of clock skew tolerated on a signed sync request |
+| `HIVE_SYNC_PULL_PAGE` / `HIVE_SYNC_PUSH_PAGE` | `25` | Entries per sync request when pulling / pushing |
+| `HIVE_SYNC_MAXSEG` | `1000` | TCP segment-size clamp for sync connections, for tailnet paths with MTU below 1280 (`0` disables) |
+| `HIVE_OWNER_PASSPHRASE` | — | Supplies the owner-key passphrase non-interactively (automation and tests) |
+| `HIVE_IDENTITY_STASH` | `~/.config/hive-mind/identity` | Where the owner key and `uninstall --keep-identity` stash identity files |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Where `hv wire claude` looks for Claude Code's config, honoured exactly as Claude Code does |
 
 ---
 
@@ -1080,7 +1186,13 @@ The format is:
 
 The same agent writing the same fact across multiple sessions still counts as
 one source. Two different agents independently writing the same fact counts as
-two.
+two. An identity is the device plus `app` and `instance`; agents on the same device
+are discounted (`same_device_lambda`).
+
+`context_class` sets how much one identity's write weighs: `primary` 1.0, `subagent` 0.5,
+`cron` 0.3. A source with no class (like plain `claude-code` or `manual`) weighs 1.0. The label
+is self-declared, so it can only lower an agent's own weight — which is the point: it lets
+background jobs count for less.
 
 **Examples:**
 ```

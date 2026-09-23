@@ -13,9 +13,12 @@ To keep it sustainable, the development model is intentionally lightweight:
 - **Questions, ideas, "does it do X?"** → open a [Discussion](https://github.com/projectmentor/hive-mind/discussions), not an Issue.
 - **Bugs** → an Issue is welcome, but responses are **best-effort, no SLA**. A clear
   repro helps a lot.
-- **Pull requests** → welcome for focused bug fixes. For anything larger, **open a
-  Discussion first** so we can agree on the approach before you spend time. Sweeping
-  refactors or new subsystems will likely be declined to keep the project coherent.
+- **Security vulnerabilities** → **don't** open an issue; report privately as described in
+  [SECURITY.md](SECURITY.md).
+- **Pull requests** → welcome for bug fixes, security fixes and documentation. The open-source
+  core is feature-complete at contract 1.20, so new features are not taken into it; for anything
+  beyond a focused fix, **open a Discussion first**. Sweeping refactors will likely be declined to
+  keep the project coherent.
 
 None of this is meant to be cold — it's how a solo maintainer stays sane and keeps the
 project alive. Open source here means the code is yours to use and learn from, not that

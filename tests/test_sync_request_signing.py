@@ -17,9 +17,10 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-# A throwaway HIVE_HOME so importing the daemon/hv never touches the real corpus (the verifier reads
-# no journal — it takes `gov` as an argument).
-os.environ.setdefault("HIVE_HOME", tempfile.mkdtemp(prefix="hive-authtest-"))
+# A throwaway HIVE_HOME, set UNCONDITIONALLY: a developer shell that exports HIVE_HOME (the installer adds
+# it to ~/.bashrc) must not bind these imports to the live hive. The verifier reads no journal (it takes
+# `gov` as an argument), but nothing here should even point at real data.
+os.environ["HIVE_HOME"] = tempfile.mkdtemp(prefix="hive-authtest-")
 
 import ed25519  # noqa: E402
 import sync_common  # noqa: E402

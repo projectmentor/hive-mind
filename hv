@@ -6282,6 +6282,21 @@ def _doctor_status():
         detail += f"; {len(orphans)} orphan daemon(s) outside systemd (PID {', '.join(map(str, orphans))}) — `hv doctor --fix`"
     checks.append({"name": "sync-daemon", "status": status, "detail": detail, "orphans": orphans})
 
+    # sync-bind (#47): the liveness probe above answers on the loopback alias whether the primary bind
+    # is loopback or the tailnet IP, so it can't see a daemon stuck on loopback. /hive/info (open
+    # discovery, served on the alias) carries the live `advertised_addr`; compare it with what
+    # resolve_bind picks now. No verdict when the daemon isn't answering: sync-daemon already warns.
+    if requests is not None and status == "ok":
+        try:
+            import sync_common
+            info = requests.get(f"http://127.0.0.1:{port}/hive/info", timeout=3).json()
+            bcfg = sync_common.load_peers()
+            sb_status, sb_detail = _sync_bind_verdict(sync_common.resolve_bind(bcfg), info.get("advertised_addr"),
+                                                      sync_common.bind_is_auto(bcfg))
+            checks.append({"name": "sync-bind", "status": sb_status, "detail": sb_detail})
+        except Exception as e:
+            checks.append({"name": "sync-bind", "status": "warn", "detail": f"check error: {e}"})
+
     if not peers:
         checks.append({"name": "peers", "status": "ok", "detail": "none configured"})
     elif requests is None:
@@ -6315,6 +6330,50 @@ def _doctor_status():
             checks.append({"name": "peers", "status": "ok", "detail": f"{len(up)} peer(s) reachable and in sync"})
 
     return checks
+
+
+def _restart_managed_daemon():
+    """Restart the supervisor-managed sync daemon (systemd on Linux/WSL, launchd on macOS, runit on
+    Android/Termux). Returns a one-line description of what was restarted, or None if there is no
+    managed service. Callers honour --dry-run before calling it."""
+    if sys.platform == "darwin":
+        if _launchd_hive_sync()[0]:
+            subprocess.run(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/com.projectmentor.hive-sync"],
+                           capture_output=True)
+            time.sleep(2)
+            return "restarted the launchd hive-sync agent."
+    elif os.environ.get("TERMUX_VERSION") or os.path.isdir("/data/data/com.termux"):
+        # Android/Termux: sys.platform is "linux" but there is no systemd; runit's runsvdir respawns
+        # the daemon on its own, so this is best-effort parity.
+        if shutil.which("sv"):
+            subprocess.run(["sv", "restart", "hive-sync"], capture_output=True)
+            time.sleep(2)
+            return "restarted the runit hive-sync service."
+    else:
+        unit_exists, _ = _systemd_hive_sync()
+        if unit_exists:
+            subprocess.run(["systemctl", "--user", "restart", "hive-sync"], capture_output=True)
+            time.sleep(2)
+            return "restarted the systemd hive-sync unit."
+    return None
+
+
+def _sync_bind_verdict(resolved, advertised, auto):
+    """#47, pure: (status, detail) for the `sync-bind` check. `resolved` is what resolve_bind picks now,
+    `advertised` the daemon's live `advertised_addr` from /hive/info (None when it is bound to
+    loopback). Never asks the daemon to move toward loopback."""
+    import sync_common
+    if not auto:
+        return "ok", "bind fixed by HIVE_BIND or .peers.json"
+    if sync_common.is_loopback(resolved):
+        return "ok", "no tailnet address; loopback-only is expected"
+    if advertised is None:
+        return "warn", (f"daemon bound to 127.0.0.1 while tailnet {resolved} is up (peers can't reach it) "
+                        f"— `hv doctor --fix` restarts it")
+    host = str(advertised).rsplit(":", 1)[0]
+    if host != resolved:
+        return "warn", f"tailnet IP changed: daemon on {host}, this node is now {resolved} — `hv doctor --fix` restarts it"
+    return "ok", f"bound to the tailnet at {advertised}"
 
 
 def doctor_cmd(args):
@@ -6411,6 +6470,7 @@ def doctor_cmd(args):
         except Exception as e:
             print(f"\n--fix: key-announce heal error: {e}")
 
+        restarted = False
         orphans = [p for c in checks for p in (c.get("orphans") or [])]
         if not orphans:
             print("\n--fix: no orphan daemons to clear.")
@@ -6421,29 +6481,23 @@ def doctor_cmd(args):
             print(f"\n--fix: killing {len(orphans)} orphan daemon(s): {', '.join(map(str, orphans))}")
             _kill_orphans(orphans)
             # Restart the supervisor-managed daemon so the just-cleared port is reclaimed by the
-            # canonical instance: systemd on Linux/WSL, launchd on macOS, runit on Android/Termux.
-            if sys.platform == "darwin":
-                if _launchd_hive_sync()[0]:
-                    subprocess.run(["launchctl", "kickstart", "-k",
-                                    f"gui/{os.getuid()}/com.projectmentor.hive-sync"],
-                                   capture_output=True)
-                    time.sleep(2)
-                    print("  restarted the launchd hive-sync agent.")
-            elif os.environ.get("TERMUX_VERSION") or os.path.isdir("/data/data/com.termux"):
-                # Android/Termux: sys.platform is "linux" but there is no systemd; runit's
-                # runsvdir respawns the daemon on its own, so this is best-effort parity.
-                if shutil.which("sv"):
-                    subprocess.run(["sv", "restart", "hive-sync"], capture_output=True)
-                    time.sleep(2)
-                    print("  restarted the runit hive-sync service.")
-            else:
-                unit_exists, _ = _systemd_hive_sync()
-                if unit_exists:
-                    subprocess.run(["systemctl", "--user", "restart", "hive-sync"], capture_output=True)
-                    time.sleep(2)
-                    print("  restarted the systemd hive-sync unit.")
+            # canonical instance.
+            msg = _restart_managed_daemon()
+            restarted = True
+            if msg:
+                print(f"  {msg}")
             after = next((c for c in _doctor_status() if c["name"] == "sync-daemon"), None)
             print(f"  sync-daemon now: {after['detail'] if after else 'unknown'}")
+
+        # sync-bind (#47): the daemon is serving, but not on the address resolve_bind picks now (it
+        # started before tailscaled, or the tailnet IP changed). A restart rebinds it.
+        sb = next((c for c in checks if c["name"] == "sync-bind"), None)
+        if sb and sb["status"] == "warn" and not restarted:
+            if dry:
+                print("\n  would restart the managed hive-sync service to rebind it (sync-bind)")
+            else:
+                msg = _restart_managed_daemon()
+                print(f"\n--fix: {msg or 'no managed hive-sync service found to restart'} (sync-bind: {sb['detail']})")
 
         # Self-heal the agent integration. The 15-min systemd timer runs `hv doctor --fix`, so THIS
         # is where Claude Code hooks that drifted (or never wired on a pre-nudge install) get

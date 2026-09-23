@@ -11,6 +11,11 @@ so a tag contains everything that version shipped; a later fix that changes no c
 
 ## Unreleased
 
+- **The sync daemon's bind heals itself (`v1.20.1`, #47):** a daemon that starts before `tailscaled`
+  waits up to 30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the
+  tailnet appearing, and on a tailnet IP change within one sync round, by exiting 75 for its service
+  manager to restart it. It never moves toward loopback. A new `sync-bind` doctor check, fixed by
+  `--fix`, catches a daemon still on the wrong address.
 - **Performance fix (`v1.20.1`, #70):** `ed25519.py` is rewritten for speed with an identical accept set
   and byte-identical signatures (roughly 60–180× faster), and each signature is verified once per
   process. On a hive of about 860 entries `hv search` drops from about 15 s to 0.3 s and `hv remember`

@@ -17,7 +17,8 @@ is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mec
    every honest node computes the same governance/confidence projection.
 3. **The network perimeter is Tailscale, and sync READS are authenticated (defense in depth).** The
    sync daemon binds the node's own tailnet IP (not `0.0.0.0`) by default, so it is not exposed on
-   other interfaces. Beyond that, the read surface is gated by an application-layer signed-request
+   other interfaces. Without a tailnet address it binds loopback only, and an automatic bind moves
+   only from loopback to the tailnet, never the other way (`sync-bind` doctor check). Beyond that, the read surface is gated by an application-layer signed-request
    envelope (`Hive-Auth-*`: an Ed25519 device signature over the request, verified against the
    governance admitted-set, with a freshness window + nonce replay guard). A *remote* reader must be
    an admitted device: `/sync/chunk` and `/sync/hello` require a valid signature; `/api/*` (the

@@ -238,6 +238,10 @@ needs attention. It looks at:
 - **agent-hooks** — whether the Claude Code dispatch shim and the `hive-memory` skill are
   wired (skipped silently on a node with no Claude Code)
 - **sync-daemon** — whether the background sync service is running
+- **sync-bind** — whether the running daemon is bound where it should be now: it warns when the
+  daemon sits on `127.0.0.1` while this node has a tailnet address (it started before Tailscale), or
+  on an old tailnet IP; `--fix` restarts it. A `HIVE_BIND` or `.peers.json` bind is left alone, and it
+  never asks the daemon to move to loopback
 - **peers** — whether your peer nodes are reachable and in sync
 
 A few checks appear only when there is something to report: **crypto-modules** (a bundled

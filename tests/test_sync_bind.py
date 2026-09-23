@@ -15,7 +15,7 @@ import pytest
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
-os.environ.setdefault("HIVE_HOME", tempfile.mkdtemp(prefix="hive-bindtest-"))
+os.environ["HIVE_HOME"] = tempfile.mkdtemp(prefix="hive-bindtest-")   # always, even if exported: never the live hive
 
 import sync_common  # noqa: E402
 import hive_sync_daemon as d  # noqa: E402

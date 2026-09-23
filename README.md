@@ -232,8 +232,10 @@ brain (`hv`), one spec, no hand-maintained per-agent adapters.
 - **Claude Code** — a skill (`integrations/claude-code/`) lets Claude Code read and write the
   hive directly.
 - **Hermes** — if [Hermes Agent](https://hermes-agent.nousresearch.com) is installed, the
-  installer wires the memory plugin so every `memory()` call is mirrored to the hive and synced.
-  Manual setup: `hermes config set memory.provider hive-mind`.
+  installer wires the memory plugin. Every `memory()` call is mirrored to the hive in the background
+  (it never blocks a turn), and the agent gets the same tools as the MCP server: `hive_search`,
+  `hive_remember` (outcomes, corrections, support or contradiction), `hive_decide` (with what informed
+  it) and `hive_propose`. Manual setup: `hermes config set memory.provider hive-mind`.
 - **Claude Desktop (MCP)** — a local stdio MCP server (`integrations/mcp/`) exposes the hive to
   Claude Desktop, so it reads and writes your shared memory with no copy-paste.
 - **Any CLI agent** — if it can run a shell command, it can use `hv`.

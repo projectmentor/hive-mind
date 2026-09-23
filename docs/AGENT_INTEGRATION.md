@@ -151,7 +151,12 @@ is real, working code in this repo — **study it, then write the equivalent for
 - **Hermes:** plugin lifecycle (`initialize`, `system_prompt_block`, `prefetch`,
   `on_session_switch`, `shutdown`). No per-turn pre-prompt hook exists → wire the save-nudge into
   `prefetch`, reorient into `system_prompt_block` (it already searches the hive), and the
-  audit-nudge into `on_session_switch`/`shutdown`.
+  audit-nudge into `on_session_switch`/`shutdown`. Tools: `hive_search` (with `kind`), `hive_remember`,
+  `hive_decide`, `hive_propose`, the same names and parameters as the MCP server (a test pins the
+  parity). Every write, the `memory()` mirror and the tools alike, runs on one bounded background
+  writer in order: the mirror returns at once, the tools wait for their result, and `shutdown` drains
+  the queue (at most 5 s) before the session-end nudge and audit. The mirror stamps no channel (so
+  `sense`): at `memory()` time the adapter can't tell an observation from reasoning.
 - **OpenClaw** (no adapter ships; guidance for writing one): plugin SDK hooks —
   `before_prompt_build` (inject digest/nudge via `prependContext`), `gateway_stop` (audit).
   Push-capable; maps cleanly.

@@ -26,6 +26,11 @@ so a tag contains everything that version shipped; a later fix that changes no c
   need. An idea's author can't support their own idea but can contradict it. One relationship per
   write: `--resolves`, `--outcome-of`, `--supports` and `--contradicts` are mutually exclusive, so
   `--resolves` with `--outcome-of`, previously accepted, is refused (#71).
+- **Hermes adapter at parity with MCP (#76):** the Hermes plugin gains `hive_remember` (outcomes,
+  corrections, `supports`/`contradicts`), `hive_decide` (with `informed_by`) and `hive_propose`, and
+  `hive_search` gains `kind`. All writes, including the `memory()` mirror, run on one bounded
+  background writer, so a turn never waits on the hive. The unused root `hermes_integration.py` is
+  removed.
 - **The sync daemon's bind heals itself (`v1.20.1`, #47):** a daemon that starts before `tailscaled`
   waits up to 30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the
   tailnet appearing, and on a tailnet IP change within one sync round, by exiting 75 for its service

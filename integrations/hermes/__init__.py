@@ -5,7 +5,14 @@ model, Salience layers) and docs/design/hivemind_continual_learning_design.md §
 
 Key behaviours
 --------------
-WRITES (on_memory_write)
+WRITES (on_memory_write + the hive_remember / hive_decide / hive_propose tools)
+  - One writer: every `hv` write runs on a single background thread, in order (_HiveWriter). The
+    memory() mirror never blocks a turn; the explicit tools wait for their result. The queue is
+    bounded, and shutdown() drains it (at most 5 s) before the session-end nudge and audit.
+  - The mirror stamps NO channel (so `sense`) whatever the epistemic tag: at memory() time the
+    adapter can't tell an observation from reasoning, and since contract 1.21 an `introspect` fact no
+    longer corroborates, so stamping it would drop most mirrors from confidence. Agents that know
+    they are recording reasoning pass channel="introspect" to hive_remember explicitly.
   - Source identity: hermes/<agent_identity>/<session_id[:8]> — granular enough
     for source-class weighting (primary 1.0 / subagent 0.5 / cron 0.3) and, with the
     entry's `channel` (sense/act/introspect), for telling observation from reasoning.
@@ -27,7 +34,8 @@ READS (prefetch + system_prompt_block + hive_search tool)
     with contested flag — does NOT rank-pick a winner. Tension is information.
   - Anti-self-amplification: facts authored in the current session are flagged
     "self-reported this session, unconfirmed" if surfaced, never injected clean.
-  - hive_search tool: exposes explicit search for deliberate deeper digs.
+  - hive_search tool: explicit search (kind: all|fact|decision|idea) for deliberate deeper digs,
+    including listing open ideas to weigh in on with hive_remember(supports=/contradicts=).
 
 Activate in config.yaml:
     memory:
@@ -38,11 +46,15 @@ No external dependencies — subprocess + stdlib only.
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import os
+import queue
 import re
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -83,9 +95,9 @@ CONTEXT_PRIMARY  = "primary"
 CONTEXT_SUBAGENT = "subagent"
 CONTEXT_CRON     = "cron"
 
-# Epistemic status tags (written as hv tags, NEVER as a self-declared trust score)
-# These feed Phase B2 source-class weighting via the tag field, not the source field.
-# The confidence number stays a pure derived projection — writers cannot set it.
+# Epistemic status tags (written as hv tags, NEVER as a self-declared trust score). They are a
+# READER hint only: the confidence projection (`_identity_weight`) never reads tags; source class and
+# channel are what weigh. The confidence number stays a pure derived projection.
 EPISTEMIC_CONFIRMED    = "confirmed"     # externally verified / human-confirmed
 EPISTEMIC_OBSERVATION  = "observation"   # first-hand tool result / outcome
 EPISTEMIC_SPECULATION  = "speculation"   # model reasoning / restatement / inference
@@ -109,8 +121,12 @@ _KNOWLEDGE_PATTERNS = re.compile(
 )
 
 
-def _hv(*args: str, timeout: int = 10, stdin_text: str = "") -> tuple[bool, str]:
-    """Run the hv CLI. Returns (success, stdout|stderr)."""
+WRITE_TIMEOUT = 20      # an `hv` write takes well under a second since v1.20.1; 20 s is ample headroom
+
+
+def _hv(*args: str, timeout: int = 10, stdin_text: str = "", env: Optional[Dict[str, str]] = None) -> tuple[bool, str]:
+    """Run the hv CLI. Returns (success, stdout|stderr). `env` EXTENDS the environment (HIVE_HOME and
+    PATH must survive); it never replaces it."""
     try:
         result = subprocess.run(
             [str(HV_PATH), *args],
@@ -118,6 +134,7 @@ def _hv(*args: str, timeout: int = 10, stdin_text: str = "") -> tuple[bool, str]
             capture_output=True,
             text=True,
             timeout=timeout,
+            env={**os.environ, **env} if env else None,
         )
         return result.returncode == 0, (result.stdout.strip() if result.returncode == 0 else result.stderr.strip())
     except Exception as e:
@@ -233,9 +250,12 @@ def _cfg_phrases(cfg: dict[str, str]) -> list[str]:
     return [p.strip().lower() for p in str(cfg.get("HIVE_NUDGE_PHRASES", "")).split(",") if p.strip()]
 
 
-def _hv_search_json(query: str) -> list[dict]:
-    """Search hive and return parsed JSON results list."""
-    ok, out = _hv("search", query, "--format", "json")
+def _hv_search_json(query: str, kind: str = "all") -> list[dict]:
+    """Search hive and return parsed JSON results list. `kind`: all | fact | decision | idea."""
+    args = ["search", query, "--format", "json"]
+    if kind and kind != "all":
+        args += ["--kind", kind]
+    ok, out = _hv(*args)
     if not ok or not out:
         return []
     try:
@@ -314,6 +334,63 @@ def _detect_conflicts(facts: list[dict]) -> list[tuple[dict, dict]]:
     return conflicts
 
 
+class _HiveWriter:
+    """The adapter's single writer (#76). Every `hv` write, from the memory() mirror and from the explicit
+    tools alike, runs on one daemon thread in submission order, so the adapter never runs two writes
+    against one store at once, and a mirror followed by a tool write that refers to it keeps its order.
+    The queue is bounded: if `hv` wedges (up to WRITE_TIMEOUT per call), new mirror writes are dropped
+    and logged rather than piling up; an explicit tool write gets an immediate error instead."""
+
+    MAXSIZE = 64
+
+    def __init__(self) -> None:
+        self._q: "queue.Queue" = queue.Queue(maxsize=self.MAXSIZE)
+        threading.Thread(target=self._run, name="hive-mind-writer", daemon=True).start()
+
+    def _run(self) -> None:
+        while True:
+            args, env, fut = self._q.get()
+            try:
+                res = _hv(*args, timeout=WRITE_TIMEOUT, env=env)
+            except Exception as e:           # never let one write kill the writer
+                res = (False, str(e))
+            if fut is not None:
+                fut.set_result(res)
+            elif not res[0]:
+                logger.warning("hive-mind: background write failed: %s", res[1])
+            self._q.task_done()
+
+    def submit(self, args: List[str], env: Optional[Dict[str, str]] = None, wait: bool = False):
+        """Queue one `hv` write. wait=False (the mirror): returns True if queued, False if dropped.
+        wait=True (a tool): blocks for (ok, output)."""
+        fut = concurrent.futures.Future() if wait else None
+        try:
+            self._q.put_nowait((list(args), env, fut))
+        except queue.Full:
+            logger.warning("hive-mind: write queue full (%d); dropped hv %s", self.MAXSIZE, args[0] if args else "")
+            return (False, "the hive-mind writer is busy (queue full); try again shortly") if wait else False
+        if not wait:
+            return True
+        try:
+            return fut.result(timeout=WRITE_TIMEOUT * 3)
+        except concurrent.futures.TimeoutError:
+            return (False, "still queued behind other writes; it will be written, so do not retry")
+
+    def drain(self, timeout: float) -> int:
+        """Wait up to `timeout` s for every queued write to finish. Returns how many were still pending."""
+        deadline = time.monotonic() + timeout
+        with self._q.all_tasks_done:
+            while self._q.unfinished_tasks:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return self._q.unfinished_tasks
+                self._q.all_tasks_done.wait(left)
+        return 0
+
+
+_RELATIONSHIPS = ("outcome_of", "resolves", "supports", "contradicts")
+
+
 class HiveMindMemoryProvider(MemoryProvider):
     """Capture-resistant hive-mind memory provider.
 
@@ -344,8 +421,11 @@ class HiveMindMemoryProvider(MemoryProvider):
         # Track content recalled from hive this session (anti-re-ingest gate; salience L1, agent-side)
         self._recall_set: Set[str] = set()
 
-        # Track content written this session (anti-self-amplification on read side)
+        # Track content written this session (anti-self-amplification on read side). Marked when a write
+        # is QUEUED, not when it lands: with writes off the turn, the next prefetch could otherwise
+        # surface the agent's own fact without the caveat. Over-flagging is harmless (a caveat, not a filter).
         self._written_this_session: Set[str] = set()
+        self._writer = _HiveWriter()
         self._last_audited_session: str = ""
         self._prefetch_turns: int = 0
         self._last_save_turn: int = 0
@@ -529,44 +609,163 @@ class HiveMindMemoryProvider(MemoryProvider):
         return "\n".join(lines).strip()
 
     def get_tool_schemas(self) -> List[Dict[str, Any]]:
-        """Expose hive_search as a first-class tool for deliberate deeper digs."""
+        """The hive tools, at parity with the MCP server (integrations/mcp/hive_mcp.py): the same names,
+        the same parameters and the same rubric, so every adapter teaches agents the same capture loop."""
+        s = {"type": "string"}
         return [
             {
                 "name": "hive_search",
                 "description": (
-                    "Search the shared hive-mind corpus for facts, decisions, and known gotchas "
-                    "across all nodes and agents. Returns facts with confidence scores and provenance. "
-                    "Use for deliberate lookup beyond the automatic prefetch triggers. "
-                    "Results include conflict flags — do not resolve contested facts, hold the tension."
+                    "Search the shared hive-mind corpus for facts, decisions, ideas and known gotchas across all "
+                    "nodes and agents. Returns rows with confidence and provenance; each row's `sid` (h:…) is the "
+                    "stable id to pass to the other tools. Results are signals, not truth: if they conflict, "
+                    "surface both and hold the tension. kind='idea' lists every open hypothesis, which you can "
+                    "weigh in on with hive_remember(supports=/contradicts=)."
                 ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search terms. FTS5 syntax supported (AND is default, OR explicit, \"exact phrase\").",
-                        },
-                        "min_confidence": {
-                            "type": "number",
-                            "description": "Minimum confidence threshold (0.0-1.0). Default 0.0 (return all).",
-                            "default": 0.0,
-                        },
+                        "query": {**s, "description": "Search terms. FTS5 syntax supported (AND is default, OR explicit, \"exact phrase\")."},
+                        "min_confidence": {"type": "number", "default": 0.0,
+                                           "description": "Minimum confidence (0.0-1.0). Default 0.0 (return all)."},
+                        "kind": {**s, "enum": ["all", "fact", "decision", "idea"], "default": "all",
+                                 "description": "all (facts, decisions, and ideas that have earned confidence), or one kind; "
+                                                "'idea' lists every hypothesis, including those still at 0.0."},
                     },
                     "required": ["query"],
                 },
-            }
+            },
+            {
+                "name": "hive_remember",
+                "description": (
+                    "Record a durable, checkable fact: an outcome, correction, constraint or discovery. Search "
+                    "first; never write back something you just read, your chain-of-thought, or a restatement. "
+                    "Confidence is derived from independent corroboration; never state your own. Pass at most ONE "
+                    "of outcome_of, resolves, supports, contradicts: one relationship per write."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {**s, "description": "The fact, in one or two self-contained sentences."},
+                        "tags": {**s, "description": "Comma-separated tags (e.g. the project)."},
+                        "epistemic_status": {**s, "enum": ["observation", "confirmed", "speculation"], "default": "observation",
+                                             "description": "Folded into the tags so readers can weigh the claim."},
+                        "outcome_of": {**s, "description": "The sid of a decision this fact is the OUTCOME of."},
+                        "polarity": {"type": "integer", "enum": [-1, 0, 1], "default": 1,
+                                     "description": "With outcome_of: 1 it worked out, -1 it did not, 0 neutral."},
+                        "channel": {**s, "enum": ["sense", "act", "introspect"],
+                                    "description": "Leave empty for an observation (counted). 'introspect' for your own "
+                                                   "reasoning: recorded, never counted as corroboration or toward an outcome."},
+                        "resolves": {**s, "description": "The sid of a wrong fact this corrects; it is soft-retracted (reversible)."},
+                        "supports": {**s, "description": "The sid of a fact or idea this OBSERVATION supports. Your own support "
+                                                         "of your own idea doesn't count."},
+                        "contradicts": {**s, "description": "The sid of a fact or idea this observation contradicts "
+                                                            "(the author may contradict their own idea to withdraw it)."},
+                    },
+                    "required": ["content"],
+                },
+            },
+            {
+                "name": "hive_decide",
+                "description": (
+                    "Record a DECISION with its rationale, for choices that shape future work. Search first. Name "
+                    "the facts and decisions you retrieved and relied on in informed_by, so the hive learns which "
+                    "knowledge matters once the decision's outcomes are recorded."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {**s, "description": "The decision."},
+                        "rationale": {**s, "description": "Why."},
+                        "tags": {**s, "description": "Comma-separated tags (e.g. the project)."},
+                        "informed_by": {**s, "description": "Comma-separated sids (h:…) of what you relied on. An "
+                                                            "unresolvable reference aborts the whole write."},
+                    },
+                    "required": ["content"],
+                },
+            },
+            {
+                "name": "hive_propose",
+                "description": (
+                    "Record an IDEA: a hypothesis the hive can support or contradict. It starts at 0.0 and earns "
+                    "confidence only from other identities' observations (hive_remember with supports=). Use it "
+                    "for 'perhaps X relates to Y', never for something observed. Search first (kind='idea')."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "content": {**s, "description": "The hypothesis."},
+                        "tags": {**s, "description": "Comma-separated tags."},
+                    },
+                    "required": ["content"],
+                },
+            },
         ]
 
     def handle_tool_call(self, tool_name: str, args: Dict[str, Any], **kwargs) -> str:
-        """Handle hive_search tool calls."""
-        if tool_name != "hive_search":
-            raise NotImplementedError(f"Unknown tool: {tool_name}")
+        """Dispatch the hive tools. hive_search returns {facts, count, conflicts, note}; the write tools return
+        {ok, output}, where output is hv's stdout, or on failure its stderr (which names the bad reference or
+        the refused combination)."""
+        if tool_name == "hive_search":
+            return self._tool_search(args)
+        if tool_name in ("hive_remember", "hive_decide", "hive_propose"):
+            if not str(args.get("content", "")).strip():
+                return json.dumps({"ok": False, "output": "content is required"})
+            argv, env = getattr(self, f"_argv_{tool_name[5:]}")(args)
+            if argv is None:
+                return json.dumps({"ok": False, "output": env})
+            if tool_name != "hive_decide":
+                self._written_this_session.add(str(args["content"]))
+            ok, out = self._writer.submit(argv, env=env, wait=True)
+            return json.dumps({"ok": bool(ok), "output": out})
+        raise NotImplementedError(f"Unknown tool: {tool_name}")
 
+    @staticmethod
+    def _tags(args: Dict[str, Any], extra: str = "") -> List[str]:
+        tags = [t.strip() for t in str(args.get("tags", "") or "").split(",") if t.strip()]
+        if extra and extra not in tags:
+            tags.append(extra)
+        return ["--tags", ",".join(tags)] if tags else []
+
+    def _argv_remember(self, args: Dict[str, Any]):
+        rels = [r for r in _RELATIONSHIPS if str(args.get(r, "") or "").strip()]
+        if len(rels) > 1:
+            return None, f"pass at most one of {', '.join(_RELATIONSHIPS)} (got {', '.join(rels)}): one relationship per write"
+        argv = ["remember", str(args["content"]), "--source", self._source_id]
+        argv += self._tags(args, str(args.get("epistemic_status", "observation") or ""))
+        if rels == ["outcome_of"]:
+            argv += ["--outcome-of", str(args["outcome_of"]).strip(), "--polarity", str(int(args.get("polarity", 1)))]
+        elif rels:
+            argv += [f"--{rels[0]}", str(args[rels[0]]).strip()]
+        if str(args.get("channel", "") or "").strip():
+            argv += ["--channel", str(args["channel"]).strip()]
+        return argv, None
+
+    def _argv_decide(self, args: Dict[str, Any]):
+        argv = ["decide", str(args["content"])]
+        if str(args.get("rationale", "") or "").strip():
+            argv += ["--rationale", str(args["rationale"])]
+        argv += self._tags(args)
+        refs = [r.strip() for r in str(args.get("informed_by", "") or "").split(",") if r.strip()]
+        if refs:
+            argv += ["--informed", *refs]
+        # `hv decide` has no --source; it reads HERMES_AGENT (the env EXTENDS os.environ, see _hv).
+        return argv, {"HERMES_AGENT": self._source_id}
+
+    def _argv_propose(self, args: Dict[str, Any]):
+        return ["propose", str(args["content"]), "--source", self._source_id] + self._tags(args), None
+
+    def _tool_search(self, args: Dict[str, Any]) -> str:
         query = args.get("query", "")
         if not query:
             return json.dumps({"error": "query is required"})
-
-        facts = _hv_search_json(query)
+        facts = _hv_search_json(query, str(args.get("kind", "all") or "all"))
+        try:
+            floor = float(args.get("min_confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            floor = 0.0
+        if floor > 0.0:
+            facts = [f for f in facts if (f.get("confidence") or 0.0) >= floor]
 
         # Track recalled content
         for f in facts:
@@ -649,12 +848,11 @@ class HiveMindMemoryProvider(MemoryProvider):
         # Source identity: granular for Phase B2/B3
         source = self._source_id
 
-        ok, out = _hv("remember", content, "--tags", tags, "--source", source)
-        if ok:
-            self._written_this_session.add(content)
-            logger.debug("hive-mind: mirrored → %s (epistemic=%s source=%s)", out, epistemic, source)
-        else:
-            logger.warning("hive-mind: write failed: %s", out)
+        # Off the turn (#76): queue it on the single writer and return. Marked as this session's own at
+        # enqueue, so a prefetch before the write lands still carries the "self-reported" caveat.
+        self._written_this_session.add(content)
+        if self._writer.submit(["remember", content, "--tags", tags, "--source", source]):
+            logger.debug("hive-mind: mirror queued (epistemic=%s source=%s)", epistemic, source)
 
     def on_session_switch(self, new_session_id: str, *, reset: bool = False, **kwargs) -> None:
         """Reset per-session state on session switch."""
@@ -706,6 +904,12 @@ class HiveMindMemoryProvider(MemoryProvider):
         return True  # MVP: pass everything (explicit memory() calls are already intentional)
 
     def shutdown(self) -> None:
+        # Drain queued writes FIRST (at most 5 s), so the session-end nudge and audit below see them.
+        writer = getattr(self, "_writer", None)
+        if writer is not None:
+            pending = writer.drain(5.0)
+            if pending:
+                logger.warning("hive-mind: shutdown with %d write(s) still pending after 5 s", pending)
         session_id = getattr(self, "_session_id", "")
         if session_id and session_id != getattr(self, "_last_audited_session", ""):
             cwd = str(Path.cwd())

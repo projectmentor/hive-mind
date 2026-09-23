@@ -21,6 +21,11 @@ so a tag contains everything that version shipped; a later fix that changes no c
 - **MCP:** `hive_remember` gains `resolves`, for parity with `hv remember --resolves` (#75).
 - **Search JSON:** rows gain `tag_list` (the tags as a list); `tags` stays a JSON-encoded string
   until 2.0, when it becomes the list (#77).
+- **Ideas can earn confidence:** `hv remember "<observation>" --supports <sid>` / `--contradicts <sid>`
+  (and MCP `hive_remember(supports=…, contradicts=…)`) write the evidence links ideas and facts
+  need. An idea's author can't support their own idea but can contradict it. One relationship per
+  write: `--resolves`, `--outcome-of`, `--supports` and `--contradicts` are mutually exclusive, so
+  `--resolves` with `--outcome-of`, previously accepted, is refused (#71).
 - **The sync daemon's bind heals itself (`v1.20.1`, #47):** a daemon that starts before `tailscaled`
   waits up to 30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the
   tailnet appearing, and on a tailnet IP change within one sync round, by exiting 75 for its service
@@ -46,8 +51,8 @@ The second half of the continual-learning work.
 
 - **Ideas:** a new `idea` entry type for hypotheses, whose confidence is earned from others' evidence
   and never asserted; `hv propose` and MCP `hive_propose`; `hv search --kind all|fact|decision|idea`;
-  open ideas in the session-start digest (#62). *Ideas cannot earn confidence yet: nothing writes the
-  links they need (#71).*
+  open ideas in the session-start digest (#62). *Ideas could not earn confidence in 1.20: nothing
+  wrote the links they need (fixed in 1.21, #71).*
 - **Trust velocity:** per-device reliability drift, the `trust-drift` doctor advisory and a `DRIFT`
   column in `hv peers`; advisory only (#63).
 - **Stable short ids:** every fact, decision and idea has an `h:…` id that is the same on every node,

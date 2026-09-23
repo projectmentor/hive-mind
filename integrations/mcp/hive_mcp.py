@@ -55,6 +55,8 @@ WRITE ONLY durable, checkable, reusable knowledge, and route it by what it is:
   sid>", polarity=1|0|-1). Only observed results count; for your own assessment rather than
   an observation, pass channel="introspect" (recorded, never counted);
 - a HYPOTHESIS worth testing -> hive_propose(content): an idea, never a fact;
+- an OBSERVATION that bears on an idea or a fact -> hive_remember(content, supports="<sid>") or
+  contradicts="<sid>" (your own support of your own idea doesn't count);
 - a CORRECTION of a fact that is wrong -> hive_remember(content, resolves="<wrong fact's sid>"):
   writes the correction and soft-retracts the old fact in one step (reversible);
 - constraints/commitments, observations, new entities -> hive_remember.
@@ -137,7 +139,8 @@ def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> l
 
 @mcp.tool()
 def hive_remember(content: str, tags: str = "", epistemic_status: str = "observation",
-                  outcome_of: str = "", polarity: int = 1, channel: str = "", resolves: str = "") -> str:
+                  outcome_of: str = "", polarity: int = 1, channel: str = "", resolves: str = "",
+                  supports: str = "", contradicts: str = "") -> str:
     """Record a durable, checkable fact to the shared corpus (source=claude-ai).
 
     SEARCH FIRST (hive_search) — only write if it's genuinely new. Write outcomes,
@@ -159,6 +162,13 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     (from hive_search, `h:…`; its `ref` also works). The correction is written with one `resolves`
     link and the old fact is soft-retracted: reversible negative evidence, never a deletion. The
     target is kind-checked; a bad reference aborts before anything is written.
+
+    supports / contradicts: when this OBSERVATION is evidence for or against a fact or an idea (for
+    example an open idea from the session-start digest), pass its `sid`. Writes the fact plus one
+    `supports` or `contradicts` link; the target is re-scored immediately. Your own support of your own
+    idea doesn't count; contradicting it does (that is how to withdraw it).
+
+    Pass at most ONE of outcome_of, resolves, supports, contradicts: one relationship per write.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if epistemic_status and epistemic_status not in tag_list:
@@ -172,6 +182,10 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
         args += ["--channel", channel]
     if resolves:
         args += ["--resolves", resolves.strip()]
+    if supports:
+        args += ["--supports", supports.strip()]
+    if contradicts:
+        args += ["--contradicts", contradicts.strip()]
     return _run_hv(args)
 
 
@@ -210,8 +224,8 @@ def hive_propose(content: str, tags: str = "") -> str:
 
     An idea is not a fact: it starts at confidence 0.0 and can EARN confidence only from
     sense-channel `supports`/`contradicts` links written by other identities against
-    observations. No tool writes those links yet (hive-mind #71), so for now an idea records
-    the hypothesis and surfaces it for attention but stays at 0.0. Restating it, or another agent proposing the same text, is a second
+    observations: hive_remember(observation, supports="<idea sid>"). Your own support of your own
+    idea doesn't count. Restating it, or another agent proposing the same text, is a second
     hypothesis, never corroboration. Use it for "perhaps X relates to Y" — things you want the
     hive to test over time, not things you observed. Search first (hive_search kind="idea").
     """

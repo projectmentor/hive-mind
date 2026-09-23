@@ -1,6 +1,6 @@
 # `hv` architecture — why one big file, and how we'd split it
 
-`hv` is a single ~5,400-line executable Python script with ~25 subcommands. New contributors
+`hv` is a single ~8,000-line executable Python script with 26 subcommands. New contributors
 reasonably ask: shouldn't this be a package? This note records the deliberate decision to **keep it
 monolithic for now**, the trade-offs, and the path we'd take if/when we split it.
 
@@ -44,7 +44,12 @@ keep every extracted module inside the signed manifest. Rough order of safety:
 `_governance_state()` projection are implicit dependencies of most commands. Before any large split,
 thread the DB connection explicitly (or wrap it in a small context object) and make the governance
 projection an explicit input rather than a recomputed global. Until that refactor is done, splitting
-mostly moves the coupling around rather than removing it.
+mostly moves the coupling around rather than removing it. The same recomputation is now the main
+performance cost: every projection rescans the journal, and the evidence projections re-verify every
+signature on each call ([#70](https://github.com/projectmentor/hive-mind/issues/70)).
+
+This note is about the internal layout of the core only. It is not a plugin or extension design:
+anything that extends HiveMind talks to the core from outside, never by importing its internals.
 
 **Bottom line:** the monolith is a conscious trade-off favoring a simple, signed, dependency-free
 distribution. Revisit when the navigation/testing cost clearly outweighs that simplicity — and when

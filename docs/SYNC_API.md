@@ -32,6 +32,15 @@ The daemon never listens on all interfaces by default. It binds, in order of pri
 When it binds a specific non-loopback address (the usual case: the tailnet IP), it **also** listens on
 `127.0.0.1`, so the local dashboard and `hv` keep working.
 
+**An automatic bind heals itself** (cases 3–4). At start the daemon waits up to 30 s for a tailnet
+address when a `tailscale` CLI is present, so it doesn't lose the race with `tailscaled` at boot. If
+it still starts on loopback, it checks for the tailnet every 15 s. Once bound, it re-checks every
+sync round. When a better address appears, it restarts itself (exit 75) and the service manager
+brings it back on the new address: loopback to the tailnet IP, or an old tailnet IP to a new one. It
+never moves toward loopback, so a Tailscale outage doesn't knock it off the tailnet. A `HIVE_BIND` or
+a specific `.peers.json` bind never moves. `hv doctor` reports a daemon stuck on the wrong address as
+`sync-bind`, and `hv doctor --fix` restarts it.
+
 ---
 
 ## Access control

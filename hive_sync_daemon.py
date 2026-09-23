@@ -17,6 +17,7 @@ import collections
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -545,7 +546,7 @@ def _advertised_addr(bind, port):
     """The host:port to advertise to peers (a reachable endpoint), or None when the bind isn't
     peer-reachable. Loopback → None (single-node/local only). All-interfaces → the tailnet IP if
     discoverable. A specific bind (tailnet IP) → itself."""
-    if bind in ("127.0.0.1", "::1", "localhost") or str(bind).startswith("127."):
+    if sync_common.is_loopback(bind):
         return None
     host = bind
     if bind in ("0.0.0.0", "::", ""):
@@ -629,34 +630,95 @@ def serve_forever(bind=None, port=None):
             s.shutdown()
 
 
+_REBIND_EXIT = 75        # EX_TEMPFAIL: every supervisor (systemd, launchd, runit) restarts the daemon, which binds afresh
+_DEGRADED_TICK = 15      # seconds between tailnet checks while an automatic bind sits on loopback (#47)
+
+
+def _wait_for_tailnet(max_s=30, step=2):
+    """#47: at start, on an automatic bind with a tailscale CLI present, wait up to `max_s` for this node's
+    (locally bindable) tailnet IP, so a daemon started just before tailscaled binds the right address
+    first time. Never waits on a node with an explicit bind or without tailscale."""
+    if not sync_common.bind_is_auto(sync_common.load_peers()) or not shutil.which("tailscale"):
+        return None
+    deadline = time.monotonic() + max_s
+    while True:
+        ip = sync_common.tailscale_ip()
+        if ip:
+            return ip
+        if time.monotonic() >= deadline:
+            print(f"sync daemon: no tailnet after {max_s} s; binding 127.0.0.1, will rebind when one appears")
+            return None
+        time.sleep(step)
+
+
+def _rebind_target(bound, auto):
+    """The address this daemon should restart onto now, or None (see sync_common.should_rebind)."""
+    if not auto:
+        return None
+    resolved = sync_common.resolve_bind(sync_common.load_peers())
+    return resolved if sync_common.should_rebind(bound, resolved, auto) else None
+
+
+def _exit_to_rebind(server, extra, bound, target, why):
+    """Stop serving cleanly and exit 75, so the supervisor restarts the daemon onto `target`."""
+    print(f"sync daemon: {why}: {bound} -> {target}; restarting to rebind")
+    server.shutdown()
+    for s in extra:
+        s.shutdown()
+    sys.exit(_REBIND_EXIT)
+
+
+def _run_round(server, extra, bound, auto, interval, sync_fn):
+    """One daemon cycle: an outbound sync round and the store catch-up, a bind check, then the wait until
+    the next round. While an automatic bind sits on loopback (tailscaled wasn't up at start) the wait
+    wakes every _DEGRADED_TICK s to check for the tailnet, so the node becomes reachable within seconds
+    of it appearing rather than at the next round. Raises SystemExit(75) to rebind."""
+    try:
+        sync_fn()
+    except Exception as e:
+        print(f"sync round error: {e}")
+    try:
+        hv._ensure_store_current()      # #70: catch up after a CLI write deferred by a busy store
+    except Exception as e:
+        print(f"store catch-up error: {e}")
+    target = _rebind_target(bound, auto)
+    if target:
+        _exit_to_rebind(server, extra, bound, target, "bind changed")
+    deadline = time.monotonic() + interval
+    while (left := deadline - time.monotonic()) > 0:
+        if auto and sync_common.is_loopback(bound):
+            time.sleep(min(_DEGRADED_TICK, left))
+            target = _rebind_target(bound, auto)
+            if target:
+                _exit_to_rebind(server, extra, bound, target, "tailnet appeared")
+        else:
+            time.sleep(left)
+
+
 def run_daemon(interval=300):
     """M5: serve inbound endpoints AND run an outbound sync round every
     `interval` seconds. One process; graceful when peers are offline."""
     import sync_client
 
     hv.init_db()
+    _wait_for_tailnet()
     try:
         server, bind, port = make_server()
     except AlreadyRunning as e:
         print(f"sync daemon: {e}; nothing to do")
         return
+    auto = sync_common.bind_is_auto(sync_common.load_peers())
     extra = _extra_servers(bind, port)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     for s in extra:
         threading.Thread(target=s.serve_forever, daemon=True).start()
     also = " (+127.0.0.1)" if extra else ""
-    print(f"sync daemon: serving on {bind}:{port}{also} as {hv.NODE_ID}; outbound every {interval}s")
+    how = "automatic, rebinds to the tailnet when it appears" if auto and sync_common.is_loopback(bind) \
+        else ("automatic" if auto else "fixed by HIVE_BIND or .peers.json")
+    print(f"sync daemon: serving on {bind}:{port}{also} as {hv.NODE_ID} (bind {how}); outbound every {interval}s")
     try:
         while True:
-            try:
-                sync_client.sync_now()
-            except Exception as e:
-                print(f"sync round error: {e}")
-            try:
-                hv._ensure_store_current()      # #70: catch up after a CLI write deferred by a busy store
-            except Exception as e:
-                print(f"store catch-up error: {e}")
-            time.sleep(interval)
+            _run_round(server, extra, bind, auto, interval, sync_client.sync_now)
     except KeyboardInterrupt:
         print("\nsync daemon: shutting down")
         server.shutdown()

@@ -200,6 +200,31 @@ def tailscale_ip():
     return None
 
 
+def bind_is_auto(cfg):
+    """True when the daemon's bind is chosen automatically: no HIVE_BIND override and no specific
+    `.peers.json` bind. A legacy '0.0.0.0'/'::'/'' counts as automatic, exactly as resolve_bind treats
+    it. Only an automatic bind is ever re-evaluated while the daemon runs (#47)."""
+    if os.environ.get("HIVE_BIND"):
+        return False
+    explicit = cfg.get("bind")
+    return not (explicit and explicit not in ("0.0.0.0", "::", ""))
+
+
+def is_loopback(addr):
+    return addr in ("127.0.0.1", "::1", "localhost") or str(addr).startswith("127.")
+
+
+def should_rebind(bound, resolved, auto):
+    """#47: whether a running daemon bound to `bound` should restart to bind `resolved` (what
+    resolve_bind answers now). Only an automatic bind moves, and only TOWARD a real address: loopback
+    to the tailnet IP (it started before tailscaled), or tailnet A to tailnet B (the IP changed). Never
+    toward loopback: if tailscale drops, the daemon keeps its tailnet bind rather than flapping, which
+    would recreate the bug in reverse."""
+    if not auto or not resolved or is_loopback(resolved):
+        return False
+    return resolved != bound
+
+
 def resolve_bind(cfg):
     """The address the daemon should bind, in priority order:
        1. HIVE_BIND env override (any value, incl. '0.0.0.0' for operators who really want it — the
@@ -212,9 +237,8 @@ def resolve_bind(cfg):
     env = os.environ.get("HIVE_BIND")
     if env:
         return env
-    explicit = cfg.get("bind")
-    if explicit and explicit not in ("0.0.0.0", "::", ""):
-        return explicit
+    if not bind_is_auto(cfg):
+        return cfg["bind"]
     ip = tailscale_ip()
     if ip:
         return ip

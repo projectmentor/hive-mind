@@ -48,9 +48,15 @@ matter. Never assert your own confidence/trust number.
 SEARCH BEFORE YOU WRITE (hive_search). If a fact is already there, do not rewrite it —
 and never write back something you just read this session (that's an echo, not evidence).
 
-WRITE ONLY durable, checkable, reusable knowledge: decisions (with rationale), outcomes
-("did X -> got Y"), corrections, constraints/commitments, new entities. Do NOT write your
-chain-of-thought, restatements, or speculation. Mark epistemic status via tags.
+WRITE ONLY durable, checkable, reusable knowledge, and route it by what it is:
+- a DECISION -> hive_decide(content, rationale, informed_by="<sid>,<sid>") naming the facts
+  you searched and relied on (their `sid`, `h:…`, from hive_search);
+- the RESULT of acting on a recorded decision -> hive_remember(content, outcome_of="<decision
+  sid>", polarity=1|0|-1). Only observed results count; for your own assessment rather than
+  an observation, pass channel="introspect" (recorded, never counted);
+- a HYPOTHESIS worth testing -> hive_propose(content): an idea, never a fact;
+- corrections, constraints/commitments, observations, new entities -> hive_remember.
+Do NOT write your chain-of-thought or restatements. Mark epistemic status via tags.
 
 WHEN YOU READ, treat results as signals with provenance, not truth — weigh the confidence,
 the number of sources, and which agent/node said it. If the corpus holds CONFLICTING facts,
@@ -173,7 +179,7 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     for this decision — pass the `sid` values from hive_search results (`h:…`; `ref` `node_id:seq`
     also works — both stable
     across nodes and rebuilds). Bare local ids (`118`, `d17`) are accepted but drift; prefer
-    `ref`. An unresolvable reference aborts the whole write. This is what lets the hive learn
+    the `sid`. An unresolvable reference aborts the whole write. This is what lets the hive learn
     which knowledge turns out to matter once the decision's outcomes are recorded.
     """
     args = ["decide", content]
@@ -192,9 +198,10 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
 def hive_propose(content: str, tags: str = "") -> str:
     """Record an IDEA — a hypothesis the hive can support or contradict (contract 1.20).
 
-    An idea is not a fact: it starts at confidence 0.0 and EARNS confidence only from
+    An idea is not a fact: it starts at confidence 0.0 and can EARN confidence only from
     sense-channel `supports`/`contradicts` links written by other identities against
-    observations. Restating it, or another agent proposing the same text, is a second
+    observations. No tool writes those links yet (hive-mind #71), so for now an idea records
+    the hypothesis and surfaces it for attention but stays at 0.0. Restating it, or another agent proposing the same text, is a second
     hypothesis, never corroboration. Use it for "perhaps X relates to Y" — things you want the
     hive to test over time, not things you observed. Search first (hive_search kind="idea").
     """
@@ -224,8 +231,10 @@ def hive_retract(fact_id: str, reason: str = "") -> str:
     This is deliberate, reversible negative evidence — NOT a deletion. The decisive owner-forget
     (`hv retract --owner`) is intentionally NOT exposed here; it stays a CLI/owner action.
 
-    Prefer `hive_remember(...)` with a prose `resolves <sid>` when you are replacing the fact with
-    a correction; use this when you just want to retract.
+    To replace a fact with a correction, the clean path is the CLI's `hv remember "<correction>"
+    --resolves <sid>`, which this server does not expose yet (hive-mind #75). Over MCP, retract the
+    wrong fact here and write the correction with hive_remember. A prose "resolves <sid>" in the
+    correction only gets flagged later by the audit; it does not retract anything.
     """
     args = ["retract", str(fact_id).strip(), "--source", "claude-ai"]
     if reason:

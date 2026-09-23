@@ -2413,9 +2413,10 @@ def _ref_str(ref):
 
 def _parse_ref_arg(conn, token, default_kind="fact"):
     """Resolve one CLI/MCP identity token to (kind, [node_id, seq]) or raise ValueError.
-    Accepts `node_id:seq` (stable; must exist in journal_index), or a bare local id with an optional
-    kind prefix: `118` (fact), `d17` (decision), `i5` (idea). A bare id must resolve to a row of the
-    prefixed kind — a mismatch is an error, not a silent re-target."""
+    Accepts the short id `h:` + 10 hex (1.19 PR3b; exact lookup on journal_index.sid — the preferred
+    form), `node_id:seq` (stable; must exist in journal_index), or a deprecated bare local id with an
+    optional kind prefix: `118` (fact), `d17` (decision), `i5` (idea). A bare id must resolve to a row
+    of the prefixed kind — a mismatch is an error, not a silent re-target."""
     t = str(token).strip()
     if not t:
         raise ValueError("empty reference")
@@ -3665,13 +3666,12 @@ def api_peers(probe=True):
 
 
 def dash(args):
-    """Print the read-only web dashboard URL(s) the sync daemon serves, and (unless --print) try to
-    open a browser. The daemon serves the SPA + /api/* on its sync port, so the dashboard is reachable
-    wherever sync is — localhost always, plus the tailnet IP for viewing from another device."""
+    """Print the read-only web dashboard URL the sync daemon serves, and (unless --print) try to open a
+    browser. The dashboard and /api/* answer loopback callers only (a remote browser gets 403 since
+    the GHSA-242f read-auth fix), so the URL is this device's own; another device's data is shown
+    through the dashboard's signed per-node view."""
     port = _self_sync_port()
     local = f"http://127.0.0.1:{port}/"
-    ip = _self_tailnet_ip()
-    tnet = f"http://{ip}:{port}/" if ip else ""
     up = False
     try:
         import urllib.request
@@ -3681,8 +3681,6 @@ def dash(args):
         up = False
     print("HiveMind dashboard")
     print(f"  Local:    {local}")
-    if tnet:
-        print(f"  Tailnet:  {tnet}  (open on any device on your tailnet)")
     if not up:
         print("\n  ⚠ The sync daemon isn't answering on this port — the dashboard won't load yet.")
         print("    Check it with `hive-mind status`, then retry `hv dash`.")
@@ -5455,7 +5453,7 @@ def wire_cmd(args):
             if writers == "owner" and _owner_seed() is None:
                 print("Publishing cells/combs is owner-only here (config cell_writers=owner) — the "
                       "projection would decline a non-owner definition. Run on the owner device, or "
-                      "`hv config governance set cell_writers fertile`."); return
+                      "`hv config set cell_writers fertile`."); return
             if writers == "fertile" and NODE_ID not in gov.get("admitted", set()):
                 print("Only admitted devices may publish cells/combs on this hive."); return
         payload.setdefault("version", 1)
@@ -5707,7 +5705,7 @@ def capsule_cmd(args):
         if gov.get("owner_id"):
             if putters == "owner" and _owner_seed() is None:
                 print("Storing capsules is owner-only here (config capsule_putters=owner). Run on the "
-                      "owner device, or `hv config governance set capsule_putters fertile`."); return 1
+                      "owner device, or `hv config set capsule_putters fertile`."); return 1
             if putters == "fertile" and NODE_ID not in gov.get("admitted", set()):
                 print("Only admitted devices may store capsules on this hive."); return 1
         recips, missing, suspect = _recipient_pubkeys(entries, gov)
@@ -7003,9 +7001,12 @@ def group_cmd(args):
 
 
 def _config_set(key, value):
-    """Set a journaled, owner-signed tunable parameter (same on every node). Owner-only. Covers the
-    confidence knobs (same_device_lambda, cap_self) and the quorum-election knobs (quorum_m,
-    quorum_by, dead_man_days)."""
+    """Set a journaled, owner-signed tunable parameter (same on every node). Owner-only. Covers every
+    governed key, whichever `hv config` sub-namespace it is set from: the confidence knobs
+    (same_device_lambda, cap_self, introspect_support_weight), the salience/decay knobs
+    (importance_self_cap, w_links, w_volatile, halflife_fact/idea/volatile), the trust-velocity knobs
+    (trust_long_days, trust_short_days, trust_drift_threshold), the quorum-election knobs (quorum_m,
+    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers)."""
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
                 "capsule_putters": str, "cell_writers": str,
@@ -7651,10 +7652,11 @@ def build_parser():
     remember_parser.add_argument("--no-volatile", action="store_true",
                                  help="Do not auto-tag transient operational-status claims as volatile")
     remember_parser.add_argument("--resolves", metavar="FACT",
-                                 help="ID of a prior fact this write resolves/closes (soft-retracts it)")
+                                 help="A prior fact this write resolves/closes (soft-retracts it): its short id "
+                                      "`h:…` (preferred), `node_id:seq`, or a deprecated local id")
     remember_parser.add_argument("--outcome-of", metavar="DECISION",
-                                 help="This fact is an OUTCOME of a decision: its stable ref `node_id:seq` (the `ref` "
-                                      "from `hv search --format json`, preferred) or a local decision id (`17` / `d17`); "
+                                 help="This fact is an OUTCOME of a decision: its short id `h:…` (preferred) or stable "
+                                      "ref `node_id:seq`, both shown by `hv search`, or a deprecated local id (`17` / `d17`); "
                                       "resolved and kind-checked before anything is written. Emits an `outcome-of` link "
                                       "that feeds the decision's outcome_score (vindication, not confidence)")
     remember_parser.add_argument("--polarity", type=int, choices=[-1, 0, 1], default=1,
@@ -7693,9 +7695,10 @@ def build_parser():
     decide_parser.add_argument("--supersedes", metavar="DECISION",
                                help="The decision this replaces: its `h:` short id or `ref` (preferred) or a local id")
     decide_parser.add_argument("--informed", nargs="+", metavar="REF",
-                               help="What this decision relied on: stable refs `node_id:seq` (the `ref` from "
-                                    "`hv search --format json`, preferred) or local ids — bare N (fact), dN "
-                                    "(decision), iN (idea) — resolved and kind-checked before anything is written")
+                               help="What this decision relied on: short ids `h:…` (preferred) or stable refs "
+                                    "`node_id:seq`, both shown by `hv search`, or deprecated local ids — bare N "
+                                    "(fact), dN (decision), iN (idea) — resolved and kind-checked before anything "
+                                    "is written")
 
     retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")
     retract_parser.add_argument("fact_id", metavar="FACT",
@@ -7721,7 +7724,7 @@ def build_parser():
 
     dash_parser = subparsers.add_parser("dash", help="Open the read-only web dashboard (served by the sync daemon)")
     dash_parser.add_argument("--print", dest="print_only", action="store_true",
-                             help="Print the dashboard URL(s) only; do not open a browser")
+                             help="Print the dashboard URL only; do not open a browser")
 
     doctor_parser = subparsers.add_parser("doctor", help="Health checks + device maintenance (rebuild, merkle, migrate-identity)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
@@ -7837,8 +7840,9 @@ def build_parser():
     config_parser = subparsers.add_parser("config", help="Settings: device identity + owner-signed confidence/quorum params")
     config_sub = config_parser.add_subparsers(dest="config_action")
     # back-compat alias: `hv config set <key> <value>` == `hv config confidence set …`
-    config_set = config_sub.add_parser("set", help="[alias] Set same_device_lambda or cap_self")
-    config_set.add_argument("key", help="same_device_lambda | cap_self")
+    config_set = config_sub.add_parser("set", help="[alias] Set an owner-signed governed parameter")
+    config_set.add_argument("key", help="a governed key, e.g. cap_self, importance_self_cap, capsule_putters "
+                                        "(an unknown key lists them all)")
     config_set.add_argument("value", help="numeric value")
     # canonical: identity (this device's key) + confidence (owner-signed hive params)
     config_id = config_sub.add_parser("identity", help="Show or mint this device's identity key")
@@ -7849,8 +7853,9 @@ def build_parser():
     config_id_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
     config_conf = config_sub.add_parser("confidence", help="Set an owner-signed confidence parameter")
     config_conf_sub = config_conf.add_subparsers(dest="config_confidence_action")
-    config_conf_set = config_conf_sub.add_parser("set", help="Set same_device_lambda or cap_self")
-    config_conf_set.add_argument("key", help="same_device_lambda | cap_self")
+    config_conf_set = config_conf_sub.add_parser("set", help="Set an owner-signed confidence, salience or trust parameter")
+    config_conf_set.add_argument("key", help="e.g. same_device_lambda, cap_self, introspect_support_weight, "
+                                             "importance_self_cap, halflife_fact (an unknown key lists them all)")
     config_conf_set.add_argument("value", help="numeric value")
     config_quorum = config_sub.add_parser("quorum", help="Set an owner-signed quorum-election parameter")
     config_quorum_sub = config_quorum.add_subparsers(dest="config_quorum_action")

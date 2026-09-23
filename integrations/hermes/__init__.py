@@ -1,13 +1,14 @@
 """Hive-mind memory provider plugin for Hermes.
 
-Implements the capture-resistant confidence model described in
-~/.claude/plans/async-inventing-shore.md (CC's design doc).
+Implements the capture-resistant confidence model described in docs/INTERNALS.md (Confidence
+model, Salience layers) and docs/design/hivemind_continual_learning_design.md §7.1.
 
 Key behaviours
 --------------
 WRITES (on_memory_write)
   - Source identity: hermes/<agent_identity>/<session_id[:8]> — granular enough
-    for Phase B2/B3 source-class weighting (assertion vs observation).
+    for source-class weighting (primary 1.0 / subagent 0.5 / cron 0.3) and, with the
+    entry's `channel` (sense/act/introspect), for telling observation from reasoning.
   - Epistemic status tag: writer records speculation|observation|confirmed,
     NOT a self-declared trust number (confidence stays a derived projection).
   - Novelty gate: suppress re-ingestion of content recalled from hive this
@@ -612,7 +613,7 @@ class HiveMindMemoryProvider(MemoryProvider):
         - L1  agent rubric — THIS adapter's job: `_salience_gate()` below (stub, passes all) +
               the novelty gate. Judges the structure of the SITUATION, never topic.
         - L2  `hv remember --gate` — the hive's content-neutral structural gate on the TEXT.
-        - L3  importance — a learned projection over the journal (planned; earned from links by
+        - L3  importance — a learned projection over the journal (since 1.19 PR6; earned from links by
               other identities, never self-asserted). Surprise/consequence weighting and
               earn-your-keep promotion live HERE, not in the adapter.
         MVP stays: mirror every explicit memory() call + novelty gate.

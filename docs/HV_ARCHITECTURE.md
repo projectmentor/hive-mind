@@ -44,9 +44,9 @@ keep every extracted module inside the signed manifest. Rough order of safety:
 `_governance_state()` projection are implicit dependencies of most commands. Before any large split,
 thread the DB connection explicitly (or wrap it in a small context object) and make the governance
 projection an explicit input rather than a recomputed global. Until that refactor is done, splitting
-mostly moves the coupling around rather than removing it. The same recomputation is now the main
-performance cost: every projection rescans the journal, and the evidence projections re-verify every
-signature on each call ([#70](https://github.com/projectmentor/hive-mind/issues/70)).
+mostly moves the coupling around rather than removing it. The same recomputation was also the main
+performance cost until v1.20.1 ([#70](https://github.com/projectmentor/hive-mind/issues/70)) made signature checks fast and once per process; every
+projection still rescans the journal.
 
 This note is about the internal layout of the core only. It is not a plugin or extension design:
 anything that extends HiveMind talks to the core from outside, never by importing its internals.

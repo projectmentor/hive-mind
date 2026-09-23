@@ -32,6 +32,7 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -297,10 +298,15 @@ CONTRACT_VERSION = "1.20"   # 1.20: `idea` journal type — a hypothesis whose c
 # Database
 # --------------------------------------------------------------------------
 
+# How long a connection waits for another writer's lock before `database is locked` (#70). Python's default
+# is 5 s; writes take well under a second, so 10 s rides out any normal overlap. Env override for tests.
+_BUSY_TIMEOUT_S = float(os.environ.get("HIVE_BUSY_TIMEOUT_MS", "10000")) / 1000.0
+
+
 def get_conn():
     """Open a tuned SQLite connection. WAL persists on the file; the rest are
     per-connection, so we apply them on every open."""
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=_BUSY_TIMEOUT_S)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
@@ -317,6 +323,11 @@ def init_db():
 
     conn = get_conn()
     conn.executescript("""
+    CREATE TABLE IF NOT EXISTS meta (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS facts (
         id INTEGER PRIMARY KEY,
         content TEXT NOT NULL,
@@ -537,6 +548,39 @@ def _sign_entry(entry, seed, pub):
     return entry
 
 
+# Signature-verification memo (#70). It caches ONLY the pure cryptographic check, and only POSITIVE results,
+# keyed on (sha512(message), sig, pub). Ed25519 already hashes the message with SHA-512, so the digest key adds
+# no assumption. AUTHORIZATION IS NEVER CACHED: admission, revocation, owner-as-of, the writer policies, link
+# authority and the node_id <-> pub binding in _verify_entry are recomputed from current governance every
+# time. Rejections are not cached, so a peer streaming bad signatures can't evict good ones. A bounded LRU,
+# in memory only: a persisted table would make store.db part of the trust base. Worst case at the cap is
+# about 7 MB (16,384 entries, measured with tracemalloc on CPython 3.12). Sync-request and release-manifest
+# signatures don't use it (fresh nonces every time); they call _ed25519.verify directly.
+_VERIFY_MEMO_MAX = 16384
+_VERIFY_MEMO = collections.OrderedDict()
+_VERIFY_MEMO_LOCK = threading.Lock()
+_VERIFY_STATS = {"hits": 0, "misses": 0}          # read by tests/test_perf.py
+
+
+def _verify_sig(message, sig, pub):
+    """`_ed25519.verify(message, sig, pub)` through the memo. The verifier of `_verify_entry` and
+    `_verify_governance`, and nothing else."""
+    key = (hashlib.sha512(message).digest(), bytes(sig), bytes(pub))
+    with _VERIFY_MEMO_LOCK:
+        if key in _VERIFY_MEMO:
+            _VERIFY_MEMO.move_to_end(key)
+            _VERIFY_STATS["hits"] += 1
+            return True
+        _VERIFY_STATS["misses"] += 1
+    ok = _ed25519.verify(message, sig, pub)
+    if ok:
+        with _VERIFY_MEMO_LOCK:
+            _VERIFY_MEMO[key] = True
+            while len(_VERIFY_MEMO) > _VERIFY_MEMO_MAX:
+                _VERIFY_MEMO.popitem(last=False)
+    return ok
+
+
 def _verify_entry(entry):
     """A SIGNED entry is valid iff its node_id is the fingerprint of its embedded pub and the
     signature checks out — so no one can attribute an entry to a device_id they don't hold the
@@ -550,7 +594,7 @@ def _verify_entry(entry):
         sig = base64.b64decode(entry["sig"])
         if len(pub) != 32 or entry.get("node_id") != _device_id_for_pub(pub):
             return False
-        return _ed25519.verify(_entry_signing_bytes(entry), sig, pub)
+        return _verify_sig(_entry_signing_bytes(entry), sig, pub)
     except Exception:
         return False
 
@@ -577,7 +621,7 @@ def _verify_governance(payload):
         if len(owner_pub) != 32:
             return None
         body = _canonical({k: v for k, v in payload.items() if k != "owner_sig"})
-        if not _ed25519.verify(body, owner_sig, owner_pub):
+        if not _verify_sig(body, owner_sig, owner_pub):
             return None
         return _owner_id_for_pub(owner_pub)
     except Exception:
@@ -638,6 +682,69 @@ def append_journal(entry_type, payload, timestamp=None):
         _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
     _append_line(_journal_path_for(timestamp), json.dumps(entry))
     return entry
+
+
+def _entry_keys(entries):
+    """The (node_id, seq) key-set of already-read entries (G-Set membership)."""
+    return {(e["node_id"], e["seq"]) for e in entries
+            if e.get("node_id") is not None and e.get("seq") is not None}
+
+
+def _journal_sig(keys):
+    """Content signature of a journal key-set (the `_GOV_CACHE` idiom): equal iff the sets are equal, so it
+    stays correct across a restore or a repair, where a count could match while the set differs."""
+    h = hashlib.sha256()
+    for k in sorted(f"{n}:{s}" for n, s in keys):
+        h.update(k.encode())
+        h.update(b"\n")
+    return h.hexdigest()
+
+
+def _projected_sig(conn):
+    row = conn.execute("SELECT value FROM meta WHERE key = 'projected_journal_sig'").fetchone()
+    return row[0] if row else None
+
+
+def _mark_projected(conn, entries, appended=()):
+    """Record, inside the caller's transaction, that store.db now holds exactly the journal `entries` (#70).
+    A full rebuild marks unconditionally. An incremental writer passes the entries it just `appended`: the
+    marker advances only if the store was current before this write (the old marker equals the key-set
+    minus this write's own keys). If anything else landed meanwhile, for example another process's write
+    that failed after its journal append, the marker stays stale and the next command catches up."""
+    keys = _entry_keys(entries)
+    mine = {(e["node_id"], e["seq"]) for e in appended if e}
+    if mine and _projected_sig(conn) != _journal_sig(keys - mine):
+        return False
+    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('projected_journal_sig', ?)",
+                 (_journal_sig(keys),))
+    conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('projected_entries', ?)", (str(len(keys)),))
+    return True
+
+
+def _ensure_store_current():
+    """Rebuild store.db if it doesn't hold exactly the journal's key-set (#70): after a write that failed
+    after its journal append, an append by a command that doesn't project incrementally (a capsule, a
+    cell, a retract), an ingest by another process, or a restore. Costs one journal read when current."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    conn = get_conn()
+    try:
+        current = _projected_sig(conn) == _journal_sig(_entry_keys(entries))
+    finally:
+        conn.close()
+    if not current:
+        rebuild_db()
+    return not current
+
+
+def _store_deferred(entry, err, word="Remembered"):
+    """The write is in the journal (the source of truth) but the store write failed after it, typically
+    `database is locked` past the busy timeout. Report success, not failure: a caller that retried would
+    append a permanent duplicate. The stale marker makes the next command catch the store up."""
+    sid = _short_id(entry["node_id"], entry["seq"])
+    print(f"{word} as {sid} (journaled; the local store is busy and will catch up on the next command)")
+    print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
+    print(f"  store write deferred: {err}", file=sys.stderr)
+    sys.exit(0)
 
 
 def journal_keys():
@@ -2682,32 +2789,36 @@ def remember(args):
             lp["channel"] = channel
         outcome_link = append_journal("link", lp)
 
-    conn = get_conn()
-    res = persist_fact(conn, entry)
+    try:
+        conn = get_conn()
+        res = persist_fact(conn, entry)
 
-    # Read the journal ONCE after all appends, then reproject confidence per affected content
-    # (keeps the live path consistent with rebuild without a full rebuild).
-    all_entries = merkle.read_all_entries(JOURNAL_DIR)
-    gov = _governance_state(all_entries)
-    by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
-    if resolves_link is not None:
-        resolve_link(conn, resolves_link, gov, by_ref)
-    if outcome_link is not None:
-        resolve_link(conn, outcome_link, gov, by_ref)
-        _recompute_decision_outcome(conn, all_entries)
-    cev = _content_evidence(all_entries, gov)
-    ev = cev.get(args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
-    n = len(ev["pos"])
-    conf = _content_confidence(ev, gov)
-    _apply_content_confidence(conn, args.content, ev, gov)
-    if resolved_content is not None:
-        ev2 = cev.get(resolved_content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
-        _apply_content_confidence(conn, resolved_content, ev2, gov)
-    _recompute_importance(conn, all_entries)          # 1.19 PR6: the column is learned, never the raw hint
-    if outcome_link is not None:
-        _recompute_utility(conn, all_entries)         # an outcome changes what the informing facts earned
-    conn.commit()
-    conn.close()
+        # Read the journal ONCE after all appends, then reproject confidence per affected content
+        # (keeps the live path consistent with rebuild without a full rebuild).
+        all_entries = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(all_entries)
+        by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
+        if resolves_link is not None:
+            resolve_link(conn, resolves_link, gov, by_ref)
+        if outcome_link is not None:
+            resolve_link(conn, outcome_link, gov, by_ref)
+            _recompute_decision_outcome(conn, all_entries)
+        cev = _content_evidence(all_entries, gov)
+        ev = cev.get(args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+        n = len(ev["pos"])
+        conf = _content_confidence(ev, gov)
+        _apply_content_confidence(conn, args.content, ev, gov)
+        if resolved_content is not None:
+            ev2 = cev.get(resolved_content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+            _apply_content_confidence(conn, resolved_content, ev2, gov)
+        _recompute_importance(conn, all_entries)          # 1.19 PR6: the column is learned, never the raw hint
+        if outcome_link is not None:
+            _recompute_utility(conn, all_entries)         # an outcome changes what the informing facts earned
+        _mark_projected(conn, all_entries, [entry, resolves_link, outcome_link])
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
+        _store_deferred(entry, e)
 
     src_word = "identity" if n == 1 else "identities"
     conn = get_conn()
@@ -2969,10 +3080,14 @@ def propose(args):
     payload = {"content": args.content, "tags": tags, "source": source,
                "channel": getattr(args, "channel", None) or "introspect"}
     entry = append_journal("idea", payload)
-    conn = get_conn()
-    res = persist_idea(conn, entry)
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_conn()
+        res = persist_idea(conn, entry)
+        _mark_projected(conn, merkle.read_all_entries(JOURNAL_DIR), [entry])
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
+        _store_deferred(entry, e, "Proposed idea")
     tagnote = f"  [{', '.join(tags)}]" if tags else ""
     print(f"Proposed idea i{res['id']} {_short_id(entry['node_id'], entry['seq'])}{tagnote}  (confidence 0.00 — "
           f"earned only from sense-channel supports/contradicts links by other identities)")
@@ -3038,18 +3153,22 @@ def decide(args):
                                              "to_ref": ref, "data": {}, "source": source})
                      for ref in informed_refs]
 
-    conn = get_conn()
-    res = persist_decision(conn, entry)
-    if link_entries:
+    try:
+        conn = get_conn()
+        res = persist_decision(conn, entry)
         all_entries = merkle.read_all_entries(JOURNAL_DIR)
-        gov = _governance_state(all_entries)
-        by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
-        for le in link_entries:
-            resolve_link(conn, le, gov, by_ref)
-        _recompute_importance(conn, all_entries)      # 1.19 PR6: `informed` links are attention + utility
-        _recompute_utility(conn, all_entries)
-    conn.commit()
-    conn.close()
+        if link_entries:
+            gov = _governance_state(all_entries)
+            by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
+            for le in link_entries:
+                resolve_link(conn, le, gov, by_ref)
+            _recompute_importance(conn, all_entries)      # 1.19 PR6: `informed` links are attention + utility
+            _recompute_utility(conn, all_entries)
+        _mark_projected(conn, all_entries, [entry] + link_entries)
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
+        _store_deferred(entry, e, "Decided")
 
     tagnote = f"  [{', '.join(tags)}]" if tags else ""
     infnote = f"  informed by {len(informed_refs)} ref(s)" if informed_refs else ""
@@ -3833,6 +3952,7 @@ def rebuild_db():
     conn.commit()
 
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
+    _mark_projected(conn, entries)   # #70: the store now holds exactly this journal
     conn.commit()
 
     counts = {
@@ -7906,6 +8026,10 @@ def build_parser():
     return parser
 
 
+# Commands that read or incrementally write store.db, so they need it current first (#70).
+_STORE_COMMANDS = {"remember", "search", "decide", "propose", "retract", "entity", "stats", "audit", "nudge"}
+
+
 def main():
     parser = build_parser()
     # Back-compat: the old top-level `hv merkle` and `hv migrate-device-identity` now live under
@@ -7922,6 +8046,8 @@ def main():
 
     # Idempotent; also auto-migrates older DBs missing tables/indexes.
     init_db()
+    if args.command in _STORE_COMMANDS:
+        _ensure_store_current()       # #70: catch up after a deferred write or an out-of-band append
 
     if args.command == "remember":
         remember(args)

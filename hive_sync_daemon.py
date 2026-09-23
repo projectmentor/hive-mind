@@ -652,6 +652,10 @@ def run_daemon(interval=300):
                 sync_client.sync_now()
             except Exception as e:
                 print(f"sync round error: {e}")
+            try:
+                hv._ensure_store_current()      # #70: catch up after a CLI write deferred by a busy store
+            except Exception as e:
+                print(f"store catch-up error: {e}")
             time.sleep(interval)
     except KeyboardInterrupt:
         print("\nsync daemon: shutting down")

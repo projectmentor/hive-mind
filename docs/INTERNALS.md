@@ -609,14 +609,31 @@ model HiveMind uses.
 
 ### Performance
 
-Every projection is a pure function over the whole journal, and today each evidence projection
-(`_content_evidence`, `_decision_evidence`, `_idea_evidence`, `_link_attention`,
-`_utility_evidence`) re-verifies every entry's signature in pure-Python Ed25519 on each call.
-`_governance_state` is memoized, but only within one process: it helps the long-running daemon, while
-every CLI call pays the cold cost once. On a journal of about 800 entries a search takes about
-15 seconds and a write about a minute, which is enough to time out the agent adapters. Tracked in
-[#70](https://github.com/projectmentor/hive-mind/issues/70); see also `HV_ARCHITECTURE.md` on making
-the governance projection an explicit input.
+Every projection is a pure function over the whole journal. Since v1.20.1 ([#70](https://github.com/projectmentor/hive-mind/issues/70)) that is cheap
+enough to run on every command:
+
+- **Ed25519** (`ed25519.py`) uses extended coordinates and a precomputed base-point table, roughly
+  60–180× faster than the reference implementation it replaced, depending on the machine (on one WSL2
+  machine: 5.6 ms per verify and 1.6 ms per signature, from about 1 s each). Its accept set is
+  identical and its signatures are byte-identical (`tests/test_ed25519.py`), because every node must
+  agree on which entries are valid.
+- **Each signature is verified once per process.** `_verify_sig` memoizes the cryptographic check
+  only: positive results, keyed on `(sha512(message), sig, pub)`, in an LRU bounded at 16,384 entries
+  (about 7 MB), in memory only. Authorization is never cached: admission, revocation, owner-as-of,
+  the writer policies, link authority and the `node_id` ↔ `pub` binding are recomputed every time.
+- **Store catch-up.** `meta.projected_journal_sig` is a signature of the journal key-set that
+  `store.db` holds. `rebuild_db` sets it; `remember`, `decide` and `propose` advance it in the same
+  transaction as their writes, and only if the store was current before them. The commands that read
+  or write the store, and the daemon on each sync round, rebuild when it doesn't match the journal.
+- **Locks.** A connection waits up to 10 s for another writer (`HIVE_BUSY_TIMEOUT_MS`). If a write
+  still can't reach the store after its journal append, the command reports it as journaled and exits
+  0, so a caller never retries into a duplicate entry; the next command catches the store up.
+
+On a copy of a live hive of about 860 entries, `hv search` went from about 15 s to 0.3 s and
+`hv remember` from about a minute to 0.7 s. `tests/test_perf.py` is the tripwire: a second rebuild in
+one process makes no new verifications, and on a 1,000-entry signed journal the digest, search and
+write paths stay inside the adapters' timeouts. Projections still scan the whole journal; persisted or
+incremental projections are the next step if a budget ever fails.
 
 ---
 

@@ -168,9 +168,9 @@ Your adapter **must**:
 
 - **Be best-effort.** Never block, never error, never slow a session. Wrap everything; the hook
   process must `exit 0` even on failure. A missing/broken `hv` must be a no-op, not a crash.
-  Today a `hv` write can take about a minute and a search about 15 seconds on a hive of a few
-  hundred entries ([#70](https://github.com/projectmentor/hive-mind/issues/70)): run writes in the
-  background, and never block a turn on one.
+  Writes and searches take well under a second since v1.20.1 ([#70](https://github.com/projectmentor/hive-mind/issues/70)), but still run writes in
+  the background and never block a turn on one. If the local store is busy, a write reports that it
+  was journaled and exits 0: do not retry it.
 - **Hint, never act.** Nudges and audits only *prompt*. You never auto-write and never
   auto-delete. **You remain the salience judge** (salience layer 1 — the agent rubric; `--gate` is
   the hive's content-neutral layer 2); erasing/forgetting is the **owner's** decision.

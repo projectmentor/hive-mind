@@ -170,6 +170,15 @@ at once). Concretely:
   Under the trust model (0600 local keys; a local-code attacker has already won by reading the key
   file directly), this is **out of scope**. Do not run HiveMind crypto as a remote oracle that
   signs/decrypts attacker-chosen inputs and returns fine-grained timing.
+- **Ed25519 accept set (v1.20.1).** The faster `ed25519.py` accepts exactly what the reference it
+  replaced accepted, including the reference's permissive rules (no `S < l` check, non-canonical `y`,
+  cofactorless verification), so upgraded and older nodes agree on every entry. Strict RFC 8032
+  checks would be a consensus change and would need their own contract version.
+- **Verification memo (v1.20.1).** Each process remembers which signatures it has verified, keyed on
+  the exact signed bytes, signature and key, so a changed byte is always checked afresh. Only the
+  cryptographic result is cached, never authorization (admission, revocation, owner-as-of, writer
+  policies, link authority). It is bounded and in memory only: persisting it would make `store.db`
+  part of the trust base.
 - A bundled crypto module that fails to import is now a hard `doctor` failure (`crypto-modules`),
   because `_verify_entry` falls through to accepting entries unverified when Ed25519 is absent — that
   degradation must be loud, not silent. Known-answer self-tests run on every `doctor` pass.
@@ -177,12 +186,12 @@ at once). Concretely:
 ## Operational / scaling characteristics
 
 - **Journal growth.** The journal is append-only and grows without bound, and every projection
-  scans all of it. The governance projection is memoized on a content signature of just the
-  governance entries, but only within one process: that helps the long-running daemon, while every
-  CLI call recomputes it once. The evidence projections re-verify every entry's signature on each
-  call. On a journal of about 800 entries a search takes about 15 seconds and a write about a minute,
-  enough to time out the agent adapters; tracked in
-  [#70](https://github.com/projectmentor/hive-mind/issues/70).
+  scans all of it. Since v1.20.1 ([#70](https://github.com/projectmentor/hive-mind/issues/70)) that is cheap: Ed25519 is roughly 60–180× faster than
+  the reference it replaced and each signature is verified once per process, so on about 860
+  entries a search takes about a third of a second and a write under a second (they took about 15 s
+  and a minute). The cost is still linear in the journal: `tests/test_perf.py` fails if a
+  1,000-entry journal pushes the adapter paths past their timeouts, and persisted or incremental
+  projections are the next step if it ever does.
 - **Best-effort recovery.** A truncated/garbled journal line (e.g. a crash mid-write) is skipped on
   read; `hv doctor` now surfaces the count so silent data loss is visible (`journal-integrity`).
 - **`hv doctor --fix` blast radius.** `--fix` kills orphan daemons (by argv match), restarts the

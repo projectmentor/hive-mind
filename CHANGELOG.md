@@ -11,6 +11,12 @@ so a tag contains everything that version shipped; a later fix that changes no c
 
 ## Unreleased
 
+- **Performance fix (`v1.20.1`, #70):** `ed25519.py` is rewritten for speed with an identical accept set
+  and byte-identical signatures (roughly 60–180× faster), and each signature is verified once per
+  process. On a hive of about 860 entries `hv search` drops from about 15 s to 0.3 s and `hv remember`
+  from about a minute to 0.7 s, back inside the agent adapters' timeouts. SQLite waits up to 10 s for
+  a busy store; a write that can't reach it after its journal append reports success (journaled) instead
+  of failing, so callers don't retry into duplicates, and the next command catches the store up.
 - Documentation brought up to date with contract 1.20: a new `SECURITY.md`, `docs/SYNC_API.md`
   rewritten (read authentication, current fields, the `/api/*` surface), `docs/P2P_DESIGN.md` marked
   historical, and README, CLI reference, agent-integration spec, internals, threat model and skills

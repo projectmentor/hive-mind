@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.20`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.21`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -92,7 +92,7 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
      --source <you>`.
 
    Label your own reasoning or plans `--channel introspect` if you record them at all: reasoning is
-   not observation. **Tag time-varying/operational facts `volatile`**
+   not observation, so an `introspect` fact is recorded but never corroborates. **Tag time-varying/operational facts `volatile`**
    (optionally `ttl:<n>h|d`), for example "service running" or "host reachable", so the audit flags
    them for re-verification instead of trusting them indefinitely. Since 1.2 `hv remember`
    **auto-tags** transient-status claims `volatile` (high-precision, content-neutral; pass
@@ -228,6 +228,14 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.21` — **the grounding rule covers fact assertions** (#73). A `fact` written with
+  `--channel introspect` now weighs `introspect_support_weight` (default 0) toward confidence, the same
+  as an `introspect` link: two agents restating the same reasoning no longer corroborate each other.
+  The fact still lands and can be searched, linked and supported; it sits at confidence 0 until an
+  observation (a `sense` assertion or `supports` link from another identity) backs it. `hv remember`
+  prints a note when it writes one. No verb, flag or output-schema change; adapters keep working.
+  Version skew: a 1.20 node keeps counting introspect facts until it upgrades (confidence differs
+  across the fleet; the journal and Merkle root do not).
 - `1.20` — **`idea` journal type.** A hypothesis whose confidence is *earned*, never asserted:
   `hv propose` / `hive_propose` journal an `idea` (channel defaults to `introspect`); it starts at
   confidence 0.0 in a new `ideas` table and moves only via `supports`/`contradicts` links from other

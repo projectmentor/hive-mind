@@ -204,7 +204,10 @@ fact is folded into the same evidence maps as assertions and retractions:
 discount and admission apply unchanged. **Grounding rule:** a link whose
 `channel` is `introspect` weighs `introspect_support_weight` (governed knob,
 default `0`) — reasoning never corroborates or contradicts an observation; an
-absent channel means `sense`.
+absent channel means `sense`. Since 1.21 the rule also applies to the assertions
+themselves: a `fact` entry whose `channel` is `introspect` adds that weight
+(default nothing) to the positive side. The fact still lands, as a row at
+confidence 0 with no `last_evidence_at`, until an observation backs it.
 
 ### Outcomes and `decisions.outcome_score` (1.19 PR4)
 

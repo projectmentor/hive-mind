@@ -11,6 +11,10 @@ so a tag contains everything that version shipped; a later fix that changes no c
 
 ## Unreleased
 
+- **Contract 1.21: the grounding rule covers fact assertions.** A fact written with
+  `--channel introspect` no longer counts as corroboration (it weighs `introspect_support_weight`,
+  default 0, like an `introspect` link); it is still recorded and can earn confidence from
+  observations (#73).
 - **The sync daemon's bind heals itself (`v1.20.1`, #47):** a daemon that starts before `tailscaled`
   waits up to 30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the
   tailnet appearing, and on a tailnet IP change within one sync round, by exiting 75 for its service

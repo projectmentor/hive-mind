@@ -233,13 +233,16 @@ when it must re-wire.
   as an `introspect` link: two agents restating the same reasoning no longer corroborate each other.
   The fact still lands and can be searched, linked and supported; it sits at confidence 0 until an
   observation (a `sense` assertion or `supports` link from another identity) backs it. `hv remember`
-  prints a note when it writes one. No verb, flag or output-schema change; adapters keep working.
+  prints a note when it writes one. No verb, flag or output-schema change for this; adapters keep
+  working.
   **Unrecognised labels fail closed** (#72): a `channel` outside `sense`/`act`/`introspect`
   (reachable only through raw journal entries) counts as `introspect` everywhere, so a typo or a newer
   label never earns observation weight; an unrecognised source class keeps weight 1.0, like an absent
-  one, because a class can only claim a discount. Version skew: a 1.20 node keeps counting introspect
-  facts and unknown channels until it upgrades (confidence differs across the fleet; the journal and
-  Merkle root do not).
+  one, because a class can only claim a discount. **MCP parity** (#75, additive): `hive_remember`
+  gains `resolves`, the MCP form of `hv remember --resolves` (write a correction and soft-retract the
+  wrong fact in one step); `tests/test_mcp_parity.py` now guards every agent-facing `hv remember`
+  flag. Version skew: a 1.20 node keeps counting introspect facts and unknown channels until it
+  upgrades (confidence differs across the fleet; the journal and Merkle root do not).
 - `1.20` — **`idea` journal type.** A hypothesis whose confidence is *earned*, never asserted:
   `hv propose` / `hive_propose` journal an `idea` (channel defaults to `introspect`); it starts at
   confidence 0.0 in a new `ideas` table and moves only via `supports`/`contradicts` links from other

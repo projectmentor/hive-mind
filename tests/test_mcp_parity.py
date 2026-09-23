@@ -46,6 +46,22 @@ def test_sensitive_commands_are_not_exposed():
     )
 
 
+# `hv remember` flags an agent needs over MCP. The rest are fixed or local by design: the server stamps
+# --source (claude-ai); --importance is a hint the hive re-learns anyway; --gate and --no-volatile are
+# write-hygiene switches for bulk and owner use. A new remember flag must be added here or exposed.
+REMEMBER_NOT_OVER_MCP = {"--source", "--importance", "--gate", "--no-volatile"}
+
+
+def test_remember_flags_have_mcp_parity():
+    """#75: `--resolves` existed on the CLI for a whole contract version with no MCP path. Guard every
+    agent-facing `hv remember` flag, statically (no `mcp` import in CI)."""
+    flags = set(re.findall(r'remember_parser\.add_argument\(\s*"(--[a-z-]+)"', HV_SRC))
+    assert "--resolves" in flags                                      # the parser scrape works
+    passed = set(re.findall(r'"(--[a-z-]+)"', MCP_SRC))
+    missing = flags - REMEMBER_NOT_OVER_MCP - passed
+    assert not missing, f"hive_remember does not pass these hv remember flags: {sorted(missing)}"
+
+
 def test_group_is_read_only_over_mcp():
     # Only `group list` may be wrapped; admit/revoke/deny/change/purge must not appear.
     group_calls = re.findall(r'_run_hv\(\[\s*"group",\s*"([a-z]+)"', MCP_SRC)

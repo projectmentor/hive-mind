@@ -293,3 +293,65 @@ def test_a_locked_store_after_the_append_is_reported_as_journaled_then_caught_up
     conn.close()
     r, _dt = _cli(tmp_path, "search", "locked")                    # the next command catches up
     assert "written while the store is locked" in r.stdout
+
+
+# ── the rest of the write paths, and a read under a locked catch-up (review of #87) ──────────────────
+
+import re  # noqa: E402
+
+
+def _journal(tmp_path):
+    return [json.loads(line) for f in (tmp_path / "journal").glob("*.jsonl")
+            for line in f.read_text().splitlines() if line.strip()]
+
+
+def test_retract_and_entity_under_a_locked_store_are_journaled_then_caught_up(tmp_path):
+    r, _dt = _cli(tmp_path, "remember", "the build uses make")
+    sid = re.search(r"h:[0-9a-f]{10}", r.stdout).group(0)
+    busy = {"HIVE_BUSY_TIMEOUT_MS": "300"}
+    lock = sqlite3.connect(tmp_path / "store.db", isolation_level=None)
+    lock.execute("BEGIN IMMEDIATE")
+    try:
+        r1, _ = _cli(tmp_path, "retract", sid, env_extra=busy)
+        r2, _ = _cli(tmp_path, "entity", "add", "--name", "deploy-pipeline", env_extra=busy)
+    finally:
+        lock.execute("ROLLBACK")
+        lock.close()
+    for r in (r1, r2):
+        assert r.returncode == 0, r.stderr                 # journaled: success, never a retry-inviting failure
+        assert "journaled; the local store is busy" in r.stdout
+    j = _journal(tmp_path)
+    assert sum(1 for e in j if e["type"] == "retract") == 1
+    assert sum(1 for e in j if e["type"] == "entity" and e["payload"].get("name") == "deploy-pipeline") == 1
+    r, _ = _cli(tmp_path, "entity", "list")                 # the next store command catches up
+    assert "deploy-pipeline" in r.stdout
+
+
+def test_retract_and_entity_advance_the_marker(tmp_path, monkeypatch):
+    r, _dt = _cli(tmp_path, "remember", "the cache is warm at boot")
+    sid = re.search(r"h:[0-9a-f]{10}", r.stdout).group(0)
+    _cli(tmp_path, "retract", sid)
+    _cli(tmp_path, "entity", "add", "--name", "cache")
+    _cli(tmp_path, "entity", "link", "--name", "cache", "--fact-id", sid)
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert hv._ensure_store_current() is False              # current: no redundant rebuild on the next command
+
+
+def test_a_read_survives_a_locked_catch_up(tmp_path):
+    _cli(tmp_path, "remember", "first fact about caching")  # the store is current
+    with open(next((tmp_path / "journal").glob("*.jsonl")), "a") as f:   # an append the store never saw
+        f.write(json.dumps({"node_id": "k1:oobnode00000000", "seq": 1, "type": "fact",
+                            "timestamp": "2026-02-01T00:00:00Z",
+                            "payload": {"content": "second fact about caching", "tags": [],
+                                        "source": "manual"}}) + "\n")
+    lock = sqlite3.connect(tmp_path / "store.db", isolation_level=None)
+    lock.execute("BEGIN IMMEDIATE")
+    try:
+        r, _ = _cli(tmp_path, "search", "caching", env_extra={"HIVE_BUSY_TIMEOUT_MS": "300"})
+    finally:
+        lock.execute("ROLLBACK")
+        lock.close()
+    assert r.returncode == 0 and "could not catch up" in r.stderr   # warned, not a traceback
+    assert "first fact about caching" in r.stdout                      # answered from the store as it is
+    r, _ = _cli(tmp_path, "search", "caching")                         # lock gone: it catches up
+    assert "second fact about caching" in r.stdout

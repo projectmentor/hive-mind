@@ -56,13 +56,13 @@ It is a normal, signed code change — no special command:
 4. Commit and push. Every node picks it up on its next `git pull` / `hive-mind update`, and the next
    `hv doctor` pass surfaces any high-severity crypto entry.
 
-## Planned extensions (not yet implemented)
+The bundled file is the single source of truth: there is no online feed and nothing is fetched.
 
-The `_comment` in `advisories.json` records the roadmap:
+## Published security advisories
 
-- **Owner-signed advisories over the journal** — push an advisory as an owner-signed governance
-  entry so it propagates with normal P2P sync, no `git pull` required.
-- **Optional Ed25519-verified online feed** — fetch advisories from a URL and verify the signature
-  against the bundled public key, for nodes that opt in to online updates.
+Vulnerabilities in HiveMind itself are published as GitHub security advisories. Report a new one
+privately; see [`SECURITY.md`](../SECURITY.md).
 
-Until those land, the bundled file is the single source of truth.
+| Advisory | Severity | What | Affected | Fixed |
+|---|---|---|---|---|
+| [GHSA-242f-7fxg-f7wm](https://github.com/projectmentor/hive-mind/security/advisories/GHSA-242f-7fxg-f7wm) | High (CVSS 7.5) | Unauthenticated journal disclosure through the sync API: `/sync/chunk` served journal entries to any client that could reach the port, and the daemon bound all interfaces by default. | Installs from before July 8, 2026 (contract 1.17 and earlier, before commit `10dc598`) | PR #42 (`10dc598`): signed sync reads from admitted devices, local-only dashboard data, and a bind to the Tailscale address instead of all interfaces. Every install at contract 1.18 or later includes it; update with `hive-mind update` and confirm with `hv verify`. Reported by EQSTLab and 2REBCat. |

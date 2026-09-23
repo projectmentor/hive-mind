@@ -893,7 +893,7 @@ tokens, and cost over time). It's served by the **sync daemon** itself (no extra
 process) at `http://127.0.0.1:9876/`, and it answers only on the device it runs on:
 open it on any device that runs HiveMind, including an Android phone running it in
 Termux. A browser on a device without its own node, pointed at another node's tailnet
-address, is refused (403) since contract 1.18. To see another device's data, pick it
+address, is refused (403) since the July 2026 read-auth fix (PR #42). To see another device's data, pick it
 in the dashboard: your own daemon fetches it with a signed request. Nothing is
 exposed to the public internet.
 

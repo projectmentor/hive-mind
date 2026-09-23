@@ -8,7 +8,8 @@ problem, and where each part of HiveMind's security is documented.
 
 **Please report privately. Don't open a public issue.** Use GitHub's private vulnerability
 reporting: **Security → Report a vulnerability** on this repository, or go directly to
-<https://github.com/projectmentor/hive-mind/security/advisories/new>.
+<https://github.com/projectmentor/hive-mind/security/advisories/new>. If you can't use GitHub, email
+<netadmin@projectmentor.org>.
 
 Include what you found, how to reproduce it, the version (`hv version`, and `hv verify` output), and
 the impact you expect. HiveMind is maintained by one person, so responses are best-effort with no

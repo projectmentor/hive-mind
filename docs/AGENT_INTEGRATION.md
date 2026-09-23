@@ -267,7 +267,7 @@ when it must re-wire.
     a *vindication* axis; decisions still carry **no confidence** and `--min-confidence` still
     excludes them. Only `sense`-channel outcomes count (absent = sense); an `introspect` outcome
     is recorded, never counted. Both evidence projections now retain an ordered evidence sequence.
-  - *PR3b (same contract):* **stable short ids.** Every fact/decision/idea now carries **`sid`** —
+  - *PR3b (1.19 feature set; landed under contract 1.20):* **stable short ids.** Every fact/decision/idea now carries **`sid`** —
     `h:` + `sha256("node_id:seq")[:10]` (e.g. `h:3f9a1c0b2d`), the human form of `ref`: identical on
     every node, never changes on rebuild, resolved **exactly** through the projection-written column
     `journal_index.sid`. It is shown wherever a rowid was shown (`hv search` text + JSON, write
@@ -280,7 +280,7 @@ when it must re-wire.
     (or `ref`). `hive_retract(fact_id)` and `hive_entity(fact_id)` now take the `sid` string. The
     audit's CONTRAVENED check parses a prose `h:…` exactly (a prose `#N` stays best-effort).
     Closes the `hv retract` wrong-target hazard (hive #58). No wire change; nothing new is journaled.
-  - *PR6 (same contract):* **importance (salience L3) + utility are learned projections.**
+  - *PR6 (1.19 feature set; landed under contract 1.20):* **importance (salience L3) + utility are learned projections.**
     `facts.importance` is now written only by `_recompute_importance`: it starts at
     `min(--importance hint, importance_self_cap)` (default cap **0.3**) and rises only through links
     from **other** identities; `--importance` is therefore a hint, never a claim — adapters should
@@ -291,7 +291,7 @@ when it must re-wire.
     (`halflife_fact` 180, `halflife_idea` 90, `halflife_volatile` 14 days) are governed knobs and now
     drive confidence decay too. JSON search rows gain `importance`, `effective_importance`,
     `utility`, `effective_utility`, `last_link_at`. No wire change; nothing new is journaled.
-  - *PR2b (same contract):* **the write-path switch.** `hv decide --supersedes`, `hv remember
+  - *PR2b (1.19 feature set; landed under contract 1.20):* **the write-path switch.** `hv decide --supersedes`, `hv remember
     --resolves` and `hv entity link` now emit **one `link`** (`supersedes` / `resolves` / `entity`)
     instead of their legacy field or entry (`supersedes_ref`; `resolves_ref` + `retract`;
     `entity_fact`) — never both. On the owner machine the link is owner-signed (hard everywhere);
@@ -303,7 +303,7 @@ when it must re-wire.
     peer's `/api/verify.version`). Upgrade every always-on node
     before relying on these verbs across the fleet. Legacy entries keep projecting forever.
     Rubric: when you act on a decision and observe the result, record it with `--outcome-of`.
-  - *PR7 (same contract):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
+  - *PR7 (1.19 feature set; landed under contract 1.20):* **trust velocity.** Per-signer reliability (facts contradicted by *other*
     devices, decisions' outcome mean) over governed short/long windows (`trust_short_days`,
     `trust_long_days`); the delta is a **signal** surfaced by `hv doctor` (`trust-drift`, threshold
     `trust_drift_threshold`) and a `DRIFT` column on `hv peers`. Advisory only — no effect on

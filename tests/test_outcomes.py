@@ -200,3 +200,20 @@ def test_two_node_differential_outcome_columns(tmp_path, monkeypatch):
 
     s1, s2 = snap(tmp_path / "n1", entries), snap(tmp_path / "n2", reversed(entries))
     assert s1 == s2 and s1[0][2] == "2026-01-04T00:00:01Z"      # introspect outcome did not move last_outcome_at
+
+
+def test_search_json_rows_carry_tag_list_for_every_kind(hive):
+    """#77: `tag_list` is a real list on fact, decision and idea rows; `tags` keeps its string form
+    until 2.0 so existing consumers that decode it keep working."""
+    hive.run("remember", "the payments api paginates at 100", "--tags", "api,payments")
+    hive.run("decide", "cache the payments api", "--rationale", "r", "--tags", "api,cache")
+    hive.run("propose", "the payments api throttles at night", "--tags", "api,hypothesis")
+    rows = json.loads(hive.run("search", "payments", "--format", "json").stdout)
+    rows += json.loads(hive.run("search", "payments", "--format", "json", "--kind", "idea").stdout)
+    by_kind = {}
+    for r in rows:
+        by_kind.setdefault(r["kind"], r)
+    assert set(by_kind) == {"fact", "decision", "idea"}
+    for kind, r in by_kind.items():
+        assert isinstance(r["tag_list"], list) and "api" in r["tag_list"], kind
+        assert isinstance(r["tags"], str) and json.loads(r["tags"]) == r["tag_list"], kind

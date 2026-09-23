@@ -19,6 +19,8 @@ so a tag contains everything that version shipped; a later fix that changes no c
   as `introspect` everywhere; an unrecognised source class keeps full weight, like an absent one,
   since a class can only claim a discount (#72).
 - **MCP:** `hive_remember` gains `resolves`, for parity with `hv remember --resolves` (#75).
+- **Search JSON:** rows gain `tag_list` (the tags as a list); `tags` stays a JSON-encoded string
+  until 2.0, when it becomes the list (#77).
 - **The sync daemon's bind heals itself (`v1.20.1`, #47):** a daemon that starts before `tailscaled`
   waits up to 30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the
   tailnet appearing, and on a tailnet IP change within one sync round, by exiting 75 for its service

@@ -241,7 +241,9 @@ when it must re-wire.
   one, because a class can only claim a discount. **MCP parity** (#75, additive): `hive_remember`
   gains `resolves`, the MCP form of `hv remember --resolves` (write a correction and soft-retract the
   wrong fact in one step); `tests/test_mcp_parity.py` now guards every agent-facing `hv remember`
-  flag. Version skew: a 1.20 node keeps counting introspect facts and unknown channels until it
+  flag. **Search JSON** (#77, additive): every `hv search --format json` row gains `tag_list`, the
+  tags as a list; `tags` stays the JSON-encoded string for existing consumers and **becomes the list at
+  2.0** (read `tag_list` now). Version skew: a 1.20 node keeps counting introspect facts and unknown channels until it
   upgrades (confidence differs across the fleet; the journal and Merkle root do not).
 - `1.20` — **`idea` journal type.** A hypothesis whose confidence is *earned*, never asserted:
   `hv propose` / `hive_propose` journal an `idea` (channel defaults to `introspect`); it starts at

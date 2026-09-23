@@ -8,7 +8,8 @@ agent on every machine can use it too. Local-first, no cloud, no central server.
 ![Status](https://img.shields.io/badge/status-alpha-yellow.svg)
 
 Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
-Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/)
+Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/) ·
+Security: [`SECURITY.md`](SECURITY.md) · Current agent contract: **1.20** (`hv version`)
 
 <p align="center">
   <a href="https://hivemind.projectmentor.org/dev/#dashboard">
@@ -22,9 +23,10 @@ Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https
 </p>
 
 HiveMind is a shared, append-only memory that your AI agents read and write as they work.
-Facts, decisions, and outcomes accumulate over time and earn trust through **independent
-corroboration**, not by an agent asserting it. Each machine holds the full memory and syncs
-directly with its peers over your private Tailscale network. There is no server to operate and
+Facts, decisions, and outcomes accumulate over time. A fact earns **confidence** only through
+**independent corroboration**, never because an agent asserts it, and a decision is scored by the
+**outcomes** recorded against it. Each machine holds the full memory and syncs directly with its
+peers over your private Tailscale network. There is no server to operate and
 nothing leaves your hardware.
 
 It is not a vector database or a RAG framework. It is the memory-and-trust layer your agents
@@ -43,11 +45,19 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
   no one can mint a crowd of keys to fake agreement. Conflicts are surfaced, not silently overwritten.
 - **Coordinate without a coordinator** — no leader, no Raft, no lock server. A conflict-free
   set (G-Set CRDT) over an append-only journal, so every device is equal and converges.
+  Ownership is a governance role, not a coordinator: if the owner is ever lost, the admitted
+  devices can elect a new one.
+- **Learns from outcomes** — a decision records which facts it relied on; when you record how it
+  turned out, the decision gains an outcome score and the facts behind it gain *utility*.
+  Importance is learned the same way: a writer can only hint at it, and it rises when *other*
+  agents link to an entry. Hypotheses are recorded separately as *ideas*, so a guess never counts
+  as a fact.
 - **Works offline** — agents keep working with no connection; entries merge cleanly on reconnect.
-- **Fast local search** — full-text search runs on your machine in milliseconds, ranked by
-  corroboration. No round trips, no data leaving your network.
+- **Local search** — full-text search runs on your machine, ranked by effective confidence
+  (independent agreement, decayed by age) or by learned importance, utility, or recency. No round
+  trips, no data leaving your network.
 - **Nothing to operate** — no servers to provision, no database to manage, no cloud accounts.
-  Any single device's journal is the complete memory; a backup is just files.
+  Once in sync, any single device's journal is the complete memory; a backup is just files.
 - **Auditable** — every fact records who wrote it and when; nothing is silently overwritten.
 - **Works with your agents today** — Claude Code, Hermes, Claude Desktop (via MCP), and any
   agent that can run a shell command.
@@ -68,12 +78,14 @@ The installer will:
 1. Install Tailscale (used for syncing between machines) and authenticate it
 2. Install Python dependencies
 3. Clone this repo to `~/projects/hive-mind`
-4. Ask for one input: your peer's Tailscale IP. **First machine with no peers yet? Just press
-   Enter** — you can add peers later by editing `.peers.json`.
+4. Look for hives on your tailnet and ask whether to join one or start your own. On Android,
+   paste the line printed by `hive-mind invite` on a device that is already in the hive. **First
+   machine? Just press Enter** to start a new hive; you become its owner.
 5. Initialise the local database
 6. Install and start the sync daemon under your OS's service manager (systemd on Linux/WSL,
    launchd on macOS, termux-services/runit on Android)
 7. Wire the Hermes memory plugin (if Hermes is installed)
+8. Wire Claude Code, the `hive-memory` skill and its hooks (if Claude Code is installed)
 
 ### Requirements
 
@@ -132,16 +144,21 @@ wsl --shutdown
 ./hv remember "The payments API rate-limits at 100 req/s" --tags api,payments
 ./hv search "payments"
 ./hv decide "Use AGPL for the core" --rationale "keeps the dual-license option open" --tags licensing
+./hv decide "Ship on Friday" --informed h:3f9a1c0b2d   # name the facts the decision relied on
+./hv remember "The Friday release went out clean" --outcome-of h:7c01d2e9aa --polarity 1
+./hv propose "Slow builds correlate with the new cache"   # a hypothesis, not a fact
 ./hv stats
 ./hv dash            # open the read-only web dashboard (facts, decisions, peers) in your browser
-./hv doctor          # health check: integrity, DB, sync, hygiene, agent hooks (--fix self-heals)
+./hv doctor          # health check: integrity, crypto, sync, authorization, trust drift, agent hooks (--fix self-heals)
 ./hv sync now        # manual sync to all peers
 ```
 
-The **dashboard** (`hv dash`) is a read-only web view of your hive — searchable facts and
-decisions (filterable by tag) plus a live peers/health tab. It's served by the sync daemon
-itself, so it's reachable on `localhost` and across your private **tailnet** (open it from your
-phone or laptop) with nothing exposed to the public internet.
+The **dashboard** (`hv dash`) is a read-only web view of your hive: an overview, the corpus (facts
+and decisions, searchable, filterable by tag, sortable by confidence, importance, utility, or
+recency), your devices and their health, and telemetry. It's served by the sync daemon at
+`http://127.0.0.1:9876/`, so open it on a device that runs HiveMind — including an Android phone
+running it in Termux. To look at another device, pick it in the dashboard: your own daemon fetches
+that device's data with a signed request. Nothing is exposed to the public internet.
 
 Most of the time your agents call `hv` for you. Full reference:
 [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md).
@@ -152,7 +169,8 @@ Most of the time your agents call `hv` for you. Full reference:
 |---|---|
 | `hive-mind install` | Full device setup from scratch |
 | `hive-mind status`  | Show device health and peer sync state |
-| `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys; `--yes` skips the confirmation prompt) |
+| `hive-mind invite`  | Print the one line a new device pastes into `hive-mind install` to join this hive |
+| `hive-mind uninstall` | Remove HiveMind from this device (`--keep-hive` preserves your journal + keys; `--keep-identity` preserves only this device's identity, so a reinstall needs no re-admit; `--yes` skips the confirmation prompt) |
 | `hive-mind update`  | Pull latest and restart the daemon (auto-heals after a force-push / history rewrite) |
 | `hive-mind reset`   | Recover a wedged install: force-align code to `origin` + rebuild + restart + verify. Keeps your Hive data (journal, keys, identity). `-y` skips the prompt. |
 
@@ -167,9 +185,11 @@ Most of the time your agents call `hv` for you. Full reference:
 - **SQLite** (`store.db`) — a derived index (WAL + FTS5) rebuilt from the journal on any node.
 - **Merkle index** — per-node chunk hashes for efficient delta sync: only missing entries move.
 - **Sync daemon** — a stdlib HTTP server on `:9876` that syncs with peers (every 5 minutes, or
-  on demand). No leader, no central broker. The tailnet is the trust perimeter, but the daemon also
-  caps request bodies, times out slow reads, bounds concurrent requests, and rate-limits per peer,
-  so a single misbehaving peer can't exhaust a node.
+  on demand). No leader, no central broker. The tailnet is the transport; the trust root is each
+  device's key and the owner key. Sync reads are signed by an admitted device (`hv sync auth`; see
+  [`docs/SYNC_API.md`](docs/SYNC_API.md)), and the daemon binds the Tailscale address (never all
+  interfaces), caps request bodies, times out slow reads, bounds concurrent requests, and
+  rate-limits per peer, so a single misbehaving peer can't exhaust a node.
 - **Capsules** — share secrets (API keys, tokens) as encrypt-to-device *capsules*: a secret sealed
   so only the devices you've admitted can open it. Each recipient's key is **derived from that
   device's signed identity**, so a capsule can never be sealed to a key a device hasn't proven it
@@ -187,10 +207,19 @@ Most of the time your agents call `hv` for you. Full reference:
   dark (`hv config quorum set`, then `hv owner propose-election`/`vote`); a live owner is never
   unseated, since any owner act (including `hv owner heartbeat`) resets the dead-man timer. See
   `hv owner` and `docs/INTERNALS.md`.
+- **Links and learning** — relationships between entries (a decision that replaces another, a
+  correction, what a decision relied on, an outcome) are signed `link` entries. A link from a
+  device that is neither the owner nor the author of its target can add evidence but can never
+  hide or replace anything. Outcomes score decisions; utility and importance are learned from
+  links. See `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/INTERNALS.md`](docs/INTERNALS.md),
-[`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md), [`docs/SYNC_API.md`](docs/SYNC_API.md),
-[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what HiveMind defends against, and what it assumes.
+[`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md) (the original
+sync design), [`docs/HV_ARCHITECTURE.md`](docs/HV_ARCHITECTURE.md), the
+[continual-learning design](docs/design/hivemind_continual_learning_design.md) behind contract
+1.19–1.20, and for security [`SECURITY.md`](SECURITY.md),
+[`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what HiveMind defends against, and what it
+assumes — and [`docs/ADVISORIES.md`](docs/ADVISORIES.md).
 
 **Integrating an agent?** See [`docs/AGENT_INTEGRATION.md`](docs/AGENT_INTEGRATION.md) — a
 runtime-agnostic spec each agent uses to wire *itself* to the hive (and keep itself current). One
@@ -213,9 +242,10 @@ brain (`hv`), one spec, no hand-maintained per-agent adapters.
 
 ## Multi-node sync
 
-Run the installer on each machine. When prompted for peer IPs, enter the **WSL Tailscale IP** of
-the other machine (run `tailscale ip -4` in WSL on that machine). Each WSL instance is its own
-machine on the tailnet, so use that IP, not the Windows host IP.
+Run the installer on each machine. On Linux, macOS, and WSL it finds your hive on the tailnet;
+otherwise paste the line printed by `hive-mind invite` on a device already in the hive. The owner
+then admits the new device (`hv group admit`). Each WSL instance is its own machine on the
+tailnet, with its own Tailscale IP (not the Windows host's).
 
 ```bash
 cd ~/projects/hive-mind
@@ -228,15 +258,6 @@ one node from another (run `git`, `systemctl`, or `hv` on a peer), that uses
 Tailscale SSH, which needs an `accept` rule in your tailnet SSH ACL. See
 [Remote administration](docs/INTERNALS.md#remote-administration-tailscale-ssh) for
 the policy and the common failure modes.
-
----
-
-## Roadmap
-
-- **Federated hives (a colony)** — separate hives (personal, team, project) that selectively share
-  what matters, so groups pool knowledge without merging into one pool. Multiple hives form a colony.
-- **More platforms** — iOS / thin-client nodes (Android, Linux, macOS, and WSL2 are supported today).
-- **Hosted relay** — an optional managed tier for nodes that can't reach each other directly.
 
 ---
 

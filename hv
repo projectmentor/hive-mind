@@ -723,8 +723,9 @@ def _mark_projected(conn, entries, appended=()):
 
 def _ensure_store_current():
     """Rebuild store.db if it doesn't hold exactly the journal's key-set (#70): after a write that failed
-    after its journal append, an append by a command that doesn't project incrementally (a capsule, a
-    cell, a retract), an ingest by another process, or a restore. Costs one journal read when current."""
+    after its journal append, an append by a command that doesn't project into the store (a capsule, a
+    cell, governance handled elsewhere), an ingest by another process, or a restore. Costs one journal
+    read when current. remember, decide, propose, retract and entity advance the marker themselves."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
     conn = get_conn()
     try:
@@ -2878,20 +2879,24 @@ def retract(args):
         payload = {"retracts_ref": ref, "reason": args.reason or "", "source": "owner:owner/owner"}
         if owner_seed is not None:
             payload = _sign_governance_payload(payload, owner_seed, _ed25519.pub_from_seed(owner_seed))
-        append_journal("retract", payload)
+        rentry = append_journal("retract", payload)
     else:
         source = args.source or os.environ.get("HERMES_AGENT", "manual")
-        append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
+        rentry = append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
 
-    conn = get_conn()
-    all_entries = merkle.read_all_entries(JOURNAL_DIR)
-    gov = _governance_state(all_entries)
-    ev = _content_evidence(all_entries, gov).get(
-        content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
-    conf = _content_confidence(ev, gov)
-    _apply_content_confidence(conn, content, ev, gov)
-    conn.commit()
-    conn.close()
+    try:
+        conn = get_conn()
+        all_entries = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(all_entries)
+        ev = _content_evidence(all_entries, gov).get(
+            content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+        conf = _content_confidence(ev, gov)
+        _apply_content_confidence(conn, content, ev, gov)
+        _mark_projected(conn, all_entries, [rentry])
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
+        _store_deferred(rentry, e, "Retraction")
     kind = "FORGOTTEN (owner)" if args.owner else "retracted"
     print(f"Fact {sid} (#{row['id']}) {kind} → confidence {conf:.2f}")
 
@@ -3824,10 +3829,14 @@ def entity(args):
         attrs = json.loads(args.attr) if args.attr else {}
         payload = {"name": args.name, "type": args.type or "unknown", "attributes": attrs}
         entry = append_journal("entity", payload)
-        conn = get_conn()
-        res = persist_entity(conn, entry)
-        conn.commit()
-        conn.close()
+        try:
+            conn = get_conn()
+            res = persist_entity(conn, entry)
+            _mark_projected(conn, merkle.read_all_entries(JOURNAL_DIR), [entry])
+            conn.commit()
+            conn.close()
+        except sqlite3.OperationalError as e:            # after the append: never report failure (#70)
+            _store_deferred(entry, e, "Entity")
         print(f"Entity #{res['id']}: {res['name']} ({res['type']})")
         return
 
@@ -3851,11 +3860,15 @@ def entity(args):
         entry = append_journal("link", _link_payload(
             "entity", entity_ref, fact_ref, os.environ.get("HERMES_AGENT", "manual"),
             data={"confidence": args.confidence if args.confidence is not None else 1.0}))
-        all_entries = merkle.read_all_entries(JOURNAL_DIR)
-        resolve_link(conn, entry, _governance_state(all_entries),
-                     {(e.get("node_id"), e.get("seq")): e for e in all_entries})
-        conn.commit()
-        conn.close()
+        try:
+            all_entries = merkle.read_all_entries(JOURNAL_DIR)
+            resolve_link(conn, entry, _governance_state(all_entries),
+                         {(e.get("node_id"), e.get("seq")): e for e in all_entries})
+            _mark_projected(conn, all_entries, [entry])
+            conn.commit()
+            conn.close()
+        except sqlite3.OperationalError as e:            # after the append: never report failure (#70)
+            _store_deferred(entry, e, "Link")
         print(f"Linked fact {_short_id(*fact_ref)} → entity '{args.name}'")
         return
 
@@ -8101,7 +8114,13 @@ def main():
     # Idempotent; also auto-migrates older DBs missing tables/indexes.
     init_db()
     if args.command in _STORE_COMMANDS:
-        _ensure_store_current()       # #70: catch up after a deferred write or an out-of-band append
+        try:
+            _ensure_store_current()   # #70: catch up after a deferred write or an out-of-band append
+        except sqlite3.OperationalError as e:
+            # Another writer holds the store past the busy timeout. Never let the catch-up kill a command:
+            # a read proceeds on the store as it is, and a write has its own post-append guard.
+            print(f"hv: the local store is busy and could not catch up ({e}); continuing on the store as it is",
+                  file=sys.stderr)
 
     if args.command == "remember":
         remember(args)

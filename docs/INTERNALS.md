@@ -622,12 +622,15 @@ enough to run on every command:
   (about 7 MB), in memory only. Authorization is never cached: admission, revocation, owner-as-of,
   the writer policies, link authority and the `node_id` ↔ `pub` binding are recomputed every time.
 - **Store catch-up.** `meta.projected_journal_sig` is a signature of the journal key-set that
-  `store.db` holds. `rebuild_db` sets it; `remember`, `decide` and `propose` advance it in the same
-  transaction as their writes, and only if the store was current before them. The commands that read
-  or write the store, and the daemon on each sync round, rebuild when it doesn't match the journal.
+  `store.db` holds. `rebuild_db` sets it; `remember`, `decide`, `propose`, `retract` and `entity`
+  advance it in the same transaction as their writes, and only if the store was current before them.
+  The commands that read or write the store, and the daemon on each sync round, rebuild when it doesn't
+  match the journal. If another writer holds the store past the busy timeout, that catch-up is skipped
+  with a warning and the command runs on the store as it is.
 - **Locks.** A connection waits up to 10 s for another writer (`HIVE_BUSY_TIMEOUT_MS`). If a write
-  still can't reach the store after its journal append, the command reports it as journaled and exits
-  0, so a caller never retries into a duplicate entry; the next command catches the store up.
+  (`remember`, `decide`, `propose`, `retract`, `entity add`/`link`) still can't reach the store after
+  its journal append, the command reports it as journaled and exits 0, so a caller never retries into
+  a duplicate entry; the next command catches the store up.
 
 On a copy of a live hive of about 860 entries, `hv search` went from about 15 s to 0.3 s and
 `hv remember` from about a minute to 0.7 s. `tests/test_perf.py` is the tripwire: a second rebuild in

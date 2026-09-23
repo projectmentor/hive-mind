@@ -191,3 +191,27 @@ def test_the_queue_is_bounded(monkeypatch):
     assert busy[0] is False and "busy" in busy[1]
     gate.set()
     assert p._writer.drain(5.0) == 0
+
+
+def test_a_session_switch_drains_the_old_sessions_writes_before_its_audit(monkeypatch):
+    gate, order = threading.Event(), []
+
+    def slow_hv(*a, **k):
+        if a and a[0] == "remember":
+            gate.wait(5)
+            order.append("write")
+        return True, ""
+    p = _provider(monkeypatch, slow_hv)
+    monkeypatch.setattr(p, "is_available", lambda: True)
+    monkeypatch.setattr(hermes_plugin, "_hv_nudge", lambda *a, **k: "")
+    monkeypatch.setattr(hermes_plugin, "_hv_audit", lambda *a, **k: order.append("audit") or "")
+    p.on_memory_write("add", "memory", "the old session's last fact")
+    threading.Timer(0.2, gate.set).start()                 # the write lands while the switch is draining
+    p.on_session_switch("new-session-0000")
+    assert order == ["write", "audit"]                        # the audit ran after the write landed
+
+
+def test_tools_on_an_uninitialized_provider_return_an_error_envelope():
+    p = hermes_plugin.HiveMindMemoryProvider()
+    out = json.loads(p.handle_tool_call("hive_remember", {"content": "x"}))
+    assert out == {"ok": False, "output": "the hive-mind provider is not initialized"}

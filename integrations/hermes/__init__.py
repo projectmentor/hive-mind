@@ -345,6 +345,8 @@ class _HiveWriter:
 
     def __init__(self) -> None:
         self._q: "queue.Queue" = queue.Queue(maxsize=self.MAXSIZE)
+        self._pending = 0                      # queued + running; our own count, not Queue internals
+        self._idle = threading.Condition()
         threading.Thread(target=self._run, name="hive-mind-writer", daemon=True).start()
 
     def _run(self) -> None:
@@ -358,15 +360,22 @@ class _HiveWriter:
                 fut.set_result(res)
             elif not res[0]:
                 logger.warning("hive-mind: background write failed: %s", res[1])
-            self._q.task_done()
+            with self._idle:
+                self._pending -= 1
+                self._idle.notify_all()
 
     def submit(self, args: List[str], env: Optional[Dict[str, str]] = None, wait: bool = False):
         """Queue one `hv` write. wait=False (the mirror): returns True if queued, False if dropped.
         wait=True (a tool): blocks for (ok, output)."""
         fut = concurrent.futures.Future() if wait else None
+        with self._idle:
+            self._pending += 1                 # counted before the put, so the worker can never go below zero
         try:
             self._q.put_nowait((list(args), env, fut))
         except queue.Full:
+            with self._idle:
+                self._pending -= 1
+                self._idle.notify_all()
             logger.warning("hive-mind: write queue full (%d); dropped hv %s", self.MAXSIZE, args[0] if args else "")
             return (False, "the hive-mind writer is busy (queue full); try again shortly") if wait else False
         if not wait:
@@ -379,12 +388,12 @@ class _HiveWriter:
     def drain(self, timeout: float) -> int:
         """Wait up to `timeout` s for every queued write to finish. Returns how many were still pending."""
         deadline = time.monotonic() + timeout
-        with self._q.all_tasks_done:
-            while self._q.unfinished_tasks:
+        with self._idle:
+            while self._pending:
                 left = deadline - time.monotonic()
                 if left <= 0:
-                    return self._q.unfinished_tasks
-                self._q.all_tasks_done.wait(left)
+                    return self._pending
+                self._idle.wait(left)
         return 0
 
 
@@ -706,6 +715,8 @@ class HiveMindMemoryProvider(MemoryProvider):
         """Dispatch the hive tools. hive_search returns {facts, count, conflicts, note}; the write tools return
         {ok, output}, where output is hv's stdout, or on failure its stderr (which names the bad reference or
         the refused combination)."""
+        if not hasattr(self, "_writer"):
+            return json.dumps({"ok": False, "output": "the hive-mind provider is not initialized"})
         if tool_name == "hive_search":
             return self._tool_search(args)
         if tool_name in ("hive_remember", "hive_decide", "hive_propose"):
@@ -858,6 +869,7 @@ class HiveMindMemoryProvider(MemoryProvider):
         """Reset per-session state on session switch."""
         old_session_id = getattr(self, "_session_id", "")
         if old_session_id and old_session_id != new_session_id and old_session_id != getattr(self, "_last_audited_session", ""):
+            self._drain_writes("session switch")    # the old session's audit must see its own queued writes
             cwd = str(Path.cwd())
             nudge_hint = _hv_nudge(
                 "sessionend",
@@ -903,13 +915,16 @@ class HiveMindMemoryProvider(MemoryProvider):
         """
         return True  # MVP: pass everything (explicit memory() calls are already intentional)
 
-    def shutdown(self) -> None:
-        # Drain queued writes FIRST (at most 5 s), so the session-end nudge and audit below see them.
+    def _drain_writes(self, why: str) -> None:
+        """Let queued writes land (at most 5 s) before a session-end nudge and audit, so they see them."""
         writer = getattr(self, "_writer", None)
         if writer is not None:
             pending = writer.drain(5.0)
             if pending:
-                logger.warning("hive-mind: shutdown with %d write(s) still pending after 5 s", pending)
+                logger.warning("hive-mind: %s with %d write(s) still pending after 5 s", why, pending)
+
+    def shutdown(self) -> None:
+        self._drain_writes("shutdown")
         session_id = getattr(self, "_session_id", "")
         if session_id and session_id != getattr(self, "_last_audited_session", ""):
             cwd = str(Path.cwd())

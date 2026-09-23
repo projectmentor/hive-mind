@@ -1,12 +1,12 @@
 {
-  "digest": "d19b6d37c55a85522a3eaffd8396afa128dfe1bade75064573666a9ebb0dc8bb",
+  "digest": "347dec57237cc46abebad9f39c9a9c0708ee5c28d4bca749cb7355be21604fb1",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
     ".github/ISSUE_TEMPLATE/config.yml": "3b57571a57a35ae2a2e1f4ea7771e0674673d3b15dfcd5608d26f2b757cd53e1",
     ".github/dependabot.yml": "42652acf58277a489b63308f8f32e68ec5b8ef14a1e422e0fee22c73f85defe3",
     ".github/pull_request_template.md": "64c9099d2857119c8d471c6cc6f7982232bdc4e4263a7a357a21ee58b433c054",
-    ".github/workflows/ci.yml": "322040cd6c025163adf0b5501fc974d0c3c5062cf285b6dd4254b91cef5684ed",
+    ".github/workflows/ci.yml": "35ba547e7d36e3ac1dc0596c40c99ef4e209598fc13d7edaa40feee53256dc56",
     ".github/workflows/cla.yml": "c9b9ef1fba789b9736a6fc976ae314ebcceed5ab15534663e179f390a1c139b3",
     ".github/workflows/sign.yml": "ba587537147988d260889ebbe20458a4bba8d2a858639c13ae0c7733dc6e5975",
     "CHANGELOG.md": "f9530fb49483cedbe466a87b033e6f8b29cea3510100454846b752d6de179d75",

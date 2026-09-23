@@ -1,5 +1,7 @@
-# Runtime data (per-machine, not versioned)
+# Runtime data (per-machine, not versioned). store.db-* covers SQLite's side files
+# (store.db-wal and store.db-shm in WAL mode, store.db-journal otherwise): they hold hive content.
 store.db
+store.db-*
 journal/*.jsonl
 
 # Migration / pre-Phase-1 backups (per-machine, not versioned)

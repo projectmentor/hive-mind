@@ -331,6 +331,12 @@ when it must re-wire.
   projection declines a non-owner-signed cell/comb entry (it still lands in the journal — every node
   folds it away, convergence-safe). New advisory `cell-authz` doctor check surfaces any now-unhonored
   definition. Set the policy with `hv config set cell_writers owner|fertile`.
+  **Security fix, 2026-07-08, still under contract 1.17** (GHSA-242f-7fxg-f7wm, PR #42): remote sync
+  reads are signed by an admitted device (`Hive-Auth-*` headers), the dashboard's `/api/*` data
+  answers only local or signed requests, and the daemon binds the Tailscale address instead of all
+  interfaces; sync `protocol_version` is 2. This changes the daemon's wire behavior, not the adapter
+  contract: no verb or flag changed. Only a foreign sync client that reads a peer must adopt the
+  signed-request envelope (the bundled `hv` and daemon already do). See `docs/SYNC_API.md`.
 - `1.16` — **capsule write-authorization at the projection**. `_capsule_state` now declines to honor a
   `capsule` entry whose signer was not the authorized writer — under the default `capsule_putters=owner`
   the entry must carry an owner signature from the owner who was legitimate *as of that entry's journal

@@ -158,10 +158,12 @@ at once). Concretely:
   asserted by the writer. They let an *honest* agent mark its own reasoning or background jobs so they
   count for less; they do not stop a dishonest admitted device, which can simply label everything
   `sense` and `primary`. What bounds such a device is identity: admission, the same-device discount
-  and `cap_self`. One gap in how honest labels are applied is open:
-  [#72](https://github.com/projectmentor/hive-mind/issues/72) (an unrecognised label counts at full
-  weight). The other, an `introspect` *fact* assertion counting toward corroboration
-  ([#73](https://github.com/projectmentor/hive-mind/issues/73)), is fixed in 1.21.
+  and `cap_self`. Since 1.21 honest labels are applied consistently: an unrecognised `channel`
+  counts as `introspect`, so a typo or a newer label never earns observation weight
+  ([#72](https://github.com/projectmentor/hive-mind/issues/72)), and an `introspect` *fact*
+  assertion no longer counts as corroboration ([#73](https://github.com/projectmentor/hive-mind/issues/73)).
+  An unrecognised source class weighs 1.0, like an absent one: a class can only claim a discount,
+  so there is nothing to fail open into.
 
 ## Cryptographic posture
 

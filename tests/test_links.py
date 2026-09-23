@@ -8,7 +8,8 @@ Links are EVIDENCE, not commands. One journal type, an open `kind` vocabulary, o
     `hard`: owner-signed for the owner AS OF that journal position, or the target's author. From any
     other admitted device they are downgraded to weigh-only and `doctor link-authz` lists them.
   - grounding rule: a link or a fact assertion whose `channel` is `introspect` weighs
-    `introspect_support_weight` (default 0); assertions since 1.21 (#73)
+    `introspect_support_weight` (default 0); assertions since 1.21 (#73). An unrecognised channel
+    counts as `introspect` (#72); an unrecognised source class weighs 1.0, like an absent one
 Every projection is pure over the journal — the two-node differential at the bottom is the guarantee.
 
 Entries are crafted in-memory exactly as `hv` would sign them (device signature; optional owner
@@ -230,6 +231,66 @@ def test_introspect_only_fact_lands_with_zero_confidence_and_can_still_earn_it(t
     assert row["confidence"] == 0.0 and row["last_evidence_at"] is None
     sup = _link(hv, b, "supports", obs, fi, "2026-01-03T00:00:00Z")
     assert _conf(_project(hv, tmp_path, base + [fi, fi2, obs, sup]), fi["payload"]["content"]) > 0
+
+
+def test_unrecognised_channel_counts_as_introspect_everywhere(tmp_path, monkeypatch):
+    """#72: one normaliser (`_channel`) for every reader. Absent = sense; `act` keeps full weight; any
+    label outside the vocabulary (a typo, a newer word, a non-string) counts as `introspect`, so it
+    never earns observation weight, whether on a link or on an assertion."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert hv._channel({}) == "sense" and hv._channel({"channel": ""}) == "sense"
+    assert hv._channel(None) == "sense"
+    assert [hv._channel({"channel": c}) for c in ("sense", "act", "introspect")] == ["sense", "act", "introspect"]
+    for odd in ("introspective", "reasoning", "SENSE", 5, ["sense"], {"x": 1}):
+        assert hv._channel({"channel": odd}) == "introspect", odd
+    _, (a, b, _c), base = _owned_hive(hv)
+    f1 = _fact(hv, a, "the nightly backup finished at 02:14", "2026-01-02T00:00:00Z")
+    f2 = _fact(hv, a, "the backup volume has 40% free", "2026-01-02T00:00:01Z")
+    one = _conf(_project(hv, tmp_path, base + [f1, f2]), f1["payload"]["content"])
+    # a mistyped channel on a supports link: no weight (it used to count in full)
+    typo = _link(hv, b, "supports", f2, f1, "2026-01-03T00:00:00Z", channel="introspective")
+    assert round(_conf(_project(hv, tmp_path, base + [f1, f2, typo]), f1["payload"]["content"]), 6) == round(one, 6)
+    # `act` is a known channel and keeps full weight
+    act = _link(hv, b, "supports", f2, f1, "2026-01-03T00:00:00Z", channel="act")
+    assert _conf(_project(hv, tmp_path, base + [f1, f2, act]), f1["payload"]["content"]) > one
+    # an unknown channel on a restated fact adds nothing either
+    odd = _fact(hv, b, f1["payload"]["content"], "2026-01-03T00:00:01Z", channel="reasoning")
+    assert round(_conf(_project(hv, tmp_path, base + [f1, f2, odd]), f1["payload"]["content"]), 6) == round(one, 6)
+
+
+def test_unrecognised_channel_counts_with_introspect_in_trust_velocity(tmp_path, monkeypatch):
+    """#72: `_signer_reliability` splits by channel; `act` counts with `sense` (unchanged) and an
+    unrecognised label now counts with `introspect` instead of `sense`."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, (a, _b, _c), base = _owned_hive(hv)
+    facts = [_fact(hv, a, "observed the queue drain", "2026-01-05T00:00:00Z"),
+             _fact(hv, a, "restarted the worker", "2026-01-05T00:00:01Z", channel="act"),
+             _fact(hv, a, "the queue probably drains on its own", "2026-01-05T00:00:02Z", channel="musing")]
+    entries = base + facts
+    rel = hv._signer_reliability(entries, hv._governance_state(entries), 30.0, "2026-01-10T00:00:00Z")
+    ch = rel[a["id"]]["channels"]
+    assert ch["sense"]["asserted"] == 2 and ch["introspect"]["asserted"] == 1
+
+
+def test_unrecognised_source_class_weighs_like_primary(tmp_path, monkeypatch):
+    """#72, decided: the source class is a self-declared DISCOUNT, so an unrecognised class claims none
+    and weighs 1.0, like an absent class. `subagent` and `cron` still discount."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert hv._identity_weight("n", "claude-code:myproject/inst")[1] == 1.0     # context name in the slot
+    assert hv._identity_weight("n", "claude-code:primary/inst")[1] == 1.0
+    assert hv._identity_weight("n", "claude-code")[1] == 1.0                    # flat = absent class
+    assert hv._identity_weight("n", "claude-code:subagent/inst")[1] == 0.5
+    assert hv._identity_weight("n", "claude-code:cron/inst")[1] == 0.3
+    _, (a, b, _c), base = _owned_hive(hv)
+    content = "the vendor API rate limit is 600 requests per minute"
+    fa = _fact(hv, a, content, "2026-01-02T00:00:00Z")
+    named = _fact(hv, b, content, "2026-01-03T00:00:00Z", source="claude-code:myproject/inst")
+    primary = _fact(hv, b, content, "2026-01-03T00:00:00Z", source="claude-code:primary/inst")
+    sub = _fact(hv, b, content, "2026-01-03T00:00:00Z", source="claude-code:subagent/inst")
+    c_named = _conf(_project(hv, tmp_path, base + [fa, named]), content)
+    c_primary = _conf(_project(hv, tmp_path, base + [fa, primary]), content)
+    c_sub = _conf(_project(hv, tmp_path, base + [fa, sub]), content)
+    assert round(c_named, 6) == round(c_primary, 6) and c_sub < c_primary
 
 
 # ── supersedes: hard vs downgraded ────────────────────────────────────────────────────────────────

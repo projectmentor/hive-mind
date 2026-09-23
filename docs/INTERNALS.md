@@ -44,17 +44,18 @@ Each line in a `.jsonl` file is a JSON object:
 |---|---|
 | `node_id` | The authoring node's **device identity**: `k1:` + first 16 hex of `sha256(pubkey)` |
 | `seq` | Per-node monotonic sequence number |
-| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `entity_fact`, `link` (1.19), `idea` (1.20), `governance` |
+| `type` | Entry type: `fact`, `retract`, `decision`, `entity`, `governance`, `capsule`, `cell`, `comb` (1.13), `link` (1.19), `idea` (1.20); `entity_fact` is legacy (read only, see below) |
 | `timestamp` | ISO8601 wall clock at write time |
 | `payload` | Type-specific data |
 | `prev_hash` | Hash of the previous entry — forms a hash chain per node |
 | `pub` | The signer's Ed25519 public key (present on signed entries) |
 | `sig` | Ed25519 signature over the canonical entry minus `sig`; the hash chain commits to it |
 
-The `governance` type carries owner-resilience actions (owner declaration, admit,
-set-config, standby, escrow/revoke-escrow, nominated succession/transfer, quorum
-election proposals/votes, and the dead-man heartbeat); it's projected by
-`_governance_state` (see *Confidence model* below).
+The `governance` type carries the owner declaration (`owner`), membership (`admit`, `revoke`,
+`deny`, `change`, `purge`, and a joiner's self-signed `join-request`), `set-config`, the
+owner-resilience actions (`standby`, `owner-escrow` / `revoke-escrow`, nominated succession and
+`transfer`, quorum-election proposals and votes, the dead-man `heartbeat`), and the authority-less
+`announce` (1.18). It's projected by `_governance_state` (see *Confidence model* below).
 
 `node_id` is an unforgeable device fingerprint, not a hostname (see *Device
 identity* below). Signed entries are verified on ingest: an entry whose `node_id`
@@ -68,12 +69,16 @@ ensures links survive cross-node merge correctly.
 
 A decision payload may carry `informed_by`: a list of `[node_id, seq]` refs it relied on
 (additive, 1.19 PR3; projected to `decisions.informed_by`). The stable identity of any entry is
-`node_id:seq`, surfaced as `ref` by `hv search`; local ids are rowids and shift on every rebuild.
+`node_id:seq`, surfaced as `ref` by `hv search`, and in short form as the `sid` (`h:…`, see *Stable
+short ids*); local ids are rowids and shift on every rebuild.
 
 Since contract 1.19 new relationships are expressed by ONE generic `link` type
-with an open `kind` vocabulary (see *Links* below); the three legacy mechanisms
-(`entity_fact`, `retract`, decision `supersedes_ref`) keep their resolvers forever
-because the journal is append-only and nothing is ever migrated.
+with an open `kind` vocabulary (see *Links* below). Since 1.19 PR2b no command writes
+the three legacy mechanisms any more — `entity_fact` entries, the `resolves_ref` +
+`retract` pair that `--resolves` used to write, and the decision `supersedes_ref` —
+so their resolvers are **read-compat only**, kept forever for entries already in
+journals (the journal is append-only and nothing is ever migrated). A plain
+`hv retract` still writes a `retract` entry; that is not a link mechanism.
 
 ---
 
@@ -88,8 +93,11 @@ Confidence is a derived value — never stored directly. It's computed by
 confidence(n) = 0.90 × (1 − 0.5ⁿ)
 ```
 
-Where `n` = number of distinct corroborating identities asserting identical
-content.
+Where `n` is the governed **net** evidence for that content: the identity-weighted
+positive evidence minus the negative (retractions, `contradicts`/`resolves` links),
+after the same-device discount, the admission gate and `cap_self`. With no
+discounts and no negative evidence, `n` is simply the number of distinct identities
+asserting identical content, as in the table.
 
 | n (sources) | Confidence |
 |---|---|
@@ -180,8 +188,9 @@ escrow passphrase is truly remediated only by rotating the owner key via success
 
 ### Retraction effects
 
-- Standard retraction (`hv retract`) → reduces confidence by excluding the
-  retractor's identity from the projection
+- Standard retraction (`hv retract`) → adds the retractor's identity weight as
+  **negative evidence** (net = positive − negative), so a fact can become contested
+  or go negative
 - Owner retraction (`hv retract --owner`) → drives confidence to the floor.
   Once an owner exists it must be **owner-signed** (you can't forge a forget with
   a bare source tag); forgets predating the owner are grandfathered.
@@ -205,8 +214,8 @@ vindication signal that informs the human who might supersede and never demotes 
 its own.
 
 An outcome is not a new type. It is an ordinary fact plus a `link` of kind `outcome-of` whose
-`data.polarity` is +1, 0 or −1 (ternary at the CLI/MCP; numeric in the schema so a future
-machine writer may use a float in [−1, 1]). `_decision_evidence` is a deliberate clone of
+`data.polarity` is +1, 0 or −1 (ternary at the CLI/MCP; numeric in the schema, so any value in
+[−1, 1] is valid). `_decision_evidence` is a deliberate clone of
 `_content_evidence` keyed by the decision's journal identity: each `outcome-of` link is one
 identity's report, weighted `identity weight × |polarity|`, positive or negative by sign; a
 polarity of 0 records "observed, neutral" (moves `last_outcome_at`, not the score), which is
@@ -218,10 +227,9 @@ own decision by reflection. Stored undecayed in `decisions.outcome_score`; the r
 the evidence under the fact half-life while the decision's standing never decays.
 
 Both evidence projections now retain the ordered sequence `evidence: [(ts, sign, identity), …]`
-per target. Nothing reads it yet; it is the prerequisite for a future per-fact adaptive
-half-life (design D-2).
+per target. Nothing reads it today.
 
-### Phase roadmap
+### Phase history
 
 - **Phase A** (shipped): derived corroboration confidence, multi-source
 - **Phase B / D0-v2** (shipped): journaled governance, same-device discount,
@@ -230,6 +238,8 @@ half-life (design D-2).
 - **Owner resilience** (shipped): pt.1 backup/restore + escrow + standby; pt.2 nominated
   succession + transfer + escrow tombstone (the owner chain above); pt.3 quorum election +
   dead-man switch (contract 1.9) — shipped
+- **Continual learning** (shipped, contracts 1.19–1.20): generic links, informed decisions,
+  outcome scores, ideas, learned importance and utility, trust velocity (sections below)
 
 ---
 
@@ -251,12 +261,12 @@ One journal type, an open vocabulary, one resolver.
 
 | kind | from → to | effect |
 |---|---|---|
-| `supports` | fact/idea → fact/idea | positive evidence on the target (`_content_evidence` for facts, `_idea_evidence` for ideas) |
-| `contradicts` | fact/idea → fact/idea | negative evidence on the target |
+| `supports` | fact/idea → fact/idea | positive evidence on the target (`_content_evidence` for facts, `_idea_evidence` for ideas). Read side only: no command writes this kind yet ([#71](https://github.com/projectmentor/hive-mind/issues/71)) |
+| `contradicts` | fact/idea → fact/idea | negative evidence on the target. Read side only, as above |
 | `supersedes` | decision → decision | **hard:** `decisions.superseded_by`; **evidence:** row only |
 | `resolves` | fact → fact | **hard:** `facts.resolves` provenance + retract-equivalent evidence; **evidence:** evidence only |
 | `entity` | entity → fact | `entity_facts` row |
-| `informed` | decision → fact/decision | written by `hv decide --informed` (PR3); the decision's payload also carries `informed_by` as the human-legible record; utility projection lands with PR6 |
+| `informed` | decision → fact/idea/decision | written by `hv decide --informed` (PR3); the decision's payload also carries `informed_by` as the human-legible record; feeds the utility projection (PR6) |
 | `outcome-of` | fact → decision | written by `hv remember --outcome-of`; scored into `decisions.outcome_score` (PR4) |
 
 **Links are evidence, not commands.** `_link_authority` returns `hard` only when the payload
@@ -295,7 +305,7 @@ Advisory; `--fix` never touches it.
 
 ## Importance and utility (1.19 PR6)
 
-Two learned, projection-written columns beside `confidence` (design §3, §7.1–7.3). Both are pure
+Two learned, projection-written columns beside `confidence` ([design](design/hivemind_continual_learning_design.md) §3, §7.1–7.3). Both are pure
 over the journal + governance, written only in `rebuild_db` (and inline after `remember` /
 `decide`), stored **undecayed**, and decayed at query time. `access_count` / `last_accessed` are
 never read — node-local state never enters a projection.
@@ -383,7 +393,7 @@ two observations.
 
 ## Trust velocity (contract 1.19)
 
-A derived, per-signer view of the evidence the projections already hold (design §8).
+A derived, per-signer view of the evidence the projections already hold ([design](design/hivemind_continual_learning_design.md) §8).
 
 - `_signer_reliability(entries, gov, window_days, now)` — per node over the trailing window:
   facts asserted, facts contradicted by a **different** node (a `retract` or a `contradicts`
@@ -453,8 +463,8 @@ device fingerprint if a key is present → the hostname (legacy, pre-migration).
 
 A key is minted only by `hv config identity init` (fresh install) or the migration — importing
 `hv` never creates one, so a legacy hostname node keeps its identity until it is
-deliberately migrated. `hv migrate-device-identity --map` (the canonical user command; also reachable as the
-folded `hv doctor migrate-identity --map`) re-stamps an existing
+deliberately migrated. `hv doctor migrate-identity --map` (the canonical command; `hv
+migrate-device-identity` is kept as a silent alias) re-stamps an existing
 journal from hostnames to device_ids: a deterministic transform (same map on every
 node → byte-identical journals → peers stay converged). Two instances on one box
 still need distinct `HIVE_NODE_ID` or distinct keys.
@@ -573,15 +583,16 @@ Key tables in `store.db`:
 
 | Table | Description |
 |---|---|
-| `facts` | Stored facts with FTS5 index (`facts_fts`) |
-| `decisions` | Decisions with supersession links |
-| `entities` | Named entities |
-| `entity_facts` | Many-to-many fact-to-entity links |
+| `facts` | Facts, with an FTS5 index (`facts_fts`): `content, tags, source_agent, created_at`, the projection-written `confidence, contested, last_evidence_at`, `resolves` (provenance of a hard `resolves` link), and the learned `importance, utility, last_link_at` (1.19 PR6). Also `source_session` and the node-local or legacy `access_count, last_accessed, trust_score`, which no projection reads |
+| `decisions` | Decisions: `content, rationale, source_agent, created_at, tags` (1.15), `superseded_by`, `informed_by` (1.19), `outcome_score, last_outcome_at` (1.19 PR4) |
+| `ideas` | 1.20 hypotheses: `content, tags, source_agent, source_session, created_at, confidence, contested, last_evidence_at, importance, utility, last_link_at` — one row per `idea` entry; confidence earned from links only |
+| `entities` | Named entities: `name, type, attributes, first_seen, last_updated` |
+| `entity_facts` | Many-to-many fact-to-entity links (`entity_id, fact_id, confidence`), from `entity` links and legacy `entity_fact` entries |
 | `links` | 1.19 generic edge table projected from `link` entries: `kind, from_kind, from_id, to_kind, to_id, signer, authority, channel, created_at` |
-| `ideas` | 1.20 hypotheses: `content, tags, source_agent, created_at, confidence, contested, last_evidence_at, utility` — one row per `idea` entry, confidence earned from links only |
-| `journal_index` | Index of ingested journal entries by `(node_id, seq)` → `(kind, local_id, sid)`; `sid` (1.19 PR3b) is the indexed short id `h:` + `sha256("node_id:seq")[:10]` |
-| `facts.importance` / `facts.utility` / `facts.last_link_at` | 1.19 PR6: projection-written salience (L3) and utility; `ideas` carry the same three |
-| `node_chunk_hashes` | Merkle chunk hashes per node, used by sync |
+| `journal_index` | Every ingested journal entry by `(node_id, seq)` → `(kind, local_id, sid)`; `sid` (1.19 PR3b) is the indexed short id `h:` + `sha256("node_id:seq")[:10]` |
+
+Merkle chunk hashes are not stored: `merkle.node_chunk_hashes()` computes them from the journal when
+sync asks.
 
 ### WAL mode
 
@@ -596,6 +607,17 @@ PRAGMA mmap_size=268435456;
 This allows concurrent reads during writes and is safe for the single-writer
 model HiveMind uses.
 
+### Performance
+
+Every projection is a pure function over the whole journal, and today each evidence projection
+(`_content_evidence`, `_decision_evidence`, `_idea_evidence`, `_link_attention`,
+`_utility_evidence`) re-verifies every entry's signature in pure-Python Ed25519 on each call.
+`_governance_state` is memoized, but only within one process: it helps the long-running daemon, while
+every CLI call pays the cold cost once. On a journal of about 800 entries a search takes about
+15 seconds and a write about a minute, which is enough to time out the agent adapters. Tracked in
+[#70](https://github.com/projectmentor/hive-mind/issues/70); see also `HV_ARCHITECTURE.md` on making
+the governance projection an explicit input.
+
 ---
 
 ## Source identity format
@@ -606,15 +628,18 @@ Used in `--source` arguments and stored in journal entries.
 <app>:<context_class>/<instance>/<session8>
 ```
 
-The confidence model extracts `(app, instance)` from this string and pairs it
-with the entry's `node_id` (the device identity). `--source` is a **human label**
+The confidence model extracts `(app, context_class, instance)` from this string
+(`_parse_source`) and pairs `(app, instance)` with the entry's `node_id` (the device
+identity) to form one identity (`_identity_weight`). `context_class` sets the identity's
+weight: `primary` 1.0, `subagent` 0.5, `cron` 0.3, and 1.0 for a source with no class
+(`manual`, a bare `claude-code`). `--source` is a **human label**
 on top of the cryptographic device identity: it distinguishes agents/apps on one
 device, but it is self-asserted and not what proves who wrote an entry — the
 device signature is. `session8` is for human/log readability only and does not
 affect confidence.
 
-**Do not change this format** without updating `_recompute_confidence` in `hv`
-and coordinating with any live agent integrations (Hermes plugin, CC hooks).
+**Do not change this format** without updating `_parse_source` / `_identity_weight` in
+`hv` and coordinating with any live agent integrations (Hermes plugin, CC hooks).
 
 ---
 

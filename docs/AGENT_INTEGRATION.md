@@ -234,8 +234,12 @@ when it must re-wire.
   The fact still lands and can be searched, linked and supported; it sits at confidence 0 until an
   observation (a `sense` assertion or `supports` link from another identity) backs it. `hv remember`
   prints a note when it writes one. No verb, flag or output-schema change; adapters keep working.
-  Version skew: a 1.20 node keeps counting introspect facts until it upgrades (confidence differs
-  across the fleet; the journal and Merkle root do not).
+  **Unrecognised labels fail closed** (#72): a `channel` outside `sense`/`act`/`introspect`
+  (reachable only through raw journal entries) counts as `introspect` everywhere, so a typo or a newer
+  label never earns observation weight; an unrecognised source class keeps weight 1.0, like an absent
+  one, because a class can only claim a discount. Version skew: a 1.20 node keeps counting introspect
+  facts and unknown channels until it upgrades (confidence differs across the fleet; the journal and
+  Merkle root do not).
 - `1.20` — **`idea` journal type.** A hypothesis whose confidence is *earned*, never asserted:
   `hv propose` / `hive_propose` journal an `idea` (channel defaults to `introspect`); it starts at
   confidence 0.0 in a new `ideas` table and moves only via `supports`/`contradicts` links from other

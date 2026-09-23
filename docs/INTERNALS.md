@@ -204,7 +204,9 @@ fact is folded into the same evidence maps as assertions and retractions:
 discount and admission apply unchanged. **Grounding rule:** a link whose
 `channel` is `introspect` weighs `introspect_support_weight` (governed knob,
 default `0`) — reasoning never corroborates or contradicts an observation; an
-absent channel means `sense`. Since 1.21 the rule also applies to the assertions
+absent channel means `sense`, and a channel outside `sense`/`act`/`introspect` counts as
+`introspect` (`_channel`, 1.21, #72), so an unrecognised label never earns observation
+weight. Since 1.21 the rule also applies to the assertions
 themselves: a `fact` entry whose `channel` is `introspect` adds that weight
 (default nothing) to the positive side. The fact still lands, as a row at
 confidence 0 with no `last_evidence_at`, until an observation backs it.
@@ -655,7 +657,8 @@ The confidence model extracts `(app, context_class, instance)` from this string
 (`_parse_source`) and pairs `(app, instance)` with the entry's `node_id` (the device
 identity) to form one identity (`_identity_weight`). `context_class` sets the identity's
 weight: `primary` 1.0, `subagent` 0.5, `cron` 0.3, and 1.0 for a source with no class
-(`manual`, a bare `claude-code`). `--source` is a **human label**
+(`manual`, a bare `claude-code`) or an unrecognised one. The class is a self-declared
+discount, so an unknown class claims none, which is what an absent class claims (#72). `--source` is a **human label**
 on top of the cryptographic device identity: it distinguishes agents/apps on one
 device, but it is self-asserted and not what proves who wrote an entry — the
 device signature is. `session8` is for human/log readability only and does not

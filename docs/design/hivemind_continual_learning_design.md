@@ -1,5 +1,23 @@
 # HiveMind × Alberta Plan — integration design (contract 1.18 → 1.19)
 
+> **Status (2026-09-23, reconciled against `main` at contract 1.20).** This is the plan that
+> contract 1.19–1.20 was built from (PRs #49, #57, #60–#66). §1–§9 shipped, mostly as written;
+> where this plan and the code differ, **the code is authoritative** — see `docs/INTERNALS.md`
+> and `docs/CLI_REFERENCE.md`. Differences:
+>
+> 1. The introspect grounding rule was applied to links only; an `introspect`-channel *fact*
+>    assertion still counts toward corroboration (§0.1) — a bug, tracked in #73.
+> 2. No command writes `supports`/`contradicts` links, so ideas cannot yet earn confidence
+>    (§2, §6) — tracked in #71.
+> 3. Importance counts attention from other *principals*, not merely other identities (§7).
+> 4. Ideas take no `outcome-of` evidence (§6).
+>
+> Added beyond the plan: stable short ids `h:…` (PR #64), `hv search --sort`, and
+> `effective_outcome_score`. Not implemented, and not part of the open-source core: the event bus
+> (§0.1), per-channel admission thresholds (§0.1), the §4.1 follow-ons, and the §10 deferred
+> initiatives. §11–§12 (positioning and site copy) are kept privately. Line numbers in the body
+> are approximate and refer to contract 1.18.
+
 Grounded in `main` @ contract 1.18 (`hv`, 6440 lines). Line numbers are approximate. Code blocks are
 **sketches to hand to Claude Code**, not drop-in patches.
 

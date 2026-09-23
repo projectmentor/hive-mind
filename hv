@@ -3051,7 +3051,16 @@ def search(args):
     if args.format == "json":
         # Stays a flat list (back-compat) with a new `kind` discriminator; decisions carry no
         # confidence, so a min_confidence>0 consumer naturally drops them.
+        # `tags` is the stored JSON-encoded string (back-compat); `tag_list` (1.21, #77) is the same
+        # tags as a list. At 2.0 `tags` becomes the list (a breaking change, so it waits for the MAJOR).
+        def _tag_list(r):
+            try:
+                t = json.loads(r["tags"]) if r["tags"] else []
+            except (TypeError, ValueError):
+                return []
+            return [str(x) for x in t] if isinstance(t, list) else []
         out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"]),
+                "tag_list": _tag_list(r),
                 "sid": fsids.get(r["id"]),
                 "effective_importance": sal(r, _fact_class(r["tags"]))[0],
                 "effective_utility": sal(r, _fact_class(r["tags"]))[1]} for eff, r in scored]
@@ -3060,10 +3069,11 @@ def search(args):
         # consumers still drop decisions. `last_outcome_at` NULL = no outcome yet.
         out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
                  "ref": drefs.get(r["id"]), "sid": dsids.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
+                 "tag_list": _tag_list(r),
                  "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact)
                                              if r["last_outcome_at"] else None)} for r in dec_rows]
         out += [{**dict(r), "kind": "idea", "effective_confidence": eff, "ref": irefs.get(r["id"]),
-                 "sid": isids.get(r["id"]),
+                 "sid": isids.get(r["id"]), "tag_list": _tag_list(r),
                  "effective_importance": sal(r, "idea")[0], "effective_utility": sal(r, "idea")[1]}
                 for eff, r in iscored]
         print(json.dumps(out, indent=2))

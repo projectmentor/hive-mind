@@ -55,7 +55,9 @@ WRITE ONLY durable, checkable, reusable knowledge, and route it by what it is:
   sid>", polarity=1|0|-1). Only observed results count; for your own assessment rather than
   an observation, pass channel="introspect" (recorded, never counted);
 - a HYPOTHESIS worth testing -> hive_propose(content): an idea, never a fact;
-- corrections, constraints/commitments, observations, new entities -> hive_remember.
+- a CORRECTION of a fact that is wrong -> hive_remember(content, resolves="<wrong fact's sid>"):
+  writes the correction and soft-retracts the old fact in one step (reversible);
+- constraints/commitments, observations, new entities -> hive_remember.
 Do NOT write your chain-of-thought or restatements. Mark epistemic status via tags.
 
 WHEN YOU READ, treat results as signals with provenance, not truth — weigh the confidence,
@@ -135,7 +137,7 @@ def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> l
 
 @mcp.tool()
 def hive_remember(content: str, tags: str = "", epistemic_status: str = "observation",
-                  outcome_of: str = "", polarity: int = 1, channel: str = "") -> str:
+                  outcome_of: str = "", polarity: int = 1, channel: str = "", resolves: str = "") -> str:
     """Record a durable, checkable fact to the shared corpus (source=claude-ai).
 
     SEARCH FIRST (hive_search) — only write if it's genuinely new. Write outcomes,
@@ -152,6 +154,11 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     of the world (the default, counted); pass "introspect" if this is your own reasoning rather
     than something observed — it is recorded but never counted as corroboration of the fact or
     toward the decision's outcome.
+
+    resolves: when this fact CORRECTS an earlier fact that is wrong, pass the wrong fact's `sid`
+    (from hive_search, `h:…`; its `ref` also works). The correction is written with one `resolves`
+    link and the old fact is soft-retracted: reversible negative evidence, never a deletion. The
+    target is kind-checked; a bad reference aborts before anything is written.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if epistemic_status and epistemic_status not in tag_list:
@@ -163,6 +170,8 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
         args += ["--outcome-of", outcome_of.strip(), "--polarity", str(int(polarity))]
     if channel:
         args += ["--channel", channel]
+    if resolves:
+        args += ["--resolves", resolves.strip()]
     return _run_hv(args)
 
 
@@ -232,10 +241,10 @@ def hive_retract(fact_id: str, reason: str = "") -> str:
     This is deliberate, reversible negative evidence — NOT a deletion. The decisive owner-forget
     (`hv retract --owner`) is intentionally NOT exposed here; it stays a CLI/owner action.
 
-    To replace a fact with a correction, the clean path is the CLI's `hv remember "<correction>"
-    --resolves <sid>`, which this server does not expose yet (hive-mind #75). Over MCP, retract the
-    wrong fact here and write the correction with hive_remember. A prose "resolves <sid>" in the
-    correction only gets flagged later by the audit; it does not retract anything.
+    To REPLACE a fact with a correction, don't use this tool: call
+    hive_remember("<correction>", resolves="<sid>"), which writes the correction and soft-retracts
+    the old fact in one step. A prose "resolves <sid>" in the correction's text only gets flagged
+    later by the audit; it does not retract anything.
     """
     args = ["retract", str(fact_id).strip(), "--source", "claude-ai"]
     if reason:

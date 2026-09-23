@@ -123,7 +123,7 @@ at once). Concretely:
   first valid self-signed `owner` declaration wins. An attacker who injects an `owner` declaration
   before the legitimate one can front-run ownership. *Mitigation:* establish the owner before
   exposing the daemon, and verify the genesis `hive_id`/`owner_id` out-of-band when joining. Closing
-  this in code is consensus-critical and deferred to its own change with multi-node convergence tests.
+  this in code is consensus-critical and has not been done; the mitigation above is the defence.
 - **Join-request replay semantics.** Join-requests are last-write-wins per `device_id`; a denied
   device can re-ask, and clearing a deny makes an older request visible again. This is intended
   (a device may legitimately re-request), but it is not replay-bounded. Documented, not changed.

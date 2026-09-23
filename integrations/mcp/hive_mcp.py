@@ -150,7 +150,8 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     `sid` (from hive_search, `h:…`; its `ref` `node_id:seq` also works). polarity: +1 it worked out (default), -1 it did
     not, 0 observed and neutral — ternary on purpose. channel: leave empty for an observation
     of the world (the default, counted); pass "introspect" if this is your own reasoning rather
-    than something observed — it is recorded but never counted toward the decision's outcome.
+    than something observed — it is recorded but never counted as corroboration of the fact or
+    toward the decision's outcome.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if epistemic_status and epistemic_status not in tag_list:

@@ -7,7 +7,8 @@ Links are EVIDENCE, not commands. One journal type, an open `kind` vocabulary, o
   - supersedes / resolves COMMAND (superseded_by / facts.resolves) only when `_link_authority` says
     `hard`: owner-signed for the owner AS OF that journal position, or the target's author. From any
     other admitted device they are downgraded to weigh-only and `doctor link-authz` lists them.
-  - grounding rule: a link whose `channel` is `introspect` weighs `introspect_support_weight` (default 0)
+  - grounding rule: a link or a fact assertion whose `channel` is `introspect` weighs
+    `introspect_support_weight` (default 0); assertions since 1.21 (#73)
 Every projection is pure over the journal — the two-node differential at the bottom is the guarantee.
 
 Entries are crafted in-memory exactly as `hv` would sign them (device signature; optional owner
@@ -67,8 +68,11 @@ def _entry(hv, dev, typ, payload, ts, owner=None):
     return hv._sign_entry(e, dev["seed"], dev["pub"])
 
 
-def _fact(hv, dev, content, ts, source="manual"):
-    return _entry(hv, dev, "fact", {"content": content, "tags": [], "importance": 0.5, "source": source}, ts)
+def _fact(hv, dev, content, ts, source="manual", channel=None):
+    p = {"content": content, "tags": [], "importance": 0.5, "source": source}
+    if channel is not None:
+        p["channel"] = channel
+    return _entry(hv, dev, "fact", p, ts)
 
 
 def _decision(hv, dev, content, ts):
@@ -184,6 +188,48 @@ def test_contradicts_lowers_and_introspect_weighs_zero_until_the_knob_is_raised(
     conn = _project(hv, tmp_path, base + [knob, f1, f2, intro])
     assert round(_conf(conn, f1["payload"]["content"]), 6) == 0.0
     assert hv._governance_state(base + [knob])["config"]["introspect_support_weight"] == 1.0
+
+
+def test_introspect_fact_assertion_does_not_corroborate_until_the_knob_is_raised(tmp_path, monkeypatch):
+    """#73: the grounding rule covers ASSERTIONS, not only links. A second identity restating a fact
+    from `introspect` adds nothing; restating it from `sense` (or with no channel) corroborates."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    (oseed, opub, _oid), (a, b, _c), base = _owned_hive(hv)
+    content = "the staging database runs postgres 16"
+    fa = _fact(hv, a, content, "2026-01-02T00:00:00Z")
+    one = _conf(_project(hv, tmp_path, base + [fa]), content)
+    assert one > 0
+    intro = _fact(hv, b, content, "2026-01-03T00:00:00Z", channel="introspect")
+    assert round(_conf(_project(hv, tmp_path, base + [fa, intro]), content), 6) == round(one, 6)
+    sense = _fact(hv, b, content, "2026-01-03T00:00:00Z", channel="sense")
+    two = _conf(_project(hv, tmp_path, base + [fa, sense]), content)
+    assert two > one
+    absent = _fact(hv, b, content, "2026-01-03T00:00:00Z")               # absent channel = sense
+    assert round(_conf(_project(hv, tmp_path, base + [fa, absent]), content), 6) == round(two, 6)
+    # the owner raises the governed knob → the same introspect restatement now counts like a sense one
+    knob = _gov(hv, {"action": "set-config", "key": "introspect_support_weight", "value": 1.0},
+                oseed, opub, "2026-01-01T00:00:09Z", 9)
+    raised = _conf(_project(hv, tmp_path, base + [knob, fa, intro]), content)
+    assert round(raised, 6) == round(two, 6)
+
+
+def test_introspect_only_fact_lands_with_zero_confidence_and_can_still_earn_it(tmp_path, monkeypatch):
+    """#73: an introspect-only fact is still in the corpus (a row, searchable, linkable), at confidence 0
+    with no evidence timestamp; a `sense` supports link from another identity then raises it."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, (a, b, _c), base = _owned_hive(hv)
+    fi = _fact(hv, a, "the retry storm is probably caused by the cache", "2026-01-02T00:00:00Z",
+               channel="introspect")
+    fi2 = _fact(hv, b, "the retry storm is probably caused by the cache", "2026-01-02T00:00:05Z",
+                channel="introspect")
+    obs = _fact(hv, b, "cache hit rate fell to 3% during the retry storm", "2026-01-02T00:00:10Z")
+    conn = _project(hv, tmp_path, base + [fi, fi2, obs])
+    row = conn.execute("SELECT confidence, last_evidence_at FROM facts WHERE content = ?",
+                       (fi["payload"]["content"],)).fetchone()
+    assert row is not None                                    # it landed
+    assert row["confidence"] == 0.0 and row["last_evidence_at"] is None
+    sup = _link(hv, b, "supports", obs, fi, "2026-01-03T00:00:00Z")
+    assert _conf(_project(hv, tmp_path, base + [fi, fi2, obs, sup]), fi["payload"]["content"]) > 0
 
 
 # ── supersedes: hard vs downgraded ────────────────────────────────────────────────────────────────
@@ -357,7 +403,8 @@ def test_two_node_differential_is_byte_identical(tmp_path, monkeypatch):
                       _link(hv, c, "supersedes", new, old, "2026-01-03T00:00:03Z", owner=(oseed, opub)),
                       _link(hv, b, "informed", new, f1, "2026-01-03T00:00:04Z"),
                       _link(hv, b, "outcome-of", f2, new, "2026-01-03T00:00:05Z", data={"polarity": 1}),
-                      _link(hv, a, "unknownkind", f1, f2, "2026-01-03T00:00:06Z")]
+                      _link(hv, a, "unknownkind", f1, f2, "2026-01-03T00:00:06Z"),
+                      _fact(hv, c, "the deploy took eleven minutes", "2026-01-03T00:00:07Z", channel="introspect")]
 
     def snapshot(home, order):
         h = _loadhv(home, monkeypatch)

@@ -85,8 +85,9 @@ at once). Concretely:
   correction from a peer is not silenced, but it cannot hide or replace. There is deliberately no
   `link_writers` knob (a fertile hive needs every agent to link). Unknown link kinds project to
   nothing. `hv doctor` (`link-authz`) lists every downgraded link; the owner ratifies by re-issuing it
-  owner-signed. Grounding: a `supports`/`contradicts` link whose `channel` is `introspect` weighs
-  `introspect_support_weight` (default 0), so no agent can talk a claim up or down by reasoning alone.
+  owner-signed. Grounding: a `supports`/`contradicts` link, or (since 1.21) a fact assertion, whose
+  `channel` is `introspect` weighs `introspect_support_weight` (default 0), so no agent can talk a
+  claim up or down by reasoning alone.
 - **Version skew during the link write-path switch (contract 1.19 PR2b).** `hv decide --supersedes`,
   `hv remember --resolves` and `hv entity link` now write only a `link` entry. A node older than 1.19
   lands that entry (journals stay converged) but does not honour it, so on that node a superseded
@@ -157,10 +158,10 @@ at once). Concretely:
   asserted by the writer. They let an *honest* agent mark its own reasoning or background jobs so they
   count for less; they do not stop a dishonest admitted device, which can simply label everything
   `sense` and `primary`. What bounds such a device is identity: admission, the same-device discount
-  and `cap_self`. Two gaps in how honest labels are applied are open:
+  and `cap_self`. One gap in how honest labels are applied is open:
   [#72](https://github.com/projectmentor/hive-mind/issues/72) (an unrecognised label counts at full
-  weight) and [#73](https://github.com/projectmentor/hive-mind/issues/73) (an `introspect` *fact*
-  assertion still counts toward corroboration; only `introspect` links are zero-weighted).
+  weight). The other, an `introspect` *fact* assertion counting toward corroboration
+  ([#73](https://github.com/projectmentor/hive-mind/issues/73)), is fixed in 1.21.
 
 ## Cryptographic posture
 

@@ -86,6 +86,19 @@ at once). Concretely:
   nothing. `hv doctor` (`link-authz`) lists every downgraded link; the owner ratifies by re-issuing it
   owner-signed. Grounding: a `supports`/`contradicts` link whose `channel` is `introspect` weighs
   `introspect_support_weight` (default 0), so no agent can talk a claim up or down by reasoning alone.
+- **Version skew during the link write-path switch (contract 1.19 PR2b).** `hv decide --supersedes`,
+  `hv remember --resolves` and `hv entity link` now write only a `link` entry. A node older than 1.19
+  lands that entry (journals stay converged) but does not honour it, so on that node a superseded
+  decision still reads as current and a resolved fact as live until it upgrades. `hv doctor`
+  (`fleet-contract`) lists admitted peers that advertise a contract below 1.19, or that are
+  unreachable and so cannot be verified; upgrade always-on nodes first. Advisory; `--fix` never
+  touches it.
+- **Self-promotion through the learning projections (contracts 1.19–1.20).** An outcome counts toward
+  a decision's outcome score only on the `sense` channel, and `cap_self` applies, so a device cannot
+  vindicate its own decisions by reflection or by itself. A writer's `--importance` is only a hint,
+  capped at `importance_self_cap` (default 0.3); only links from *other* principals raise it. An idea
+  starts at zero, its own channel defaults to `introspect`, and it can gain confidence only from other
+  identities' `sense`-channel links; restating it never counts.
 - **Detecting a device that has gone bad (contract 1.19 trust velocity).** Per-signer reliability is a
   derived view of the same evidence: how often a device's recent facts get retracted or contradicted by
   *other* devices, and how its recent decisions' outcomes score, each compared against the device's own
@@ -133,6 +146,20 @@ at once). Concretely:
   any capsule version it already synced; `rotate`/`tombstone` cut it off the *new* version only. To
   truly cut access, rotate the upstream token/secret too. Inherent to encrypt-to-device (you cannot
   un-send ciphertext); the CLI says so at `put`/`rotate` time. Documented.
+- **Version currency under partition.** A capsule is a latest-version-wins projection over the local
+  journal, so a device that is offline or partitioned when a secret is rotated or tombstoned keeps
+  opening the version it already holds until it reconnects and syncs. Rotating the upstream secret
+  bounds the damage; the offline device simply fails with the stale value. Inherent to offline-first
+  sync. Documented.
+- **Channel and source-class labels are self-declared.** An entry's `channel`
+  (`sense`/`act`/`introspect`) and its source `context_class` (`primary`/`subagent`/`cron`) are
+  asserted by the writer. They let an *honest* agent mark its own reasoning or background jobs so they
+  count for less; they do not stop a dishonest admitted device, which can simply label everything
+  `sense` and `primary`. What bounds such a device is identity: admission, the same-device discount
+  and `cap_self`. Two gaps in how honest labels are applied are open:
+  [#72](https://github.com/projectmentor/hive-mind/issues/72) (an unrecognised label counts at full
+  weight) and [#73](https://github.com/projectmentor/hive-mind/issues/73) (an `introspect` *fact*
+  assertion still counts toward corroboration; only `introspect` links are zero-weighted).
 
 ## Cryptographic posture
 
@@ -149,12 +176,13 @@ at once). Concretely:
 
 ## Operational / scaling characteristics
 
-- **Journal growth.** The journal is append-only and grows without bound; projections
-  (`_governance_state`, confidence) historically full-scanned it. The governance projection is now
-  memoized on a content signature of just the governance entries (the heavy Ed25519 verification +
-  election walk is skipped when governance is unchanged — the common case, since ordinary `fact`
-  writes don't touch it). Very large histories still benefit from periodic operational review;
-  streaming/indexed projection is a long-term item.
+- **Journal growth.** The journal is append-only and grows without bound, and every projection
+  scans all of it. The governance projection is memoized on a content signature of just the
+  governance entries, but only within one process: that helps the long-running daemon, while every
+  CLI call recomputes it once. The evidence projections re-verify every entry's signature on each
+  call. On a journal of about 800 entries a search takes about 15 seconds and a write about a minute,
+  enough to time out the agent adapters; tracked in
+  [#70](https://github.com/projectmentor/hive-mind/issues/70).
 - **Best-effort recovery.** A truncated/garbled journal line (e.g. a crash mid-write) is skipped on
   read; `hv doctor` now surfaces the count so silent data loss is visible (`journal-integrity`).
 - **`hv doctor --fix` blast radius.** `--fix` kills orphan daemons (by argv match), restarts the

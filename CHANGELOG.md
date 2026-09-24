@@ -10,8 +10,16 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased
+## Unreleased — contract 1.23
 
+- **Contract 1.23: links carry owner authority only when a person writes them (#114).** On a machine
+  that holds the owner key, a link is owner-signed only when its source is `manual`; every agent
+  source is device-signed, as on a member device, so an agent there can no longer `supersedes` or
+  `resolves` another device's entries with owner authority. All eight link kinds go through one
+  builder (`outcome-of` and `informed` were built inline). `hv decide` and `hv entity link` gain
+  `--source` (the MCP server passes `claude-ai`), so an agent's decision is no longer attributed to a
+  person. Write confirmations say `(owner-signed: source manual)` or `(device-signed: source …)`. An
+  omitted `--source` still means `manual` (#119). No wire change.
 - **`hv doctor` catches a sync daemon left on old code (#112).** A bare `git pull` moves the files but
   not the running daemon. The daemon now records the source digest it loaded and serves it on a
   loopback-only `/api/daemon`; the new `daemon-code` check compares it with the same digest of the
@@ -19,7 +27,9 @@ introduced (a contract) or tagged (a patch).
   at most once per run. A hive daemon from before this change also warns; another program on the port
   gets no verdict. The 15-minute doctor timer therefore heals a bare pull.
 
-## Unreleased — contract 1.22
+## 1.22 — 2026-09-24 · `v1.22.0`
+
+Contract 1.22, tagged 2026-09-24 at 5c30c20. It also carries the fixes that landed before the tag.
 
 - **Contract 1.22: an `extends` link kind.** `hv remember "…" --extends <sid>` (and MCP
   `hive_remember(extends=…)`, Hermes `hive_remember`) writes the fact plus one `extends` link to a

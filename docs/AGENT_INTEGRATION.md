@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.22`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.23`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -51,7 +51,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv search "<q>" [--format json] [--min-confidence N] [--kind all\|fact\|decision\|idea] [--sort confidence\|importance\|utility\|recency]` | Read the corpus (ranked by effective confidence by default) |
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
 | `hv remember "<outcome>" --source <you> --outcome-of <decision sid> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
-| `hv decide "<decision>" --rationale "<why>" --informed <sid>…` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
+| `hv decide "<decision>" --rationale "<why>" --informed <sid>… --source <you>` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
 | `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — it can earn confidence only from others' evidence, never from you *(1.20)* |
 | `hv retract <sid> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
@@ -83,7 +83,7 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    session can reconcile.
 2. **Capture.** Search first, and never write back something you just read this session (no
    echoes). Then route by what happened:
-   - a **decision** → `hv decide "<decision>" --rationale "<why>" --informed <sid> [<sid>…]`,
+   - a **decision** → `hv decide "<decision>" --rationale "<why>" --informed <sid> [<sid>…] --source <you>`,
      naming the entries you searched and relied on (their `sid`, `h:…`, from `hv search`);
    - the **result of acting on a recorded decision** → `hv remember "<what happened>"
      --outcome-of <decision sid> --polarity 1|0|-1`. Only observed results count toward the
@@ -241,6 +241,15 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.23` — **links carry owner authority only when a person writes them** (#114, additive flag).
+  `hv decide` and `hv entity link` gain `--source` (the MCP server passes `claude-ai`; Hermes keeps
+  `HERMES_AGENT`, still honoured). **Pass `--source <you>` on every write verb**: an omitted source is
+  `manual`, a person. On a machine holding the owner key, only `manual` writes are owner-signed; every
+  agent's `supersedes`/`resolves`/`supports`/… link is device-signed and, against another device's
+  entry, weighs as evidence instead of commanding (the member-device rule). All eight link kinds now go
+  through one builder (`outcome-of` and `informed` included). Write confirmations add `(owner-signed:
+  source manual)` or `(device-signed: source <src>)` to each link line. No wire change; a 1.22 node
+  projects the same journal identically.
 - `1.22` — **`extends` link kind** (#115, additive). `hv remember "…" --extends <sid>` and MCP
   `hive_remember(extends=…)` write the fact plus one `extends` link to a fact, idea or decision
   (resolved and kind-checked before anything is written; a decision target is allowed). It says

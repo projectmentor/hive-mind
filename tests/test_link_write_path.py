@@ -42,31 +42,101 @@ def _owner_hive(tmp_path):
     return run, entries
 
 
-# ── owner machine: links are owner-signed → hard everywhere ──────────────────────────────────────
+# ── owner machine: only a PERSON's links are owner-signed (1.23, #114) ─────────────────────────
 
-def test_owner_machine_owner_signs_links_and_they_are_hard(tmp_path):
+def test_owner_machine_owner_signs_manual_links_and_they_are_hard(tmp_path):
     run, entries = _owner_hive(tmp_path)
-    run("remember", "issue Z is open", "--source", "alice")
-    run("remember", "issue Z is fixed", "--resolves", "1", "--source", "alice")
+    run("remember", "issue Z is open")
+    run("remember", "issue Z is fixed", "--resolves", "1")
     run("decide", "plan A", "--rationale", "r")
     run("decide", "plan B replaces A", "--rationale", "r", "--supersedes", "1")
     links = [e for e in entries() if e["type"] == "link"]
     assert sorted(l["payload"]["kind"] for l in links) == ["resolves", "supersedes"]
     for l in links:
-        assert "owner_sig" in l["payload"] and "owner_pub" in l["payload"]      # owner-signed on the owner machine
+        assert l["payload"]["source"] == "manual"
+        assert "owner_sig" in l["payload"] and "owner_pub" in l["payload"]      # a person on the owner machine
     import sqlite3
     conn = sqlite3.connect(tmp_path / "store.db"); conn.row_factory = sqlite3.Row
     assert {r["authority"] for r in conn.execute("SELECT authority FROM links")} == {"hard"}
     assert conn.execute("SELECT superseded_by FROM decisions WHERE content='plan A'").fetchone()[0] is not None
-    assert conn.execute("SELECT resolves FROM facts WHERE content='issue Z is fixed'").fetchone()[0] == 1
-    assert conn.execute("SELECT confidence FROM facts WHERE content='issue Z is open'").fetchone()[0] <= 0
-    # nothing legacy, nothing doubled
-    assert not any(e["type"] in ("retract", "entity_fact") for e in entries())
-    assert not any("resolves_ref" in e["payload"] or "supersedes_ref" in e["payload"] for e in entries()
-                   if e["type"] in ("fact", "decision"))
 
 
-# ── non-owner, non-author device: evidence only ──────────────────────────────────────────────────
+def _all_eight(run, source_args):
+    """Write one link of every kind the CLI writes, with the given --source (none = manual). Returns the
+    combined confirmation text."""
+    out = []
+    def sid(r):
+        out.append(r.stdout)
+        return _first_sid(r.stdout)
+    f1 = sid(run("remember", "service X answers on port 443", *source_args))
+    sid(run("remember", "port 443 answered a probe at 10:00", *source_args, "--supports", f1))
+    sid(run("remember", "port 443 refused a probe at 10:05", *source_args, "--contradicts", f1))
+    sid(run("remember", "service X also answers on 8443", *source_args, "--extends", f1))
+    sid(run("remember", "service X answers on port 8443 only", *source_args, "--resolves", f1))
+    d1 = sid(run("decide", "route X through 443", "--rationale", "r", *source_args))
+    sid(run("remember", "routing through 443 worked", *source_args, "--outcome-of", d1))
+    sid(run("decide", "route X through 8443", "--rationale", "r", *source_args, "--supersedes", d1,
+            "--informed", f1))
+    run("entity", "add", "--name", "service-x", "--type", "concept")
+    out.append(run("entity", "link", "--name", "service-x", "--fact-id", f1, *source_args).stdout)
+    return "\n".join(out)
+
+
+EIGHT = ["contradicts", "entity", "extends", "informed", "outcome-of", "resolves", "supersedes", "supports"]
+
+
+def test_an_agent_on_the_owner_machine_writes_device_signed_links_of_all_eight_kinds(tmp_path):
+    """#114: an agent source never borrows the owner key, whatever the link kind (outcome-of and informed
+    now go through the same builder), and each confirmation says so."""
+    run, entries = _owner_hive(tmp_path)
+    out = _all_eight(run, ["--source", "claude-code"])
+    links = [e for e in entries() if e["type"] == "link"]
+    assert sorted({l["payload"]["kind"] for l in links}) == EIGHT
+    for l in links:
+        assert "owner_sig" not in l["payload"] and "owner_pub" not in l["payload"], l["payload"]["kind"]
+        assert l["payload"]["source"] == "claude-code", l["payload"]["kind"]
+    # decide and entity link take --source (D-6): the decision is the agent's, not a person's
+    assert {e["payload"]["source"] for e in entries() if e["type"] == "decision"} == {"claude-code"}
+    assert "owner-signed" not in out
+    assert out.count("(device-signed: source claude-code)") == 8
+
+
+def test_a_person_on_the_owner_machine_writes_owner_signed_links_of_all_eight_kinds(tmp_path):
+    run, entries = _owner_hive(tmp_path)
+    out = _all_eight(run, [])                                         # no --source: `manual`, a person
+    links = [e for e in entries() if e["type"] == "link"]
+    assert sorted({l["payload"]["kind"] for l in links}) == EIGHT
+    for l in links:
+        assert "owner_sig" in l["payload"] and l["payload"]["source"] == "manual", l["payload"]["kind"]
+    assert out.count("(owner-signed: source manual)") == 8
+
+
+def test_a_member_device_never_owner_signs_even_for_manual(tmp_path):
+    out = _as(tmp_path, "nodeA", "remember", "the backup ran at 02:00").stdout
+    f1 = _first_sid(out)
+    out = _as(tmp_path, "nodeA", "remember", "the backup log shows 02:00", "--supports", f1).stdout
+    link = next(e for e in _journal(tmp_path) if e["type"] == "link")
+    assert "owner_sig" not in link["payload"]
+    assert "(device-signed: source manual)" in out
+
+
+def test_the_builder_signs_only_manual_and_the_projection_follows(tmp_path, monkeypatch):
+    """The rule at its source and its §5 consequence: on the owner's machine (device b holds the owner
+    seed), an agent's supersedes of device a's decision is evidence, a person's is hard."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    (oseed, opub, _oid), (a, b, _c), base = _owned_hive(hv)
+    monkeypatch.setattr(hv, "_owner_seed", lambda: oseed)            # b is the owner's machine
+    old = _decision(hv, a, "plan A", "2026-01-02T00:00:00Z")
+    new = _decision(hv, b, "plan B replaces A", "2026-01-03T00:00:00Z")
+    ref_new, ref_old = [new["node_id"], new["seq"]], [old["node_id"], old["seq"]]
+    agent = hv._link_payload("supersedes", ref_new, ref_old, "claude-code")
+    person = hv._link_payload("supersedes", ref_new, ref_old, "manual")
+    assert "owner_sig" not in agent and "owner_sig" in person
+    for payload, authority in ((agent, "evidence"), (person, "hard")):
+        link = _entry(hv, b, "link", dict(payload), "2026-01-03T00:00:01Z")
+        conn = _project(hv, tmp_path, base + [old, new, link])
+        assert conn.execute("SELECT authority FROM links").fetchone()[0] == authority, payload["source"]
+
 
 def test_link_from_non_owner_non_author_is_evidence_only_but_still_weighs(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)

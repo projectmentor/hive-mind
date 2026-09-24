@@ -266,8 +266,8 @@ One journal type, an open vocabulary, one resolver.
 
 | kind | from → to | effect |
 |---|---|---|
-| `supports` | fact/idea → fact/idea | positive evidence on the target (`_content_evidence` for facts, `_idea_evidence` for ideas). Read side only: no command writes this kind yet ([#71](https://github.com/projectmentor/hive-mind/issues/71)) |
-| `contradicts` | fact/idea → fact/idea | negative evidence on the target. Read side only, as above |
+| `supports` | fact/idea → fact/idea | positive evidence on the target (`_content_evidence` for facts, `_idea_evidence` for ideas). Written by `hv remember --supports` (1.21). On an idea, a link from the idea author's own principal weighs 0 |
+| `contradicts` | fact/idea → fact/idea | negative evidence on the target. Written by `hv remember --contradicts` (1.21). An idea's author may contradict it |
 | `supersedes` | decision → decision | **hard:** `decisions.superseded_by`; **evidence:** row only |
 | `resolves` | fact → fact | **hard:** `facts.resolves` provenance + retract-equivalent evidence; **evidence:** evidence only |
 | `entity` | entity → fact | `entity_facts` row |
@@ -383,6 +383,12 @@ two observations.
   fed only by `supports` (+) and `contradicts` (−) links whose source resolves. The idea's own
   assertion contributes nothing; identical text elsewhere contributes nothing; an idea never adds
   positive evidence to a fact.
+- **No self-support (1.21).** A `supports` link from the idea author's own principal (the same device,
+  or a device admitted under the same principal) weighs 0, so an idea earns confidence only from
+  others. The author's `contradicts` still counts: it is the only way to withdraw an idea. Before an
+  owner exists there is no principal map, so only the same device is excluded (an author's second
+  device still counts until `hv owner init`). `cap_self` still binds when every supporter shares one
+  other principal.
 - **Grounding rule.** A link whose `channel` is `introspect` weighs `introspect_support_weight`
   (governed, default 0). `hv propose` stamps the idea itself `introspect` by default. So the only
   way a hypothesis gains confidence is a `sense`-channel link from another identity: an

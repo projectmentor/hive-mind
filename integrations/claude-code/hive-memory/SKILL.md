@@ -24,8 +24,10 @@ corroboration and checkable outcomes are what matter.
   and dropped at the next MAJOR — never pass one)
 - Propose:  `~/projects/hive-mind/hv propose "<hypothesis>" --tags <t1,t2> --source claude-code`
   (an IDEA, not a fact: starts at 0.00 and can earn confidence only from other identities' sense-channel
-  `supports`/`contradicts` links, which no tool writes yet (#71) — use it for "perhaps X relates to Y",
-  never for something observed)
+  evidence — use it for "perhaps X relates to Y", never for something observed)
+- Weigh in: `~/projects/hive-mind/hv remember "<what you observed>" --supports <sid>` (or `--contradicts <sid>`)
+  when an observation bears on an idea or fact, e.g. one the digest lists as open. One relationship per
+  write; your own support of your own idea doesn't count
 - Sync:     `~/projects/hive-mind/hv sync now`
 
 **ALWAYS pass `--source claude-code`** on `remember` so the hive can distinguish your writes

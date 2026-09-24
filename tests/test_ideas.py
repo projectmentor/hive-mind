@@ -78,8 +78,9 @@ def test_open_ideas_digest_lists_up_to_three_newest_and_stats_counts(hive):
         hive.run("propose", f"hypothesis number {i} about the build", "--source", "alice")
     out = hive.run("nudge", "--event", "session-start", "--cwd", str(hive.home)).stdout
     assert "Open ideas" in out
-    listed = [l for l in out.splitlines() if l.strip().startswith("• i")]
+    listed = [l for l in out.splitlines() if l.strip().startswith("• h:")]   # the stable sid, not `i<N>`
     assert len(listed) == 3 and "hypothesis number 3" in listed[0]         # cap 3, newest first
+    assert "--supports h:" in out                                          # how to weigh in (#71)
     assert "Ideas:              4  (0 with earned confidence)" in hive.run("stats").stdout
 
 
@@ -120,11 +121,43 @@ def test_contradicts_lowers_contested_flag_and_cap_self(tmp_path, monkeypatch):
     conn = _project(hv, tmp_path, base + [idea, o1, o2, sup, con])
     row = conn.execute("SELECT confidence, contested FROM ideas").fetchone()
     assert round(row[0], 6) == 0.0 and row[1] == 1                            # +1 −1 → net 0, contested
-    # the author supporting its OWN idea from two agents on one device: same principal → cap_self
+    # the author supporting its OWN idea, even from two agents on one device, counts for nothing (#71):
+    # an idea earns confidence only from other principals
     own1 = _link(hv, a, "supports", o1, idea, "2026-01-04T00:00:02Z")
     own2 = _link(hv, a, "supports", o2, idea, "2026-01-04T00:00:03Z", source="hermes:primary/other/s1")
     conn = _project(hv, tmp_path, base + [idea, o1, o2, own1, own2])
-    assert 0 < conn.execute("SELECT confidence FROM ideas").fetchone()[0] <= hv.CONF_CAP_SELF + 1e-9
+    assert conn.execute("SELECT confidence FROM ideas").fetchone()[0] == 0.0
+
+
+def test_author_self_support_weighs_zero_across_its_principal_but_contradicts_counts(tmp_path, monkeypatch):
+    """#71: the same-principal rule covers another device admitted under the author's principal; it is
+    asymmetric (the author's `contradicts` still counts); cap_self still binds when every supporter
+    shares one OTHER principal."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    (oseed, opub, _oid), (a, b, c), base = _owned_hive(hv)
+    a2, b2 = _device(hv), _device(hv)
+    base = base + [_gov(hv, {"action": "admit", "device_id": a2["id"], "principal": "p0"}, oseed, opub,
+                         "2026-01-01T00:00:07Z", 7),
+                   _gov(hv, {"action": "admit", "device_id": b2["id"], "principal": "p1"}, oseed, opub,
+                        "2026-01-01T00:00:08Z", 8)]
+    idea = _idea(hv, a, "the flaky test is a timezone bug", "2026-01-02T00:00:00Z")
+    obs_a2 = _fact(hv, a2, "the test fails only between 23:00 and 00:00 UTC", "2026-01-03T00:00:00Z")
+    obs_b = _fact(hv, b, "setting TZ=UTC makes the test pass", "2026-01-03T00:00:01Z")
+    obs_b2 = _fact(hv, b2, "the failing assertion compares local dates", "2026-01-03T00:00:02Z")
+    obs_c = _fact(hv, c, "the test also failed once at noon", "2026-01-03T00:00:03Z")
+    by_a2 = _link(hv, a2, "supports", obs_a2, idea, "2026-01-04T00:00:00Z")      # author's other device
+    conn = _project(hv, tmp_path, base + [idea, obs_a2, by_a2])
+    assert conn.execute("SELECT confidence FROM ideas").fetchone()[0] == 0.0
+    by_b = _link(hv, b, "supports", obs_b, idea, "2026-01-04T00:00:01Z")
+    by_b2 = _link(hv, b2, "supports", obs_b2, idea, "2026-01-04T00:00:02Z")
+    conn = _project(hv, tmp_path, base + [idea, obs_b, obs_b2, by_b, by_b2])
+    two_devices_one_principal = conn.execute("SELECT confidence FROM ideas").fetchone()[0]
+    assert 0 < two_devices_one_principal <= hv.CONF_CAP_SELF + 1e-9               # cap_self still binds
+    # the author withdraws it: their contradicts counts, and with others' support the idea is contested
+    con_a = _link(hv, a, "contradicts", obs_c, idea, "2026-01-04T00:00:03Z")
+    conn = _project(hv, tmp_path, base + [idea, obs_b, obs_b2, obs_c, by_b, by_b2, con_a])
+    row = conn.execute("SELECT confidence, contested FROM ideas").fetchone()
+    assert row[1] == 1 and row[0] < two_devices_one_principal
 
 
 def test_peer_idea_arrival_emits_bus_line_local_write_does_not(hive, tmp_path, monkeypatch):
@@ -163,3 +196,63 @@ def test_two_node_differential_idea_confidence(tmp_path, monkeypatch):
 
     s1, s2 = snap(tmp_path / "n1", entries), snap(tmp_path / "n2", reversed(entries))
     assert s1 == s2 and s1[0][2] == 0                    # introspect contradiction weighed nothing → not contested
+
+
+# ── the live write path: `hv remember --supports/--contradicts` (#71) ─────────────────────────────────
+
+import re                  # noqa: E402
+import subprocess          # noqa: E402
+
+PROJECT_HV = Path(__file__).resolve().parent.parent / "hv"
+
+
+def _as(hive, node, *args, check=True):
+    """Run `hv` as a given device (HIVE_NODE_ID), so one temp hive holds two principals (no owner yet:
+    different devices are different principals)."""
+    env = dict(os.environ, HIVE_HOME=str(hive.home), HIVE_NODE_ID=node)
+    r = subprocess.run([sys.executable, str(PROJECT_HV), *args], env=env, capture_output=True, text=True)
+    if check and r.returncode != 0:
+        raise AssertionError(f"`hv {' '.join(args)}` failed ({r.returncode}):\n{r.stderr}")
+    return r
+
+
+def _sid(out):
+    return re.search(r"h:[0-9a-f]{10}", out).group(0)
+
+
+def test_supports_on_an_idea_raises_it_immediately_but_not_from_its_author(hive):
+    idea = _sid(_as(hive, "nodeA", "propose", "the cache causes the retry storm").stdout)
+    r = _as(hive, "nodeA", "remember", "the storm began right after a cache flush", "--supports", idea)
+    assert f"↗ supports idea {idea}" in r.stdout and "your own idea" in r.stdout
+    assert hive.query("SELECT confidence FROM ideas")[0]["confidence"] == 0.0      # the author's own: nothing
+    r = _as(hive, "nodeB", "remember", "cache hit rate fell to 3% during the storm", "--supports", idea)
+    assert "your own idea" not in r.stdout
+    row = hive.query("SELECT confidence, last_evidence_at FROM ideas")[0]          # no rebuild in between
+    assert row["confidence"] > 0 and row["last_evidence_at"]
+    _as(hive, "nodeA", "remember", "the storm also happened with the cache disabled", "--contradicts", idea)
+    assert hive.query("SELECT contested FROM ideas")[0]["contested"] == 1           # the author may withdraw
+
+
+def test_supports_on_a_fact_moves_the_target_now_and_introspect_weighs_nothing(hive):
+    target = _sid(_as(hive, "nodeA", "remember", "the vendor api paginates at 100 rows").stdout)
+    before = hive.query("SELECT confidence FROM facts WHERE content LIKE 'the vendor api%'")[0]["confidence"]
+    _as(hive, "nodeB", "remember", "I reasoned it must page at 100", "--supports", target,
+        "--channel", "introspect")
+    same = hive.query("SELECT confidence FROM facts WHERE content LIKE 'the vendor api%'")[0]["confidence"]
+    assert round(same, 6) == round(before, 6)
+    _as(hive, "nodeB", "remember", "fetching 250 rows took 3 pages", "--supports", target)
+    after = hive.query("SELECT confidence FROM facts WHERE content LIKE 'the vendor api%'")[0]["confidence"]
+    assert after > before
+
+
+def test_bad_targets_and_two_relationships_write_nothing(hive):
+    dec = _sid(_as(hive, "nodeA", "decide", "ship on friday", "--rationale", "r").stdout)
+    fact = _sid(_as(hive, "nodeA", "remember", "ci is green").stdout)
+    n = len(hive.entries())
+    r = _as(hive, "nodeB", "remember", "it shipped", "--supports", dec, check=False)
+    assert r.returncode == 1 and "--outcome-of" in r.stderr
+    r = _as(hive, "nodeB", "remember", "nothing", "--contradicts", "h:0000000000", check=False)
+    assert r.returncode == 1
+    r = _as(hive, "nodeB", "remember", "both", "--supports", fact, "--resolves", fact, check=False)
+    assert r.returncode == 2 and "not allowed with" in r.stderr                    # argparse, before any I/O
+    assert len(hive.entries()) == n                                                 # nothing was written

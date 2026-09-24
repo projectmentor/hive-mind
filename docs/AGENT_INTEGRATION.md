@@ -50,7 +50,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
 | `hv remember "<outcome>" --source <you> --outcome-of <decision sid> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
 | `hv decide "<decision>" --rationale "<why>" --informed <sid>…` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
-| `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — it can earn confidence only from others' evidence, never from you; nothing writes that evidence yet ([#71](https://github.com/projectmentor/hive-mind/issues/71)) *(1.20)* |
+| `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — it can earn confidence only from others' evidence, never from you *(1.20)* |
 | `hv retract <sid> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
@@ -88,6 +88,9 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
      decision's outcome score; if it is your own assessment rather than an observation, add
      `--channel introspect` (recorded, never counted);
    - a **hypothesis** worth testing → `hv propose "<hypothesis>"`, an idea, never a fact;
+   - an **observation that bears on an idea or a fact** (for example one listed as an open idea in the
+     digest) → `hv remember "<what you observed>" --supports <sid>` or `--contradicts <sid>`. It is
+     evidence only from an identity other than the idea's author, and only on the `sense` channel;
    - a correction, constraint, observation or new entity → `hv remember "..." --tags ...
      --source <you>`.
 
@@ -241,9 +244,16 @@ when it must re-wire.
   one, because a class can only claim a discount. **MCP parity** (#75, additive): `hive_remember`
   gains `resolves`, the MCP form of `hv remember --resolves` (write a correction and soft-retract the
   wrong fact in one step); `tests/test_mcp_parity.py` now guards every agent-facing `hv remember`
-  flag. **Search JSON** (#77, additive): every `hv search --format json` row gains `tag_list`, the
+  flag. **Evidence writers** (#71): `hv remember "<observation>" --supports <sid>` / `--contradicts
+  <sid>` and MCP `hive_remember(supports=…, contradicts=…)` write the fact plus one `supports` or
+  `contradicts` link to a fact or idea (kind-checked before anything is written; a decision points
+  you to `--outcome-of`). The target is re-scored immediately. An idea's author can't support their own
+  idea (the same principal weighs 0) but can contradict it, the only way to withdraw one. One
+  relationship per write: `--resolves`, `--outcome-of`, `--supports` and `--contradicts` are mutually
+  exclusive (argparse), so `--resolves` together with `--outcome-of`, previously accepted, is now
+  refused. **Search JSON** (#77, additive): every `hv search --format json` row gains `tag_list`, the
   tags as a list; `tags` stays the JSON-encoded string for existing consumers and **becomes the list at
-  2.0** (read `tag_list` now). Version skew: a 1.20 node keeps counting introspect facts and unknown channels until it
+  2.0** (read `tag_list` now). Version skew: a 1.20 node keeps counting introspect facts, unknown channels and an idea author's self-support until it
   upgrades (confidence differs across the fleet; the journal and Merkle root do not).
 - `1.20` — **`idea` journal type.** A hypothesis whose confidence is *earned*, never asserted:
   `hv propose` / `hive_propose` journal an `idea` (channel defaults to `introspect`); it starts at
@@ -254,9 +264,8 @@ when it must re-wire.
   `hive_search(kind=…)`: under `all` an idea surfaces only once it has earned confidence > 0. The
   session-start digest lists up to three open ideas; a peer's idea arriving by sync appends an
   `idea-arrived` line to the local bus log. **No wire change, no version skew** (older nodes land an
-  `idea` and ignore it). Rubric: a hypothesis worth testing is an idea, not a fact. *Current
-  limitation:* no verb writes `supports`/`contradicts` links yet, so ideas stay at 0.00 until one
-  does ([#71](https://github.com/projectmentor/hive-mind/issues/71)).
+  `idea` and ignore it). Rubric: a hypothesis worth testing is an idea, not a fact. In 1.20 nothing
+  could write the `supports`/`contradicts` links an idea needs; 1.21 adds them (#71).
 - `1.19` — **generic `link` journal type (read side).** One content type with an open `kind`
   vocabulary for relationships between entries: `{kind, from_ref, to_ref, data, source, channel?}`
   with journal-identity refs. The projection knows `supports`, `contradicts`, `supersedes`,

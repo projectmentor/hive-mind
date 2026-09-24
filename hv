@@ -1782,11 +1782,19 @@ def _idea_evidence(entries, gov=None):
     `contradicts` (−) links move it; the idea's own assertion contributes NOTHING (initial confidence
     0.0) and identical text elsewhere is never corroboration. Grounding rule: a link whose `channel` is
     `introspect` weighs `introspect_support_weight` (governed, default 0) — reasoning cannot promote a
-    hypothesis; only `sense`-channel observation can. Same admission / same-device / cap_self governance
-    as facts via `_content_confidence`."""
+    hypothesis; only `sense`-channel observation can.
+
+    No self-support (1.21, #71): a `supports` link whose signer is the SAME PRINCIPAL as the idea's author
+    (`_same_principal`: the same device, or devices admitted under one principal) weighs 0, so an idea
+    earns confidence only from others' evidence. The rule is asymmetric on purpose: the author's own
+    `contradicts` still counts, since it is the only way to withdraw an idea. Before an owner exists there
+    is no principal map, so only the same DEVICE is excluded; an author's second device still counts.
+    Admission, the same-device discount and cap_self apply as for facts via `_content_confidence`, so
+    cap_self still binds when every supporter shares one OTHER principal (two devices of B on A's idea)."""
     gov = gov or _DEFAULT_GOV
     isw = float((gov.get("config") or {}).get("introspect_support_weight", CONF_INTROSPECT_SUPPORT_WEIGHT))
-    ideas = {(e.get("node_id"), e.get("seq")) for e in entries if e.get("type") == "idea"}
+    authors = {(e.get("node_id"), e.get("seq")): e.get("node_id") for e in entries if e.get("type") == "idea"}
+    ideas = set(authors)
     known = {(e.get("node_id"), e.get("seq")) for e in entries}
     out = {ref: {"pos": {}, "neg": {}, "forget": False, "last_ts": "", "evidence": []} for ref in ideas}
     for e in entries:
@@ -1801,6 +1809,8 @@ def _idea_evidence(entries, gov=None):
             continue
         if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in known):
             continue
+        if side == "pos" and _same_principal(gov, e.get("node_id"), authors[tuple(to_ref)]):
+            continue                                   # #71: an author cannot support their own idea
         key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
         if _channel(p) == "introspect":
             w = w * isw
@@ -2795,6 +2805,30 @@ def remember(args):
             sys.exit(1)
     polarity = int(getattr(args, "polarity", 1) if getattr(args, "polarity", None) is not None else 1)
 
+    # --supports / --contradicts (1.21, #71): this observation is evidence for or against a FACT or an IDEA.
+    # Resolved and kind-checked BEFORE any write: a wrong-kind or unknown reference aborts, nothing written.
+    evidence_kind = evidence_ref = evidence_tkind = None
+    for flag in ("supports", "contradicts"):
+        tok = getattr(args, flag, None)
+        if not tok:
+            continue
+        conn0 = get_conn()
+        try:
+            tkind, tref = _parse_ref_arg(conn0, tok)
+        except ValueError as e:
+            conn0.close()
+            print(f"--{flag}: {e}", file=sys.stderr)
+            sys.exit(1)
+        conn0.close()
+        if tkind == "decision":
+            print(f"--{flag}: {tok!r} is a decision; to report how a decision worked out, use --outcome-of",
+                  file=sys.stderr)
+            sys.exit(1)
+        if tkind not in ("fact", "idea"):
+            print(f"--{flag}: {tok!r} is not a fact or idea", file=sys.stderr)
+            sys.exit(1)
+        evidence_kind, evidence_ref, evidence_tkind = flag, tref, tkind
+
     payload = {
         "content": args.content,
         "tags": tags,
@@ -2818,6 +2852,11 @@ def remember(args):
         if channel:
             lp["channel"] = channel
         outcome_link = append_journal("link", lp)
+    evidence_link = None
+    if evidence_ref:
+        # Same channel on the fact and the link, as --outcome-of does; the projection reads the LINK's.
+        evidence_link = append_journal("link", _link_payload(evidence_kind, [entry["node_id"], entry["seq"]],
+                                                             evidence_ref, source, channel=channel))
 
     try:
         conn = get_conn()
@@ -2833,6 +2872,8 @@ def remember(args):
         if outcome_link is not None:
             resolve_link(conn, outcome_link, gov, by_ref)
             _recompute_decision_outcome(conn, all_entries)
+        if evidence_link is not None:
+            resolve_link(conn, evidence_link, gov, by_ref)
         cev = _content_evidence(all_entries, gov)
         ev = cev.get(args.content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
         n = len(ev["pos"])
@@ -2841,10 +2882,17 @@ def remember(args):
         if resolved_content is not None:
             ev2 = cev.get(resolved_content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
             _apply_content_confidence(conn, resolved_content, ev2, gov)
+        if evidence_link is not None and evidence_tkind == "fact":       # #71: the target moves now, not at rebuild
+            tcontent = ((by_ref.get(tuple(evidence_ref)) or {}).get("payload") or {}).get("content")
+            if tcontent is not None and tcontent != args.content:
+                ev3 = cev.get(tcontent, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
+                _apply_content_confidence(conn, tcontent, ev3, gov)
+        if evidence_link is not None and evidence_tkind == "idea":
+            _recompute_idea_confidence(conn, all_entries)
         _recompute_importance(conn, all_entries)          # 1.19 PR6: the column is learned, never the raw hint
         if outcome_link is not None:
             _recompute_utility(conn, all_entries)         # an outcome changes what the informing facts earned
-        _mark_projected(conn, all_entries, [entry, resolves_link, outcome_link])
+        _mark_projected(conn, all_entries, [entry, resolves_link, outcome_link, evidence_link])
         conn.commit()
         conn.close()
     except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
@@ -2867,6 +2915,13 @@ def remember(args):
         sign = "+1" if polarity > 0 else ("−1" if polarity < 0 else "0")
         print(f"  ↗ outcome ({sign}) of decision {_ref_str(outcome_ref)}"
               + ("" if (channel or "sense") == "sense" else f"  [channel {channel}: not counted toward outcome_score]"))
+    if evidence_ref:
+        arrow = "↗" if evidence_kind == "supports" else "↘"
+        print(f"  {arrow} {evidence_kind} {evidence_tkind} {_short_id(*evidence_ref)}")
+        author = (by_ref.get(tuple(evidence_ref)) or {}).get("node_id")
+        if evidence_tkind == "idea" and evidence_kind == "supports" and _same_principal(gov, entry["node_id"], author):
+            print("  ⊘ your own idea: an author's support doesn't count; it earns confidence only from others' "
+                  "observations")
     if channel == "introspect" and not outcome_ref:
         isw_now = float((gov.get("config") or {}).get("introspect_support_weight", CONF_INTROSPECT_SUPPORT_WEIGHT))
         print(f"  ⊘ channel introspect: recorded; counts {isw_now:g}× toward confidence "
@@ -4284,11 +4339,12 @@ def _print_open_ideas(cfg, cap=3):
         opened = [(r, eff) for r, eff in opened if eff < thr][:cap]
         if not opened:
             return
-        lines = ["[hive] Open ideas — hypotheses awaiting evidence (support or contradict with a "
-                 "sense-channel link; restating them is not evidence):"]
+        lines = ["[hive] Open ideas — hypotheses awaiting evidence. If you observe something that bears on one, "
+                 "`hv remember \"<what you observed>\" --supports h:…` (or `--contradicts`); restating an idea is "
+                 "not evidence, and an author's own support doesn't count:"]
         for r, eff in opened:
-            lines.append(f"  • i{r['id']} {r['sid'] or _short_id(r['node_id'], r['seq'])} "
-                         f"{r['content'].splitlines()[0][:140]} (conf {eff:.2f})  ref {r['node_id']}:{r['seq']}")
+            lines.append(f"  • {r['sid'] or _short_id(r['node_id'], r['seq'])} "
+                         f"{r['content'].splitlines()[0][:140]} (conf {eff:.2f})")
         print("\n".join(lines))
     except Exception:
         return
@@ -7881,14 +7937,26 @@ def build_parser():
                                       "not knowledge-shaped (trivially short, bare question, greeting)")
     remember_parser.add_argument("--no-volatile", action="store_true",
                                  help="Do not auto-tag transient operational-status claims as volatile")
-    remember_parser.add_argument("--resolves", metavar="FACT",
+    # One relationship per write (#71): argparse refuses any two of these before anything is read or written.
+    rel = remember_parser.add_mutually_exclusive_group()
+    rel.add_argument("--resolves", metavar="FACT",
                                  help="A prior fact this write resolves/closes (soft-retracts it): its short id "
                                       "`h:…` (preferred), `node_id:seq`, or a deprecated local id")
-    remember_parser.add_argument("--outcome-of", metavar="DECISION",
+    rel.add_argument("--outcome-of", metavar="DECISION",
                                  help="This fact is an OUTCOME of a decision: its short id `h:…` (preferred) or stable "
                                       "ref `node_id:seq`, both shown by `hv search`, or a deprecated local id (`17` / `d17`); "
                                       "resolved and kind-checked before anything is written. Emits an `outcome-of` link "
                                       "that feeds the decision's outcome_score (vindication, not confidence)")
+    rel.add_argument("--supports", metavar="REF",
+                     help="This observation SUPPORTS a fact or an idea: its short id `h:…` (preferred), `node_id:seq`, "
+                          "or a deprecated local id (`118` fact, `i5` idea). Writes the fact plus one `supports` link, "
+                          "resolved and kind-checked before anything is written. It counts as this identity's positive "
+                          "evidence on the write's --channel (introspect weighs introspect_support_weight, default 0); "
+                          "an idea's author cannot support their own idea")
+    rel.add_argument("--contradicts", metavar="REF",
+                     help="This observation CONTRADICTS a fact or an idea (same forms as --supports). Writes the fact "
+                          "plus one `contradicts` link: this identity's negative evidence. An idea's author may "
+                          "contradict their own idea (the way to withdraw it)")
     remember_parser.add_argument("--polarity", type=int, choices=[-1, 0, 1], default=1,
                                  help="With --outcome-of: +1 worked out (default), -1 did not, 0 observed and neutral. "
                                       "Ternary on purpose — magnitude comes from how many independent identities report, "

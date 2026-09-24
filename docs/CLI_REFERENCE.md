@@ -183,9 +183,8 @@ from `supports`/`contradicts` links written by *other* identities on the `sense`
 observation). Restating it, or a second agent proposing the same text, creates a second idea; it
 never corroborates the first. An LLM proposes; it cannot promote.
 
-> **Current limitation.** No `hv` command, MCP tool or adapter writes `supports`/`contradicts` links
-> yet ([#71](https://github.com/projectmentor/hive-mind/issues/71)), so for now every idea stays at
-> 0.00: `hv propose` records the hypothesis and surfaces it for attention, but nothing can confirm it.
+To weigh in on an idea, write what you observed with `hv remember "<observation>" --supports <sid>`
+(or `--contradicts`). Its author's own support doesn't count.
 
 ```
 hv propose <content> [--tags a,b,c] [--source SOURCE] [--channel sense|act|introspect]
@@ -696,7 +695,8 @@ independent sources agree on the same thing.
 
 ```
 hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] [--resolves ID]
-            [--outcome-of DECISION] [--polarity -1|0|1] [--channel sense|act|introspect]
+            [--outcome-of DECISION | --resolves FACT | --supports REF | --contradicts REF]
+            [--polarity -1|0|1] [--channel sense|act|introspect]
 ```
 
 **Arguments:**
@@ -712,6 +712,8 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
 | `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`. An `introspect` fact, and an `introspect` `supports`/`contradicts` link, weigh `introspect_support_weight` (default 0) toward confidence *(facts since 1.21)*: the fact is recorded and searchable but corroborates nothing until an observation backs it. A channel outside these three (possible only in a raw journal entry) counts as `introspect`. |
 | `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It journals one `resolves` **link** *(1.19 PR2b — no separate `retract` entry any more)* from the new fact to the resolved fact's journal identity (stable across rebuilds and nodes); the projection folds it as negative evidence that **soft-retracts** the old fact (so it stops surfacing as canonical) and, when the link is hard, records the chain on the new row — keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
+| `--supports REF` | *(1.21)* This observation **supports** a fact or an idea, named by its `sid` (`h:…`, preferred), its `ref`, or a deprecated local id (`118` fact, `i5` idea). Writes the fact plus one `supports` link, resolved and kind-checked **before** anything is written (a decision aborts with a pointer to `--outcome-of`). The target is re-scored immediately. It counts as this identity's evidence on the write's `--channel` (`introspect` weighs `introspect_support_weight`, default 0). An idea's author can't support their own idea. |
+| `--contradicts REF` | *(1.21)* The same, as negative evidence: one `contradicts` link. An idea's author may contradict their own idea, which is how to withdraw it. |
 
 **What you get back:**
 

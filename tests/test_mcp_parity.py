@@ -55,7 +55,7 @@ REMEMBER_NOT_OVER_MCP = {"--source", "--importance", "--gate", "--no-volatile"}
 def test_remember_flags_have_mcp_parity():
     """#75: `--resolves` existed on the CLI for a whole contract version with no MCP path. Guard every
     agent-facing `hv remember` flag, statically (no `mcp` import in CI)."""
-    flags = set(re.findall(r'remember_parser\.add_argument\(\s*"(--[a-z-]+)"', HV_SRC))
+    flags = set(re.findall(r'(?:remember_parser|rel)\.add_argument\(\s*"(--[a-z-]+)"', HV_SRC))  # rel: the exclusive group
     assert "--resolves" in flags                                      # the parser scrape works
     passed = set(re.findall(r'"(--[a-z-]+)"', MCP_SRC))
     missing = flags - REMEMBER_NOT_OVER_MCP - passed

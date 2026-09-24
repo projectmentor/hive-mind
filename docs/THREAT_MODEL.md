@@ -99,8 +99,9 @@ at once). Concretely:
   a decision's outcome score only on the `sense` channel, and `cap_self` applies, so a device cannot
   vindicate its own decisions by reflection or by itself. A writer's `--importance` is only a hint,
   capped at `importance_self_cap` (default 0.3); only links from *other* principals raise it. An idea
-  starts at zero, its own channel defaults to `introspect`, and it can gain confidence only from other
-  identities' `sense`-channel links; restating it never counts.
+  starts at zero, its own channel defaults to `introspect`, and it can gain confidence only from
+  `sense`-channel links by *other principals*: since 1.21 the author's own `supports` weighs 0
+  (before an owner exists, only the same device is excluded). Restating it never counts.
 - **Detecting a device that has gone bad (contract 1.19 trust velocity).** Per-signer reliability is a
   derived view of the same evidence: how often a device's recent facts get retracted or contradicted by
   *other* devices, and how its recent decisions' outcomes score, each compared against the device's own

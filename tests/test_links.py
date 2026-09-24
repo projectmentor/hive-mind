@@ -479,3 +479,46 @@ def test_two_node_differential_is_byte_identical(tmp_path, monkeypatch):
     s2 = snapshot(tmp_path / "n2", reversed(entries))          # same journal, different arrival order
     assert s1 == s2
     assert len(s1[0]) == 6                                       # the six known-kind links; the unknown one is absent
+
+
+def test_extends_is_an_edge_row_only_and_a_node_without_the_kind_converges(tmp_path, monkeypatch):
+    """1.22 (#115): `extends` folds into `links` and nothing else — no confidence, contested or evidence
+    timestamp moves on any channel. A node that does not know the kind (pre-1.22: removed from
+    `_LINK_RESOLVERS`) lands the same journal, rebuilds, projects the link to nothing, and its Merkle
+    root and every weighed column match."""
+    hv = _loadhv(tmp_path / "n1", monkeypatch)
+    _, (a, b, c), base = _owned_hive(hv)
+    f1 = _fact(hv, a, "the deploy succeeded at commit abc123", "2026-01-02T00:00:00Z")
+    f2 = _fact(hv, b, "the deploy took eleven minutes", "2026-01-02T00:00:01Z")
+    idea = _entry(hv, a, "idea", {"content": "the slow deploy is the image pull", "tags": [], "source": "manual",
+                                  "channel": "introspect"}, "2026-01-02T00:00:02Z")
+    dec = _decision(hv, a, "ship on friday", "2026-01-02T00:00:03Z")
+    core = base + [f1, f2, idea, dec, _link(hv, c, "supports", f2, idea, "2026-01-02T00:00:04Z")]
+    ext = [_link(hv, b, "extends", f2, f1, "2026-01-03T00:00:00Z"),
+           _link(hv, c, "extends", f1, idea, "2026-01-03T00:00:01Z", channel="introspect"),
+           _link(hv, c, "extends", f2, dec, "2026-01-03T00:00:02Z")]
+
+    def weighed(conn):
+        return ([tuple(r) for r in conn.execute("SELECT content, round(confidence, 6), contested, last_evidence_at "
+                                                 "FROM facts ORDER BY content")],
+                [tuple(r) for r in conn.execute("SELECT content, round(confidence, 6), contested, last_evidence_at "
+                                                 "FROM ideas ORDER BY content")],
+                [tuple(r) for r in conn.execute("SELECT content, outcome_score, last_outcome_at FROM decisions")])
+
+    without = weighed(_project(hv, tmp_path / "n1", core))
+    conn1 = _project(hv, tmp_path / "n1", core + ext)
+    assert weighed(conn1) == without                                           # an edge row, never evidence
+    assert without[0][0][1] > 0 and without[1][0][1] > 0                       # the targets carry real evidence
+    assert sorted(tuple(r) for r in conn1.execute("SELECT kind, from_kind, to_kind, channel FROM links "
+                                                  "WHERE kind = 'extends'")) == [
+        ("extends", "fact", "decision", "sense"), ("extends", "fact", "fact", "sense"),
+        ("extends", "fact", "idea", "introspect")]
+
+    old = _loadhv(tmp_path / "n2", monkeypatch)                                # a node that predates the kind
+    monkeypatch.delitem(old._LINK_RESOLVERS, "extends")
+    conn2 = _project(old, tmp_path / "n2", list(reversed(core + ext)))
+    assert conn2.execute("SELECT count(*) FROM links WHERE kind = 'extends'").fetchone()[0] == 0
+    assert weighed(conn2) == weighed(conn1)
+    m = hv.merkle
+    root = lambda home: m.merkle_root(m.chunk_hashes(m.read_all_entries(str(home / "journal"))))
+    assert root(tmp_path / "n1") == root(tmp_path / "n2")

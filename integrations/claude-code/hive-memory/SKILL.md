@@ -27,7 +27,8 @@ corroboration and checkable outcomes are what matter.
   evidence — use it for "perhaps X relates to Y", never for something observed)
 - Weigh in: `~/projects/hive-mind/hv remember "<what you observed>" --supports <sid>` (or `--contradicts <sid>`)
   when an observation bears on an idea or fact, e.g. one the digest lists as open. If it comes from
-  your reasoning rather than an observation, add `--channel introspect`. One relationship per
+  your reasoning rather than an observation, add `--channel introspect`; if it builds on or comments on
+  an entry rather than bearing evidence, use `--extends <sid>` (never weighed). One relationship per
   write; your own support of your own idea doesn't count
 - Sync:     `~/projects/hive-mind/hv sync now`
 

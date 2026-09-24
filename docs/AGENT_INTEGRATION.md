@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.21`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.22`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -91,6 +91,9 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    - an **observation that bears on an idea or a fact** (for example one listed as an open idea in the
      digest) → `hv remember "<what you observed>" --supports <sid>` or `--contradicts <sid>`. It is
      evidence only from an identity other than the idea's author, and only on the `sense` channel;
+   - something that **builds on or comments on another entry** (a fact, idea or decision) without
+     being evidence for or against it → `hv remember "..." --extends <sid>` *(1.22)*. It records the
+     relationship and is never weighed toward confidence, on any channel;
    - a correction, constraint, observation or new entity → `hv remember "..." --tags ...
      --source <you>`.
 
@@ -236,6 +239,14 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.**
+- `1.22` — **`extends` link kind** (#115, additive). `hv remember "…" --extends <sid>` and MCP
+  `hive_remember(extends=…)` write the fact plus one `extends` link to a fact, idea or decision
+  (resolved and kind-checked before anything is written; a decision target is allowed). It says
+  "builds on" without evidence semantics: the projection keeps it as an edge row in `links` and never
+  weighs it toward confidence on any channel. Mutually exclusive with `--resolves`, `--outcome-of`,
+  `--supports` and `--contradicts` (one relationship per write). `hv search` text shows
+  `extends h:…` on the row; JSON rows are unchanged. No wire change, no version skew: a pre-1.22 node
+  lands the link and projects it to nothing.
 - `1.21` — **the grounding rule covers fact assertions** (#73). A `fact` written with
   `--channel introspect` now weighs `introspect_support_weight` (default 0) toward confidence, the same
   as an `introspect` link: two agents restating the same reasoning no longer corroborate each other.

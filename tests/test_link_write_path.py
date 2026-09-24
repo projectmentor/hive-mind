@@ -195,3 +195,114 @@ def test_two_node_differential_for_the_link_write_path(tmp_path, monkeypatch):
     s1, s2 = snap(tmp_path / "n1", entries), snap(tmp_path / "n2", reversed(entries))
     assert s1 == s2
     assert s1[2] == [("entity", "evidence"), ("resolves", "hard"), ("supersedes", "hard")] and s1[3] == 1
+
+
+# ── 1.22 (#115): `hv remember --extends` — "builds on" without evidence semantics ──────────────────
+
+import re                  # noqa: E402
+
+import pytest              # noqa: E402
+
+
+def _as(tmp_path, node, *args, check=True):
+    """Run `hv` as a given device (HIVE_NODE_ID) in one temp hive; no owner, so devices are principals."""
+    env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_NODE_ID=node)
+    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+    if check:
+        assert r.returncode == 0, r.stderr
+    return r
+
+
+def _journal(tmp_path):
+    out = []
+    for f in sorted((tmp_path / "journal").glob("*.jsonl")):
+        out += [json.loads(l) for l in f.read_text().splitlines() if l.strip()]
+    return out
+
+
+def _db(tmp_path, sql, params=()):
+    import sqlite3
+    conn = sqlite3.connect(tmp_path / "store.db"); conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+def _first_sid(out):
+    return re.search(r"h:[0-9a-f]{10}", out).group(0)
+
+
+@pytest.mark.parametrize("channel", ["sense", "introspect"])
+@pytest.mark.parametrize("tkind", ["fact", "idea"])
+def test_extends_writes_one_link_and_never_moves_the_target(tmp_path, tkind, channel):
+    # A target with real evidence on it, so "unchanged" is not trivially 0 → 0.
+    if tkind == "fact":
+        sid = _first_sid(_as(tmp_path, "nodeA", "remember", "the vendor api paginates at 100 rows").stdout)
+        _as(tmp_path, "nodeC", "remember", "the vendor api paginates at 100 rows")        # corroborated
+        table, content = "facts", "the vendor api paginates at 100 rows"
+    else:
+        sid = _first_sid(_as(tmp_path, "nodeA", "propose", "the cache causes the retry storm").stdout)
+        _as(tmp_path, "nodeC", "remember", "cache hit rate fell to 3% during the storm", "--supports", sid)
+        table, content = "ideas", "the cache causes the retry storm"
+    _as(tmp_path, "nodeA", "doctor", "rebuild")
+
+    def state():
+        r = _db(tmp_path, f"SELECT confidence, last_evidence_at FROM {table} WHERE content = ?", (content,))[0]
+        return round(r["confidence"], 6), r["last_evidence_at"]
+    before = state()
+    assert before[0] > 0 and before[1]
+    target = next(e for e in _journal(tmp_path) if e["type"] == tkind and e["payload"]["content"] == content)
+
+    n = len(_journal(tmp_path))
+    args = ["remember", "building on that: the retry budget should follow the page size", "--extends", sid]
+    if channel != "sense":
+        args += ["--channel", channel]
+    r = _as(tmp_path, "nodeB", *args)
+    assert f"↗ extends {tkind} {sid}" in r.stdout
+    new = _journal(tmp_path)[n:]
+    assert [e["type"] for e in new] == ["fact", "link"]                       # the fact + exactly ONE link
+    fact, link = new
+    assert link["payload"]["kind"] == "extends"
+    assert link["payload"]["from_ref"] == [fact["node_id"], fact["seq"]]
+    assert link["payload"]["to_ref"] == [target["node_id"], target["seq"]]
+    assert link["payload"].get("channel", "sense") == channel               # recorded for readers, never weighed
+    assert "polarity" not in link["payload"]["data"]
+
+    assert state() == before                                                  # live path: nothing moved
+    rows = _db(tmp_path, "SELECT kind, from_kind, to_kind FROM links WHERE kind = 'extends'")
+    assert [tuple(x) for x in rows] == [("extends", "fact", tkind)]
+    _as(tmp_path, "nodeA", "doctor", "rebuild")
+    assert state() == before                                                  # ...and after a rebuild
+    assert len(_db(tmp_path, "SELECT 1 FROM links WHERE kind = 'extends'")) == 1
+
+    out = _as(tmp_path, "nodeA", "search", "retry budget").stdout
+    assert f"extends {sid}" in out                                            # text: shown on the row
+    js = json.loads(_as(tmp_path, "nodeA", "search", "retry budget", "--format", "json").stdout)
+    assert js and not any("extends" in row for row in js)                     # JSON rows: nothing new
+
+
+def test_extends_accepts_a_decision_target(tmp_path):
+    dec = _first_sid(_as(tmp_path, "nodeA", "decide", "ship on friday", "--rationale", "r").stdout)
+    before = [tuple(x) for x in _db(tmp_path, "SELECT outcome_score, last_outcome_at FROM decisions")]
+    r = _as(tmp_path, "nodeB", "remember", "friday also suits the support rota", "--extends", dec)
+    assert f"↗ extends decision {dec}" in r.stdout
+    assert [tuple(x) for x in _db(tmp_path, "SELECT kind, to_kind FROM links")] == [("extends", "decision")]
+    assert [tuple(x) for x in _db(tmp_path, "SELECT outcome_score, last_outcome_at FROM decisions")] == before
+
+
+@pytest.mark.parametrize("other", ["--supports", "--contradicts", "--resolves", "--outcome-of"])
+def test_extends_is_one_relationship_per_write(tmp_path, other):
+    fact = _first_sid(_as(tmp_path, "nodeA", "remember", "ci is green").stdout)
+    n = len(_journal(tmp_path))
+    r = _as(tmp_path, "nodeB", "remember", "both", "--extends", fact, other, fact, check=False)
+    assert r.returncode == 2 and "not allowed with" in r.stderr              # argparse, before any I/O
+    assert len(_journal(tmp_path)) == n
+
+
+def test_extends_unknown_target_writes_nothing(tmp_path):
+    _as(tmp_path, "nodeA", "remember", "ci is green")
+    n = len(_journal(tmp_path))
+    r = _as(tmp_path, "nodeB", "remember", "builds on a ghost", "--extends", "h:0000000000", check=False)
+    assert r.returncode == 1 and "--extends" in r.stderr
+    assert len(_journal(tmp_path)) == n

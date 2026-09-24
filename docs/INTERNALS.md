@@ -260,7 +260,7 @@ One journal type, an open vocabulary, one resolver.
 ```
 
 - `from_ref` / `to_ref` are journal identities, never local ids.
-- `kind` is a free string on the wire. The projection knows seven kinds; an unknown kind
+- `kind` is a free string on the wire. The projection knows eight kinds (`extends` since 1.22); an unknown kind
   **lands in the journal and projects to nothing** (the `announce` rule), so a 1.19 node and a
   later node never diverge over vocabulary.
 
@@ -273,6 +273,7 @@ One journal type, an open vocabulary, one resolver.
 | `entity` | entity → fact | `entity_facts` row |
 | `informed` | decision → fact/idea/decision | written by `hv decide --informed` (PR3); the decision's payload also carries `informed_by` as the human-legible record; feeds the utility projection (PR6) |
 | `outcome-of` | fact → decision | written by `hv remember --outcome-of`; scored into `decisions.outcome_score` (PR4) |
+| `extends` | fact → fact/idea/decision | "builds on", not evidence: an edge row in `links` only, never folded into `_content_evidence` / `_idea_evidence` on any channel. Written by `hv remember --extends` (1.22, #115); a pre-1.22 node lands it and projects it to nothing |
 
 **Links are evidence, not commands.** `_link_authority` returns `hard` only when the payload
 carries an `owner_sig` valid for the owner **as of that journal position** (the same

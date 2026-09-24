@@ -145,7 +145,7 @@ def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> l
 @mcp.tool()
 def hive_remember(content: str, tags: str = "", epistemic_status: str = "observation",
                   outcome_of: str = "", polarity: int = 1, channel: str = "", resolves: str = "",
-                  supports: str = "", contradicts: str = "") -> str:
+                  supports: str = "", contradicts: str = "", extends: str = "") -> str:
     """Record a durable, checkable fact to the shared corpus (source=claude-ai).
 
     SEARCH FIRST (hive_search) — only write if it's genuinely new. Write outcomes,
@@ -173,7 +173,11 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     `supports` or `contradicts` link; the target is re-scored immediately. Your own support of your own
     idea doesn't count; contradicting it does (that is how to withdraw it).
 
-    Pass at most ONE of outcome_of, resolves, supports, contradicts: one relationship per write.
+    extends: when this entry BUILDS ON or comments on a fact, an idea or a decision without being
+    evidence for or against it, pass its `sid`. Writes the fact plus one `extends` link: a
+    relationship, never weighed toward the target's confidence.
+
+    Pass at most ONE of outcome_of, resolves, supports, contradicts, extends: one relationship per write.
     """
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
     if epistemic_status and epistemic_status not in tag_list:
@@ -191,6 +195,8 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
         args += ["--supports", supports.strip()]
     if contradicts:
         args += ["--contradicts", contradicts.strip()]
+    if extends:
+        args += ["--extends", extends.strip()]
     return _run_hv(args)
 
 

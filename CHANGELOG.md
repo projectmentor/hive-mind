@@ -10,6 +10,14 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## Unreleased
+
+- **The test suite no longer touches the developer's real account (#109).** Every test runs with a
+  throwaway `HOME`, `CLAUDE_CONFIG_DIR` and `HIVE_IDENTITY_STASH`, and with service-manager stubs
+  first on `PATH`, so `hv doctor --fix` can no longer relink the live `~/.claude/skills/hive-memory`
+  into a worktree or restart the live daemon, and `hv owner init` can no longer overwrite the
+  owner-key stash. A session guard checks those real paths are unchanged at the end of every run.
+
 ## 1.21 — 2026-09-23 · `v1.21.0`
 
 Contract 1.21, tagged 2026-09-24 at b723b12. It also carries the fixes and documentation that landed before the tag.

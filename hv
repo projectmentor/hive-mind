@@ -6597,8 +6597,12 @@ def _daemon_code_verdict(loaded, current_digest, hive_listener):
 
 
 def _daemon_code_probe(requests, port):
-    """#112: read the daemon's /api/daemon (loopback) and re-fingerprint its own root; see the verdict."""
-    r = requests.get(f"http://127.0.0.1:{port}/api/daemon", timeout=2)
+    """#112: read the daemon's /api/daemon (loopback) and re-fingerprint its own root; see the verdict.
+    A daemon that stops answering here is no verdict, not a check error: sync-daemon owns liveness."""
+    try:
+        r = requests.get(f"http://127.0.0.1:{port}/api/daemon", timeout=2)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        return None
     if r.status_code == 404:
         try:
             hive_listener = bool(requests.get(f"http://127.0.0.1:{port}/hive/info", timeout=2).json().get("hive_id"))

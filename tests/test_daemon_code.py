@@ -111,7 +111,11 @@ def _standin(routes):
     """A stand-in daemon: `routes` maps a path to (status, JSON body); anything else is 404."""
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
-            status, body = routes.get(self.path.split("?")[0], (404, {"error": "not found"}))
+            route = routes.get(self.path.split("?")[0], (404, {"error": "not found"}))
+            if route == "drop":                          # stop answering: close with no response at all
+                self.close_connection = True
+                return
+            status, body = route
             data = json.dumps(body).encode()
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
@@ -215,4 +219,13 @@ def test_dry_run_says_it_would_restart_and_does_not(tmp_path):
     with _standin(_hive_routes((200, rec))) as port:
         out, calls = _doctor(tmp_path, port, "--fix", "--dry-run")
     assert "would restart the managed hive-sync service to load the current code (daemon-code)" in out
+    assert _restarts(calls) == []
+
+
+def test_a_daemon_that_stops_answering_api_daemon_gets_no_verdict_and_no_restart(tmp_path):
+    """Grok's #121 gap: liveness answered, then /api/daemon dropped the connection. sync-daemon owns
+    liveness, so daemon-code is no verdict (not a second 'check error' warning) and nothing restarts."""
+    with _standin(_hive_routes("drop")) as port:
+        assert _check(_doctor(tmp_path, port, "--format", "json")[0]) is None
+        _out, calls = _doctor(tmp_path, port, "--fix")
     assert _restarts(calls) == []

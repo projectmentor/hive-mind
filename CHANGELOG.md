@@ -35,6 +35,13 @@ introduced (a contract) or tagged (a patch).
   `hive_search` gains `kind`. All writes, including the `memory()` mirror, run on one bounded
   background writer, so a turn never waits on the hive. The unused root `hermes_integration.py` is
   removed.
+- **`hive-mind update` no longer aborts on a busy store (#93).** It now refreshes the units, restarts
+  the daemon and waits for it, *then* rebuilds (the old daemon could hold the store's lock through a
+  minutes-long rebuild, past the 10 s busy timeout, which aborted the update and skipped the restart
+  and hooks). A rebuild that still finds the store busy warns and continues; the daemon catches up on
+  its next cycle. A pull that lands before the release re-sign waits for it (up to 3 minutes) and
+  pulls it, or says it is pending, and `hv doctor`'s `authenticity` check marks a clean checkout on a
+  commit under 30 minutes old advisory instead of failed while the re-sign is pending.
 - **Agent write guidance teaches the grounding rule (#99):** the Claude Code skill, the MCP server
   instructions and the Hermes context block now tell agents to write their own conclusions, analysis
   and plans with `--channel introspect` (only if worth finding later), and that tags help readers but

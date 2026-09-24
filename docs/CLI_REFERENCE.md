@@ -287,8 +287,13 @@ whether it would rewrite the Claude Code config — without performing any of th
 Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
 non-zero only when a check actually fails, so you can wire it into a cron job or a
 monitoring probe and get alerted on real breakage, not on a peer being briefly
-offline. A failed `authenticity` check right after an upgrade usually just means
-the signed manifest has not caught up yet; pull the latest and re-run.
+offline. Right after an upgrade the signed manifest can lag: the release bot
+re-signs a few minutes after each merge to `main`. While your checkout is clean, sits
+exactly on its upstream commit, and that commit is under 30 minutes old,
+`authenticity` reports this as advisory (•) with a "re-sign pending" hint; run
+`hive-mind update` again in a few minutes. Outside that window a mismatch is a
+failure (✗), because an unsigned change to `main` is exactly what the check exists
+to catch.
 
 ---
 
@@ -1054,8 +1059,9 @@ checks, strongest last:
 A healthy install prints `✓ Official HiveMind v1.20 from ProjectMentor — verified.` If you edited
 files yourself it says the install was modified locally. `hv doctor` runs the same check as
 **authenticity**, and a peer's result is readable at `/api/verify`. Right after an update the signed
-manifest can lag for a few minutes (the release bot re-signs after each merge to `main`); pull again
-and re-run.
+manifest can lag for a few minutes (the release bot re-signs after each merge to `main`): `hive-mind
+update` waits for the re-sign and pulls it, and `hv doctor` marks a fresh, clean checkout advisory
+rather than failed while it is pending (see `hv doctor` above).
 
 ---
 
@@ -1107,7 +1113,7 @@ hive-mind <subcommand> [options]
 | Subcommand | What it does |
 |---|---|
 | `install` | Set up this device from scratch (discovery-driven bootstrap or join). |
-| `update` | Pull the latest code and restart the sync daemon. **Auto-heals** after a force-push / history rewrite: when a fast-forward isn't possible and the tree is clean, it hard-resets to the upstream instead of aborting. |
+| `update` | Pull the latest code and restart the sync daemon. **Auto-heals** after a force-push / history rewrite: when a fast-forward isn't possible and the tree is clean, it hard-resets to the upstream instead of aborting. It then refreshes the supervisor units, restarts the daemon and waits for it to answer, rebuilds the database, and re-wires the Claude Code hooks, in that order. A rebuild that finds the store busy is skipped with a warning rather than aborting the update; the daemon catches the store up on its next cycle. If the pull landed before the release bot's re-sign, it waits up to 3 minutes (`HIVE_RESIGN_WAIT_S`) for it, pulls it, or says it is still pending. |
 | `reset` | Recover a **wedged** install in one command: force-align the code to `origin` (even after a rewrite, even with local edits), rebuild the DB from the journal, refresh the supervisor units + Claude Code hooks, restart the daemon, and verify authenticity. **Your Hive (journal, keys, device identity) is preserved** — this is not `uninstall`. Use it when `hv doctor`/`hv verify` is unhappy after a breaking change. `-y` skips the prompt. |
 | `status` | Show device health and peer sync state. |
 | `invite` | Print the one-line address to paste on a new device so it can join this hive. |

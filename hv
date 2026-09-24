@@ -4965,6 +4965,38 @@ def _verify_status(root, check_anchor=True):
         f"  Reinstall from the official source: {OFFICIAL_SOURCE}"]}
 
 
+RESIGN_WINDOW_S = 1800   # #93: how long after a commit lands on main its sign.yml re-sign may still be pending
+
+
+def _resign_window_verdict(clean, at_upstream, age_s, window_s=RESIGN_WINDOW_S):
+    """#93, pure: may a `modified` verdict be a pending sign.yml re-sign rather than tampering?
+    Only when the tree is clean, HEAD IS the fetched upstream commit, and that commit is younger than
+    the window. A dirty tree is a local edit; HEAD off upstream is a local commit; an old commit that
+    still fails is an unsigned push to main, which is exactly what `authenticity` exists to catch, so
+    none of those may hide behind the hint."""
+    return bool(clean and at_upstream and age_s is not None and 0 <= age_s < window_s)
+
+
+def _resign_pending_hint(root):
+    """The operator hint when `_resign_window_verdict` holds for this checkout, else None. Reads git
+    facts only (no fetch, no network); any git error means no hint, so the check stays `fail`."""
+    def git(*a):
+        r = subprocess.run(["git", "-C", str(root), *a], capture_output=True, text=True, timeout=5)
+        if r.returncode != 0:
+            raise RuntimeError(r.stderr)
+        return r.stdout.strip()
+    try:
+        clean = git("status", "--porcelain") == ""
+        at_upstream = git("rev-parse", "HEAD") == git("rev-parse", "@{u}")
+        age_s = time.time() - int(git("log", "-1", "--format=%ct"))
+    except Exception:
+        return None
+    if not _resign_window_verdict(clean, at_upstream, age_s):
+        return None
+    return (f"(clean checkout at its upstream commit, {int(age_s // 60)} min old: the release re-sign "
+            "is probably still pending on GitHub; run `hive-mind update` again in a few minutes)")
+
+
 def verify_cmd(args):
     """Integrity + authenticity check (prints the layered verdict; see _verify_status)."""
     for line in _verify_status(Path(__file__).resolve().parent)["lines"]:
@@ -6053,9 +6085,15 @@ def _doctor_status():
     # 1. Authenticity — integrity + signature. Skip the slow network key-anchor layer so doctor
     #    stays fast and works offline; `hv verify` does the full three-layer check.
     try:
-        v = _verify_status(Path(__file__).resolve().parent, check_anchor=False)
+        root = Path(__file__).resolve().parent
+        v = _verify_status(root, check_anchor=False)
         headline = v["lines"][0].lstrip("✓⚠ ").strip()
-        checks.append({"name": "authenticity", "status": "ok" if v["ok"] else "fail", "detail": headline})
+        status = "ok" if v["ok"] else "fail"
+        if v["level"] == "modified":                    # #93: a pull inside sign.yml's re-sign window
+            hint = _resign_pending_hint(root)
+            if hint:
+                status, headline = "warn", f"{headline} {hint}"
+        checks.append({"name": "authenticity", "status": status, "detail": headline})
     except Exception as e:
         checks.append({"name": "authenticity", "status": "warn", "detail": f"check error: {e}"})
 

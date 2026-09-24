@@ -1,5 +1,5 @@
 {
-  "digest": "e3a881ec9d2e90a05abd8f8f588b1cd1f1cf6aa7c44d2d0f0c2041f26c03ddad",
+  "digest": "847eaaca830d478d98e89d1d55a9dabed5392b802a64b933bc5836d7e88a1ff0",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -9,7 +9,7 @@
     ".github/workflows/ci.yml": "35ba547e7d36e3ac1dc0596c40c99ef4e209598fc13d7edaa40feee53256dc56",
     ".github/workflows/cla.yml": "c9b9ef1fba789b9736a6fc976ae314ebcceed5ab15534663e179f390a1c139b3",
     ".github/workflows/sign.yml": "ba587537147988d260889ebbe20458a4bba8d2a858639c13ae0c7733dc6e5975",
-    "CHANGELOG.md": "e7c848e423f9dc8751807691d5d4f376872280c9497369ead8ada383d1c5c64d",
+    "CHANGELOG.md": "8a1e3e30a0e5c3cb5a595753c9b75262fd1dfb869bed780d203ee1dc969aafe8",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "a58e3df877f83fd3a37508d696230a82592756ddafeb7feb318b59ef600c49de",
     "README.md": "17fd15a3ca21cd085b54cea21f5eebba96729bad825df2368df1a90d23483ba3",
@@ -74,7 +74,8 @@
     "sync_common.py": "742188d14712e66d9dad1e8a8ef9d8e922061aaa670213cfb9f881f53839f1b8",
     "sync_daemon.py": "f5ee127c4c15579244b5f80a9587ff55dd4575a978763917583175808d980cfe",
     "tests/_ed25519_reference.py": "313e3f52e74ad1f5afe3c729565e57fb9c5f9861b51497cf8fc4de00243c4460",
-    "tests/conftest.py": "8cdd191e3b8336ac1e38a234cbe698784b09ee28c73f7071290b2183f14004ea",
+    "tests/_realhome.py": "b094d859573ec6cfe2f248b6daa372972f0ebd0f5b3be146d855f7418959a1f1",
+    "tests/conftest.py": "4ec1647c755b53716dba835a877d6d564e664f67b88b9a1fadcdee10991a9c93",
     "tests/security/poc.py": "3fd6e13a0aa080e7408c76649ffc67128c8387ad0209621611ffca334973a631",
     "tests/test_admit_peering.py": "61094cc2aa48b60b4522b96efc17771c47146d0f6eb3a59a71f0cd6df65fbf7a",
     "tests/test_agent_guidance.py": "f3211fb32efe143ba28fcf92d9c5f653482f211832d9d7b1ed3cc19ac055e1c9",
@@ -109,6 +110,7 @@
     "tests/test_peer_address.py": "39d8595a49aabfd9205a5244475eae9fead0f66c3a079fc3df268cf28ea088cb",
     "tests/test_perf.py": "4d7ca8ed5f70bc3a5cd257870dd2fe31b21095e206072c5cf99c3fbefb1d8d86",
     "tests/test_projection_authz.py": "9b30f24ba052d75d6fd89f1d9cdea23c10ad0f0174aaef6601282f2c64e07227",
+    "tests/test_real_home_guard.py": "4f0d20eaffa85fd38975f2f1e56aefea042768b819709c2ebdbb37e996fde322",
     "tests/test_recipient_pubkeys.py": "3e6899c45e5ff35df61e79b6d7907a211f595ed55e4f84ec51beb4113c15913d",
     "tests/test_service.py": "e6b4afb6dfaa8cd4db73ba5ff953dce810524704f4a59ab60ff8a574386178fe",
     "tests/test_short_ids.py": "5ef7d50a16278d79448838d33f99efbd12f33041d3ecbe211dcd055fce512e9b",

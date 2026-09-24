@@ -17,6 +17,8 @@ MUST_BE_IGNORED = [
     # keys and per-node config
     ".device-key", ".owner-key", "hive-owner-k1_0123456789abcdef.key",
     ".peers.json", "nudge.env",
+    # verified peer addresses (#7), and the temp files an atomic rewrite leaves if interrupted
+    ".peer_candidates.json", ".peer_candidates.json.a1b2c3.tmp", ".peers.json.a1b2c3.tmp",
     # local-only telemetry, including its own SQLite side files
     ".telemetry/telemetry.db", ".telemetry/telemetry.db-wal",
     # the local bus log, and any log written into the checkout

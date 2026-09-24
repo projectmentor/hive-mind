@@ -20,6 +20,12 @@ introduced (a contract) or tagged (a patch).
   as `introspect` everywhere; an unrecognised source class keeps full weight, like an absent one,
   since a class can only claim a discount (#72).
 - **MCP:** `hive_remember` gains `resolves`, for parity with `hv remember --resolves` (#75).
+- **A peer that moves to a new tailnet IP heals itself (#7).** The daemon records a peer's address
+  only from requests signed by that peer's admitted device key (`$HIVE_HOME/.peer_candidates.json`,
+  local and never journaled). A new `hv doctor` check, `peer-address`, repoints the `.peers.json`
+  entry with `--fix` when the stored address fails and the peer has verified itself elsewhere. A
+  working address is never rewritten, and `tailscale status` names are only unverified hints. The
+  responder-signed hello that would also cover a peer that never contacts this node is #107.
 - **`.gitignore`** ignores the local bus log (`.bus/`) and any `*.log` in the checkout. Like the
   store's side files (#74), they hold hive content and could otherwise be committed to the public repo
   by accident (#103).

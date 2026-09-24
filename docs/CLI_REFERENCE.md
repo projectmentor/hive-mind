@@ -242,6 +242,11 @@ needs attention. It looks at:
   on an old tailnet IP; `--fix` restarts it. A `HIVE_BIND` or `.peers.json` bind is left alone, and it
   never asks the daemon to move to loopback
 - **peers** — whether your peer nodes are reachable and in sync
+- **peer-address** — for a peer whose stored address did not answer: whether its device has since
+  reached this node from another address with a verified signed request. If so, `--fix` changes that
+  entry's URL host in `.peers.json` and nothing else. An address that answers is never rewritten. With
+  no verified address it only reports, listing devices of the same name in `tailscale status` as
+  unverified hints (none where there is no `tailscale` CLI, as on Android)
 
 A few checks appear only when there is something to report: **crypto-modules** (a bundled
 cryptography module failed to load, so signature checking is degraded), **journal-integrity**
@@ -277,12 +282,16 @@ source control, so new behaviors arrive by update, not by editing `~/.claude`. I
 shim or the `hive-memory` skill is missing, or an older node still carries the previous
 inline hooks, `--fix` wires the shim, migrates the old hooks away (so nothing fires
 twice), and relinks the skill — leaving your own hooks untouched and taking a
-`.bak.doctor` backup first. Because the 15-minute `hive-doctor.timer` runs `hv doctor
+`.bak.doctor` backup first. It also **repoints a peer that moved**: when the
+`peer-address` check finds a peer's device verified at a new address, `--fix` updates
+that one URL in `.peers.json` (see [SYNC_API.md](SYNC_API.md#configuration-peersjson)).
+Because the 15-minute `hive-doctor.timer` runs `hv doctor
 --fix`, a node that drifts heals itself with no one re-running the installer. Without
 `--fix`, doctor only reports — it never kills or writes anything, so it stays safe to
 run from cron. `--fix --dry-run` sits in between: it prints every action `--fix` would
-take — which key files it would re-tighten, which orphan daemons it would kill, and
-whether it would rewrite the Claude Code config — without performing any of them.
+take — which key files it would re-tighten, which orphan daemons it would kill,
+whether it would rewrite the Claude Code config, and which peer URLs it would repoint —
+without performing any of them.
 
 Each check is marked healthy (✓), advisory (•), or failed (✗). The command exits
 non-zero only when a check actually fails, so you can wire it into a cron job or a

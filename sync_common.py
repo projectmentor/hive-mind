@@ -94,18 +94,27 @@ def hive_home():
     return Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 
 
+def peers_path():
+    """The .peers.json that load_peers() reads: HIVE_HOME's, else the repo root's; None if neither
+    exists. `hv doctor --fix` rewrites this same file (#7)."""
+    for p in (hive_home() / ".peers.json", ROOT / ".peers.json"):
+        if p.exists():
+            return p
+    return None
+
+
 def load_peers():
     """Read .peers.json from HIVE_HOME (per-node), falling back to the repo root,
     then to a no-peers default. `bind` defaults to None (unset) — NOT "0.0.0.0" — so
     resolve_bind() can tell "operator chose all-interfaces" from "nobody set it"."""
-    for p in (hive_home() / ".peers.json", ROOT / ".peers.json"):
-        if p.exists():
-            cfg = json.loads(p.read_text())
-            cfg.setdefault("self", socket.gethostname())
-            cfg.setdefault("bind", None)
-            cfg.setdefault("port", PORT_DEFAULT)
-            cfg.setdefault("peers", [])
-            return cfg
+    p = peers_path()
+    if p is not None:
+        cfg = json.loads(p.read_text())
+        cfg.setdefault("self", socket.gethostname())
+        cfg.setdefault("bind", None)
+        cfg.setdefault("port", PORT_DEFAULT)
+        cfg.setdefault("peers", [])
+        return cfg
     return {"self": socket.gethostname(), "bind": None, "port": PORT_DEFAULT, "peers": []}
 
 

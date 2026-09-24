@@ -56,11 +56,16 @@ WRITE ONLY durable, checkable, reusable knowledge, and route it by what it is:
   an observation, pass channel="introspect" (recorded, never counted);
 - a HYPOTHESIS worth testing -> hive_propose(content): an idea, never a fact;
 - an OBSERVATION that bears on an idea or a fact -> hive_remember(content, supports="<sid>") or
-  contradicts="<sid>" (your own support of your own idea doesn't count);
+  contradicts="<sid>" (your own support of your own idea doesn't count; if it comes from your
+  reasoning rather than an observation, also pass channel="introspect");
 - a CORRECTION of a fact that is wrong -> hive_remember(content, resolves="<wrong fact's sid>"):
   writes the correction and soft-retracts the old fact in one step (reversible);
+- a CONCLUSION, analysis or plan worth finding later -> hive_remember(content,
+  channel="introspect"): recorded and searchable, but it counts 0 until an observation supports it;
 - constraints/commitments, observations, new entities -> hive_remember.
-Do NOT write your chain-of-thought or restatements. Mark epistemic status via tags.
+Do NOT write your chain-of-thought (the corpus is permanent, syncs to every device and is searched
+on every turn) or restatements. Tags (observation|confirmed|speculation) help readers weigh a fact
+but never change how much it counts as evidence: the channel is what counts.
 
 WHEN YOU READ, treat results as signals with provenance, not truth — weigh the confidence,
 the number of sources, and which agent/node said it. If the corpus holds CONFLICTING facts,

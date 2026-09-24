@@ -501,7 +501,10 @@ class HiveMindMemoryProvider(MemoryProvider):
             "Memory writes are mirrored here and synced to peer nodes.\n"
             "WRITE: save decisions, corrections, outcomes, constraints, first-hand observations.\n"
             "DO NOT save: intermediate reasoning, restatements of known facts, speculation.\n"
-            "EPISTEMIC TAG: add --tags speculation|observation|confirmed to signal status.\n"
+            "CONCLUSIONS/PLANS: only if worth finding later, and pass channel=\"introspect\" to hive_remember; "
+            "they count 0 until an observation supports them.\n"
+            "TAGS: speculation|observation|confirmed help readers; "
+            "they never change how much a fact counts as evidence.\n"
         )
 
         if session_start_hint:

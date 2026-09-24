@@ -20,6 +20,9 @@ introduced (a contract) or tagged (a patch).
   as `introspect` everywhere; an unrecognised source class keeps full weight, like an absent one,
   since a class can only claim a discount (#72).
 - **MCP:** `hive_remember` gains `resolves`, for parity with `hv remember --resolves` (#75).
+- **`.gitignore`** ignores the local bus log (`.bus/`) and any `*.log` in the checkout. Like the
+  store's side files (#74), they hold hive content and could otherwise be committed to the public repo
+  by accident (#103).
 - **Search JSON:** rows gain `tag_list` (the tags as a list); `tags` stays a JSON-encoded string
   until 2.0, when it becomes the list (#77).
 - **Ideas can earn confidence:** `hv remember "<observation>" --supports <sid>` / `--contradicts <sid>`

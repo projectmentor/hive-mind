@@ -19,6 +19,8 @@ MUST_BE_IGNORED = [
     ".peers.json", "nudge.env",
     # local-only telemetry, including its own SQLite side files
     ".telemetry/telemetry.db", ".telemetry/telemetry.db-wal",
+    # the local bus log, and any log written into the checkout
+    ".bus/introspect.log", "hive-sync.log",
     # live cells can carry private infrastructure details
     "cells/prod-site.json",
 ]

@@ -205,7 +205,7 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     """Record an architectural or process DECISION with its rationale.
 
     Use for choices that shape future work. Search first to avoid duplicating an existing
-    decision. (Decisions are not source-tagged by the CLI; the rationale is the provenance.)
+    decision. Decisions are source-tagged (source=claude-ai, contract 1.23) like facts.
 
     tags: comma-separated (e.g. the project) so the decision is findable by hive_search /
     `hv search` by tag/text instead of by an unstable, node-local decision id.
@@ -217,7 +217,7 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     the `sid`. An unresolvable reference aborts the whole write. This is what lets the hive learn
     which knowledge turns out to matter once the decision's outcomes are recorded.
     """
-    args = ["decide", content]
+    args = ["decide", content, "--source", "claude-ai"]
     if rationale:
         args += ["--rationale", rationale]
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
@@ -302,6 +302,8 @@ def hive_entity(action: str, name: str = "", type: str = "", attr: str = "",
         args += ["--fact-id", str(fact_id).strip()]
     if confidence is not None:
         args += ["--confidence", str(confidence)]
+    if action == "link":
+        args += ["--source", "claude-ai"]          # contract 1.23: the link is this server's, not a person's
     return _run_hv(args)
 
 

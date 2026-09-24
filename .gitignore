@@ -10,6 +10,11 @@ store.db.bak.*
 
 # Peer registry is per-node, not versioned (use config/.peers.json.example as a template)
 .peers.json
+# Where the daemon verified each peer's device from (#7): per-node, never synced; names devices and IPs.
+.peer_candidates.json
+# The temp file an atomic rewrite of either goes through, should a crash leave one behind.
+.peers.json.*.tmp
+.peer_candidates.json.*.tmp
 
 # Device identity (per-node Ed25519 key). The seed is SECRET — never commit or sync it.
 .device-key

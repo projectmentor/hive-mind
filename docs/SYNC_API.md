@@ -330,13 +330,29 @@ Written by the installer; per node and git-ignored.
 | `self` | — | This device's id |
 | `port` | `9876` | Port to listen on |
 | `peers[].url` | required | Base URL of a peer's daemon |
-| `peers[].id` | optional | A label for logs |
+| `peers[].id` | optional | A label for logs. A device id (`k1:…`) here also tells `hv doctor` which device the entry is (below) |
 | `bind` | automatic | Optional override of the bind address (see *Binding*); `0.0.0.0` is treated as automatic |
 | `sync_auth` | `permissive` | Optional sync auth mode (`hv sync auth` sets it) |
 
 Admitting a device with `hv group admit` also adds a peer entry from the address in its join request.
 To add a device, run `hive-mind invite` on a device already in the hive and paste the line into
 `hive-mind install` on the new one.
+
+**When a peer's address changes** (same device key, new tailnet IP). A request that passes signature
+verification (see *Authentication*) proves which admitted device sent it, and the daemon sees the address
+it came from. The daemon records that pair in `$HIVE_HOME/.peer_candidates.json`. This
+includes the signed `/sync/merkle-root` call that a peer already in sync makes each round: the daemon
+checks that signature only to learn the address, and the path stays open. Unsigned requests, failed
+signatures and loopback record nothing. The file is local: it is never journaled or synced, and it is
+git-ignored. `hv doctor` reads it in the `peer-address` check. When a peer's stored address does not
+answer and its device has verified itself from another address since `.peers.json` last changed,
+`hv doctor --fix` (which the 15-minute doctor timer runs) replaces that entry's URL host. The scheme,
+port and every other key stay as they are. An address that answers is never rewritten. An entry is
+matched to its device by a device id in `id`, or else by the one device verified at its stored address. Host
+names are never used, because they are self-reported and can collide. When no verified address exists,
+doctor only reports, and lists devices with the same name in `tailscale status` as unverified hints. A
+peer that never contacts this node is not learned this way; that needs responder-signed `/sync/hello`
+replies, tracked in [#107](https://github.com/projectmentor/hive-mind/issues/107).
 
 ### Environment variables
 

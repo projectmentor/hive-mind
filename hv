@@ -4826,7 +4826,7 @@ _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", 
 # verify.json.sig signs it, and hivemind.pub is the anchor (its integrity comes from the published
 # copy at the canonical site, not from being self-listed). Listing any of them would be circular.
 _VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env",
-                         ".peers.json", ".device-key", ".device-id", ".owner-key"}
+                         ".peers.json", ".peer_candidates.json", ".device-key", ".device-id", ".owner-key"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg",
                 ".html", ".css", ".js", ".svg"}   # .html/.css/.js/.svg: the dashboard SPA + assets the
                                                   # daemon serves are signed too (tamper-evident over HTTP)
@@ -6416,6 +6416,7 @@ def _doctor_status():
     else:
         local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
         up, down, diverged = [], [], []
+        answered = {}                       # base URL -> did it answer (peer-address reuses this probe)
         for p in peers:
             base = str(p.get("url", "")).rstrip("/")
             # Label by the peer's ADDRESS, not the .peers.json `id` (which may be a principal like
@@ -6426,7 +6427,9 @@ def _doctor_status():
                 rr = requests.get(f"{base}/sync/merkle-root", timeout=5)
                 rr.raise_for_status()
                 (up if rr.json().get("root_hash") == local_root else diverged).append(pid)
+                answered[base] = True
             except Exception:
+                answered[base] = False
                 down.append(pid)
         if down or diverged:
             bits = []
@@ -6440,6 +6443,22 @@ def _doctor_status():
             checks.append({"name": "peers", "status": "warn", "detail": "; ".join(bits)})
         else:
             checks.append({"name": "peers", "status": "ok", "detail": f"{len(up)} peer(s) reachable and in sync"})
+
+        # peer-address (#7): for each stored address that did not answer just now, has that peer's device
+        # since verified itself from another address (a signed request that reached this node's daemon)?
+        # Reuses the probe above. A candidate counts only while its device would still pass
+        # _verify_sync_request (admitted, not purged), so a purged device is never repointed.
+        try:
+            import sync_common
+            pp = sync_common.peers_path()
+            cands = _load_peer_candidates()
+            pgov = _governance_state(entries)
+            if pgov.get("owner_id"):
+                cands = {d: h for d, h in cands.items() if d in pgov["admitted"] and d not in pgov["purged"]}
+            checks.append(_peer_address_check(peers, answered, cands, int(pp.stat().st_mtime) if pp else 0,
+                                              _tailscale_hosts))
+        except Exception as e:
+            checks.append({"name": "peer-address", "status": "warn", "detail": f"check error: {e}"})
 
     return checks
 
@@ -6486,6 +6505,233 @@ def _sync_bind_verdict(resolved, advertised, auto):
     if host != resolved:
         return "warn", f"tailnet IP changed: daemon on {host}, this node is now {resolved} — `hv doctor --fix` restarts it"
     return "ok", f"bound to the tailnet at {advertised}"
+
+
+# ── peer-address (#7) ─────────────────────────────────────────────────────────────────────────────
+# A peer whose tailnet IP changed (same device key, new address) used to fail silently until someone
+# edited .peers.json. The daemon now notes where each device VERIFIED itself: a request whose
+# Hive-Auth-* envelope passed _verify_sync_request, from a non-loopback source address. That is the only
+# proof of a peer's identity the transport has (/sync/hello and /hive/info responses are unsigned and
+# self-reported), so it is the only basis on which doctor repoints an entry; tailscale names are shown
+# as unverified hints, never acted on. The file is local operational state: never journaled, never
+# synced, git-ignored. A responder-signed hello, which would also cover a peer that never contacts
+# this node, is the follow-up (#107).
+PEER_CANDIDATES_PATH = HIVE_HOME / ".peer_candidates.json"
+_PEER_CANDIDATES_PER_DEVICE = 8       # addresses kept per device, most recently seen first
+_PEER_CANDIDATES_MAX_DEVICES = 256    # a pre-owner hive verifies any valid signature, so bound the file
+
+
+def _atomic_write_text(path, text):
+    """Write `path` through a temp file in the same directory and os.replace, so a concurrent reader sees
+    the old file or the new one, never a torn one. An existing file keeps its mode; a new one is 0600.
+    A symlinked file is rewritten at its target, so the link survives."""
+    import tempfile
+    path = Path(os.path.realpath(path))
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(tmp, path.stat().st_mode & 0o777)
+        except FileNotFoundError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def _load_peer_candidates():
+    """{device_id: {ip: {"first_seen": s, "last_seen": s}}} (epoch seconds) from PEER_CANDIDATES_PATH.
+    {} when the file is absent or unreadable: it is advisory, so a bad one only means nothing learned."""
+    try:
+        devs = json.loads(PEER_CANDIDATES_PATH.read_text()).get("devices")
+    except Exception:
+        return {}
+    out = {}
+    for d, hist in (devs.items() if isinstance(devs, dict) else ()):
+        recs = {ip: r for ip, r in (hist.items() if isinstance(hist, dict) else ())
+                if isinstance(r, dict) and isinstance(r.get("last_seen"), int)}
+        if recs:
+            out[d] = recs
+    return out
+
+
+def _record_peer_candidate(device_id, ip, now=None):
+    """Note that `device_id` verified itself from `ip`. The daemon calls this only after
+    _verify_sync_request passed; loopback is refused here too, since that is this device. Keeps the
+    _PEER_CANDIDATES_PER_DEVICE most recent addresses per device, and writes nothing when nothing
+    changed. Returns True when `ip` is new for that device."""
+    import sync_common
+    ip = str(ip or "")
+    ip = ip[7:] if ip.startswith("::ffff:") else ip      # an IPv4 peer seen on a dual-stack socket
+    if not device_id or not ip or sync_common.is_loopback(ip):
+        return False
+    now = int(time.time()) if now is None else int(now)
+    cands = _load_peer_candidates()
+    hist = cands.setdefault(device_id, {})
+    rec = hist.get(ip)
+    if rec is not None and rec["last_seen"] >= now:
+        return False
+    hist[ip] = {"first_seen": rec.get("first_seen", now) if rec else now, "last_seen": now}
+    if len(hist) > _PEER_CANDIDATES_PER_DEVICE:
+        keep = sorted(hist, key=lambda k: hist[k]["last_seen"], reverse=True)[:_PEER_CANDIDATES_PER_DEVICE]
+        cands[device_id] = {k: hist[k] for k in keep}
+    if len(cands) > _PEER_CANDIDATES_MAX_DEVICES:
+        order = sorted(cands, key=lambda d: max(r["last_seen"] for r in cands[d].values()), reverse=True)
+        cands = {d: cands[d] for d in order[:_PEER_CANDIDATES_MAX_DEVICES]}
+    _atomic_write_text(PEER_CANDIDATES_PATH, json.dumps({"devices": cands}, indent=2, sort_keys=True) + "\n")
+    return rec is None
+
+
+def _is_device_id(s):
+    return bool(re.fullmatch(r"k1:[0-9a-f]{16}", str(s or "")))
+
+
+def _url_host(url):
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(str(url or "")).hostname or ""
+    except ValueError:
+        return ""
+
+
+def _url_with_host(url, ip):
+    """`url` with only its host replaced by `ip`: scheme, port, path and any userinfo are kept."""
+    from urllib.parse import urlsplit, urlunsplit
+    u = urlsplit(url)
+    netloc = (f"[{ip}]" if ":" in ip else ip) + (f":{u.port}" if u.port else "")
+    if "@" in u.netloc:
+        netloc = u.netloc.rsplit("@", 1)[0] + "@" + netloc
+    return urlunsplit(u._replace(netloc=netloc))
+
+
+def _peer_entry_device(entry, candidates):
+    """The device a .peers.json entry points at, or None: its `id` when that is a device id (k1:…),
+    else the ONE device verified at the entry's current host. Never a hostname or label: names are
+    self-reported and collide (two devices named HP-cn2063cl on one hive)."""
+    pid = str(entry.get("id") or "")
+    if _is_device_id(pid):
+        return pid
+    host = _url_host(entry.get("url"))
+    here = [d for d, hist in candidates.items() if host and host in hist]
+    return here[0] if len(here) == 1 else None
+
+
+def _peer_address_verdict(host, answered, device, seen, since):
+    """#7, pure: what the `peer-address` check says about ONE .peers.json entry. `host` is the entry's URL
+    host, `answered` whether that URL answered doctor's probe, `device` the device the entry maps to
+    (None when unknown), `seen` that device's verified sightings {ip: last_seen} and `since` the
+    .peers.json mtime, since the stored binding is at least that recent. Returns (verdict, ip):
+      ("ok", None)       the stored address answers; it is never rewritten, whatever `seen` holds
+      ("move", ip)       it fails, and the device verified itself at `ip` after the stored binding
+      ("report", None)   it fails, and no newer verified address is known for the device
+      ("unknown", None)  it fails, and no device is known for the entry: report only, never rewrite"""
+    if answered:
+        return "ok", None
+    if not device:
+        return "unknown", None
+    if not seen:
+        return "report", None
+    ip, last = max(seen.items(), key=lambda kv: (kv[1], kv[0]))
+    if ip != host and last > max(seen.get(host, 0), since):
+        return "move", ip
+    return "report", None
+
+
+def _tailscale_hosts():
+    """[(name, [ipv4, …])] for the other devices on the tailnet, from `tailscale status --json` (its
+    HostName and the first label of its DNSName). [] when the CLI is absent (Android/Termux has none),
+    logged out or failing: the hints this feeds are optional, so that is never an error."""
+    try:
+        r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True, timeout=5)
+        out = []
+        for p in ((json.loads(r.stdout) if r.returncode == 0 else {}).get("Peer") or {}).values():
+            ips = [ip for ip in (p.get("TailscaleIPs") or []) if ":" not in str(ip)]
+            for name in {str(p.get("HostName") or "").lower(), str(p.get("DNSName") or "").split(".")[0].lower()}:
+                if name and ips:
+                    out.append((name, ips))
+        return out
+    except Exception:
+        return []
+
+
+def _peer_hint_names(entry):
+    """Lower-cased names a stale entry may go by on the tailnet, for the unverified hints only: its
+    `label`, its `id` when that is not a device id, and its URL host when that is a name, not an IP."""
+    import ipaddress
+    names = {str(v).lower() for v in (entry.get("label"), entry.get("id")) if v and not _is_device_id(v)}
+    host = _url_host(entry.get("url"))
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        if host:
+            names.add(host.split(".")[0].lower())
+    return names
+
+
+def _peer_address_check(peers, answered, candidates, since, tailscale_hosts=None):
+    """#7: the `peer-address` doctor check over the .peers.json `peers` list. `answered` maps each entry's
+    base URL to whether it answered the `peers` probe (so there is no second round of network calls; an
+    entry missing from it counts as answering and is left alone), `candidates` is _load_peer_candidates()
+    and `since` the .peers.json mtime. `tailscale_hosts` supplies the unverified hints and is called
+    only when an unreachable entry has no verified address. The check's `moves` are what `--fix` applies."""
+    moves, lines, quiet, n_ok, hosts = [], [], 0, 0, None
+    for i, p in enumerate(peers):
+        url = str(p.get("url", "")).rstrip("/")
+        if not url:
+            continue
+        host, where = _url_host(url), url.split("://", 1)[-1]
+        device = _peer_entry_device(p, candidates)
+        seen = {ip: r["last_seen"] for ip, r in (candidates.get(device) or {}).items()}
+        verdict, ip = _peer_address_verdict(host, answered.get(url, True), device, seen, since)
+        if verdict == "ok":
+            n_ok += 1
+            continue
+        if verdict == "move":
+            moves.append({"index": i, "device": device, "url": p.get("url"), "to": _url_with_host(p.get("url"), ip)})
+            lines.append(f"peer {device[:11]}… unreachable at {where}, verified at {ip} — `hv doctor --fix` repoints it")
+            continue
+        if hosts is None:
+            hosts = (tailscale_hosts() if tailscale_hosts else None) or []
+        names = _peer_hint_names(p)
+        hints = sorted({f"{h} ({name})" for name, ips in hosts if name in names for h in ips if h != host})
+        if not hints:
+            quiet += 1
+            continue
+        who = f"peer {device[:11]}… unreachable at {where}, no newer verified address" if device \
+            else f"{where} unreachable, no known device for this entry"
+        lines.append(f"{who}; unverified tailscale hint(s) by name, not acted on: {', '.join(hints)}")
+    if not lines:
+        detail = f"{n_ok} stored peer address(es) answer"
+        if quiet:
+            detail += f"; {quiet} unreachable with no newer verified address (nothing to repoint)"
+        return {"name": "peer-address", "status": "ok", "detail": detail, "moves": []}
+    return {"name": "peer-address", "status": "warn", "detail": "; ".join(lines), "moves": moves}
+
+
+def _repoint_peers(path, moves):
+    """Apply peer-address `moves` to the .peers.json at `path`. Each changes ONE entry's `url` (host only)
+    and nothing else: every other key of that entry and of the file, known or not, keeps its value and
+    its order. The file is re-read first, and a move whose entry no longer holds the URL the check saw
+    (edited meanwhile) is skipped. Atomic. Returns the moves applied."""
+    cfg = json.loads(Path(path).read_text())
+    peers = cfg.get("peers") if isinstance(cfg, dict) else None
+    done = []
+    for m in moves:
+        i = m["index"]
+        if isinstance(peers, list) and 0 <= i < len(peers) and isinstance(peers[i], dict) \
+                and peers[i].get("url") == m["url"]:
+            peers[i]["url"] = m["to"]
+            done.append(m)
+    if done:
+        _atomic_write_text(path, json.dumps(cfg, indent=2) + "\n")
+    return done
 
 
 def doctor_cmd(args):
@@ -6610,6 +6856,26 @@ def doctor_cmd(args):
             else:
                 msg = _restart_managed_daemon()
                 print(f"\n--fix: {msg or 'no managed hive-sync service found to restart'} (sync-bind: {sb['detail']})")
+
+        # peer-address (#7): a peer's stored address failed and its device has since verified itself at
+        # another one. Repoint that entry's URL host in .peers.json; the daemon reads the file each round,
+        # so no restart. An address that answered is never in `moves`.
+        pa = next((c for c in checks if c["name"] == "peer-address"), None)
+        moves = (pa or {}).get("moves") or []
+        if moves and dry:
+            for m in moves:
+                print(f"\n  would repoint peer {m['device'][:11]}… in .peers.json: {m['url']} -> {m['to']} (peer-address)")
+        elif moves:
+            try:
+                import sync_common
+                done = _repoint_peers(sync_common.peers_path(), moves)
+                for m in done:
+                    print(f"\n--fix: repointed peer {m['device'][:11]}… in .peers.json: {m['url']} -> {m['to']} (peer-address)")
+                if len(done) < len(moves):
+                    print(f"\n--fix: left {len(moves) - len(done)} peer-address entr(y/ies) alone: "
+                          f".peers.json changed since the check")
+            except Exception as e:
+                print(f"\n--fix: peer-address heal error: {e}")
 
         # Self-heal the agent integration. The 15-min systemd timer runs `hv doctor --fix`, so THIS
         # is where Claude Code hooks that drifted (or never wired on a pre-nudge install) get

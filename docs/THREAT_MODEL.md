@@ -200,6 +200,8 @@ at once). Concretely:
 - **Best-effort recovery.** A truncated/garbled journal line (e.g. a crash mid-write) is skipped on
   read; `hv doctor` now surfaces the count so silent data loss is visible (`journal-integrity`).
 - **`hv doctor --fix` blast radius.** `--fix` kills orphan daemons (by argv match), restarts the
-  managed daemon (systemd unit on Linux/WSL, launchd agent on macOS), and rewrites the foreign
-  Claude Code config (with a backup). Run
+  managed daemon (systemd unit on Linux/WSL, launchd agent on macOS), rewrites the foreign
+  Claude Code config (with a backup), and repoints a `.peers.json` peer's URL host when its stored
+  address fails and its device has since verified itself from another address with a signed request
+  (`peer-address`, [#7](https://github.com/projectmentor/hive-mind/issues/7)). Run
   `hv doctor --fix --dry-run` to preview every mutating action before letting it run.

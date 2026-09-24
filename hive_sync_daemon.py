@@ -219,6 +219,44 @@ def _verify_sync_request(headers, method, path, query, body_bytes, gov):
     return (True, "ok", device_id)
 
 
+# ── verified peer addresses (#7) ─────────────────────────────────────────────────────────────────
+# A request that passes _verify_sync_request proves its device holds an admitted key, and the handler
+# holds that device_id and the request's source address together. The pair is recorded
+# (hv._record_peer_candidate → $HIVE_HOME/.peer_candidates.json: local, never journaled, never synced)
+# so `hv doctor --fix` can repoint a .peers.json entry whose peer moved to a new tailnet IP. A device
+# seen again at the same address is re-recorded at most once per _PEER_SEEN_THROTTLE seconds, so a
+# steady sync round costs no disk write.
+_PEER_SEEN_THROTTLE = 600
+_peer_seen_lock = threading.Lock()
+_peer_seen = {}                   # device_id -> (ip, monotonic time it was last recorded at that ip)
+
+
+def _peer_seen_fresh(device_id, ip):
+    with _peer_seen_lock:
+        last = _peer_seen.get(device_id)
+    return bool(last) and last[0] == ip and time.monotonic() - last[1] < _PEER_SEEN_THROTTLE
+
+
+def _note_verified_peer(device_id, ip):
+    """Record that `device_id` verified itself from `ip`. Call ONLY with the device_id of a request that
+    _verify_sync_request accepted. Loopback records nothing (that is this device). Best-effort: a failed
+    write never fails the request, and is retried after the throttle."""
+    if not device_id or not ip or sync_common.is_loopback(ip):
+        return
+    with _peer_seen_lock:
+        last, now = _peer_seen.get(device_id), time.monotonic()
+        if last and last[0] == ip and now - last[1] < _PEER_SEEN_THROTTLE:
+            return
+        if len(_peer_seen) > 4096:
+            _peer_seen.clear()
+        _peer_seen[device_id] = (ip, now)
+        try:
+            if hv._record_peer_candidate(device_id, ip):
+                print(f"sync daemon: {device_id} verified from a new address, {ip} (see `hv doctor` peer-address)")
+        except Exception:
+            pass
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hive-sync/2.0"
     timeout = SOCKET_TIMEOUT             # honored by socketserver setup() → socket read timeout
@@ -295,9 +333,11 @@ class Handler(BaseHTTPRequestHandler):
             return True
         mode = sync_common.sync_auth_mode()
         if mode == "off":
+            self._learn_address(u, body)
             return True
-        ok, reason, _dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
+        ok, reason, dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
         if ok:
+            _note_verified_peer(dev, self.client_address[0])      # (#7)
             return True
         if mode == "permissive":
             _auth_flag(reason)
@@ -313,12 +353,31 @@ class Handler(BaseHTTPRequestHandler):
         if self._is_loopback():
             return True
         if sync_common.sync_auth_mode() == "off":
+            self._learn_address(u, body)
             return True
-        ok, reason, _dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
+        ok, reason, dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
         if ok:
+            _note_verified_peer(dev, self.client_address[0])      # (#7)
             return True
         self._send(403, {"error": "forbidden", "detail": reason})
         return False
+
+    def _learn_address(self, u, body=b""):
+        """#7: verify a SIGNED request that no gate checks (open discovery, or any path in `off` mode) only
+        to learn where its device is. A peer already in sync makes a single /sync/merkle-root call per
+        round, so without this it would never be learned. Never gates and never raises; an unsigned or
+        loopback request, or a device already recorded at this address within the throttle, skips the
+        signature check."""
+        try:
+            dev = self.headers.get("Hive-Auth-Device")
+            ip = self.client_address[0] if self.client_address else ""
+            if not dev or self._is_loopback() or _peer_seen_fresh(dev, ip):
+                return
+            ok, _reason, dev = _verify_sync_request(self.headers, self.command, u.path, u.query, body, self._gov())
+            if ok:
+                _note_verified_peer(dev, ip)
+        except Exception:
+            pass
 
     def do_GET(self):
         if not self._enter():
@@ -335,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path in _LOOPBACK_ONLY:
                 if not self._local_or_signed(u):
                     return
+            elif u.path in _OPEN_DISCOVERY:
+                self._learn_address(u)             # (#7) learn-only: open discovery is never gated
             # Per-node proxy: these read endpoints can be served for a SPECIFIC node — self = local,
             # a peer = proxied over the tailnet. hv resolves the address from the admitted-peer probe
             # (never from the client), so the proxy can't be aimed at an arbitrary host (no SSRF).

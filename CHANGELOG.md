@@ -10,7 +10,9 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.21
+## 1.21 — 2026-09-23 · `v1.21.0`
+
+Contract 1.21, tagged 2026-09-24 at b723b12. It also carries the fixes and documentation that landed before the tag.
 
 - **Contract 1.21: the grounding rule covers fact assertions.** A fact written with
   `--channel introspect` no longer counts as corroboration (it weighs `introspect_support_weight`,

@@ -135,15 +135,19 @@ def _standin(routes):
 
 
 def _doctor(tmp_path, port, *args):
-    """Run `hv doctor` against the stand-in on `port`, with a systemctl stub that reports a managed,
-    active hive-sync unit and logs every call. Returns (stdout, the list of systemctl calls)."""
+    """Run `hv doctor` against the stand-in on `port`, with service-manager stubs that report a managed
+    hive-sync (a loaded, active systemd unit on Linux; a loaded launchd agent on macOS, where
+    `_restart_managed_daemon` uses `launchctl kickstart`) and log every call. Returns (stdout, calls)."""
     home, bin_dir, log = tmp_path / "hive", tmp_path / "bin", tmp_path / "systemctl.log"
     home.mkdir(exist_ok=True)
     bin_dir.mkdir(exist_ok=True)
     (home / ".peers.json").write_text(json.dumps({"port": port, "bind": "127.0.0.1", "peers": []}))
     stub = bin_dir / "systemctl"
-    stub.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\ncase "$*" in\n'
+    stub.write_text(f'#!/bin/sh\necho "systemctl $*" >> "{log}"\ncase "$*" in\n'
                     '  *LoadState*) echo loaded ;;\n  *is-active*) echo active ;;\n  *MainPID*) echo 4242 ;;\nesac\nexit 0\n')
+    stub.chmod(0o755)
+    stub = bin_dir / "launchctl"                         # `print` exits 0 = the agent is loaded
+    stub.write_text(f'#!/bin/sh\necho "launchctl $*" >> "{log}"\nexit 0\n')
     stub.chmod(0o755)
     env = dict(os.environ, HIVE_HOME=str(home), PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), "doctor", *args], env=env,
@@ -153,7 +157,9 @@ def _doctor(tmp_path, port, *args):
 
 
 def _restarts(calls):
-    return [c for c in calls if c.startswith("--user restart hive-sync")]
+    """Restart calls on either service manager: systemd (Linux/WSL) or launchd (macOS)."""
+    return [c for c in calls if c.startswith("systemctl --user restart hive-sync")
+            or (c.startswith("launchctl kickstart -k ") and c.endswith("com.projectmentor.hive-sync"))]
 
 
 def _check(out):

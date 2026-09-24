@@ -182,11 +182,18 @@ def test_the_mirror_returns_before_the_write_and_shutdown_drains_it(monkeypatch)
 
 
 def test_the_queue_is_bounded(monkeypatch):
-    gate = threading.Event()
+    gate, started = threading.Event(), threading.Event()
+
+    def blocked_hv(*a, **k):
+        started.set()                                  # the worker has taken a job and is now stuck in it
+        gate.wait(10)
+        return True, ""
     monkeypatch.setattr(hermes_plugin._HiveWriter, "MAXSIZE", 2)
-    p = _provider(monkeypatch, lambda *a, **k: (gate.wait(5), (True, ""))[1])
-    results = [p._writer.submit(["remember", f"f{i}"]) for i in range(5)]
-    assert results.count(False) >= 2                                     # dropped, not piled up
+    p = _provider(monkeypatch, blocked_hv)
+    assert p._writer.submit(["remember", "f0"]) is True
+    assert started.wait(5)                             # deterministic: f0 is off the queue, in the worker
+    assert [p._writer.submit(["remember", f"f{i}"]) for i in (1, 2)] == [True, True]    # fills the queue
+    assert p._writer.submit(["remember", "f3"]) is False                                # dropped, not piled up
     busy = p._writer.submit(["remember", "tool"], wait=True)
     assert busy[0] is False and "busy" in busy[1]
     gate.set()

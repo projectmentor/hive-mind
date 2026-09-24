@@ -20,6 +20,12 @@ introduced (a contract) or tagged (a patch).
   `--source` (the MCP server passes `claude-ai`), so an agent's decision is no longer attributed to a
   person. Write confirmations say `(owner-signed: source manual)` or `(device-signed: source …)`. An
   omitted `--source` still means `manual` (#119). No wire change.
+- **`hv doctor` catches a sync daemon left on old code (#112).** A bare `git pull` moves the files but
+  not the running daemon. The daemon now records the source digest it loaded and serves it on a
+  loopback-only `/api/daemon`; the new `daemon-code` check compares it with the same digest of the
+  daemon's own checkout (never the checkout doctor runs from) and `--fix` restarts the managed daemon,
+  at most once per run. A hive daemon from before this change also warns; another program on the port
+  gets no verdict. The 15-minute doctor timer therefore heals a bare pull.
 
 ## 1.22 — 2026-09-24 · `v1.22.0`
 

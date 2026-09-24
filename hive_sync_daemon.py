@@ -31,6 +31,22 @@ import sync_common
 
 hv = sync_common.load_hv()
 
+
+def _loaded_code():
+    """#112: the code THIS process loaded, so `hv doctor` (daemon-code) can tell a daemon that kept
+    serving old code after a bare `git pull` moved its checkout. The digest is `hv verify`'s
+    (`_source_manifest`, one hash pass over the tracked source at startup). It never fails startup: no
+    git, an unreadable file, anything else, and the digest is None, which doctor reads as no verdict."""
+    try:
+        digest = hv._source_manifest(sync_common.ROOT)["digest"]
+    except Exception:
+        digest = None
+    return {"root": str(sync_common.ROOT), "digest": digest, "contract": getattr(hv, "CONTRACT_VERSION", None),
+            "pid": os.getpid(), "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+_LOADED = _loaded_code()
+
 # Read-only dashboard SPA, served from the committed dashboard/ dir next to this file. An explicit
 # allowlist (name -> content-type) — NOT arbitrary file serving — so there is no path-traversal
 # surface. The /api/* JSON below is the data layer; both are read-only and reachable wherever the
@@ -62,7 +78,7 @@ _OPEN_DISCOVERY = frozenset({"/hive/info", "/sync/merkle-root", "/api/verify"})
 _REMOTE_AUTH = frozenset({"/sync/hello", "/sync/chunk"})
 _LOOPBACK_ONLY = frozenset({
     "/api/overview", "/api/search", "/api/tags", "/api/related", "/api/item", "/api/audit",
-    "/api/status", "/api/telemetry", "/api/peers",
+    "/api/status", "/api/telemetry", "/api/peers", "/api/daemon",
     "/", "/index.html", "/dashboard", "/dashboard/", "/logo.svg", "/favicon.svg",
 })
 
@@ -493,6 +509,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, _api_status())
             elif u.path == "/api/verify":
                 self._send(200, hv.api_verify())
+            elif u.path == "/api/daemon":             # #112: loopback-only (gated above), never /hive/info
+                self._send(200, _LOADED)
             elif u.path == "/api/telemetry":          # node!=self already handled by the proxy above
                 lim = max(1, min(2000, int(q.get("limit", ["25"])[0] or 25)))
                 off = max(0, int(q.get("offset", ["0"])[0] or 0))

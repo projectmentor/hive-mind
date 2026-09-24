@@ -69,6 +69,16 @@ def _fix_manifest_digest(repo_dir):
     vj.write_text(json.dumps(m, indent=2) + "\n")
 
 
+def _stale_manifest_digest(repo_dir):
+    """Make verify.json's digest deliberately wrong. The working tree's own verify.json can't be relied
+    on to be stale: sign.yml regenerates it before it runs this suite (which broke the re-sign of
+    99db973 and ae6d8db)."""
+    vj = repo_dir / "verify.json"
+    m = json.loads(vj.read_text())
+    m["digest"] = "0" * 64
+    vj.write_text(json.dumps(m, indent=2) + "\n")
+
+
 class Sandbox:
     def __init__(self, tmp, fresh_manifest):
         self.tmp = tmp
@@ -84,9 +94,8 @@ class Sandbox:
                 shutil.copy2(p, self.src / rel)
         _git(tmp, "init", "-q", "-b", "main", str(self.src))
         _git(self.src, "add", "-A")
-        if fresh_manifest:
-            _fix_manifest_digest(self.src)
-            _git(self.src, "add", "-A")
+        (_fix_manifest_digest if fresh_manifest else _stale_manifest_digest)(self.src)
+        _git(self.src, "add", "-A")
         _git(self.src, "commit", "-q", "-m", "sandbox base")
         _git(tmp, "clone", "-q", "--bare", str(self.src), str(self.bare))
         _git(self.src, "remote", "add", "origin", str(self.bare))
@@ -106,7 +115,9 @@ class Sandbox:
         e = {**os.environ, **GIT_ID, "HOME": str(self.home), "HIVE_DIR": str(self.hive),
              "HIVE_HOME": str(self.hive), "PATH": f"{self.stub}:{os.environ['PATH']}",
              "HIVE_DAEMON_WAIT_S": "3", "HIVE_RESIGN_WAIT_S": "1", "HIVE_RESIGN_POLL_S": "1",
-             "XDG_CONFIG_HOME": str(self.home / ".config")}
+             "XDG_CONFIG_HOME": str(self.home / ".config"),
+             "CLAUDE_CONFIG_DIR": str(self.home / ".claude"),       # pinned: an inherited one would win
+             "HIVE_IDENTITY_STASH": str(self.tmp / "identity-stash")}
         e.pop("HIVE_UPDATE_REEXEC", None)
         e.update({k: str(v) for k, v in extra.items()})
         return e

@@ -5,11 +5,12 @@ for the adapter surface — the verbs, flags and outputs an agent calls keep wor
 means adapters must re-integrate (see [`docs/AGENT_INTEGRATION.md`](docs/AGENT_INTEGRATION.md) §7,
 which also records what each version means for an adapter).
 
-Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the **final** commit of contract `X.Y` on `main`,
-so a tag contains everything that version shipped; a later fix that changes no contract is tagged
-`vX.Y.1`, `vX.Y.2`, … Dates are when each contract version was introduced.
+Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that completed contract
+`X.Y`, so the tag contains everything that version shipped. Fixes and documentation that follow
+without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
+introduced (a contract) or tagged (a patch).
 
-## Unreleased
+## Unreleased — contract 1.21
 
 - **Contract 1.21: the grounding rule covers fact assertions.** A fact written with
   `--channel introspect` no longer counts as corroboration (it weighs `introspect_support_weight`,
@@ -31,24 +32,35 @@ so a tag contains everything that version shipped; a later fix that changes no c
   `hive_search` gains `kind`. All writes, including the `memory()` mirror, run on one bounded
   background writer, so a turn never waits on the hive. The unused root `hermes_integration.py` is
   removed.
-- **The sync daemon's bind heals itself (`v1.20.1`, #47):** a daemon that starts before `tailscaled`
-  waits up to 30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the
-  tailnet appearing, and on a tailnet IP change within one sync round, by exiting 75 for its service
-  manager to restart it. It never moves toward loopback. A new `sync-bind` doctor check, fixed by
-  `--fix`, catches a daemon still on the wrong address.
-- **Performance fix (`v1.20.1`, #70):** `ed25519.py` is rewritten for speed with an identical accept set
-  and byte-identical signatures (roughly 60–180× faster), and each signature is verified once per
+
+## 1.20.1 — 2026-09-23 · `v1.20.1`
+
+A patch release: no contract change.
+
+- **Performance fix (#70):** `ed25519.py` is rewritten for speed with an identical accept set and
+  byte-identical signatures (roughly 60–180× faster), and each signature is verified once per
   process. On a hive of about 860 entries `hv search` drops from about 15 s to 0.3 s and `hv remember`
-  from about a minute to 0.7 s, back inside the agent adapters' timeouts. SQLite waits up to 10 s for
-  a busy store; a write that can't reach it after its journal append reports success (journaled) instead
-  of failing, so callers don't retry into duplicates, and the next command catches the store up.
+  from about a minute to 0.7 s, back inside the agent adapters' timeouts (#87). SQLite waits up to 10 s
+  for a busy store. A write that can't reach it after its journal append (`remember`, `decide`,
+  `propose`, `retract`, `entity`) reports success (journaled) instead of failing, so callers don't
+  retry into duplicates, and the next command catches the store up; a busy store never stops a read
+  (#95).
+- **The sync daemon's bind heals itself (#47):** a daemon that starts before `tailscaled` waits up to
+  30 s for the tailnet. If it still lands on loopback, it rebinds within 15 s of the tailnet appearing,
+  and on a tailnet IP change within one sync round, by exiting 75 for its service manager to restart
+  it. It never moves toward loopback. A new `sync-bind` doctor check, fixed by `--fix`, catches a
+  daemon still on the wrong address (#90).
+- **`.gitignore`** ignores the store's SQLite side files (`store.db-wal`, `-shm`, `-journal`), which
+  hold hive content, so they can't be committed by accident (#74, #80).
 - Documentation brought up to date with contract 1.20: a new `SECURITY.md`, `docs/SYNC_API.md`
   rewritten (read authentication, current fields, the `/api/*` surface), `docs/P2P_DESIGN.md` marked
   historical, and README, CLI reference, agent-integration spec, internals, threat model and skills
-  updated (#78). This changelog and the version tags were added.
+  updated (#78). This changelog and the version tags were added. The continual-learning design
+  record is in `docs/design/` (#68).
 - `hv dash` prints only the local URL; the dashboard is refused to other devices (see 1.17).
 - Security advisory [GHSA-242f-7fxg-f7wm](https://github.com/projectmentor/hive-mind/security/advisories/GHSA-242f-7fxg-f7wm)
   published (fixed in 1.17).
+- CI also runs on Ubuntu 26.04, ahead of the `ubuntu-latest` migration (#89).
 
 ## 1.20 — 2026-09-20 · `v1.20.0`
 

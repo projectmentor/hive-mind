@@ -16,7 +16,7 @@ corroboration and checkable outcomes are what matter.
 `hv` lives at `~/projects/hive-mind/hv` — an **absolute path that works from any directory**
 (do not `cd`). Run it via the shell:
 - Search:   `~/projects/hive-mind/hv search "<query>"`   (add `--format json` for structured results)
-- Remember: `~/projects/hive-mind/hv remember "<fact>" --tags <t1,t2> --source claude-code`
+- Remember: `~/projects/hive-mind/hv remember "<fact>" --tags <t1,t2> --source claude-code [--channel introspect]`
 - Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>" --informed <ref> [<ref>…]`
   (`<ref>` = the `sid` field — `h:` + 10 hex, e.g. `h:3f9a1c0b2d` — of each fact/decision you
   retrieved and relied on; the raw `ref` `node_id:seq` also works. Both are stable across nodes and
@@ -26,7 +26,8 @@ corroboration and checkable outcomes are what matter.
   (an IDEA, not a fact: starts at 0.00 and can earn confidence only from other identities' sense-channel
   evidence — use it for "perhaps X relates to Y", never for something observed)
 - Weigh in: `~/projects/hive-mind/hv remember "<what you observed>" --supports <sid>` (or `--contradicts <sid>`)
-  when an observation bears on an idea or fact, e.g. one the digest lists as open. One relationship per
+  when an observation bears on an idea or fact, e.g. one the digest lists as open. If it comes from
+  your reasoning rather than an observation, add `--channel introspect`. One relationship per
   write; your own support of your own idea doesn't count
 - Sync:     `~/projects/hive-mind/hv sync now`
 
@@ -46,12 +47,18 @@ Write durable, checkable, reusable knowledge:
   both live: `hv remember "<correction>" --resolves <sid of the wrong fact>` (soft-retracts it).
 - **Constraints / preferences / commitments** that shape future work.
 - **New entities / relationships** worth remembering.
+- **Conclusions, analysis, plans**: only if worth finding later, and always with
+  `--channel introspect`. They are recorded, searchable and linkable, but count 0 toward
+  confidence until someone's observation supports them. Two agents that read the same code and
+  reach the same conclusion are one line of reasoning twice, not two observations.
 
-Do **NOT** write as facts: your chain-of-thought, restatements of things already in the corpus, or
-speculation/opinion. A hypothesis worth testing goes through `hv propose` as an **idea** instead
-(it earns confidence from evidence; it cannot borrow it from you). Mark epistemic status with `--tags` (e.g. `observation`,
-`confirmed`) so readers can weigh it — but **never assert your own confidence/trust number**;
-confidence is derived, not declared.
+Do **NOT** write your chain-of-thought (the journal is permanent, syncs to every device and is
+searched on every turn), restatements of things already in the corpus, or untestable speculation.
+A hypothesis worth testing goes through `hv propose` as an **idea** (it earns confidence from
+evidence; it cannot borrow it from you). Tags such as `observation` or `confirmed` help readers
+weigh a fact but never change how much it counts as evidence: **the channel is what counts**. Leave
+it off for what you observed; pass `--channel introspect` for what you concluded. Never assert your
+own confidence/trust number; confidence is derived, not declared.
 
 **Search before you write** (`hv search`). If the fact is already there, don't rewrite it — its
 confidence rises from *independent* corroboration, not from you repeating it. **Never write back

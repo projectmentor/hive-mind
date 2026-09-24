@@ -32,6 +32,11 @@ introduced (a contract) or tagged (a patch).
   `hive_search` gains `kind`. All writes, including the `memory()` mirror, run on one bounded
   background writer, so a turn never waits on the hive. The unused root `hermes_integration.py` is
   removed.
+- **Agent write guidance teaches the grounding rule (#99):** the Claude Code skill, the MCP server
+  instructions and the Hermes context block now tell agents to write their own conclusions, analysis
+  and plans with `--channel introspect` (only if worth finding later), and that tags help readers but
+  never change how much a fact counts as evidence. A new test (`tests/test_agent_guidance.py`) keeps
+  all three from dropping it.
 
 ## 1.20.1 — 2026-09-23 · `v1.20.1`
 

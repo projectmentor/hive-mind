@@ -6487,6 +6487,15 @@ def _doctor_status():
             checks.append({"name": "sync-bind", "status": sb_status, "detail": sb_detail})
         except Exception as e:
             checks.append({"name": "sync-bind", "status": "warn", "detail": f"check error: {e}"})
+        # daemon-code (#112): the daemon answers, but is it still running the code in its checkout? A
+        # bare `git pull` moves the files and leaves the process on the old code. Only a real mismatch
+        # (stale=True) makes --fix restart; a check error never does.
+        try:
+            dc = _daemon_code_probe(requests, port)
+            if dc:
+                checks.append({"name": "daemon-code", "status": dc[0], "detail": dc[1], "stale": dc[0] == "warn"})
+        except Exception as e:
+            checks.append({"name": "daemon-code", "status": "warn", "detail": f"check error: {e}", "stale": False})
 
     if not peers:
         checks.append({"name": "peers", "status": "ok", "detail": "none configured"})
@@ -6566,6 +6575,42 @@ def _restart_managed_daemon():
             time.sleep(2)
             return "restarted the systemd hive-sync unit."
     return None
+
+
+def _daemon_code_verdict(loaded, current_digest, hive_listener):
+    """#112, pure: (status, detail) for the `daemon-code` check, or None for no verdict. `loaded` is the
+    daemon's /api/daemon record, the string "missing" when that route 404s, or None when nothing usable
+    answered; `current_digest` is the source digest of the DAEMON'S OWN root now (never the checkout
+    doctor runs from, so a worktree cannot flag or restart the live daemon); `hive_listener` says the
+    404 came from a hive daemon (its /hive/info carries a hive_id), not some other process on the port.
+    The digest is `hv verify`'s, so a docs-only commit counts and a re-sign alone does not."""
+    if loaded == "missing":
+        return (("warn", "the sync daemon predates the daemon-code check (no /api/daemon); "
+                         "run `hive-mind update`") if hive_listener else None)
+    if not isinstance(loaded, dict) or not loaded.get("digest") or not current_digest:
+        return None
+    root = loaded.get("root") or "?"
+    if loaded["digest"] == current_digest:
+        return "ok", f"the running sync daemon matches {root}'s source digest"
+    return "warn", (f"the running sync daemon does not match {root}'s source digest "
+                    f"(started {loaded.get('started_at') or '?'}); run `hive-mind update`")
+
+
+def _daemon_code_probe(requests, port):
+    """#112: read the daemon's /api/daemon (loopback) and re-fingerprint its own root; see the verdict."""
+    r = requests.get(f"http://127.0.0.1:{port}/api/daemon", timeout=2)
+    if r.status_code == 404:
+        try:
+            hive_listener = bool(requests.get(f"http://127.0.0.1:{port}/hive/info", timeout=2).json().get("hive_id"))
+        except Exception:
+            hive_listener = False
+        return _daemon_code_verdict("missing", None, hive_listener)
+    if r.status_code != 200:
+        return None
+    loaded = r.json()
+    root = Path(loaded.get("root") or "")
+    current = _source_manifest(root)["digest"] if loaded.get("root") and root.is_dir() else None
+    return _daemon_code_verdict(loaded, current, True)
 
 
 def _sync_bind_verdict(resolved, advertised, auto):
@@ -6930,11 +6975,23 @@ def doctor_cmd(args):
         # started before tailscaled, or the tailnet IP changed). A restart rebinds it.
         sb = next((c for c in checks if c["name"] == "sync-bind"), None)
         if sb and sb["status"] == "warn" and not restarted:
+            restarted = True                           # one restart per --fix, whichever branch asks (#112)
             if dry:
                 print("\n  would restart the managed hive-sync service to rebind it (sync-bind)")
             else:
                 msg = _restart_managed_daemon()
                 print(f"\n--fix: {msg or 'no managed hive-sync service found to restart'} (sync-bind: {sb['detail']})")
+
+        # daemon-code (#112): the daemon runs code that no longer matches its own checkout (a bare `git
+        # pull`). A restart loads the current code; the 15-min hive-doctor.timer makes this self-healing.
+        dcc = next((c for c in checks if c["name"] == "daemon-code"), None)
+        if dcc and dcc.get("stale") and not restarted:
+            restarted = True
+            if dry:
+                print("\n  would restart the managed hive-sync service to load the current code (daemon-code)")
+            else:
+                msg = _restart_managed_daemon()
+                print(f"\n--fix: {msg or 'no managed hive-sync service found to restart'} (daemon-code: {dcc['detail']})")
 
         # peer-address (#7): a peer's stored address failed and its device has since verified itself at
         # another one. Repoint that entry's URL host in .peers.json; the daemon reads the file each round,

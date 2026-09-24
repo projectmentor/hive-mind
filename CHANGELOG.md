@@ -10,6 +10,15 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## Unreleased
+
+- **`hv doctor` catches a sync daemon left on old code (#112).** A bare `git pull` moves the files but
+  not the running daemon. The daemon now records the source digest it loaded and serves it on a
+  loopback-only `/api/daemon`; the new `daemon-code` check compares it with the same digest of the
+  daemon's own checkout (never the checkout doctor runs from) and `--fix` restarts the managed daemon,
+  at most once per run. A hive daemon from before this change also warns; another program on the port
+  gets no verdict. The 15-minute doctor timer therefore heals a bare pull.
+
 ## Unreleased — contract 1.22
 
 - **Contract 1.22: an `extends` link kind.** `hv remember "…" --extends <sid>` (and MCP

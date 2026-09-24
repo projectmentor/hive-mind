@@ -242,6 +242,14 @@ needs attention. It looks at:
   daemon sits on `127.0.0.1` while this node has a tailnet address (it started before Tailscale), or
   on an old tailnet IP; `--fix` restarts it. A `HIVE_BIND` or `.peers.json` bind is left alone, and it
   never asks the daemon to move to loopback
+- **daemon-code** — whether the running daemon still matches the code in its own checkout. A bare
+  `git pull` moves the files but leaves the daemon on the code it started with; this check compares
+  the source digest the daemon loaded (from its loopback-only `/api/daemon`) with the same digest of
+  its checkout now, and warns when they differ. It uses `hv verify`'s digest, so a docs-only commit
+  counts and a re-sign alone does not. A hive daemon from before this check (no `/api/daemon`) warns
+  too; another program on the port gets no verdict. `--fix` restarts the managed daemon, at most once
+  per run whichever check asks, and the 15-minute `hive-doctor.timer` therefore heals a bare pull.
+  `hive-mind update` avoids the state altogether ([#112](https://github.com/projectmentor/hive-mind/issues/112))
 - **peers** — whether your peer nodes are reachable and in sync
 - **peer-address** — for a peer whose stored address did not answer: whether its device has since
   reached this node from another address with a verified signed request. If so, `--fix` changes that

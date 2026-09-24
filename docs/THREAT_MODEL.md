@@ -203,5 +203,8 @@ at once). Concretely:
   managed daemon (systemd unit on Linux/WSL, launchd agent on macOS), rewrites the foreign
   Claude Code config (with a backup), and repoints a `.peers.json` peer's URL host when its stored
   address fails and its device has since verified itself from another address with a signed request
-  (`peer-address`, [#7](https://github.com/projectmentor/hive-mind/issues/7)). Run
+  (`peer-address`, [#7](https://github.com/projectmentor/hive-mind/issues/7)). It also restarts the
+  managed daemon when the source digest it loaded no longer matches its own checkout (`daemon-code`,
+  [#112](https://github.com/projectmentor/hive-mind/issues/112)); a foreign listener on the port never
+  triggers that. Run
   `hv doctor --fix --dry-run` to preview every mutating action before letting it run.

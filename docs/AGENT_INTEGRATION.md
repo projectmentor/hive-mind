@@ -25,6 +25,8 @@ block or break a session:
 1. Make your local hive current. Your install's update path keeps the repo fresh (a periodic
    `hive-mind update` / git pull); a best-effort `git -C "$HIVE_HOME" pull --ff-only` is fine on a
    deployed checkout, but **skip auto-pull on a dev checkout** with local changes. Offline is fine.
+   A pull alone leaves the sync daemon on its old code: when it moved `HEAD`, run `hive-mind update`
+   (or leave it to the 15-minute doctor timer, whose `daemon-code` check restarts a stale daemon, #112).
 2. Read the current `Contract-Version` — authoritatively from `hv version`, else this spec's header.
 3. Compare it to the version you last integrated against (marker `"$HIVE_HOME/.nudge_state/<agent>.spec"`).
 4. **Same** → you are up to date; do nothing (the fast path, every normal boot).

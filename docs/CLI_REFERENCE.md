@@ -135,7 +135,7 @@ them. You can link a new decision to an older one it replaces, so you always
 have a clear trail of what changed and why.
 
 ```
-hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes DECISION] [--informed REF ...]
+hv decide <content> [--rationale TEXT] [--tags a,b,c] [--source SOURCE] [--supersedes DECISION] [--informed REF ...]
 ```
 
 **Arguments:**
@@ -145,7 +145,8 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--supersedes DECISION] [-
 | `content` | The decision, stated clearly. Required. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
 | `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision numbers (`#N`) are node-local and shift on rebuild; to cite a decision, use its `sid` (`h:…`, shown by `hv search`). |
-| `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. *(1.19 PR2b)* Journaled as one `supersedes` **link** (owner-signed when this device holds the owner key → hard everywhere; otherwise hard only where this device authored the old decision — see `hv doctor` `link-authz`). |
+| `--source` | *(1.23)* Who is deciding, as on `hv remember` (e.g. `claude-code`). An agent should always pass it: omitted, it is `$HERMES_AGENT`, else `manual` (a person), and on the owner device only a `manual` write's links are owner-signed (#114). |
+| `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. *(1.19 PR2b)* Journaled as one `supersedes` **link**. It is owner-signed (hard everywhere) only when this device holds the owner key **and** the source is `manual` *(1.23, #114)*; otherwise it is hard only where this device authored the old decision (see `hv doctor` `link-authz`). The confirmation says `(owner-signed: source manual)` or `(device-signed: source …)`. |
 | `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable forms are the **`sid`** shown by `hv search` (`h:3f9a1c0b2d` — the form to type) and the `ref` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — both identical on every node, never change. Bare local ids are still accepted — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time, prints a one-line deprecation warning, and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
 
 **Examples:**
@@ -465,7 +466,7 @@ hv entity {add,list,show,link} [options]
 | `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
 | `list` | List all entities. |
 | `show` | Show an entity and all facts linked to it. Needs `--name`. |
-| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id` (the fact's `sid` `h:…` or `ref`; a bare local id is *deprecated*). Optionally set `--confidence` to indicate how strongly the fact relates. *(1.19 PR2b)* Journaled as one `entity` **link** (evidence-class: it never hides anything, so it needs no authority). |
+| `link` | Attach a fact to an entity. Needs `--name` and `--fact-id` (the fact's `sid` `h:…` or `ref`; a bare local id is *deprecated*). *(1.23)* `--source` names the writer, as on `hv remember`; omitted it is `$HERMES_AGENT`, else `manual`, the only source owner-signed on the owner device (#114). Optionally set `--confidence` to indicate how strongly the fact relates. *(1.19 PR2b)* Journaled as one `entity` **link** (evidence-class: it never hides anything, so it needs no authority). |
 
 **Examples:**
 ```bash

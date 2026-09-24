@@ -765,7 +765,9 @@ class HiveMindMemoryProvider(MemoryProvider):
         refs = [r.strip() for r in str(args.get("informed_by", "") or "").split(",") if r.strip()]
         if refs:
             argv += ["--informed", *refs]
-        # `hv decide` has no --source; it reads HERMES_AGENT (the env EXTENDS os.environ, see _hv).
+        # `hv decide` gained --source in 1.23 (#114); the adapter still names itself through HERMES_AGENT,
+        # which every contract honours, so it also works against a pre-1.23 hv (the env EXTENDS
+        # os.environ, see _hv).
         return argv, {"HERMES_AGENT": self._source_id}
 
     def _argv_propose(self, args: Dict[str, Any]):

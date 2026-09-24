@@ -17,7 +17,7 @@ corroboration and checkable outcomes are what matter.
 (do not `cd`). Run it via the shell:
 - Search:   `~/projects/hive-mind/hv search "<query>"`   (add `--format json` for structured results)
 - Remember: `~/projects/hive-mind/hv remember "<fact>" --tags <t1,t2> --source claude-code [--channel introspect]`
-- Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>" --informed <ref> [<ref>…]`
+- Decide:   `~/projects/hive-mind/hv decide "<decision>" --rationale "<why>" --informed <ref> [<ref>…] --source claude-code`
   (`<ref>` = the `sid` field — `h:` + 10 hex, e.g. `h:3f9a1c0b2d` — of each fact/decision you
   retrieved and relied on; the raw `ref` `node_id:seq` also works. Both are stable across nodes and
   rebuilds. Bare local ids like `118`/`d17` are rowids that drift on every rebuild: deprecated, warned,
@@ -32,8 +32,9 @@ corroboration and checkable outcomes are what matter.
   write; your own support of your own idea doesn't count
 - Sync:     `~/projects/hive-mind/hv sync now`
 
-**ALWAYS pass `--source claude-code`** on `remember` so the hive can distinguish your writes
-from other agents' — this is what makes corroboration and provenance work.
+**ALWAYS pass `--source claude-code`** on `remember` and `decide` so the hive can distinguish your writes
+from other agents' — this is what makes corroboration and provenance work. Without it the write counts
+as a person's (`manual`), and on the owner device its links carry owner authority.
 
 ## When to WRITE (be disciplined — the corpus is shared and permanent)
 Write durable, checkable, reusable knowledge:

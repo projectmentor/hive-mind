@@ -85,7 +85,12 @@ at once). Concretely:
   correction from a peer is not silenced, but it cannot hide or replace. There is deliberately no
   `link_writers` knob (a fertile hive needs every agent to link). Unknown link kinds project to
   nothing. `hv doctor` (`link-authz`) lists every downgraded link; the owner ratifies by re-issuing it
-  owner-signed. Grounding: a `supports`/`contradicts` link, or (since 1.21) a fact assertion, whose
+  owner-signed. **Agents on the owner device are members for link authority (1.23, #114).** A link is
+  owner-signed only when the machine holds the owner key AND the write's source is `manual` (a person
+  at the CLI). Every agent source (claude-code, hermes, grok, claude-ai …) is device-signed as on any
+  member device, so an agent running where the owner key lives cannot borrow owner authority to
+  `supersedes`/`resolves` another device's entries. The confirmation line says which. Residual: an
+  agent that omits `--source` writes as `manual` (#119). Grounding: a `supports`/`contradicts` link, or (since 1.21) a fact assertion, whose
   `channel` is `introspect` weighs `introspect_support_weight` (default 0), so no agent can talk a
   claim up or down by reasoning alone.
 - **Version skew during the link write-path switch (contract 1.19 PR2b).** `hv decide --supersedes`,

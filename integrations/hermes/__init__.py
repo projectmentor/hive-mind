@@ -397,7 +397,7 @@ class _HiveWriter:
         return 0
 
 
-_RELATIONSHIPS = ("outcome_of", "resolves", "supports", "contradicts")
+_RELATIONSHIPS = ("outcome_of", "resolves", "supports", "contradicts", "extends")
 
 
 class HiveMindMemoryProvider(MemoryProvider):
@@ -653,7 +653,7 @@ class HiveMindMemoryProvider(MemoryProvider):
                     "Record a durable, checkable fact: an outcome, correction, constraint or discovery. Search "
                     "first; never write back something you just read, your chain-of-thought, or a restatement. "
                     "Confidence is derived from independent corroboration; never state your own. Pass at most ONE "
-                    "of outcome_of, resolves, supports, contradicts: one relationship per write."
+                    "of outcome_of, resolves, supports, contradicts, extends: one relationship per write."
                 ),
                 "parameters": {
                     "type": "object",
@@ -673,6 +673,8 @@ class HiveMindMemoryProvider(MemoryProvider):
                                                          "of your own idea doesn't count."},
                         "contradicts": {**s, "description": "The sid of a fact or idea this observation contradicts "
                                                             "(the author may contradict their own idea to withdraw it)."},
+                        "extends": {**s, "description": "The sid of a fact, idea or decision this BUILDS ON or comments on. "
+                                                        "A relationship, not evidence: never weighed toward confidence."},
                     },
                     "required": ["content"],
                 },

@@ -93,7 +93,8 @@ hv config confidence set halflife_volatile 14            # … of a `volatile`-t
 > See `docs/INTERNALS.md` → *Importance and utility*.
 
 > **Links (1.19).** The journal has a generic `link` entry type (`supports`, `contradicts`,
-> `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`; unknown kinds are ignored).
+> `supersedes`, `resolves`, `entity`, `informed`, `outcome-of`, and `extends` since 1.22; unknown
+> kinds are ignored).
 > *(PR2b)* `--supersedes`, `--resolves` and `entity link` now each write **one** such link instead
 > of their legacy field/entry (never both); on the owner machine the link is owner-signed and
 > therefore *hard* everywhere, elsewhere it is hard only where this device authored the target.
@@ -709,7 +710,7 @@ independent sources agree on the same thing.
 
 ```
 hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] [--resolves ID]
-            [--outcome-of DECISION | --resolves FACT | --supports REF | --contradicts REF]
+            [--outcome-of DECISION | --resolves FACT | --supports REF | --contradicts REF | --extends REF]
             [--polarity -1|0|1] [--channel sense|act|introspect]
 ```
 
@@ -728,6 +729,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It journals one `resolves` **link** *(1.19 PR2b — no separate `retract` entry any more)* from the new fact to the resolved fact's journal identity (stable across rebuilds and nodes); the projection folds it as negative evidence that **soft-retracts** the old fact (so it stops surfacing as canonical) and, when the link is hard, records the chain on the new row — keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
 | `--supports REF` | *(1.21)* This observation **supports** a fact or an idea, named by its `sid` (`h:…`, preferred), its `ref`, or a deprecated local id (`118` fact, `i5` idea). Writes the fact plus one `supports` link, resolved and kind-checked **before** anything is written (a decision aborts with a pointer to `--outcome-of`). The target is re-scored immediately. It counts as this identity's evidence on the write's `--channel` (`introspect` weighs `introspect_support_weight`, default 0). An idea's author can't support their own idea. |
 | `--contradicts REF` | *(1.21)* The same, as negative evidence: one `contradicts` link. An idea's author may contradict their own idea, which is how to withdraw it. |
+| `--extends REF` | *(1.22)* This entry **builds on** (extends, comments on) a fact, an idea or a decision (same forms as `--supports`; `d17` for a decision). Writes the fact plus one `extends` link, resolved and kind-checked **before** anything is written. A relationship, not evidence: it never moves the target's confidence, on any channel. `hv search` shows `extends h:…` on the row. The confirmation line reads `↗ extends <kind> <sid>`. |
 
 **What you get back:**
 

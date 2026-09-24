@@ -10,8 +10,15 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased
+## Unreleased — contract 1.22
 
+- **Contract 1.22: an `extends` link kind.** `hv remember "…" --extends <sid>` (and MCP
+  `hive_remember(extends=…)`, Hermes `hive_remember`) writes the fact plus one `extends` link to a
+  fact, idea or decision: "builds on" without evidence semantics. The projection keeps it as an edge
+  row in `links` and never weighs it toward confidence on any channel. One relationship per write, so
+  it is mutually exclusive with `--resolves`, `--outcome-of`, `--supports` and `--contradicts`.
+  `hv search` text shows `extends h:…` on the row; JSON rows are unchanged. No wire change and no
+  skew: a pre-1.22 node lands the link and projects it to nothing (#115).
 - **The test suite no longer touches the developer's real account (#109).** Every test runs with a
   throwaway `HOME`, `CLAUDE_CONFIG_DIR` and `HIVE_IDENTITY_STASH`, and with service-manager stubs
   first on `PATH`, so `hv doctor --fix` can no longer relink the live `~/.claude/skills/hive-memory`

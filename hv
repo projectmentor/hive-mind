@@ -638,8 +638,34 @@ def _next_seq_and_prev(node_id):
     return last["seq"] + 1, compute_hash(last)
 
 
+# An entry's timestamp names its journal file, so it must be a real ISO-8601 time before anything is written
+# (private #29: an unchecked `../` or absolute prefix wrote outside journal/). Both shapes the journal holds are
+# accepted: `_now_iso()`'s `YYYY-MM-DDTHH:MM:SS.mmm+00:00` and the naive `YYYY-MM-DDTHH:MM:SS` of early-June lines;
+# `Z` and microseconds are ISO too. The read path never checks this: lines already on disk stay as they are.
+_TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})?")
+
+
+def _valid_timestamp(ts):
+    """True iff `ts` is an ISO-8601 timestamp this hive writes (see _TIMESTAMP_RE) on a real calendar date."""
+    if not isinstance(ts, str) or not _TIMESTAMP_RE.fullmatch(ts):
+        return False
+    try:
+        datetime.strptime(ts[:10], "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
+
+
 def _journal_path_for(timestamp):
-    return JOURNAL_DIR / f"{timestamp[:10]}.jsonl"
+    """The day file for `timestamp`. Refuses a date prefix that is not `YYYY-MM-DD`, and any path that would
+    land outside JOURNAL_DIR, so no caller (ingest, append_journal, HIVE_NOW) can write elsewhere."""
+    day = str(timestamp)[:10]
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day):
+        raise ValueError(f"not a journal timestamp: {timestamp!r}")
+    path = JOURNAL_DIR / f"{day}.jsonl"
+    if path.resolve().parent != JOURNAL_DIR.resolve():
+        raise ValueError(f"journal path escapes {JOURNAL_DIR}: {timestamp!r}")
+    return path
 
 
 try:
@@ -779,7 +805,7 @@ def append_foreign_entries(entries):
     arrived_ideas = []
 
     def _persist(e):
-        _append_line(_journal_path_for(e.get("timestamp", _now_iso())), json.dumps(e))
+        _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
 
     # ── Pass 1: governance (owner-signed acts + authority-less join-requests) ────────────────────
     for e in entries:
@@ -790,6 +816,9 @@ def append_foreign_entries(entries):
             continue
         if (nid, seq) in existing:
             duplicates += 1
+            continue
+        if not _valid_timestamp(e.get("timestamp")):
+            rejected += 1               # the timestamp names the journal file: never persist one that isn't a time
             continue
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
@@ -810,8 +839,12 @@ def append_foreign_entries(entries):
             # so future kinds ride through this contract's nodes with no version-skew rejection window.
             rejected += 1
             continue
+        try:
+            _persist(e)
+        except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
+            rejected += 1
+            continue
         existing.add((nid, seq))
-        _persist(e)
         accepted += 1
 
     # Recompute governance AFTER pass 1 so admits that just landed populate the admitted set.
@@ -828,6 +861,9 @@ def append_foreign_entries(entries):
         if (nid, seq) in existing:
             duplicates += 1
             continue
+        if not _valid_timestamp(e.get("timestamp")):
+            rejected += 1
+            continue
         if not _verify_entry(e):
             rejected += 1
             continue
@@ -836,8 +872,12 @@ def append_foreign_entries(entries):
             # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
             rejected += 1
             continue
+        try:
+            _persist(e)
+        except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
+            rejected += 1
+            continue
         existing.add((nid, seq))
-        _persist(e)
         accepted += 1
         if e.get("type") == "idea" and nid != NODE_ID:
             arrived_ideas.append(e)
@@ -859,8 +899,8 @@ def append_foreign_entries(entries):
 
     if rejected:
         print(f"append_foreign_entries: rejected {rejected} entr"
-              f"{'y' if rejected == 1 else 'ies'} (bad signature, unauthorized governance, or "
-              f"content from an unadmitted device)", file=sys.stderr)
+              f"{'y' if rejected == 1 else 'ies'} (bad signature, malformed timestamp, unauthorized "
+              f"governance, or content from an unadmitted device)", file=sys.stderr)
     return accepted, duplicates
 
 

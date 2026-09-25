@@ -126,7 +126,7 @@ journal entries.
   "label": "gregorius",
   "node_count": 3,
   "protocol_version": 2,
-  "contract": "1.23",
+  "contract": "1.24",
   "advertised_addr": "100.84.84.100:9876",
   "genesis": { "node_id": "k1:…", "seq": 1, "type": "governance", "payload": { "action": "owner", "…": "…" } }
 }
@@ -163,7 +163,7 @@ The handshake: per-node sequence maxima and per-node chunk hashes, used to find 
   "node_id": "k1:10f6b761dd1c2a90",
   "hive_id": "h1:cf5b2e8adbe05936",
   "protocol_version": 2,
-  "contract": "1.23",
+  "contract": "1.24",
   "advertised_addr": "100.84.84.100:9876",
   "journal_summary": { "total": 802, "by_node": { "k1:10f6b761dd1c2a90": 335, "k1:597b3e0f5fb92d37": 464 } },
   "chunks": { "k1:10f6b761dd1c2a90": ["sha256:d46957a7…", "sha256:4bff2b51…"], "k1:597b3e0f5fb92d37": ["…"] }

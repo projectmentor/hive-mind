@@ -694,8 +694,13 @@ class HiveMindMemoryProvider(MemoryProvider):
                         "tags": {**s, "description": "Comma-separated tags (e.g. the project)."},
                         "informed_by": {**s, "description": "Comma-separated sids (h:…) of what you relied on. An "
                                                             "unresolvable reference aborts the whole write."},
+                        "supersedes": {**s, "description": "The sid of a decision this one REPLACES."},
+                        "revoke": {**s, "description": "The sid of a decision that was wrong, withdrawn with no "
+                                                       "replacement; content is then optional, rationale required. "
+                                                       "At most one of supersedes and revoke. The output says "
+                                                       "whether it is in effect or only recorded as evidence."},
                     },
-                    "required": ["content"],
+                    "required": [],
                 },
             },
             {
@@ -725,8 +730,10 @@ class HiveMindMemoryProvider(MemoryProvider):
         if tool_name == "hive_search":
             return self._tool_search(args)
         if tool_name in ("hive_remember", "hive_decide", "hive_propose"):
-            if not str(args.get("content", "")).strip():
-                return json.dumps({"ok": False, "output": "content is required"})
+            if not str(args.get("content", "")).strip() and not (
+                    tool_name == "hive_decide" and str(args.get("revoke", "") or "").strip()):
+                return json.dumps({"ok": False, "output": "content is required"
+                                   + (" (optional only with revoke)" if tool_name == "hive_decide" else "")})
             argv, env = getattr(self, f"_argv_{tool_name[5:]}")(args)
             if argv is None:
                 return json.dumps({"ok": False, "output": env})
@@ -758,13 +765,19 @@ class HiveMindMemoryProvider(MemoryProvider):
         return argv, None
 
     def _argv_decide(self, args: Dict[str, Any]):
-        argv = ["decide", str(args["content"])]
+        rels = [r for r in ("supersedes", "revoke") if str(args.get(r, "") or "").strip()]
+        if len(rels) > 1:
+            return None, "pass at most one of supersedes, revoke (got both): one relationship per write"
+        content = str(args.get("content", "") or "").strip()
+        argv = ["decide"] + ([str(args["content"])] if content else [])
         if str(args.get("rationale", "") or "").strip():
             argv += ["--rationale", str(args["rationale"])]
         argv += self._tags(args)
         refs = [r.strip() for r in str(args.get("informed_by", "") or "").split(",") if r.strip()]
         if refs:
             argv += ["--informed", *refs]
+        if rels:
+            argv += [f"--{rels[0]}", str(args[rels[0]]).strip()]
         # `hv decide` gained --source in 1.23 (#114); the adapter still names itself through HERMES_AGENT,
         # which every contract honours, so it also works against a pre-1.23 hv (the env EXTENDS
         # os.environ, see _hv).

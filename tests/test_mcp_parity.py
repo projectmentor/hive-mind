@@ -62,6 +62,21 @@ def test_remember_flags_have_mcp_parity():
     assert not missing, f"hive_remember does not pass these hv remember flags: {sorted(missing)}"
 
 
+# `hv decide` flags an agent needs over MCP (#45 R3). The server stamps --source (claude-ai). A new decide
+# flag must be added here or exposed: `--supersedes` had no MCP path from 1.19 until 1.24.
+DECIDE_NOT_OVER_MCP = {"--source"}
+
+
+def test_decide_flags_have_mcp_parity():
+    """Guard every agent-facing `hv decide` flag the way `remember`'s are, statically."""
+    flags = set(re.findall(r'(?:decide_parser|dec_rel)\.add_argument\(\s*"(--[a-z-]+)"', HV_SRC))  # dec_rel: the exclusive group
+    assert {"--rationale", "--supersedes", "--revoke", "--informed"} <= flags     # the parser scrape works
+    body = re.search(r'def hive_decide\(.*?(?=\n@mcp\.tool\(\)|\Z)', MCP_SRC, re.S).group(0)
+    passed = set(re.findall(r'"(--[a-z-]+)"', body))
+    missing = flags - DECIDE_NOT_OVER_MCP - passed
+    assert not missing, f"hive_decide does not pass these hv decide flags: {sorted(missing)}"
+
+
 def test_group_is_read_only_over_mcp():
     # Only `group list` may be wrapped; admit/revoke/deny/change/purge must not appear.
     group_calls = re.findall(r'_run_hv\(\[\s*"group",\s*"([a-z]+)"', MCP_SRC)

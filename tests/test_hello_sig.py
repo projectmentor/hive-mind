@@ -390,8 +390,11 @@ def test_a_flood_of_nonced_info_requests_stays_within_the_slot_cap(tmp_path, mon
         assert 1 <= live["peak"] <= cap and live["calls"] == codes.count(200)
         assert codes.count(503) > 0
 
-        for _ in range(cap):                                                # every slot came back
-            assert d._request_slots.acquire(blocking=False)
+        # Every slot comes back. A handler writes its response inside _send before `finally: _leave()`, so a
+        # client can finish while its handler has not yet released: wait for each slot (Grok, PR #140), rather
+        # than demanding it at once. A leaked slot still fails, after the timeout.
+        for _ in range(cap):
+            assert d._request_slots.acquire(timeout=5), "a request slot was never released"
         for _ in range(cap):
             d._request_slots.release()
         nonce = _nonce()

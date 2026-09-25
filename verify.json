@@ -1,5 +1,5 @@
 {
-  "digest": "d1f171e453265130242c0d6534959be0b25b450033a93c8f845f118f4db57c68",
+  "digest": "00397837bcf4c8beff11a41870e1c4f2a9a1f043fd9476cf382f2bf1eaf6d28f",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -10,7 +10,7 @@
     ".github/workflows/ci.yml": "bc227c4337a8152bebc826fdb0fb0f030b7aefa157022ea57e7d11668e9e277f",
     ".github/workflows/cla.yml": "5eeb4727b7bf5833cc27bcf612e340f8dbbe5772dd1999b991e4af09e6d77a04",
     ".github/workflows/sign.yml": "4877449abe2bcfe5b3e6f2ab085a294c9e04e077569ba51951536b26ecda77c1",
-    "CHANGELOG.md": "3aa6b4acbef90fb6374c52e821d1bcbc58f008eddbaa12e5b22d4b12e4f6507e",
+    "CHANGELOG.md": "5ccff66ff8339ecc9705f1161a9af57b55e06e79701940a26f8c042be57a272d",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "9f14417f7463317c3d597b244a28066c0b88e80c2c0193f0511cbd547fb0da6d",
     "README.md": "17fd15a3ca21cd085b54cea21f5eebba96729bad825df2368df1a90d23483ba3",
@@ -37,7 +37,7 @@
     "ed25519.py": "d0dd375112f33e527021b3654558d296e60c594c52fd17826e84493e418fccd4",
     "glama.json": "324dd61ba65a72154bb599baf92da55d6d9f34a952371681360fd55bf9e12b8d",
     "hive_sync_daemon.py": "a9351cc796bd013b17638966ff34f74661cd45074adebb255b90e177d4b7e82a",
-    "hv": "e552475ea5c8b8c610e58f3f6a807bfea8b56f6a1f89d0d5ec926de5c068fc96",
+    "hv": "02ed3f6dae1d69e09542fb679399c3f501611e6429a7867a228e8bada66302ca",
     "integrations/claude-code/hive-memory/SKILL.md": "ad7fa1943c6b8174084c509743dae05af544a9ba6314a49ccf6a4d1b8c45ee71",
     "integrations/claude-code/install.sh": "e2f2831359968dce15110190660bc26aad9faae4e662d4d2289b46b60985614c",
     "integrations/claude-code/wire-up/SKILL.md": "53622492cf82dffe837d73af4d190fc945f816085a74925ed37124256ece1d63",
@@ -102,6 +102,7 @@
     "tests/test_hv.py": "03c93a5a51f325ba1df22a4661ac65ea4a966c7bb53a25bc62ce01cc07dd2336",
     "tests/test_ideas.py": "ae01755f9830d9b8136861d36baf103e60816c876afad49c18bfa47a24722a1e",
     "tests/test_informed.py": "5d613452ec97a00ea584cab29fdd9372428e7cc4a5765b263dc84237979a7e0f",
+    "tests/test_journal_timestamps.py": "f42e14e4c39fdd62d284b2d50d2c61b16ac4b0fbd65daa6907b223fb19faabe5",
     "tests/test_keep_identity.py": "cd52f58d33e9c431221e2d3534dae26e0fcaa126f33859cc3010a9e9d0a117b4",
     "tests/test_keyperm.py": "b8373497951c311648d4230925e0fc7f611cb03ac8d2395d4968ef3e5150b411",
     "tests/test_link_write_path.py": "0fd006024549e6b0bbf6b9b3dd6b81c31827e6f5b9b4da7b1e4b3fbdd8e3ec09",

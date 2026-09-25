@@ -62,7 +62,7 @@ jobs:
           python-version: '3.12'        # match ci.yml — the sign gate runs the same suite
 
       - name: Install test deps
-        run: pip install -r requirements.txt pytest   # sign_release.py's gate runs `python3 -m pytest`
+        run: pip install -r requirements.txt pytest pytest-xdist==3.8.0   # sign_release.py's gate: the full suite, `-n auto`
 
       - name: Regenerate manifest
         run: python3 scripts/common/gen_verify.py

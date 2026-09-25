@@ -30,7 +30,13 @@ if len(seed) != 32:
 if os.environ.get("HIVE_SIGN_SKIP_TESTS") != "1":
     import subprocess
     print("running the test suite before signing (HIVE_SIGN_SKIP_TESTS=1 bypasses, emergencies only)…")
-    if subprocess.run([sys.executable, "-m", "pytest", "-q"], cwd=str(ROOT)).returncode != 0:
+    gate = [sys.executable, "-m", "pytest", "-q"]
+    try:
+        import xdist  # noqa: F401  (pytest-xdist: the same full suite on every core; sign.yml installs it)
+        gate += ["-n", "auto"]
+    except ImportError:
+        pass                                   # a local run without xdist still runs the whole suite, serially
+    if subprocess.run(gate, cwd=str(ROOT)).returncode != 0:
         sys.exit("REFUSING TO SIGN: the test suite is RED. Fix it, or set HIVE_SIGN_SKIP_TESTS=1.")
     print("suite green — proceeding to sign.")
 

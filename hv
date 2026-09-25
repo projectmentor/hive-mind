@@ -2542,6 +2542,55 @@ def resolve_link(conn, entry, gov, by_ref):
     )
 
 
+def _forgets_grandfathered(entries, gov):
+    """#122 step 1: owner-source forgets honoured ONLY by the pre-genesis grandfather in `_content_evidence`,
+    which needs no owner signature there; ingest does not check timestamps, so an admitted device can backdate
+    one. Returns (hides, dangling) as 'forget <entry>→<target>' labels. `hides`: the forget is the latest
+    honoured owner act on its fact's content, so it is what keeps that fact forgotten now. `dangling`: its
+    target is not a fact in the journal, so it hides nothing. Pure over the journal and the same rules as
+    `_content_evidence` (point-in-time `_owner_at`, latest honoured act wins); [] before any owner exists."""
+    if not gov.get("owner_id"):
+        return [], []
+    timeline = gov.get("owner_timeline") or []
+    seq_content = {(e.get("node_id"), e.get("seq")): (e.get("payload") or {}).get("content")
+                   for e in entries if e.get("type") == "fact" and (e.get("payload") or {}).get("content") is not None}
+    acts, dangling = {}, []          # content -> [(pos, is_forget, honored, label if grandfathered)]
+    for e in entries:
+        if e.get("type") != "retract":
+            continue
+        p = e.get("payload", {}) or {}
+        ref = p.get("retracts_ref")
+        unforget = ref is None and p.get("unretracts_ref") is not None
+        if unforget:
+            ref = p.get("unretracts_ref")
+        if not (isinstance(ref, (list, tuple)) and len(ref) == 2):
+            continue
+        app, ctx, _inst, _sess = _parse_source(p.get("source", "manual"))
+        if not (app in OWNER_APPS or ctx == "owner"):
+            continue
+        pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
+        signer = _verify_governance(p) if "owner_sig" in p else None
+        at = _owner_at(timeline, pos)
+        grandfathered = not unforget and at is None
+        honored = (signer is not None and signer == at) or grandfathered
+        label = f"forget {e.get('node_id')}:{e.get('seq')}→{ref[0]}:{ref[1]}"
+        content = seq_content.get(tuple(ref))
+        if content is None:
+            if grandfathered:
+                dangling.append(label)
+            continue
+        acts.setdefault(content, []).append((pos, not unforget, honored, label if grandfathered else None))
+    hides = []
+    for lst in acts.values():
+        last = None
+        for act in sorted(lst, key=lambda a: a[0]):
+            if act[2]:
+                last = act
+        if last is not None and last[1] and last[3] is not None:
+            hides.append(last[3])
+    return hides, dangling
+
+
 def _links_unauthorized(entries, gov):
     """`supersedes`/`resolves` links the projection DOWNGRADED to evidence (signer neither the owner-at-
     position nor the target's author) — surfaced by `hv doctor` (`link-authz`) so the owner can ratify
@@ -6507,6 +6556,28 @@ def _doctor_status():
                            "detail": f"{len(down)} link(s) downgraded to evidence (signer neither owner-at-"
                                      f"position nor the target's author): {', '.join(down)} — re-issue "
                                      f"owner-signed to make it hard"})
+    except Exception:
+        pass
+
+    # 3f2. Owner FORGETS honoured only by the pre-genesis grandfather (#122): they need no signature and
+    #      ingest does not check timestamps, so an admitted device can erase a fact with a backdated unsigned
+    #      owner forget. Warn when one is what keeps a fact forgotten now (`hv unforget` undoes it); a forget
+    #      whose target is not in the journal hides nothing and is only counted. Advisory; #122 step 2 closes it.
+    try:
+        hides, dangling = _forgets_grandfathered(entries, gov)
+        more = f" and {len(hides) - 10} more" if len(hides) > 10 else ""
+        if hides:
+            checks.append({"name": "forget-authz", "status": "warn",
+                           "detail": f"{len(hides)} fact(s) kept forgotten only by a pre-genesis owner forget, "
+                                     f"which needs no signature (#122): {', '.join(hides[:10])}{more} — if you "
+                                     f"did not make it, `hv unforget` the fact on the owner machine"
+                                     + (f"; {len(dangling)} more such forget(s) target nothing in the journal"
+                                        if dangling else "")})
+        elif dangling:
+            checks.append({"name": "forget-authz", "status": "ok",
+                           "detail": f"{len(dangling)} pre-genesis owner forget(s) are honoured without a "
+                                     f"signature (#122), but none hides a fact: their targets are not in the "
+                                     f"journal"})
     except Exception:
         pass
 

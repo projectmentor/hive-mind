@@ -271,6 +271,9 @@ devices sealed the same capsule version before syncing, so one value lost a dete
 **capsule-authz** (a `capsule` entry the projection declines because its signer was not authorized
 under `capsule_putters`), **cell-authz** (the same for cells and combs under `cell_writers`),
 **link-authz** (a `supersedes`/`resolves` link was downgraded to evidence — re-issue it owner-signed),
+**forget-authz** (#122: a fact is kept forgotten only by an owner forget dated before the genesis
+owner, which needs no signature, so an admitted device could have backdated it; `hv unforget` it if
+you did not make it. A count of such forgets whose target is not in the journal is reported as ok),
 **trust-drift** (a device's recent reliability fell well below its baseline; advisory, see `hv peers`)
 and *(1.19 PR2b)* **fleet-contract** (an admitted peer advertises an agent contract below 1.19, or
 is unreachable so it cannot be verified — such a peer lands but does not honour the `link` entries

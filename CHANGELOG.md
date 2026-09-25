@@ -37,6 +37,11 @@ introduced (a contract) or tagged (a patch).
   touches `hv`, the daemon, the installer or launchd scripts, or the tests that stub them. The merge
   rule is "CI green, and macOS green when it ran"; the macOS jobs are not required checks
   (CONTRIBUTING.md). No contract change.
+- **`hv doctor` shows forgets that need no signature (#122, step 1).** An owner forget dated before
+  the genesis owner is honoured unsigned, and ingest does not check timestamps, so an admitted device
+  can erase a fact with a backdated forget. The advisory `forget-authz` check names every fact such a
+  forget keeps forgotten (undo it with `hv unforget`) and counts the ones whose target is not in the
+  journal. No projection or contract change; step 2 closes the hole.
 
 ## 1.23 — 2026-09-25 · `v1.23.0`
 

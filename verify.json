@@ -1,5 +1,5 @@
 {
-  "digest": "473113b2f63fb38b811c1bdba5064fdfb30c5b7cf20b6c6bd6d901a6e10f0129",
+  "digest": "46e30a53eaa186ad8ea691ecd9944de0e8542abd7b3227c36777f77928cebd0d",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -9,7 +9,7 @@
     ".github/workflows/ci-macos.yml": "d856b718958fab57180d5f605684c686b778da7b416800bd90d4670d1748cd85",
     ".github/workflows/ci.yml": "0a5aae03e6ef0cc287436b122eb6c57433c75aa8964dfbd0612a30fc27ab77d1",
     ".github/workflows/cla.yml": "c9b9ef1fba789b9736a6fc976ae314ebcceed5ab15534663e179f390a1c139b3",
-    ".github/workflows/sign.yml": "ba587537147988d260889ebbe20458a4bba8d2a858639c13ae0c7733dc6e5975",
+    ".github/workflows/sign.yml": "3474a5777e80b6ffc38033d61c343798a1383d641cfc05999f84ad083d3518ef",
     "CHANGELOG.md": "faae60740ee4159d66204e8e1340a849f2eac8dc25ab4fb4e14958796a50710b",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "9f14417f7463317c3d597b244a28066c0b88e80c2c0193f0511cbd547fb0da6d",

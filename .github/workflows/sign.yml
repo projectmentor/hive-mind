@@ -29,8 +29,10 @@ on:
       - '!verify.json'
       - '!verify.json.sig'
 
+# The default GITHUB_TOKEN only reads. The push to main uses a short-lived token for the
+# `hivemind-release-signer` GitHub App (below), the one identity a ruleset on main can list as a bypass (#131).
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: sign-manifest
@@ -40,7 +42,21 @@ jobs:
   sign:
     runs-on: ubuntu-latest
     steps:
+      # #131: push as the hivemind-release-signer GitHub App, not as the default GITHUB_TOKEN. The built-in
+      # Actions app cannot be a ruleset bypass actor (GitHub answers 422), so once main requires status
+      # checks a default-token push is rejected (GH006) and main stops being re-signed. The App has
+      # contents:write on this repository only; each run mints a one-hour installation token from its
+      # private key (secrets SIGN_APP_ID, SIGN_APP_KEY), and checkout persists it for the `git push` below.
+      - name: Mint a short-lived App token for the push
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.SIGN_APP_ID }}
+          private-key: ${{ secrets.SIGN_APP_KEY }}
+          permission-contents: write
       - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.app-token.outputs.token }}
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'        # match ci.yml — the sign gate runs the same suite
@@ -76,6 +92,8 @@ jobs:
           if git diff --cached --quiet; then
             echo "manifest already current; nothing to commit"
           else
+            # [skip ci] matters more now: unlike the default token, an App token's push DOES trigger
+            # workflows. The path filter above already keeps this commit from re-running sign.yml.
             git commit -m "chore: re-sign source manifest [skip ci]"
             git push
           fi

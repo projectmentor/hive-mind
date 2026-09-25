@@ -10,7 +10,19 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.25
+## 1.25.1 — 2026-09-25 · `v1.25.1`
+
+No contract change.
+
+- **Ingest validates entry timestamps before writing (security fix).** An entry's timestamp names its journal
+  file, so ingest now rejects an entry whose timestamp is not an ISO-8601 time, and every writer refuses a
+  date prefix that is not `YYYY-MM-DD` or a path outside `journal/`. Both shapes already in journals stay
+  valid, and lines on disk are read unchanged. A security advisory accompanies this release.
+- **`actions/create-github-app-token` bumped to v3.2.0** (#137), still pinned to a commit SHA.
+
+## 1.25 — 2026-09-25 · `v1.25.0`
+
+Contract 1.25, tagged 2026-09-25 at df0d671.
 
 - **Contract 1.25: owner forgets can require a signature (#122, step 2).** A governed config key closes the
   hole `forget-authz` reports: `hv config set forget_writers owner` makes only forgets signed by the owner as

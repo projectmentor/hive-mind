@@ -32,6 +32,12 @@ introduced (a contract) or tagged (a patch).
   forged forget can't refresh a fact's decay clock and an unforgotten fact re-derives from its evidence.
   A pre-1.24 node skips an unforget and keeps the fact forgotten until it upgrades (projection skew).
 
+- **CI: the macOS legs run only where they can matter (#125).** The macOS test and installer smoke
+  moved to `ci-macos.yml`. It runs on every push to `main`, and on a pull request only when the diff
+  touches `hv`, the daemon, the installer or launchd scripts, or the tests that stub them. The merge
+  rule is "CI green, and macOS green when it ran"; the macOS jobs are not required checks
+  (CONTRIBUTING.md). No contract change.
+
 ## 1.23 — 2026-09-25 · `v1.23.0`
 
 Contract 1.23, tagged 2026-09-25 at 3f6d569.

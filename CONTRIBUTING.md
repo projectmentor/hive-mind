@@ -43,6 +43,18 @@ That's it — you sign once. Full text: [CLA.md](CLA.md).
 - Tests must pass offline: `python3 -m pytest -q`.
 - Be kind. This is a small project run by a human.
 
+## CI
+
+- **Ubuntu** (`ci.yml`) runs on every pull request and every push to `main`.
+- **macOS** (`ci-macos.yml`) runs on every push to `main`. On a pull request it runs only when the diff
+  touches a path that can affect macOS: `hv`, the sync daemon, the installer and launchd scripts, and the
+  tests that stub them. The full list is in the workflow. A docs-only PR shows no macOS check.
+- **Merge rule:** CI is green, **and the macOS jobs are green when they ran**. The macOS jobs are not
+  required status checks, because a required check that the path filter skipped stays pending and blocks
+  the merge.
+- If a change outside those paths turns out to break macOS, `main` shows it. The fix is an ordinary PR;
+  add the path to the filter if it should have run.
+
 ## License
 
 By contributing, you agree your contributions are licensed under the

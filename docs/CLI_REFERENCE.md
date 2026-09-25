@@ -122,6 +122,19 @@ hv config set capsule_putters fertile    # any admitted device may seal and rota
 hv config set cell_writers owner         # only the owner may publish cells/combs (default)
 ```
 
+*(1.25, #122)* `forget_writers` decides which owner forgets count. `legacy` (the default) also honours an
+unsigned owner forget dated before the genesis owner, which an admitted device could have backdated. `owner`
+honours only a forget signed by the owner as of its position:
+
+```
+hv config set forget_writers owner       # close the pre-genesis grandfather (#122)
+```
+
+It refuses, writing nothing, while closing would bring a fact back: it lists each fact kept forgotten only by
+such a forget, with the two ways to decide it, `hv retract <sid> --owner` (keep it forgotten, now signed) or
+`hv unforget <sid> --reason …` (let it back). Run it again once each is decided. `hv doctor` (`forget-authz`)
+shows the same list beforehand.
+
 `same_device_lambda` is why two agents on one machine count for less than two on
 separate machines: the device contributes its strongest agent in full plus this
 fraction of the rest. `0` means a device is one voice no matter how many agents run
@@ -273,7 +286,8 @@ under `capsule_putters`), **cell-authz** (the same for cells and combs under `ce
 **link-authz** (a `supersedes`/`resolves` link was downgraded to evidence — re-issue it owner-signed),
 **forget-authz** (#122: a fact is kept forgotten only by an owner forget dated before the genesis
 owner, which needs no signature, so an admitted device could have backdated it; `hv unforget` it if
-you did not make it. A count of such forgets whose target is not in the journal is reported as ok),
+you did not make it, or close the grandfather with `hv config set forget_writers owner`. A count of such
+forgets whose target is not in the journal is reported as ok, and once closed the check reports it closed),
 **trust-drift** (a device's recent reliability fell well below its baseline; advisory, see `hv peers`)
 and *(1.19 PR2b)* **fleet-contract** (an admitted peer advertises an agent contract below 1.19, or
 is unreachable so it cannot be verified — such a peer lands but does not honour the `link` entries

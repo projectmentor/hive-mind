@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.24`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.25`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -241,6 +241,9 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `1.25` — **owner forgets can require a signature** (#122): a governed config key, `hv config set
+  forget_writers owner`, closes the pre-genesis grandfather. Owner-only, no new command or flag; adapters
+  are unaffected. No wire change.
 - `1.24` — **revoke a decision** (#45, additive flag). `hv decide --revoke <sid> --rationale "<why>"` (MCP and Hermes
   `hive_decide(revoke=…)`) withdraws a decision that was wrong, with no replacement: one decision tagged
   `revocation` plus one `supersedes` link. `content` is optional only with `--revoke`, and a rationale is

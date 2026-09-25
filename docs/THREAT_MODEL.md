@@ -94,9 +94,14 @@ at once). Concretely:
   `channel` is `introspect` weighs `introspect_support_weight` (default 0), so no agent can talk a
   claim up or down by reasoning alone.
 - **Owner forgets are reversible, and only by the owner (contract 1.24, #46).** `hv retract --owner` floors a fact; `hv unforget` reverses it. Both are owner-signed `retract` entries (an unforget carries `unretracts_ref`), and the owner acts on one fact's text form a timeline sorted on `(timestamp, node_id, seq)` where the latest honoured act wins. An act is honoured only when signed by the owner AS OF its own journal position (`_owner_at`, the capsule/cell/link rule), so a previous owner's forget survives a transfer, succession or election (before 1.24 it resurrected), and a successor's signature from before their term does not count. An unsigned or forged unforget is ignored, and an unforget is never grandfathered. Owner acts are governance, not evidence: they do not move a fact's last-evidence time, so an unforgotten fact's confidence re-derives from its surviving evidence. A pre-1.24 node skips an unforget (it has no `retracts_ref`) and keeps the fact forgotten until it upgrades: projection skew, never divergence. **Residual (#122):** a forget positioned before the genesis owner is still grandfathered without a signature, and ingest does not check timestamps, so an admitted device can erase a fact with a backdated unsigned owner forget. After 1.24 the owner can undo it with `hv unforget`, and `hv doctor` (`forget-authz`) names every fact a grandfathered forget keeps
-  forgotten, and counts the ones whose target is not in the journal. Until #122 closes it, the 1.19
-  property "a compromised admitted device can never erase, only weigh" holds for links, capsules
-  and cells, **not** for fact forgets.
+  forgotten, and counts the ones whose target is not in the journal. **Closed by policy (contract 1.25,
+  #122):** `hv config set forget_writers owner` makes only forgets signed by the owner as of their position
+  count, so a backdated unsigned forget erases nothing, including one appended after the close. The policy
+  is a set-config act honoured only from the owner at its position, and it stores no journal refs, so no
+  future re-keying can orphan it (#130). A legitimate legacy forget is kept by re-issuing it signed. Once set,
+  the 1.19 property "a compromised admitted device can never erase, only weigh" holds for fact forgets
+  too. Residual: a hive still on `legacy` (the default), and nodes before 1.25, which ignore the key and
+  keep honouring the grandfather until they upgrade (projection skew).
 - **Version skew during the link write-path switch (contract 1.19 PR2b).** `hv decide --supersedes`,
   `hv remember --resolves` and `hv entity link` now write only a `link` entry. A node older than 1.19
   lands that entry (journals stay converged) but does not honour it, so on that node a superseded

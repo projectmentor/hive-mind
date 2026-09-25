@@ -291,7 +291,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.24"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
+CONTRACT_VERSION = "1.25"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
 
 
 # --------------------------------------------------------------------------
@@ -1465,6 +1465,8 @@ def _governance_state_uncached(entries):
                     gov["config"][key] = raw
                 elif key in ("capsule_putters", "cell_writers") and raw in ("owner", "fertile"):
                     gov["config"][key] = raw
+                elif key == "forget_writers" and raw in ("legacy", "owner"):   # #122 step 2; else ignored
+                    gov["config"][key] = raw
             except (TypeError, ValueError):
                 pass
 
@@ -1539,7 +1541,8 @@ def _content_evidence(entries, gov=None):
     Owner-forget authority: once an owner is established, a forget is honored only if it is
     OWNER-SIGNED by the owner AS OF its own journal position (`_owner_at`, the capsule/cell/link rule,
     so a previous owner's forget survives a transfer, succession or election; #46 Q1), or its position
-    precedes the genesis owner (grandfathered, signed or not: #122 tracks closing that). Before any owner
+    precedes the genesis owner (grandfathered, signed or not) while the governed `forget_writers` policy is
+    `legacy`, the default; `forget_writers=owner` closes that grandfather (#122 step 2). Before any owner
     exists, the legacy source-tag forget (`owner:owner/owner`) is honored — so existing forgets are never
     resurrected, and after `hv owner init` a forged unsigned forget no longer carries authority.
 
@@ -1582,6 +1585,8 @@ def _content_evidence(entries, gov=None):
             ev["last_ts"] = ts
     owner_acts = {}                        # content -> [(pos, is_forget, honored)], the #46 timeline
     timeline = gov.get("owner_timeline") or []
+    # #122 step 2 (1.25): `forget_writers=owner` closes the pre-genesis grandfather; `legacy` (default) keeps it.
+    grandfather = (gov.get("config") or {}).get("forget_writers", "legacy") != "owner"
     for e in entries:
         if e.get("type") != "retract":
             continue
@@ -1599,11 +1604,11 @@ def _content_evidence(entries, gov=None):
             pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
             if gov["owner_id"]:
                 # Owner established: honor only an act signed by the owner AS OF this position. A forget
-                # positioned before the genesis owner is grandfathered; an unforget never is. An
-                # unsigned/forged owner act is ignored.
+                # positioned before the genesis owner is grandfathered unless `forget_writers=owner`
+                # (#122); an unforget never is. An unsigned/forged owner act is ignored.
                 signer = _verify_governance(p) if "owner_sig" in p else None
                 at = _owner_at(timeline, pos)
-                honored = (signer is not None and signer == at) or (at is None and not unforget)
+                honored = (signer is not None and signer == at) or (at is None and not unforget and grandfather)
             else:
                 honored = not unforget   # pre-governance: legacy source-tag forget honored; no owner, no unforget
             owner_acts.setdefault(content, []).append((pos, not unforget, honored))
@@ -2543,7 +2548,9 @@ def resolve_link(conn, entry, gov, by_ref):
 
 
 def _forgets_grandfathered(entries, gov):
-    """#122 step 1: owner-source forgets honoured ONLY by the pre-genesis grandfather in `_content_evidence`,
+    """#122 step 1: owner-source forgets honoured ONLY by the pre-genesis grandfather in `_content_evidence`
+    UNDER `forget_writers=legacy` (it answers for that policy whatever the current setting, so step 2's guard
+    can ask "what would come back if the grandfather closed?"),
     which needs no owner signature there; ingest does not check timestamps, so an admitted device can backdate
     one. Returns (hides, dangling) as 'forget <entry>→<target>' labels. `hides`: the forget is the latest
     honoured owner act on its fact's content, so it is what keeps that fact forgotten now. `dangling`: its
@@ -6566,18 +6573,24 @@ def _doctor_status():
     try:
         hides, dangling = _forgets_grandfathered(entries, gov)
         more = f" and {len(hides) - 10} more" if len(hides) > 10 else ""
-        if hides:
+        if (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
+            if hides or dangling:
+                checks.append({"name": "forget-authz", "status": "ok",
+                               "detail": f"closed (forget_writers=owner): {len(hides) + len(dangling)} unsigned "
+                                         f"pre-genesis owner forget(s) are ignored (#122)"})
+        elif hides:
             checks.append({"name": "forget-authz", "status": "warn",
                            "detail": f"{len(hides)} fact(s) kept forgotten only by a pre-genesis owner forget, "
                                      f"which needs no signature (#122): {', '.join(hides[:10])}{more} — if you "
                                      f"did not make it, `hv unforget` the fact on the owner machine"
                                      + (f"; {len(dangling)} more such forget(s) target nothing in the journal"
-                                        if dangling else "")})
+                                        if dangling else "")
+                                     + "; `hv config set forget_writers owner` closes this (#122)"})
         elif dangling:
             checks.append({"name": "forget-authz", "status": "ok",
                            "detail": f"{len(dangling)} pre-genesis owner forget(s) are honoured without a "
                                      f"signature (#122), but none hides a fact: their targets are not in the "
-                                     f"journal"})
+                                     f"journal; `hv config set forget_writers owner` closes this"})
     except Exception:
         pass
 
@@ -7907,10 +7920,10 @@ def _config_set(key, value):
     (same_device_lambda, cap_self, introspect_support_weight), the salience/decay knobs
     (importance_self_cap, w_links, w_volatile, halflife_fact/idea/volatile), the trust-velocity knobs
     (trust_long_days, trust_short_days, trust_drift_threshold), the quorum-election knobs (quorum_m,
-    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers)."""
+    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers, forget_writers)."""
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
-                "capsule_putters": str, "cell_writers": str,
+                "capsule_putters": str, "cell_writers": str, "forget_writers": str,
                 "introspect_support_weight": float,
                 "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float,
                 **{k: float for k in _PR6_KNOB_DEFAULTS}}
@@ -7928,6 +7941,31 @@ def _config_set(key, value):
     if key in ("capsule_putters", "cell_writers") and val not in ("owner", "fertile"):
         print(f"{key} must be 'owner' (default) or 'fertile' (any admitted device)")
         return
+    if key == "forget_writers":
+        if val not in ("legacy", "owner"):
+            print("forget_writers must be 'legacy' (default: an unsigned owner forget dated before the genesis "
+                  "owner still counts) or 'owner' (only forgets signed by the owner as of their position count)")
+            return
+        # #122 step 2 guard, no flag: closing must not silently bring a fact back. Every fact still kept
+        # forgotten only by an unsigned pre-genesis forget needs an explicit owner decision first.
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(entries)
+        hides, _dangling = _forgets_grandfathered(entries, gov)
+        if val == "owner" and hides:
+            conn = get_conn()
+            print(f"Not set: closing the grandfather would bring back {len(hides)} fact(s) kept forgotten only by "
+                  f"an unsigned pre-genesis forget (#122). Decide each first, then run this again:")
+            for label in hides:
+                ref = label.split("→", 1)[1].rsplit(":", 1)
+                row = conn.execute("SELECT sid FROM journal_index WHERE node_id = ? AND seq = ?",
+                                   (ref[0], int(ref[1]))).fetchone()
+                sid = (row["sid"] if row and row["sid"] else _short_id(ref[0], int(ref[1])))
+                print(f"  {sid}   keep it forgotten: hv retract {sid} --owner   |   let it back: hv unforget {sid} --reason …")
+            conn.close()
+            return
+        if val == "legacy" and hides and (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
+            print(f"Note: reopening the grandfather hides {len(hides)} fact(s) again (listed by `hv doctor`, "
+                  f"forget-authz).")
     if key == "quorum_m" and val < 0:
         print("quorum_m must be >= 0 (0 disables elections)")
         return

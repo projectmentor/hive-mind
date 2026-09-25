@@ -10,7 +10,28 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.24
+## Unreleased — contract 1.25
+
+- **Contract 1.25: owner forgets can require a signature (#122, step 2).** A governed config key closes the
+  hole `forget-authz` reports: `hv config set forget_writers owner` makes only forgets signed by the owner as
+  of their position count, so a backdated unsigned owner forget from an admitted device erases nothing.
+  `legacy` stays the default. The key stores no journal refs (orphan-proof, #130), and a legitimate legacy
+  forget is kept by re-issuing it signed. Closing refuses while it would bring a fact back, and lists each
+  one with its two remedies. No new command or flag; no wire change (a pre-1.25 node ignores the key).
+
+## 1.24.1 — 2026-09-25 · `v1.24.1`
+
+CI and signing only; no contract change.
+
+- **`sign.yml` pushes the re-signed manifest as a dedicated GitHub App (#131, #132).** A short-lived
+  installation token for `hivemind-release-signer` replaces the default token, which is now read-only. The App
+  is the only bypass of a ruleset that requires the Ubuntu checks on `main`, so the re-sign lands without
+  GH006.
+- **Every GitHub Action is pinned to a full commit SHA (#133).**
+
+## 1.24 — 2026-09-25 · `v1.24.0`
+
+Contract 1.24, tagged 2026-09-25 at b2fe903.
 
 - **Contract 1.24: revoke a decision (#45).** `hv decide --revoke <sid> --rationale "<why>"` withdraws a
   decision that was wrong, with no replacement. It writes one decision tagged `revocation` (content

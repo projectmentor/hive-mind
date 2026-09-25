@@ -81,3 +81,48 @@ def test_the_read_path_keeps_lines_already_on_disk(hv):
               "payload": {"content": f"old {i}", "tags": [], "source": "manual"}} for i, ts in enumerate(LIVE_SHAPES)]
     (hv.JOURNAL_DIR / "2026-06-05.jsonl").write_text("\n".join(json.dumps(l) for l in lines) + "\n")
     assert len(hv.merkle.read_all_entries(hv.JOURNAL_DIR)) == 2
+
+
+# ── Fable + Grok (private #29): one bad entry must not abort a batch or 500 the ingest handler ─────────
+
+def _fact(nid, ts, content):
+    return {"node_id": nid, "seq": 1, "type": "fact", "timestamp": ts,
+            "payload": {"content": content, "tags": [], "source": "manual"}}
+
+
+def test_a_bad_entry_is_rejected_alone_and_the_rest_of_the_batch_lands(hv):
+    batch = [_fact("k1:00000000000000a1", LIVE_SHAPES[0], "first"),
+             _fact("k1:00000000000000a2", "../PWNED", "bad"),
+             _fact("k1:00000000000000a3", LIVE_SHAPES[1], "third")]
+    assert hv.append_foreign_entries(batch)[:2] == (2, 0)
+    contents = {e["payload"]["content"] for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
+    assert contents == {"first", "third"}
+
+
+def test_a_refusal_from_the_path_helper_is_caught_inside_ingest(hv, monkeypatch):
+    """If the two checks ever drift, the helper's ValueError is counted as a rejection, not raised."""
+    monkeypatch.setattr(hv, "_valid_timestamp", lambda ts: True)      # simulate the ingest gate missing it
+    batch = [_fact("k1:00000000000000b1", LIVE_SHAPES[0], "ok"), _fact("k1:00000000000000b2", "../PWNED", "bad")]
+    assert hv.append_foreign_entries(batch)[:2] == (1, 0)
+
+
+def test_the_ingest_handler_answers_200_and_lands_the_valid_entries(tmp_path, monkeypatch):
+    import threading
+    import urllib.request
+    from test_hardening_batch2 import _load, _free_port
+    sd = _load("hive_sync_daemon", tmp_path, monkeypatch)
+    sd.hv.JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    server, _bind, port = sd.make_server(bind="127.0.0.1", port=_free_port())
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        batch = [_fact("k1:00000000000000c1", LIVE_SHAPES[0], "one"),
+                 _fact("k1:00000000000000c2", "../PWNED", "bad"),
+                 _fact("k1:00000000000000c3", LIVE_SHAPES[1], "two")]
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/sync/ingest", data=json.dumps({"entries": batch}).encode(),
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.status == 200
+            assert json.loads(r.read())["accepted"] == 2
+        assert not (tmp_path / "PWNED.jsonl").exists()
+    finally:
+        server.shutdown()

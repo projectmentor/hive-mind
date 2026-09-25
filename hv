@@ -839,8 +839,12 @@ def append_foreign_entries(entries):
             # so future kinds ride through this contract's nodes with no version-skew rejection window.
             rejected += 1
             continue
+        try:
+            _persist(e)
+        except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
+            rejected += 1
+            continue
         existing.add((nid, seq))
-        _persist(e)
         accepted += 1
 
     # Recompute governance AFTER pass 1 so admits that just landed populate the admitted set.
@@ -868,8 +872,12 @@ def append_foreign_entries(entries):
             # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
             rejected += 1
             continue
+        try:
+            _persist(e)
+        except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
+            rejected += 1
+            continue
         existing.add((nid, seq))
-        _persist(e)
         accepted += 1
         if e.get("type") == "idea" and nid != NODE_ID:
             arrived_ideas.append(e)

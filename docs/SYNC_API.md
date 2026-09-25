@@ -7,7 +7,8 @@ three things from one port:
 - **discovery**, so a new device can find and verify a hive before it is admitted (`/hive/info`);
 - the **dashboard** (`hv dash`) and the JSON data it reads (`/api/*`).
 
-Sync wire-protocol version: **2** (the `protocol_version` field; 2 = understands signed read requests).
+Sync wire-protocol version: **3** (the `protocol_version` field; 2 = understands signed read requests,
+3 = signs its `/sync/hello` and `/hive/info` answers, see *Responder signatures*).
 The agent contract version is reported separately as `contract` (see `hv version`).
 
 Start it:
@@ -64,7 +65,10 @@ Every path belongs to one of three classes. A **loopback** caller is a request t
 
 Set it with `hv sync auth off|permissive|enforce` (restart the daemon to apply). The mode is read from
 `HIVE_SYNC_AUTH`, then `.peers.json` → `sync_auth`, then defaults to `permissive`. Switch to `enforce`
-once every peer reports `protocol_version` 2 or higher.
+once every peer reports `protocol_version` 2 or higher (`hv doctor` → `peer-identity` says when).
+
+This mode governs who may **read from** this node. What this node requires of a peer before it **pushes
+to** it is a separate setting, `hv sync auth --outbound`; see *Responder signatures*.
 
 **What this means for the dashboard.** Open it on a device that runs a HiveMind node:
 `http://127.0.0.1:9876/` (or `hv dash`). That includes an Android phone running HiveMind in Termux.
@@ -111,6 +115,79 @@ that works only against a node in `off` or `permissive` mode.
 
 ---
 
+## Responder signatures (`hello_sig`)
+
+The request envelope proves who asks. A signed answer proves who answered
+([#107](https://github.com/projectmentor/hive-mind/issues/107)): without it, whatever listens at a
+peer's stored address could claim to be that peer, and a sync round would push this node's journal to it.
+
+**The responder signs** `/sync/hello` and `/hive/info` when all of these hold:
+
+- the request carries a well-formed `Hive-Auth-Nonce` (32 to 64 hex characters);
+- this node has a device key, and its node id is that key's fingerprint (a `HIVE_NODE_ID` override or a
+  hostname identity sends no signature).
+
+It signs whether or not the caller's own envelope verified, so a caller it does not yet admit still gets
+its proof. Signing happens inside the same request slot and per-address rate limit as every request, so a
+flood of nonced requests signs at most 32 at a time. The answer gains one field:
+
+```json
+"hello_sig": { "alg": "hive-hello-v1", "device": "k1:10f6b761dd1c2a90", "pub": "<base64 Ed25519 public key>", "sig": "<base64>" }
+```
+
+The signed bytes are these eight lines joined with `\n`:
+
+```
+hive-hello-v1
+<path>                           /sync/hello or /hive/info
+<Hive-Auth-Nonce>                the caller's nonce
+<node_id>
+<hive_id>                        "" if none
+<advertised_addr>                "" if none
+<protocol_version>
+sha256:<hex digest>              of the canonical JSON (sorted keys, no spaces) of the answer without hello_sig
+```
+
+The `hive-hello-v1` tag keeps these signatures apart from request (`hive-sig-v1`) and journal-entry
+signatures, and the path line keeps a `/hive/info` signature from standing in for a hello. Freshness
+comes from the caller's single-use nonce, so there is no timestamp and no clock-skew failure.
+
+**The caller checks it** (`sync_common.verify_hello`) and reaches one outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `verified` | The signature covers our nonce and path; the key's fingerprint is `device` and `node_id`; same hive, or none on one side; once the hive has an owner, the device is admitted and not purged (before that, identity alone is enough); and `advertised_addr` is exactly the host:port we contacted |
+| `addr-unproven` | Identity proven, but `advertised_addr` is missing or another address. A relay at a stale address can forward our request to the real peer, but the answer it gets back carries the peer's real address. A `.peers.json` URL that uses a host name also lands here |
+| `unadmitted` / `purged` | Identity proven, membership fails |
+| `unsigned` | No `hello_sig`: a peer before protocol 3, a legacy identity, or this node has no key and sent no nonce |
+| `invalid` | Anything else: a bad signature, a fingerprint or `node_id` mismatch, another nonce (a replay) or path, a foreign key, another hive |
+
+Separately, the check flags an answer signed by another device than the one a `.peers.json` entry's
+`id` names.
+
+**What a sync round does with it** is this node's outbound mode, set with
+`hv sync auth --outbound off|permissive|enforce` and read from `HIVE_SYNC_AUTH_OUTBOUND`, then
+`.peers.json` → `sync_auth_outbound`, then `permissive`. It applies from the next round. It is separate
+from `sync_auth` because the two need different fleets: inbound enforce needs every peer at protocol 2,
+outbound enforce needs protocol 3.
+
+| Outcome | `off` | `permissive` *(default)* | `enforce` |
+|---|---|---|---|
+| `verified` | pull and push | pull and push, and record the sighting | pull and push, and record the sighting |
+| `addr-unproven`, `unsigned`, `unadmitted` | pull and push | pull and push, flagged | pull only |
+| `purged`, `invalid` | pull and push | pull and push, with a warning | skip the peer |
+
+Pushing is the disclosure; pulling is safe, because every pulled entry is checked on append and content
+from a device that is not admitted is refused. Pulling from an unadmitted peer is also how its admission
+reaches this node. `permissive` never changes what a round does. Flags appear on the peer's line in
+`hv sync now` and, throttled, on the daemon's stderr. `enforce` ignores the `protocol_version` a peer
+claims, so a peer cannot downgrade its way past it, and there is no ratchet: a peer that verified once and
+later answers unsigned is simply `unsigned`. A peer already in sync is never asked for a hello, since the
+merkle-root comparison ends the round first; that shortcut stays unsigned (an impostor echoing our root
+can stall a sync, not receive one).
+
+---
+
 ## Sync endpoints
 
 ### `GET /hive/info` — open discovery
@@ -125,10 +202,11 @@ journal entries.
   "owner_id": "o1:3afa9410be4d1e04",
   "label": "gregorius",
   "node_count": 3,
-  "protocol_version": 2,
-  "contract": "1.25",
+  "protocol_version": 3,
+  "contract": "1.26",
   "advertised_addr": "100.84.84.100:9876",
-  "genesis": { "node_id": "k1:…", "seq": 1, "type": "governance", "payload": { "action": "owner", "…": "…" } }
+  "genesis": { "node_id": "k1:…", "seq": 1, "type": "governance", "payload": { "action": "owner", "…": "…" } },
+  "hello_sig": { "alg": "hive-hello-v1", "device": "k1:10f6b761dd1c2a90", "pub": "…", "sig": "…" }
 }
 ```
 
@@ -139,10 +217,11 @@ journal entries.
 | `owner_id` | The current owner's fingerprint (`o1:` + first 16 hex of `sha256(owner pubkey)`), from governance |
 | `label` | This node's display label (`HIVE_NODE_LABEL`, default the hostname) |
 | `node_count` | Number of admitted devices (the count of distinct authoring devices if nothing is admitted yet) |
-| `protocol_version` | Sync wire-protocol version (2) |
+| `protocol_version` | Sync wire-protocol version (3) |
 | `contract` | The agent contract version (`hv version`); `hv doctor` reads it for the `fleet-contract` check |
 | `advertised_addr` | The `address:port` this daemon actually bound |
 | `genesis` | The signed owner declaration, so a joiner can verify the hive's origin |
+| `hello_sig` | Only when the request carried a `Hive-Auth-Nonce`: the responder's signature over it and this answer (see *Responder signatures*). `hv doctor` uses it for `peer-identity` and `peer-address` |
 
 ### `GET /sync/merkle-root` — open discovery
 
@@ -162,11 +241,12 @@ The handshake: per-node sequence maxima and per-node chunk hashes, used to find 
 {
   "node_id": "k1:10f6b761dd1c2a90",
   "hive_id": "h1:cf5b2e8adbe05936",
-  "protocol_version": 2,
-  "contract": "1.25",
+  "protocol_version": 3,
+  "contract": "1.26",
   "advertised_addr": "100.84.84.100:9876",
   "journal_summary": { "total": 802, "by_node": { "k1:10f6b761dd1c2a90": 335, "k1:597b3e0f5fb92d37": 464 } },
-  "chunks": { "k1:10f6b761dd1c2a90": ["sha256:d46957a7…", "sha256:4bff2b51…"], "k1:597b3e0f5fb92d37": ["…"] }
+  "chunks": { "k1:10f6b761dd1c2a90": ["sha256:d46957a7…", "sha256:4bff2b51…"], "k1:597b3e0f5fb92d37": ["…"] },
+  "hello_sig": { "alg": "hive-hello-v1", "device": "k1:10f6b761dd1c2a90", "pub": "…", "sig": "…" }
 }
 ```
 
@@ -174,6 +254,7 @@ The handshake: per-node sequence maxima and per-node chunk hashes, used to find 
 |---|---|
 | `journal_summary.by_node` | Highest `seq` held for each authoring device |
 | `chunks` | Per device, the hashes of consecutive 100-entry windows (seq 1–100, 101–200, …) |
+| `hello_sig` | The responder's signature over the caller's nonce and this answer, when the request carried a nonce (see *Responder signatures*) |
 
 ### `GET /sync/chunk?node=<device_id>&start=<seq>&end=<seq>` — remote-auth
 
@@ -212,13 +293,15 @@ Response: `{"accepted": 3, "duplicates": 0}`.
 ```
 Client                                   Peer
   |-- GET /sync/merkle-root ----------->  |   equal to ours → done
-  |-- GET /sync/hello ----------------->  |   refuse if the hive ids differ
+  |-- GET /sync/hello ----------------->  |   refuse if the hive ids differ; verify hello_sig and
+  |                                        |   apply the outbound mode (push, pull only, or skip)
   |   compare per-device chunk hashes      |
   |-- GET /sync/chunk?node=…&start=…&end=… |   PULL each differing window, in pages of
   |      (repeated)                        |   HIVE_SYNC_PULL_PAGE entries (default 25)
   |   append (de-dup) + rebuild            |
   |-- POST /sync/ingest ---------------->  |   PUSH what the peer lacks, in pages of
-  |      (repeated)                        |   HIVE_SYNC_PUSH_PAGE entries (default 25)
+  |      (repeated)                        |   HIVE_SYNC_PUSH_PAGE entries (default 25), unless the
+                                               outbound mode withheld the push
 ```
 
 Both directions happen in one round; there is no leader or coordinator. Where the platform allows it
@@ -334,6 +417,7 @@ Written by the installer; per node and git-ignored.
 | `peers[].id` | optional | A label for logs. A device id (`k1:…`) here also tells `hv doctor` which device the entry is (below) |
 | `bind` | automatic | Optional override of the bind address (see *Binding*); `0.0.0.0` is treated as automatic |
 | `sync_auth` | `permissive` | Optional sync auth mode (`hv sync auth` sets it) |
+| `sync_auth_outbound` | `permissive` | Optional outbound mode: what a peer's hello must prove before this node pushes to it (`hv sync auth --outbound` sets it; see *Responder signatures*) |
 
 Admitting a device with `hv group admit` also adds a peer entry from the address in its join request.
 To add a device, run `hive-mind invite` on a device already in the hive and paste the line into
@@ -343,17 +427,25 @@ To add a device, run `hive-mind invite` on a device already in the hive and past
 verification (see *Authentication*) proves which admitted device sent it, and the daemon sees the address
 it came from. The daemon records that pair in `$HIVE_HOME/.peer_candidates.json`. This
 includes the signed `/sync/merkle-root` call that a peer already in sync makes each round: the daemon
-checks that signature only to learn the address, and the path stays open. Unsigned requests, failed
-signatures and loopback record nothing. The file is local: it is never journaled or synced, and it is
-git-ignored. `hv doctor` reads it in the `peer-address` check. When a peer's stored address does not
-answer and its device has verified itself from another address since `.peers.json` last changed,
-`hv doctor --fix` (which the 15-minute doctor timer runs) replaces that entry's URL host. The scheme,
-port and every other key stay as they are. An address that answers is never rewritten. An entry is
-matched to its device by a device id in `id`, or else by the one device verified at its stored address. Host
-names are never used, because they are self-reported and can collide. When no verified address exists,
-doctor only reports, and lists devices with the same name in `tailscale status` as unverified hints. A
-peer that never contacts this node is not learned this way; that needs responder-signed `/sync/hello`
-replies, tracked in [#107](https://github.com/projectmentor/hive-mind/issues/107).
+checks that signature only to learn the address, and the path stays open. A `/sync/hello` this node asked
+for that comes back `verified` is recorded the same way, tagged `"via": "outbound"` (unless the outbound
+mode is `off`). Unsigned requests, failed signatures and loopback record nothing. The file is local: it is
+never journaled or synced, and it is git-ignored. `hv doctor` reads it in the `peer-address` check. When a
+peer's stored address does not answer and its device has verified itself from another address since
+`.peers.json` last changed, `hv doctor --fix` (which the 15-minute doctor timer runs) replaces that
+entry's URL host. The scheme, port and every other key stay as they are. An address that answers is never
+rewritten. An entry is matched to its device by a device id in `id`, or else by the one device verified at
+its stored address. Host names are never trusted, because they are self-reported and can collide.
+
+A peer that never contacts this node leaves no sighting, so for an entry whose stored address fails,
+whose device is known and which has no newer sighting, doctor asks up to 8 candidate hosts, with the
+entry's port and a 3-second timeout: the addresses of devices with the same name in `tailscale status`,
+the device's other recorded addresses, and the host of its join-request URL. Each gets a signed
+`/hive/info` request. Doctor repoints the entry only to a host whose answer is `verified` for exactly that
+device, admitted and not purged, advertising the host:port asked. Another device, an unsigned answer, a
+relay and a purged device never move it, and the probe records nothing. Otherwise doctor only reports,
+listing the same-name devices as unverified hints. A port change is not followed: only the host is
+rewritten.
 
 ### Environment variables
 
@@ -361,6 +453,7 @@ replies, tracked in [#107](https://github.com/projectmentor/hive-mind/issues/107
 |---|---|---|
 | `HIVE_BIND` | — | Bind address override (see *Binding*) |
 | `HIVE_SYNC_AUTH` | — | Sync auth mode override (`off`\|`permissive`\|`enforce`) |
+| `HIVE_SYNC_AUTH_OUTBOUND` | — | Outbound mode override (`off`\|`permissive`\|`enforce`; see *Responder signatures*) |
 | `HIVE_SYNC_AUTH_WINDOW` | `300` | Signed-request freshness window, seconds |
 | `HIVE_SYNC_PULL_PAGE` | `25` | Entries per `/sync/chunk` request |
 | `HIVE_SYNC_PUSH_PAGE` | `25` | Entries per `/sync/ingest` request |

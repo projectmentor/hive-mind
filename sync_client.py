@@ -7,13 +7,19 @@ Runs a bidirectional round with each configured peer:
      seq maxima, and diff them against ours to localize the differing 100-seq
      windows (a flat one-level compare — a full recursive tree walk is needless
      at this scale; the root is the shortcut, the chunk vector the localizer).
+     The hello is signed by the responder over our nonce (#107); what it proves
+     decides, under the outbound auth mode, whether steps 3 and 4 run.
   3. PULL the windows we lack/differ on, append (G-Set dedup) + rebuild.
   4. PUSH the windows the peer lacks/differs on to its /sync/ingest.
 """
 
+import collections
 import json
 import os
 import socket
+import sys
+import threading
+import time
 from urllib.parse import urlencode
 
 import requests
@@ -72,13 +78,18 @@ def _local_entries():
 
 
 def _get(base, path, **params):
+    return _get_nonced(base, path, **params)[0]
+
+
+def _get_nonced(base, path, **params):
     # Sign the request with this device's key so an enforce-mode peer accepts the read (GHSA-242f).
     # Canonicalize the same query the server will receive; sign_sync_request returns {} pre-key-init.
+    # Also hands back the request's nonce (None when unsigned): a responder signs its hello over it (#107).
     qs = urlencode(params) if params else ""
     headers = sync_common.sign_sync_request("GET", path, qs, b"")
     r = _sess().get(f"{base}{path}", params=params or None, timeout=15, headers=headers or None)
     r.raise_for_status()
-    return r.json()
+    return r.json(), headers.get("Hive-Auth-Nonce")
 
 
 def _post(base, path, payload):
@@ -126,9 +137,60 @@ def _short_err(e):
     return (str(e).split("(Caused by", 1)[0].strip()[:80] or e.__class__.__name__)
 
 
-def _sync_with_peer(peer):
+# ── outbound responder check (#107) ──────────────────────────────────────────────────────────────
+# Each round with differences verifies the peer's signed hello (sync_common.verify_hello) and applies the
+# outbound mode (sync_common.outbound_action). Anything short of `verified` is flagged: in the per-peer
+# line of the round, and on stderr through a throttled counter (the daemon runs a round every 5 minutes).
+# A verified hello is also a sighting of that device at the address we contacted, recorded for #7 like a
+# verified inbound request, at most once per _SIGHTING_THROTTLE seconds per device and address.
+_SIGHTING_THROTTLE = 600
+_sightings = {}                   # device_id -> (host, monotonic time it was last recorded at that host)
+_flag_lock = threading.Lock()
+_flags = collections.Counter()
+
+
+def _outbound_flag(mode, outcome, reason):
+    with _flag_lock:
+        _flags[(mode, outcome)] += 1
+        n = _flags[(mode, outcome)]
+    if n <= 3 or n % 100 == 0:   # don't spam the journal
+        print(f"sync-auth[outbound {mode}]: a peer's hello was {outcome} ({reason}); count={n}. "
+              f"`hv doctor` (peer-identity) lists the peers; outbound enforce pushes only to verified ones.",
+              file=sys.stderr)
+
+
+def _note_outbound_sighting(device, base):
+    host = hv._url_host(base)
+    last, now = _sightings.get(device), time.monotonic()
+    if last and last[0] == host and now - last[1] < _SIGHTING_THROTTLE:
+        return
+    if len(_sightings) > 4096:
+        _sightings.clear()
+    _sightings[device] = (host, now)
+    try:
+        hv._record_peer_candidate(device, host, via="outbound")
+    except Exception:
+        pass
+
+
+def _hello_note(check, action):
+    """The per-peer line's suffix for a hello that did not fully prove its peer ('' when it did)."""
+    what = f"hello {check['outcome']} ({check['reason']})"
+    if check["other_device"]:
+        what += f", signed by {check['device']}, not the device its .peers.json id names"
+    if check["outcome"] == "verified":
+        return f"; {what}" if check["other_device"] else ""
+    if action == "pull":
+        return f"; push withheld: {what} (outbound enforce)"
+    if check["outcome"] in ("purged", "invalid"):
+        return f"; WARNING {what}: pushed anyway (outbound enforce would skip this peer)"
+    return f"; {what} (outbound enforce would pull only)"
+
+
+def _sync_with_peer(peer, mode=None):
     base = peer["url"].rstrip("/")
     pid = _peer_label(peer)
+    mode = mode or sync_common.sync_auth_outbound_mode()
 
     local = _local_entries()
     local_root = merkle.merkle_root(merkle.chunk_hashes(local))
@@ -136,7 +198,7 @@ def _sync_with_peer(peer):
         print(f"  {pid}: in sync")
         return
 
-    hello = _get(base, "/sync/hello")
+    hello, nonce = _get_nonced(base, "/sync/hello")
     # Hive scoping: if both sides have a hive_id and they differ, this is a different hive —
     # never merge its journal into ours. (Empty on either side = pre-owner, allowed so the genesis
     # owner declaration can propagate during bootstrap.)
@@ -144,6 +206,23 @@ def _sync_with_peer(peer):
     if local_hive and peer_hive and local_hive != peer_hive:
         print(f"  {pid}: different hive ({peer_hive} vs {local_hive}) — not syncing")
         return
+
+    # Who answered (#107)? `off` does not look; otherwise verify, flag, and under enforce withhold the
+    # push (or the whole round) from a peer that did not prove itself. The protocol_version a peer
+    # claims plays no part, so no peer can downgrade its way past enforce.
+    action, note = "push", ""
+    if mode != "off":
+        expected = peer.get("id") if hv._is_device_id(peer.get("id")) else None
+        check = sync_common.verify_hello(hello, nonce, "/sync/hello", base, hv._governance_state(local), expected)
+        action = sync_common.outbound_action(mode, check["outcome"])
+        note = _hello_note(check, action)
+        if check["outcome"] == "verified":
+            _note_outbound_sighting(check["device"], base)
+        if note:
+            _outbound_flag(mode, check["outcome"], check["reason"])
+        if action == "skip":
+            print(f"  {pid}: skipped: hello {check['outcome']} ({check['reason']}) (outbound enforce)")
+            return
     remote_chunks = hello.get("chunks", {})
 
     # PULL differing/missing windows, paginated into PULL_PAGE-seq sub-windows so each /sync/chunk
@@ -169,8 +248,9 @@ def _sync_with_peer(peer):
     # PUSH windows the peer lacks/differs on (recompute local after the pull).
     local = _local_entries()
     push = []
-    for node, start, end in _differing_windows(remote_chunks, merkle.node_chunk_hashes(local)):
-        push.extend(merkle.entries_in_range(local, node, start, end))
+    if action == "push":
+        for node, start, end in _differing_windows(remote_chunks, merkle.node_chunk_hashes(local)):
+            push.extend(merkle.entries_in_range(local, node, start, end))
 
     pushed = 0
     # Paginate the push so each /sync/ingest body stays small; the daemon de-dups by (node_id, seq),
@@ -179,7 +259,8 @@ def _sync_with_peer(peer):
         pushed += _post(base, "/sync/ingest",
                         {"entries": push[i:i + PUSH_PAGE], "hive_id": local_hive}).get("accepted", 0)
 
-    print(f"  {pid}: pulled {accepted} (dup {duplicates}), pushed {pushed}")
+    done = f", pushed {pushed}" if action == "push" else ""
+    print(f"  {pid}: pulled {accepted} (dup {duplicates}){done}{note}")
 
 
 def sync_now():
@@ -189,10 +270,11 @@ def sync_now():
     if not peers:
         print("No peers configured (.peers.json). Nothing to sync.")
         return
+    mode = sync_common.sync_auth_outbound_mode(cfg)
     print(f"sync now: {hv.NODE_ID} -> {len(peers)} peer(s)")
     for peer in peers:
         try:
-            _sync_with_peer(peer)
+            _sync_with_peer(peer, mode)
         except requests.RequestException as e:
             print(f"  {_peer_label(peer)}: unreachable ({_short_err(e)})")
         except Exception as e:

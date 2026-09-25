@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.25`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.26`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -241,6 +241,11 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `1.26` — **a peer proves who answered** (#107): `/sync/hello` and `/hive/info` carry a responder
+  signature (`hello_sig`) over the caller's nonce, and sync `protocol_version` is 3. `hv sync auth --outbound
+  off|permissive|enforce` (default `permissive`) decides whether this node pushes only to verified peers;
+  `hv doctor` gains the advisory `peer-identity`. Operator-only; adapters are unaffected. A foreign sync client
+  may ignore the field. No journal change.
 - `1.25` — **owner forgets can require a signature** (#122): a governed config key, `hv config set
   forget_writers owner`, closes the pre-genesis grandfather. Owner-only, no new command or flag; adapters
   are unaffected. No wire change.

@@ -10,13 +10,27 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased
+## Unreleased — contract 1.26
 
+- **Contract 1.26: a peer proves who answered (#107), sync protocol 3.** A `/sync/hello` or `/hive/info`
+  asked for with a signed request now carries `hello_sig`: the responder's device signature over the
+  caller's nonce, the path, its node id, hive id, advertised address, protocol and a digest of the whole
+  answer. The caller checks it (verified, addr-unproven, unadmitted, purged, unsigned or invalid). A new
+  setting, `hv sync auth --outbound off|permissive|enforce` (default `permissive`, which only flags), makes
+  a node push only to a verified peer: under `enforce` an unsigned, addr-unproven or unadmitted peer is
+  only pulled from, and a purged or invalid one is skipped. It is separate from the inbound `sync_auth`,
+  because inbound enforce needs peers at protocol 2 and outbound enforce needs protocol 3. `hv doctor`
+  gains `peer-identity`, which shows each peer's outcome and protocol and when the fleet is ready for
+  either enforce, and `peer-address` can now find a peer that never contacts this node: it asks the
+  peer's candidate addresses for a signed `/hive/info` and repoints only to one that proves the right
+  device at that address. An address that answers is never rewritten. One new flag; no journal change;
+  a mixed fleet keeps syncing.
 - **CI and the pre-sign gate run the test suite in parallel.** `pytest-xdist` (pinned 3.8.0) runs the same full
   suite on every core: the CI test jobs use `-n auto`, and `sign_release.py`'s gate does too whenever xdist is
   installed (a local run without it still runs the whole suite, serially). The re-sign after a merge drops
   from about 4.5 minutes to under 180 seconds, inside the `hive-mind update` wait window. What gets signed
   is unchanged: only a tree whose full suite passed. No contract change.
+
 
 ## 1.25.1 — 2026-09-25 · `v1.25.1`
 

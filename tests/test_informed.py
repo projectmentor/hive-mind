@@ -123,7 +123,7 @@ def test_mcp_hive_decide_informed_by_matches_cli(hive, monkeypatch):
     """MCP parity: hive_decide(informed_by="ref,ref") forwards `--informed`; hive_search passes `ref` through.
     The source-level checks always run; the live call runs only where the `mcp` package is installed."""
     src = (PROJECT / "integrations" / "mcp" / "hive_mcp.py").read_text()
-    assert 'def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: str = "")' in src
+    assert 'def hive_decide(content: str = "", rationale: str = "", tags: str = "", informed_by: str = "",' in src
     assert '"--informed"' in src and "`ref`" in src
     import pytest
     pytest.importorskip("mcp")

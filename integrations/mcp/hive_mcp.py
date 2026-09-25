@@ -50,7 +50,9 @@ and never write back something you just read this session (that's an echo, not e
 
 WRITE ONLY durable, checkable, reusable knowledge, and route it by what it is:
 - a DECISION -> hive_decide(content, rationale, informed_by="<sid>,<sid>") naming the facts
-  you searched and relied on (their `sid`, `h:…`, from hive_search);
+  you searched and relied on (their `sid`, `h:…`, from hive_search); one that REPLACES a decision
+  adds supersedes="<sid>"; a decision that was WRONG, with no replacement ->
+  hive_decide(revoke="<sid>", rationale=…). "NOT in effect" in the output means the owner must re-run it;
 - the RESULT of acting on a recorded decision -> hive_remember(content, outcome_of="<decision
   sid>", polarity=1|0|-1). Only observed results count; for your own assessment rather than
   an observation, pass channel="introspect" (recorded, never counted);
@@ -201,11 +203,18 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
 
 
 @mcp.tool()
-def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: str = "") -> str:
+def hive_decide(content: str = "", rationale: str = "", tags: str = "", informed_by: str = "",
+                supersedes: str = "", revoke: str = "") -> str:
     """Record an architectural or process DECISION with its rationale.
 
     Use for choices that shape future work. Search first to avoid duplicating an existing
     decision. Decisions are source-tagged (source=claude-ai, contract 1.23) like facts.
+    content is required unless you pass revoke.
+
+    supersedes: the sid of a decision this one REPLACES. revoke: the sid of a decision that was
+    wrong, withdrawn with no replacement (contract 1.24); needs a rationale. At most one of the two.
+    Either is recorded as evidence, and does not take effect, unless the owner or the device that
+    wrote the target decision makes it; the output says which.
 
     tags: comma-separated (e.g. the project) so the decision is findable by hive_search /
     `hv search` by tag/text instead of by an unstable, node-local decision id.
@@ -217,7 +226,7 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     the `sid`. An unresolvable reference aborts the whole write. This is what lets the hive learn
     which knowledge turns out to matter once the decision's outcomes are recorded.
     """
-    args = ["decide", content, "--source", "claude-ai"]
+    args = ["decide"] + ([content] if content.strip() else []) + ["--source", "claude-ai"]
     if rationale:
         args += ["--rationale", rationale]
     tag_list = [t.strip() for t in tags.split(",") if t.strip()]
@@ -226,6 +235,10 @@ def hive_decide(content: str, rationale: str = "", tags: str = "", informed_by: 
     refs = [r.strip() for r in informed_by.split(",") if r.strip()]
     if refs:
         args += ["--informed", *refs]
+    if supersedes.strip():
+        args += ["--supersedes", supersedes.strip()]
+    if revoke.strip():
+        args += ["--revoke", revoke.strip()]
     return _run_hv(args)
 
 

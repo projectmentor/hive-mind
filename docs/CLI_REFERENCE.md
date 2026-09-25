@@ -136,17 +136,19 @@ have a clear trail of what changed and why.
 
 ```
 hv decide <content> [--rationale TEXT] [--tags a,b,c] [--source SOURCE] [--supersedes DECISION] [--informed REF ...]
+hv decide [content] --revoke DECISION --rationale TEXT [--tags a,b,c] [--source SOURCE] [--informed REF ...]
 ```
 
 **Arguments:**
 
 | Argument | What it does |
 |---|---|
-| `content` | The decision, stated clearly. Required. |
+| `content` | The decision, stated clearly. Required, except with `--revoke`. |
 | `--rationale` | Why this decision was made. Optional but strongly recommended — future you will thank you. |
 | `--tags` | Comma-separated tags, just like `hv remember`. Tag a decision with its project (e.g. `--tags hive-mind`) so it shows up in `hv search` scoped to that project — the reliable way to find a decision later. Decision numbers (`#N`) are node-local and shift on rebuild; to cite a decision, use its `sid` (`h:…`, shown by `hv search`). |
 | `--source` | *(1.23)* Who is deciding, as on `hv remember` (e.g. `claude-code`). An agent should always pass it: omitted, it is `$HERMES_AGENT`, else `manual` (a person), and on the owner device only a `manual` write's links are owner-signed (#114). |
 | `--supersedes` | A previous decision this replaces: its **`sid`** (`h:…`, shown by `hv search`; preferred), its `ref` (`node_id:seq`), or a bare local id (`17` / `d17` — *deprecated*, see [Stable ids](#stable-ids-sid-vs-local-id)). Resolved and kind-checked **before** anything is written; a bad reference aborts. The old decision stays on record; this one is linked to it. *(1.19 PR2b)* Journaled as one `supersedes` **link**. It is owner-signed (hard everywhere) only when this device holds the owner key **and** the source is `manual` *(1.23, #114)*; otherwise it is hard only where this device authored the old decision (see `hv doctor` `link-authz`). The confirmation says `(owner-signed: source manual)` or `(device-signed: source …)`. |
+| `--revoke` | *(1.24, #45)* Withdraw a decision that was **wrong**, with no replacement. Takes the decision's `sid` (preferred), `ref` or a bare local id, resolved and kind-checked like `--supersedes` (a fact aborts). Needs `--rationale`; cannot be combined with `--supersedes`. It writes one decision tagged `revocation`, whose content is `Revoke <sid>: <the target's first line>` unless you give `content`, and one `supersedes` link to the target. The target is superseded **only when that link is hard**: written by a person on the owner device (`manual`), or by the device that wrote the decision. Otherwise the revoke is recorded as evidence and is **not in effect**. The confirmation says which: `Revoked decision h:… (…)` or `Revoke of decision h:… recorded …; NOT in effect until the owner, or the device that wrote the decision, re-runs hv decide --revoke h:…`. Until then `hv search` does not flag the target as superseded, and `hv doctor` lists the link under `link-authz`. A revocation cannot itself be undone; a new decision restates what still holds. |
 | `--informed` | *(1.19)* One or more references to the facts/decisions this decision **relied on**. The stable forms are the **`sid`** shown by `hv search` (`h:3f9a1c0b2d` — the form to type) and the `ref` (`node_id:seq`, e.g. `k1:597b3e0f5fb92d37:401`) — both identical on every node, never change. Bare local ids are still accepted — `118` (fact), `d17` (decision), `i5` (idea) — but they are rowids that shift on every rebuild, so each is resolved **and kind-checked** at write time, prints a one-line deprecation warning, and any failure aborts the whole command before anything is written. The refs are journaled on the decision (`informed_by`) and one `informed` link is written per ref; this is the input to the utility projection (what knowledge proved useful once outcomes are recorded). |
 
 **Examples:**
@@ -162,6 +164,9 @@ hv decide <content> [--rationale TEXT] [--tags a,b,c] [--source SOURCE] [--super
 ./hv decide "Android uses the runit supervisor (no systemd on Termux)" \
     --rationale "Termux has no systemd; runit/termux-services is the native supervisor" \
     --tags hive-mind,android
+
+# A decision that was wrong: withdraw it, no replacement (1.24)
+./hv decide --revoke h:3f9a1c0b2d --rationale "Friday deploys broke prod twice; no deploy-day rule for now"
 
 # Replacing a previous decision
 ./hv decide "Install Tailscale inside WSL — each device gets its own IP" \

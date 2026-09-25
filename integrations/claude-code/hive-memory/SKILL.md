@@ -47,6 +47,9 @@ Write durable, checkable, reusable knowledge:
   outcomes count; if it is your own assessment rather than something observed, add `--channel introspect`.
 - **Corrections** — something was wrong and is now right. Replace the old fact rather than leaving
   both live: `hv remember "<correction>" --resolves <sid of the wrong fact>` (soft-retracts it).
+  A **decision** that was wrong and has no replacement: `hv decide --revoke <sid> --rationale "<why>"
+  --source claude-code`. A replacement instead: `hv decide "<new>" --supersedes <sid>`. Read the output:
+  `NOT in effect` means the owner has to re-run it.
 - **Constraints / preferences / commitments** that shape future work.
 - **New entities / relationships** worth remembering.
 - **Conclusions, analysis, plans**: only if worth finding later, and always with

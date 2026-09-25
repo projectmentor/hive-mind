@@ -10,7 +10,22 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.23
+## Unreleased — contract 1.24
+
+- **Contract 1.24: revoke a decision (#45).** `hv decide --revoke <sid> --rationale "<why>"` withdraws a
+  decision that was wrong, with no replacement. It writes one decision tagged `revocation` (content
+  `Revoke <sid>: <the target's first line>` unless given) and one `supersedes` link to the target. The
+  target is resolved and kind-checked, and a missing rationale or a combination with `--supersedes` is
+  refused, before anything is written. There is no new projection: the target is superseded only when
+  the link is hard (a person on the owner device, or the device that wrote the decision). The
+  confirmation is derived from that authority, so an agent's revoke elsewhere prints `NOT in effect`
+  until the owner re-runs it, and `hv doctor` lists it under `link-authz`. MCP and Hermes `hive_decide`
+  gain `revoke` and `supersedes` (the latter had no path since 1.19), and a parity test now covers
+  `hv decide`'s flags. No wire change; a pre-1.24 node sees an ordinary superseding decision.
+
+## 1.23 — 2026-09-25 · `v1.23.0`
+
+Contract 1.23, tagged 2026-09-25 at 3f6d569.
 
 - **Contract 1.23: links carry owner authority only when a person writes them (#114).** On a machine
   that holds the owner key, a link is owner-signed only when its source is `manual`; every agent

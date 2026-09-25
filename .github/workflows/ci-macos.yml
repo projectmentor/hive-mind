@@ -40,9 +40,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt pytest pytest-xdist==3.8.0
       - name: Run offline test suite
-        run: python3 -m pytest -q
+        run: python3 -m pytest -q -n auto   # pytest-xdist: every core (the sign gate runs the same)
 
   # macOS-only: exercise the installer/launchd path as far as an ephemeral, headless
   # runner allows. Branch protection requires no check, so a soft step here never blocks

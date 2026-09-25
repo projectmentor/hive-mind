@@ -21,9 +21,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: pip install -r requirements.txt pytest
+        run: pip install -r requirements.txt pytest pytest-xdist==3.8.0
       - name: Run offline test suite
-        run: python3 -m pytest -q
+        run: python3 -m pytest -q -n auto   # pytest-xdist: every core (the sign gate runs the same)
 
   # Android/Termux supervisor seam, exercised on an ordinary Linux runner (no phone,
   # no termux-services). `TERMUX_VERSION=1` forces the runit branch in _service.sh, so

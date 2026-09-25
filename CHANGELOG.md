@@ -43,6 +43,11 @@ introduced (a contract) or tagged (a patch).
   forget keeps forgotten (undo it with `hv unforget`) and counts the ones whose target is not in the
   journal. No projection or contract change; step 2 closes the hole.
 
+- **The contract history moved out of `hv` (#106).** The per-version notes were one trailing comment on
+  `hv`'s `CONTRACT_VERSION` line (18,544 characters), printed whole by every `grep` that matched it, at a
+  real token cost for every agent reading the code. They now live in `docs/CONTRACT_HISTORY.md`, one
+  section per version, text unchanged. No code change.
+
 ## 1.23 — 2026-09-25 · `v1.23.0`
 
 Contract 1.23, tagged 2026-09-25 at 3f6d569.

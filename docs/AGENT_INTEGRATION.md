@@ -240,7 +240,7 @@ This is what makes future breaking changes safe: additive-within-major keeps old
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly
 when it must re-wire.
 
-**Changelog.**
+**Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `1.24` — **revoke a decision** (#45, additive flag). `hv decide --revoke <sid> --rationale "<why>"` (MCP and Hermes
   `hive_decide(revoke=…)`) withdraws a decision that was wrong, with no replacement: one decision tagged
   `revocation` plus one `supersedes` link. `content` is optional only with `--revoke`, and a rationale is

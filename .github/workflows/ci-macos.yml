@@ -1,0 +1,84 @@
+name: CI (macOS)
+# The macOS legs of CI, split out of ci.yml to cut PR latency without losing coverage (#125). macOS is the
+# only runner that exercises the launchd daemon path, a case-insensitive filesystem and Apple's Python.
+#
+# - push to main: ALWAYS runs, so every release commit is tested on macOS and a red macOS build shows there.
+# - pull request: runs only when the diff touches a path below. A path filter cannot see which function
+#   changed, so any PR that edits `hv` or the daemon still waits for macOS; the saving is docs, skills and
+#   tests outside these paths. A docs-only PR shows no macOS check at all.
+#
+# Do NOT make these jobs required status checks on pull requests: a required check that the filter skipped
+# stays pending and blocks the merge. Require the Ubuntu jobs; the merge rule is "CI green, and the macOS
+# jobs green when they ran" (CONTRIBUTING.md).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - 'hv'
+      - 'hive_sync_daemon.py'
+      - 'requirements.txt'
+      - 'scripts/platform/macos/**'
+      - 'scripts/installer/_service.sh'
+      - 'scripts/installer/_install*.sh'
+      - 'scripts/installer/dispatcher.sh'     # macos-installer-smoke checks it resolves through a symlink
+      - 'tests/conftest.py'                   # the #109 stubs, launchctl included, front every test
+      - 'tests/test_service.py'
+      - 'tests/test_daemon_code.py'           # the #121 macOS failure was this file's restart count
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/ci-macos.yml'
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest]          # a one-entry matrix keeps the check name `test (macos-latest)`
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Run offline test suite
+        run: python3 -m pytest -q
+
+  # macOS-only: exercise the installer/launchd path as far as an ephemeral, headless
+  # runner allows. Branch protection requires no check, so a soft step here never blocks
+  # merges. What it CANNOT prove (needs a real Mac): that `launchctl bootstrap gui/$UID`
+  # actually loads under a login session, reboot persistence, and real Tailscale auth.
+  macos-installer-smoke:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: dispatcher resolves through a symlink (readlink -f shim)
+        run: |
+          ln -s "$PWD/scripts/installer/dispatcher.sh" /tmp/hive-mind
+          /tmp/hive-mind help | grep -q 'Subcommands'
+      - name: launchd plists render + plutil -lint
+        run: bash scripts/platform/macos/_launchd.sh --render-test
+      - name: sync daemon answers on :9876 natively
+        run: |
+          HIVE_HOME="$PWD" python3 ./hv rebuild >/dev/null 2>&1 || true
+          HIVE_HOME="$PWD" nohup python3 hive_sync_daemon.py >/tmp/d.log 2>&1 &
+          ok=
+          for i in $(seq 1 20); do
+            curl -sf http://127.0.0.1:9876/sync/hello >/dev/null && { ok=1; break; }
+            sleep 1
+          done
+          [ -n "$ok" ] || { echo "daemon did not answer on :9876"; cat /tmp/d.log; exit 1; }
+          echo "daemon answered /sync/hello"
+      - name: launchctl bootstrap (best-effort; GUI domain may be absent in headless CI)
+        continue-on-error: true
+        run: |
+          bash -c '. scripts/installer/_service.sh; service_install "$PWD" hive-sync'
+          launchctl print "gui/$(id -u)/com.projectmentor.hive-sync" \
+            || echo "gui domain unavailable in headless CI — bootstrap unverifiable here (needs a real Mac)"
+      - name: service uninstall is idempotent
+        run: bash -c '. scripts/installer/_service.sh; launchd_uninstall hive-sync; launchd_uninstall hive-sync'

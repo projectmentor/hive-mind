@@ -148,7 +148,8 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 
 1. **Genesis (TOFU).** The first valid self-signed `owner` declaration wins and
    becomes the term-0 owner; it also mints the `hive_id` and fixes `owner_ts`
-   (which still anchors the grandfathering of pre-owner forgets, even after a handoff).
+   (the genesis position still anchors the grandfathering of pre-owner forgets, even after
+   a handoff; #122).
 2. **Succession chain.** Walking forward, the *current* owner is carried along and
    advances when an act is authorized by the then-current owner:
    `nominate-successor` (owner-signed) opens a nomination over a successor pubkey;
@@ -192,8 +193,14 @@ escrow passphrase is truly remediated only by rotating the owner key via success
   **negative evidence** (net = positive − negative), so a fact can become contested
   or go negative
 - Owner retraction (`hv retract --owner`) → drives confidence to the floor.
-  Once an owner exists it must be **owner-signed** (you can't forge a forget with
-  a bare source tag); forgets predating the owner are grandfathered.
+  Once an owner exists it must be **owner-signed** by the owner **as of its journal
+  position** (`_owner_at`, so a previous owner's forget survives a handoff; 1.24);
+  forgets positioned before the genesis owner are grandfathered (#122).
+- Owner unforget (`hv unforget`, 1.24) → an owner-signed `retract` with
+  `unretracts_ref`. Per fact text, the owner forgets and unforgets are sorted on
+  `(timestamp, node_id, seq)` and the **latest honoured act wins**; an unforget is
+  never grandfathered. Owner acts never move `last_evidence_at`, so an unforgotten
+  fact's confidence re-derives from its surviving evidence.
 
 ### Link evidence (1.19)
 

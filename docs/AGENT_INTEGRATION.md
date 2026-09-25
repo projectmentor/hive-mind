@@ -247,7 +247,8 @@ when it must re-wire.
   required. Like any `supersedes`, it takes effect only when the link is hard: a person on the owner
   device, or the device that wrote the decision. **Read the confirmation**: an agent's revoke is usually
   `recorded …; NOT in effect` until the owner re-runs it. `hive_decide` also gains `supersedes`, which
-  had no MCP or Hermes path before. No wire change.
+  had no MCP or Hermes path before. `hv unforget` (#46) reverses an owner forget; it is owner-only and
+  not on MCP, so adapters are unaffected. No wire change.
 - `1.23` — **links carry owner authority only when a person writes them** (#114, additive flag).
   `hv decide` and `hv entity link` gain `--source` (the MCP server passes `claude-ai`; Hermes keeps
   `HERMES_AGENT`, still honoured). **Pass `--source <you>` on every write verb**: an omitted source is

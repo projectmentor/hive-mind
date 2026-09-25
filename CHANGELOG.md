@@ -22,6 +22,15 @@ introduced (a contract) or tagged (a patch).
   until the owner re-runs it, and `hv doctor` lists it under `link-authz`. MCP and Hermes `hive_decide`
   gain `revoke` and `supersedes` (the latter had no path since 1.19), and a parity test now covers
   `hv decide`'s flags. No wire change; a pre-1.24 node sees an ordinary superseding decision.
+- **Contract 1.24: `hv unforget` reverses an owner forget (#46), and owner forgets are honoured
+  point-in-time.** `hv unforget <fact> --reason "<why>"` is owner-only and off MCP. It journals an
+  owner-signed `retract` carrying `unretracts_ref`. Per fact text, owner forgets and unforgets are sorted
+  on `(timestamp, node_id, seq)` and the latest honoured act wins. An act counts only when signed by the
+  owner as of its own position, which fixes a resurrection bug: a previous owner's forget was dropped
+  after a transfer, succession or election. An unforget is never grandfathered; a forget before the
+  genesis owner still is (#122). Owner acts no longer move a fact's `last_evidence_at`, so an ignored
+  forged forget can't refresh a fact's decay clock and an unforgotten fact re-derives from its evidence.
+  A pre-1.24 node skips an unforget and keeps the fact forgotten until it upgrades (projection skew).
 
 ## 1.23 — 2026-09-25 · `v1.23.0`
 

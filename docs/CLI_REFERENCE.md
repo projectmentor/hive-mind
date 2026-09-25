@@ -34,6 +34,7 @@ memory.
 | `hv retract` | Correct a fact you got wrong |
 | `hv search` | Search facts, decisions and ideas |
 | `hv stats` | See a summary of your memory |
+| `hv unforget` | Owner only: reverse an owner forget (`hv retract --owner`) |
 | `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode |
 | `hv telemetry` | Local-only session observability (never synced) |
 | `hv verify` | Check that this install is the official, signed release |
@@ -836,6 +837,34 @@ hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
     --reason "Superseded by Tailscale-in-WSL architecture" \
     --source "claude-code" \
     --owner
+```
+
+---
+
+### `hv unforget` — Reverse an owner forget *(1.24, #46)*
+
+An owner forget (`hv retract --owner`) floors a fact on every node. `hv unforget`
+reverses it: the fact comes back, and its confidence re-derives from the evidence
+that still stands. **Owner only**: it needs the current owner's key, so run it on
+the owner machine. It is not exposed over MCP.
+
+```
+hv unforget <fact> --reason TEXT
+```
+
+| Argument | What it does |
+|---|---|
+| `fact` | The forgotten fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). Kind-checked: a decision is an error. Like a forget, it acts on the fact's **text**, so every row with the same text comes back. |
+| `--reason` | Why the forget is reversed. Required; journaled. |
+
+It refuses, writing nothing, when the fact is not forgotten, when this device has no
+owner key, or when the key is not the hive's current owner's. The latest act the
+owner signed wins, so `retract --owner` → `unforget` → `retract --owner` ends
+forgotten. A node older than 1.24 skips the unforget and keeps the fact forgotten
+until it upgrades.
+
+```bash
+./hv unforget h:9be4410f37 --reason "Forgotten by mistake on 2026-08-18; the fact was right"
 ```
 
 ---

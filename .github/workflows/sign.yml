@@ -49,15 +49,15 @@ jobs:
       # private key (secrets SIGN_APP_ID, SIGN_APP_KEY), and checkout persists it for the `git push` below.
       - name: Mint a short-lived App token for the push
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349  # v2.2.2
         with:
           app-id: ${{ secrets.SIGN_APP_ID }}
           private-key: ${{ secrets.SIGN_APP_KEY }}
           permission-contents: write
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: '3.12'        # match ci.yml — the sign gate runs the same suite
 

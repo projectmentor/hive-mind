@@ -40,11 +40,49 @@ def _run_hv(home, *argv):
 
 # ── the two planes agree, in both directions ────────────────────────────────────────────────────
 
-def test_every_moved_command_is_reachable_on_the_control_plane():
-    """The failure this prevents: `hv` points an operator at a `hive-mind` command that does not exist."""
-    unreachable = [new for (new, _why) in commandmap.MOVED.values()
-                   if not hivemind_ctl._is_control_plane(new.split())]
-    assert not unreachable, f"pointed at but not implemented: {sorted(set(unreachable))}"
+def _parser_paths():
+    """Every command path the library's parser really accepts, walking argparse's subparser actions.
+
+    Deliberately not "any action with choices": on `doctor` that picks up `--format`'s `text|json` and
+    reports flag values as if they were subcommands."""
+    import argparse
+
+    def walk(parser, prefix=()):
+        out = {prefix} if prefix else set()
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for name, sub in action.choices.items():
+                    out |= walk(sub, prefix + (name,))
+        return out
+
+    return walk(hivemind_ctl.hv().build_parser())
+
+
+def test_every_moved_command_resolves_to_a_real_command():
+    """The failure this prevents: `hv` points an operator at a `hive-mind` command that does not exist,
+    leaving them mid-task with nothing correct to type.
+
+    An earlier version of this test checked only ROUTING (`_is_control_plane`), never that the library
+    parser accepts the command — so it passed while `MOVED` advertised `owner mint`, which does not
+    exist. A test that names the right property and does not check it is worse than no test."""
+    paths = _parser_paths()
+    broken = []
+    for (new, _why) in commandmap.MOVED.values():
+        lib = tuple(hivemind_ctl._to_library_argv(new.split()))
+        if lib not in paths:
+            broken.append(f"{new!r} -> {' '.join(lib)!r}")
+        if not hivemind_ctl._is_control_plane(new.split()):
+            broken.append(f"{new!r} does not route to the control plane")
+    assert not broken, "advertised but not real: " + "; ".join(sorted(set(broken)))
+
+
+def test_every_command_that_stays_is_also_a_real_command():
+    """The same check on the other table. `STAYS` listed `owner vote-election` — the JOURNAL ACTION name,
+    not the CLI verb, which is `owner vote`. That made the dead-man guard assert something vacuous while
+    the command that matters went unguarded."""
+    paths = _parser_paths()
+    unreal = [" ".join(k) for k in commandmap.STAYS if tuple(k) not in paths]
+    assert not unreal, f"named in STAYS but not a real command: {unreal}"
 
 
 def test_nothing_that_stays_is_also_on_the_control_plane():
@@ -59,7 +97,7 @@ def test_dead_man_recovery_is_not_on_the_control_plane():
     """Stated as its own test because the consequence is severe and non-obvious: if these move, an
     admitted member running only `hv` cannot propose or vote when the owner has gone dark, so recovering
     a lost owner would need the very binary the split keeps off agent nodes."""
-    for verb in ("propose-election", "vote-election", "elections"):
+    for verb in ("propose-election", "vote", "elections"):    # `vote`, not the action name `vote-election`
         assert not hivemind_ctl._is_control_plane(["owner", verb]), verb
 
 

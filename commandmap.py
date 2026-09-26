@@ -20,10 +20,14 @@ an owner-signing path in `hv` and undo S2. The window preserves discoverability,
 """
 
 # (old hv argv prefix) -> (new hive-mind argv prefix, one-line why)
+#
+# Every target here must resolve to a real command on the control plane, and a test walks the library's
+# actual subparsers to prove it. `owner mint` is deliberately ABSENT until the change that implements it:
+# advertising a command that does not exist is the failure this table exists to prevent, and it is worse
+# than the command being missing, because the operator is told to type something that cannot work.
 MOVED = {
     # Owner identity and governance — every one of these produces an owner signature.
     ("owner", "init"):              ("owner init",              "mints and claims the owner key"),
-    ("owner", "mint"):              ("owner mint",              "mints a prospective owner key"),
     ("owner", "export"):            ("owner export",            "reads the owner key"),
     ("owner", "import"):            ("owner import",            "installs an owner key"),
     ("owner", "standby"):           ("owner standby",           "owner-signed"),
@@ -62,7 +66,9 @@ STAYS = {
     ("owner", "elections"):         "a read",
     ("owner", "propose-election"):  "DEVICE-signed: an admitted member must be able to propose when the "
                                     "owner has gone dark, on a node that has only hv",
-    ("owner", "vote-election"):     "DEVICE-signed: same reason",
+    ("owner", "vote"):              "DEVICE-signed: same reason. NOTE the CLI verb is `vote`; "
+                                    "`vote-election` is the JOURNAL ACTION name, and using it here made "
+                                    "the dead-man guard vacuous",
     ("group", "list"):              "a read",
     ("retract",):                   "peer negative evidence; only --owner is governance",
     ("doctor",):                    "read-only checks, and the peer-address repoint is data-plane self-heal",

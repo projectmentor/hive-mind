@@ -1358,6 +1358,21 @@ def _auto_pin_genesis(entries):
     return _write_genesis_pin(_genesis_pin_for(cands[0])) if len(cands) == 1 else None
 
 
+def _genesis_fingerprint(entries, gov=None):
+    """This hive's genesis, in a form a human can compare across devices and an invite can carry:
+    `<hive_id>/<owner_id>/<hash8>`. The hash prefix is what makes it a FINGERPRINT rather than a
+    claim — a squatter can copy the hive_id and the owner_id, but not the genesis entry's hash. Empty
+    when no genesis is established on this node."""
+    gov = _governance_state(entries) if gov is None else gov
+    ref = (gov.get("genesis") or {}).get("ref")
+    if not ref:
+        return ""
+    for e in _self_signed_owner_acts(entries):
+        if f"{e.get('node_id')}:{e.get('seq')}" == ref:
+            return f"{gov.get('hive_id', '')}/{gov.get('owner_id', '')}/{compute_hash(e).split(':', 1)[-1][:8]}"
+    return ""
+
+
 def _governance_state(entries):
     """Memoized wrapper over the (pure, deterministic) governance projection. The projection reads
     ONLY governance entries, so the cache key is a content signature of just those — a plain `fact`
@@ -7632,6 +7647,13 @@ def owner_cmd(args):
         held = seed is not None and _owner_id_for_pub(_ed25519.pub_from_seed(seed)) == gov["owner_id"]
         print(f"owner: {gov['owner_id']}" + ("  (this device holds the owner key)" if held else ""))
         print(f"  hive_id: {gov['hive_id']}")
+        g = gov.get("genesis") or {}
+        fp = _genesis_fingerprint(entries, gov)
+        print(f"  genesis: {g.get('ref') or '?'}" + (f"  fingerprint {fp}" if fp else "")
+              + ("  (pinned)" if g.get("pinned") else "  (NOT PINNED — `hv owner pin --set`)"))
+        if g.get("candidates", 0) > 1:
+            print(f"  WARNING: {g['candidates']} self-signed owner declarations in this journal "
+                  "— see `hv doctor genesis`")
         print(f"  admitted devices: {len(gov['admitted'])}; principals tagged: {len(gov['principals'])}; "
               f"pending: {len(_pending_admissions(entries, gov))}; "
               f"denied: {len(gov['denied'])}; purged: {len(gov['purged'])}")
@@ -7656,6 +7678,48 @@ def owner_cmd(args):
             print(f"  live escrows: {len(gov['escrows'])} (recover with `hv owner restore`)")
         if not held:
             print("  This is a member node; membership and config changes run on the owner device.")
+        return
+    if action == "pin":
+        pin = _load_genesis_pin()
+        cands = _self_signed_owner_acts(entries)
+        if not getattr(args, "set", False):
+            if pin is None:
+                print("No genesis pinned on this device.")
+                print("  Legacy behaviour applies: the EARLIEST self-signed owner declaration in the")
+                print("  journal establishes the hive — and an entry's timestamp is written by whoever")
+                print("  made the entry. Pin with `hv owner pin --set`.")
+            else:
+                print(f"genesis pinned: {pin.get('genesis_ref')}")
+                print(f"  owner: {pin.get('owner_id')}")
+                print(f"  hive_id: {pin.get('hive_id')}")
+                print(f"  hash: {pin.get('genesis_hash') or pin.get('genesis_hash8')}")
+                print(f"  file: {GENESIS_PIN_PATH} (private to this node, never synced)")
+                if not any(_pin_matches(e, pin) for e in cands):
+                    print("  MISMATCH: the pinned declaration is not in this journal. Until it syncs,")
+                    print("    this node has no owner and refuses foreign content — see `hv doctor genesis`.")
+            if len(cands) > 1:
+                print(f"  {len(cands)} self-signed owner declaration(s) present — `hv doctor genesis`")
+            return
+        if pin is not None and not getattr(args, "force", False):
+            print(f"Already pinned to {pin.get('genesis_ref')} (owner {pin.get('owner_id')}).")
+            print("  A pin changes only by a deliberate act: `hv owner pin --set --force`, or re-joining.")
+            return
+        if len(cands) != 1:
+            print(f"Not pinning: this journal holds {len(cands)} self-signed owner declaration(s).")
+            for e in cands:
+                pl = e.get("payload") or {}
+                print(f"  {e.get('node_id')}:{e.get('seq')}  owner {pl.get('owner_id')}  "
+                      f"hive {pl.get('hive_id')}  {e.get('timestamp')}")
+            if len(cands) > 1:
+                print("  Two or more declarations means one is a rival. There is NO timestamp tie-break:")
+                print("  the timestamp is exactly what an attacker controls. Re-join from the device you")
+                print("  trust, using the genesis fingerprint from its `hv owner show`.")
+            return
+        new_pin = _write_genesis_pin(_genesis_pin_for(cands[0]))
+        print(f"Pinned genesis {new_pin['genesis_ref']}")
+        print(f"  owner: {new_pin['owner_id']}")
+        print(f"  hive_id: {new_pin['hive_id']}")
+        print(f"  file: {GENESIS_PIN_PATH} (private to this node, never synced)")
         return
     if action == "export":
         seed = _owner_seed()
@@ -7984,13 +8048,23 @@ def owner_cmd(args):
         # The genesis owner declaration also mints the hive_id: a public, owner-attested identifier
         # that scopes sync, so two hives on one tailnet never merge their journals. Random (no key).
         hive_id = "h1:" + os.urandom(8).hex()
-        append_journal("governance", _sign_governance_payload(
+        genesis = append_journal("governance", _sign_governance_payload(
             {"action": "owner", "owner_id": oid, "hive_id": hive_id}, seed, pub),
             timestamp=os.environ.get("HIVE_NOW") or None)
+        # Pin the declaration we just made. Without this the node would accept a rival `owner` act
+        # with an earlier timestamp and project IT as the owner (hive-mind-private #14). --force is a
+        # deliberate FORK: it re-pins here, and peers that keep the old pin keep the old owner.
+        forked = _load_genesis_pin() is not None
+        _write_genesis_pin(_genesis_pin_for(genesis))
         rebuild_db()
         stashed = _stash_owner_key(seed)
         print(f"Owner established: {oid}")
         print(f"  hive_id: {hive_id}")
+        print(f"  genesis: {genesis['node_id']}:{genesis['seq']}  pinned ({GENESIS_PIN_PATH.name})")
+        if forked:
+            print("  FORKED: this device re-pinned its genesis. Peers that keep the old pin keep the")
+            print("    OLD owner, and the old declaration stays in the journal — it is never removed.")
+            print("    Every other device must re-join against this genesis to follow this owner.")
         print(f"  key: {OWNER_KEY_PATH} (private — never commit or sync it)")
         if stashed:
             print(f"  backup: {stashed} (auto-stash; `hv owner export` for a portable copy)")
@@ -9044,6 +9118,10 @@ def build_parser():
     owner_sub.add_parser("show", help="Show the established owner + governance state")
     owner_init = owner_sub.add_parser("init", help="Mint the owner key and claim ownership")
     owner_init.add_argument("--force", action="store_true", help="Replace an existing owner key / override an established owner")
+    owner_pin = owner_sub.add_parser("pin", help="Show or set the pinned genesis declaration (no arg shows)")
+    owner_pin.add_argument("--set", action="store_true",
+                           help="Pin the journal's single self-signed owner declaration (refuses if there are 0 or 2+)")
+    owner_pin.add_argument("--force", action="store_true", help="With --set: replace an existing pin (a deliberate fork)")
     owner_export = owner_sub.add_parser("export", help="Back up this device's owner key to a file (for recovery)")
     owner_export.add_argument("--out", help="Output file (default ./hive-owner-<owner_id>.key)")
     owner_export.add_argument("--passphrase", action="store_true", help="Encrypt the file with a passphrase (prompted)")

@@ -6947,10 +6947,16 @@ def _doctor_status():
         hides, dangling = _forgets_grandfathered(entries, gov)
         more = f" and {len(hides) - 10} more" if len(hides) > 10 else ""
         if (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
-            if hides or dangling:
-                checks.append({"name": "forget-authz", "status": "ok",
-                               "detail": f"closed (forget_writers=owner): {len(hides) + len(dangling)} unsigned "
-                                         f"pre-genesis owner forget(s) are ignored (#122)"})
+            # 1.28 (#135): say `closed` even with nothing left to ignore. A hive born by `hv owner init`
+            # re-issues its grandfathered forgets owner-signed, so both lists come back empty and the
+            # closed state would otherwise be reported by silence.
+            n = len(hides) + len(dangling)
+            checks.append({"name": "forget-authz", "status": "ok",
+                           "detail": (f"closed (forget_writers=owner): {n} unsigned pre-genesis owner "
+                                      f"forget(s) are ignored (#122)") if n else
+                                     "closed (forget_writers=owner): every fact forgotten here is hidden by a "
+                                     "forget the owner signed; none depends on the pre-genesis grandfather "
+                                     "(#122, #135)"})
         elif hides:
             checks.append({"name": "forget-authz", "status": "warn",
                            "detail": f"{len(hides)} fact(s) kept forgotten only by a pre-genesis owner forget, "
@@ -7837,6 +7843,100 @@ def _emit_key_announce():
                                       "data": {"device_id": NODE_ID, "label": NODE_LABEL}})
 
 
+def _grandfather_remedy(sids):
+    """The two remedies `_config_set`'s #122 guard prints, for the facts a failed close left behind."""
+    for sid in sids:
+        print(f"    {sid}   keep it forgotten: hv retract {sid} --owner   |   "
+              f"let it back: hv unforget {sid} --reason …")
+    print("    Then close the grandfather by hand:  hv config set forget_writers owner")
+
+
+def _close_grandfather_at_genesis(owner_seed, owner_pub):
+    """#135 part (1), contract 1.28: a hive born by `hv owner init` starts CLOSED, so it never depends on
+    the pre-genesis grandfather. Called at the end of `owner init` with the genesis `owner` act already
+    appended and pinned: re-issue every forget that is in effect ONLY because it precedes genesis as an
+    ordinary owner-signed `retract` — the shape `hv retract <fact> --owner` writes — and only THEN set
+    `forget_writers=owner`.
+
+    THE ORDER IS LOAD-BEARING. `_config_set`'s #122 guard refuses to close while `_forgets_grandfathered`'s
+    `hides` is non-empty, because closing would silently bring those facts back. Re-issuing first empties
+    `hides`, so the flip has nothing left to decide — and the flip still goes through that guard, which is
+    what makes "closed AND a fact silently back" unreachable rather than merely unlikely.
+
+    `hides` is taken from `_forgets_grandfathered` UNCHANGED and is not filtered further: it is already
+    limited to OWNER-SOURCE forgets, so a member device's negative-evidence retract is never promoted into
+    an irreversible owner act. Its second list (`dangling` — a grandfathered forget whose target is not a
+    fact in this journal) is NOT re-issued: it hides nothing, and minting owner authority over a target
+    that does not exist would be a new claim rather than a restatement. `hv doctor` (`forget-authz`) keeps
+    counting those. The old unsigned entries stay in the append-only journal and, once the policy is
+    `owner`, count for nothing.
+
+    FAILURE. Every retract is prepared AND SIGNED before any of them is appended.
+      • preparation fails  → nothing is appended and the config is not set; the journal is as it was.
+      • an append fails    → the config is still not set, and what landed is NOT removed. An append-only
+        journal cannot be rolled back, and pretending otherwise would be the worse bug; those entries are
+        ordinary post-genesis owner forgets, so nothing is resurrected by their presence.
+    Either way both lists are reported, with the same two remedies the #122 guard prints. The one state
+    that must be impossible is `forget_writers=owner` together with a fact silently back."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    hides, _dangling = _forgets_grandfathered(entries, gov)
+    # Phase 1 — prepare and sign EVERY re-issue before appending any of them.
+    prepared = []                                  # [(sid, signed payload)], nothing written yet
+    resolved = []                                  # the sids we got as far as naming, for the failure report
+    try:
+        conn = get_conn()
+        try:
+            for label in hides:                    # 'forget <entry>→<node_id>:<seq>' (the target fact)
+                node, seq = label.split("→", 1)[1].rsplit(":", 1)
+                row = conn.execute("SELECT sid FROM journal_index WHERE node_id = ? AND seq = ?",
+                                   (node, int(seq))).fetchone()
+                resolved.append(((row["sid"] if row and row["sid"] else _short_id(node, int(seq))),
+                                 [node, int(seq)]))
+        finally:
+            conn.close()
+        for sid, ref in resolved:
+            prepared.append((sid, _sign_governance_payload(
+                {"retracts_ref": ref, "source": "owner:owner/owner",
+                 "reason": "re-issued owner-signed at genesis (#135): it was honoured only by the "
+                           "pre-genesis grandfather"},
+                owner_seed, owner_pub)))
+    except Exception as e:
+        print(f"  COULD NOT re-issue {len(hides)} pre-genesis forget(s): {e}")
+        print("    NOTHING was written: forget_writers stays `legacy`, the grandfather is intact and no")
+        print("    fact came back. Decide each of these, then close it yourself:")
+        _grandfather_remedy([sid for sid, _ in resolved] or hides)
+        return
+    # Phase 2 — append them. Only now can the journal change.
+    done = []
+    for i, (sid, payload) in enumerate(prepared):
+        try:
+            # $HIVE_NOW (when set) dates the entry, exactly as it dates the genesis act just above, so the
+            # re-issue is deterministically positioned AFTER genesis (same node_id, higher seq).
+            append_journal("retract", payload, timestamp=os.environ.get("HIVE_NOW") or None)
+        except Exception as e:
+            left = [s for s, _ in prepared[i:]]
+            rebuild_db()
+            print(f"  PARTLY re-issued the pre-genesis forget(s) — an append failed: {e}")
+            print(f"    re-issued owner-signed: {', '.join(done) or '(none)'}")
+            print(f"    NOT re-issued: {', '.join(left)}")
+            print("    forget_writers stays `legacy`, so nothing came back. The journal is append-only: the")
+            print("    re-issued acts stay as ordinary post-genesis owner forgets and are NOT removed.")
+            _grandfather_remedy(left)
+            return
+        done.append(sid)
+    if done:
+        rebuild_db()
+        print(f"  re-issued {len(done)} pre-genesis forget(s) owner-signed, so no fact here depends on the "
+              f"grandfather: {', '.join(done)}")
+    # Phase 3 — the flip, through the #122 guard (`hides` is empty now, so it has nothing to decide).
+    _config_set("forget_writers", "owner")
+    if (_governance_state(merkle.read_all_entries(JOURNAL_DIR)).get("config") or {}).get(
+            "forget_writers") == "owner":
+        print("  forget_writers=owner: only a forget signed by the owner as of its position hides a fact in")
+        print("    this hive (#135). Pre-genesis unsigned forgets count for nothing.")
+
+
 def owner_cmd(args):
     """Show or create the governance owner identity (the root of trust for membership + config)."""
     action = getattr(args, "owner_action", None) or "show"
@@ -8299,6 +8399,10 @@ def owner_cmd(args):
         print(f"  key: {OWNER_KEY_PATH} (private — never commit or sync it)")
         if stashed:
             print(f"  backup: {stashed} (auto-stash; `hv owner export` for a portable copy)")
+        # #135 part (1), 1.28: leave this hive closed. Re-issue every forget kept in effect only by the
+        # pre-genesis grandfather as an owner-signed one, THEN set forget_writers=owner. --force (a
+        # deliberate re-genesis) gets the same treatment: skipping it would silently reopen those facts.
+        _close_grandfather_at_genesis(seed, pub)
         print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
 
 

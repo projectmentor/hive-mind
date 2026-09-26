@@ -70,6 +70,23 @@ def test_ownerkey_owns_no_hive_location():
         assert fn in OWNERKEY_SRC, f"{fn} must take its path as an argument"
 
 
+def test_ownerkey_does_not_touch_sys_path():
+    """A library module must not decide import resolution for the process.
+
+    An earlier version inserted this file's resolved parent at sys.path[0]. In a staged or shadowed
+    install the module is a symlink, so that resolves to the REAL source directory and prepends it,
+    silently shadowing the staged copy for every later import — `hv doctor`'s crypto self-test then
+    loaded the genuine KAT vectors instead of the staged ones and reported ok on a tampered install.
+    The entry point owns sys.path: `hv` inserts its own directory before importing this."""
+    import ast
+    for node in ast.walk(ast.parse(OWNERKEY_SRC)):
+        if isinstance(node, ast.Attribute) and node.attr in ("insert", "append", "extend"):
+            val = node.value
+            if isinstance(val, ast.Attribute) and val.attr == "path":
+                raise AssertionError("ownerkey.py manipulates sys.path; the entry point owns it")
+    assert "import sys" not in OWNERKEY_SRC
+
+
 def test_there_is_no_third_canonicaliser():
     """`hv` and `merkle` already carry byte-identical `_canonical` copies, each documented as having to
     match the other. A third copy — in the module that produces the bytes a signature covers — would turn

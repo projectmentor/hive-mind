@@ -24,13 +24,16 @@ Two deliberate properties, both there to keep the boundary honest:
 
 import base64
 import os
-import sys
 from pathlib import Path
 
-# Sibling modules, importable when this is loaded standalone (the control plane will) as well as from
-# `hv`, which inserts the same directory before importing merkle.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import merkle  # noqa: E402
+# NO sys.path manipulation here, deliberately. An earlier version inserted this file's resolved parent
+# at position 0, which broke any staged or shadowed install: in such a layout this module is a symlink,
+# so the resolved parent is the REAL source directory, and prepending it silently shadowed the staged
+# copy for every later import — `hv doctor`'s crypto self-test loaded the genuine vectors instead of the
+# staged ones, and reported ok. A library module must not decide import resolution for the process.
+# The entry point owns sys.path: `hv` inserts its own directory before importing this, and the control
+# plane will do the same.
+import merkle
 
 try:
     import ed25519 as _ed25519      # bundled pure-Python signer

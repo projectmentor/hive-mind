@@ -34,8 +34,12 @@ def install(tmp_path):
     """An isolated, signed HiveMind install with a throwaway key."""
     d = tmp_path / "hm"
     d.mkdir()
-    for f in ("hv", "ed25519.py", "merkle.py"):
-        shutil.copy(PROJECT / f, d / f)
+    # Every top-level module, not a hardcoded list: `hv` imports its siblings at module level, so a
+    # missing one makes it crash on import and this test reports empty output instead of a verdict.
+    # 2.0 adds modules (the signing module, then the control plane), and each would break this fixture.
+    shutil.copy(PROJECT / "hv", d / "hv")
+    for f in sorted(PROJECT.glob("*.py")):
+        shutil.copy(f, d / f.name)
     manifest_fn = _load_manifest_fn(d)
     seed = os.urandom(32)
     (d / "hivemind.pub").write_text(base64.b64encode(ed25519.pub_from_seed(seed)).decode() + "\n")

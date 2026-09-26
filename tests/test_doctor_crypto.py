@@ -49,7 +49,7 @@ def test_doctor_exit_nonzero_when_crypto_breaks(tmp_path):
         "00" * 32)
     (bad / "crypto_selftest.py").write_text(src)
     shutil.copy(PROJECT / "hv", bad / "hv")        # a COPY, so hv's __file__ resolves into `bad`
-    for f in ("x25519.py", "ed25519.py", "merkle.py"):
+    for f in [q.name for q in sorted(PROJECT.glob("*.py")) if q.name != "crypto_selftest.py"]:
         (bad / f).symlink_to(PROJECT / f)
     r = subprocess.run([sys.executable, str(bad / "hv"), "doctor", "--format", "json"],
                        env=dict(os.environ, HIVE_HOME=str(tmp_path / "h")), capture_output=True, text=True)

@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.27`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.28`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -241,6 +241,14 @@ the deprecation window + graceful degradation prevent hard breakage, and §0 tel
 when it must re-wire.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `1.28` — **a new hive starts closed** (#135 part 1). Nothing an adapter calls changes: no verb, flag or
+  output format moves. `hv owner init` now re-issues every forget that was in effect only because it predates
+  the genesis owner as an ordinary owner-signed `retract`, then sets `forget_writers=owner`, so a hive born
+  here never depends on the pre-genesis grandfather; it prints which facts it re-issued. If any of that fails
+  the policy is left at `legacy` and the message says what is still open, so a hive is never left closed with a
+  fact silently back. `hv doctor`'s advisory `forget-authz` now reports `closed` even when there is nothing
+  left to ignore. No journal or wire change: everything written is an owner-signed `retract` plus the 1.25
+  `set-config` act, and a pre-1.25 peer simply keeps its own default for that key.
 - `1.26` — **a peer proves who answered** (#107): `/sync/hello` and `/hive/info` carry a responder
   signature (`hello_sig`) over the caller's nonce, and sync `protocol_version` is 3. `hv sync auth --outbound
   off|permissive|enforce` (default `permissive`) decides whether this node pushes only to verified peers;

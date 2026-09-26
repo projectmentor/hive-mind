@@ -173,13 +173,22 @@ def _policy_acts(tmp_path):
             and e["payload"].get("action") == "set-config" and e["payload"].get("key") == "forget_writers"]
 
 
+def _legacy_hive(tmp_path, run):
+    """Since 1.28 (#135) `hv owner init` leaves a hive CLOSED, so a test of the #122 guard must first put
+    it back in the state every pre-1.28 hive is in: grandfather open, `forget_writers=legacy`. Returns the
+    number of policy acts that baseline costs, so a test can assert nothing NEW was written."""
+    run("owner", "init")
+    run("config", "set", "forget_writers", "legacy")
+    return len(_policy_acts(tmp_path))                                     # init's close, then this reopen
+
+
 def test_config_set_refuses_while_a_fact_would_come_back_and_names_it(tmp_path):
     run = _cli(tmp_path)
-    run("owner", "init")
+    base = _legacy_hive(tmp_path, run)
     sid = _backdate_forget(tmp_path, run, "the backup runs at 02:00")
     r = run("config", "set", "forget_writers", "owner")
     assert "Not set" in r.stdout and sid in r.stdout and "hv retract" in r.stdout and "hv unforget" in r.stdout
-    assert _policy_acts(tmp_path) == []                                    # nothing written
+    assert len(_policy_acts(tmp_path)) == base                             # nothing written
     doc = json.loads(run("doctor", "--format", "json", check=False).stdout)
     fa = {c["name"]: c for c in doc["checks"]}["forget-authz"]
     assert fa["status"] == "warn" and "forget_writers owner" in fa["detail"]
@@ -188,7 +197,7 @@ def test_config_set_refuses_while_a_fact_would_come_back_and_names_it(tmp_path):
 @pytest.mark.parametrize("decision", ["keep", "release"])
 def test_after_the_owner_decides_each_fact_the_close_is_written(tmp_path, decision):
     run = _cli(tmp_path)
-    run("owner", "init")
+    base = _legacy_hive(tmp_path, run)
     sid = _backdate_forget(tmp_path, run, "the backup runs at 02:00")
     if decision == "keep":
         run("retract", sid, "--owner", "--reason", "keep it")
@@ -197,7 +206,7 @@ def test_after_the_owner_decides_each_fact_the_close_is_written(tmp_path, decisi
     r = run("config", "set", "forget_writers", "owner")
     assert "set forget_writers = owner" in r.stdout
     acts = _policy_acts(tmp_path)
-    assert len(acts) == 1 and acts[0]["payload"]["value"] == "owner" and "owner_sig" in acts[0]["payload"]
+    assert len(acts) == base + 1 and acts[-1]["payload"]["value"] == "owner" and "owner_sig" in acts[-1]["payload"]
     import sqlite3
     conf = sqlite3.connect(tmp_path / "store.db").execute("SELECT confidence FROM facts").fetchone()[0]
     assert (conf == FORGET_FLOOR) == (decision == "keep")
@@ -205,8 +214,8 @@ def test_after_the_owner_decides_each_fact_the_close_is_written(tmp_path, decisi
 
 def test_config_set_refuses_an_unknown_value_and_needs_no_decision_when_nothing_is_hidden(tmp_path):
     run = _cli(tmp_path)
-    run("owner", "init")
+    base = _legacy_hive(tmp_path, run)
     run("remember", "a fact nobody forgot")
     assert "must be 'legacy'" in run("config", "set", "forget_writers", "sometimes").stdout
-    assert _policy_acts(tmp_path) == []
+    assert len(_policy_acts(tmp_path)) == base
     assert "set forget_writers = owner" in run("config", "set", "forget_writers", "owner").stdout

@@ -330,3 +330,131 @@ def test_the_pin_is_private_to_the_node(hv):
     assert hv.GENESIS_PIN_PATH.stat().st_mode & 0o777 == 0o600
     assert hv.GENESIS_PIN_PATH.name in hv._VERIFY_EXCLUDE_NAMES     # never in the signed manifest
     assert not list(hv.JOURNAL_DIR.glob("*.jsonl"))                 # and never journaled
+
+
+# ── The daemon: an unpinned node serves nothing of the journal to a remote caller ────────────────
+#
+# Mitigation (b) of the plan. The pre-pin window is where a rival declaration captures a node, and a
+# captured joiner relays it onward — so an unpinned node answers 403 to /sync/hello, /sync/chunk and
+# /sync/ingest. It still reaches the hive through its OWN outbound pull, which is how it gets the
+# genesis it then pins. Every test here sets HIVE_SYNC_AUTH explicitly so the pin gate, not the
+# read-auth gate, is what answers — and so the suite does not inherit the operator's mode (#142).
+
+import threading                                                             # noqa: E402
+import urllib.error                                                          # noqa: E402
+import urllib.request                                                        # noqa: E402
+from http.server import ThreadingHTTPServer                                  # noqa: E402
+
+sys.path.insert(0, str(PROJECT / "tests"))
+import hive_sync_daemon as _d                                                # noqa: E402
+
+
+def _serve(from_ip):
+    """The real Handler, seeing every request as coming from `from_ip` (None = real loopback)."""
+    class H(_d.Handler):
+        def setup(self):
+            super().setup()
+            if from_ip:
+                self.client_address = (from_ip, 40000)
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _status(port, path, method="GET", payload=None):
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=data, method=method,
+                                 headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+
+@pytest.fixture
+def daemon(monkeypatch):
+    monkeypatch.setenv("HIVE_SYNC_AUTH", "permissive")     # not enforce: gate the pin, not the signature
+    monkeypatch.setattr(_d.Handler, "_gov", lambda self: {"owner_id": None, "hive_id": "",
+                                                          "admitted": set(), "purged": set()})
+    return _d
+
+
+def test_an_unpinned_node_refuses_remote_sync_but_stays_discoverable(daemon, monkeypatch):
+    monkeypatch.setattr(daemon.hv, "_load_genesis_pin", lambda: None)
+    srv = _serve("100.64.0.9")
+    port = srv.server_address[1]
+    try:
+        assert _status(port, "/sync/hello")[0] == 403
+        assert _status(port, "/sync/chunk?node=k1:x&start=1&end=1")[0] == 403
+        code, body = _status(port, "/sync/ingest", "POST", {"entries": []})
+        assert code == 403 and body.get("accepted") == 0
+        assert "hv owner pin" in body.get("hint", "")          # the 403 says how to clear it
+        assert _status(port, "/hive/info")[0] == 200           # discovery stays open...
+        assert _status(port, "/sync/merkle-root")[0] == 200    # ...and so does the root probe
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_the_local_operator_still_reaches_an_unpinned_node(daemon, monkeypatch):
+    """Loopback must never be gated: running `hv owner pin --set` is how the node gets pinned."""
+    monkeypatch.setattr(daemon.hv, "_load_genesis_pin", lambda: None)
+    srv = _serve(None)
+    port = srv.server_address[1]
+    try:
+        assert _status(port, "/sync/hello")[0] == 200
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_a_pinned_node_serves_remote_sync_again(daemon, monkeypatch):
+    monkeypatch.setattr(daemon.hv, "_load_genesis_pin",
+                        lambda: {"owner_id": "o1:x", "hive_id": "h1:x", "genesis_ref": "k1:a:1",
+                                 "genesis_hash": "sha256:" + "0" * 64})
+    srv = _serve("100.64.0.9")
+    port = srv.server_address[1]
+    try:
+        assert _status(port, "/sync/hello")[0] == 200
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_a_rival_push_that_omits_the_body_hive_id_is_still_refused(hv, daemon, monkeypatch):
+    """The confirmed bypass: the cross-hive guard only compares when BOTH sides send a hive_id, so a
+    rival that omits it walks past that check. The pin is what refuses it — deriving the hive from the
+    body never could."""
+    real, attacker = _owner_key(hv), _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    _on_disk(hv, [genesis])
+    pin = _pin(hv, genesis)
+    rival = _owner_act(hv, attacker, T_BACKDATED, nid="attackerdev")
+
+    monkeypatch.setattr(daemon.hv, "_load_genesis_pin", lambda: pin)
+    monkeypatch.setattr(daemon.hv, "append_foreign_entries",
+                        lambda entries, **kw: hv.append_foreign_entries(entries, **kw))
+    srv = _serve("100.64.0.9")
+    port = srv.server_address[1]
+    try:
+        code, body = _status(port, "/sync/ingest", "POST", {"entries": [rival]})   # no hive_id at all
+        assert code == 200 and body["accepted"] == 0
+    finally:
+        srv.shutdown(); srv.server_close()
+    assert hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["owner_id"] == real[2]
+
+
+def test_the_genesis_fingerprint_is_inside_the_signed_body(hv):
+    """It must be signed WITH the answer, not beside it: #107's responder signature covers a digest of
+    the whole body, so a joiner cannot be handed a swapped fingerprint to pin against."""
+    import sync_common
+    real = _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    entries = _on_disk(hv, [genesis])
+    _pin(hv, genesis)
+
+    fp = hv._genesis_fingerprint(entries)
+    assert fp.startswith(f"{HIVE_ID}/{real[2]}/") and len(fp.rsplit("/", 1)[-1]) == 8
+    body = {"node_id": "k1:" + "a" * 16, "hive_id": HIVE_ID, "protocol_version": 3,
+            "contract": hv.CONTRACT_VERSION, "advertised_addr": "100.64.0.1:9876",
+            "genesis_fingerprint": fp}
+    swapped = dict(body, genesis_fingerprint=f"{HIVE_ID}/{real[2]}/deadbeef")
+    assert sync_common.hello_body_digest(body) != sync_common.hello_body_digest(swapped)

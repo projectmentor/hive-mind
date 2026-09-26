@@ -1437,8 +1437,20 @@ def _write_genesis_pin(pin):
 
 def _pin_matches(entry, pin):
     """True when this `owner` act IS the pinned genesis. A pin taken from an invite fingerprint carries
-    only a hash prefix (`genesis_hash8`), so both forms are honoured; the full hash wins when present."""
+    only a hash prefix (`genesis_hash8`), so both forms are honoured; the full hash wins when present.
+
+    The declared owner (and the hive, when the pin names one) is compared FIRST, and that is what makes
+    the short prefix safe. A prefix alone is grindable: an attacker varies `seq` and `timestamp` — fields
+    the owner signature does not cover — until their own self-signed declaration's hash shares those few
+    hex characters, which is ~2^32 sha256 evaluations for eight of them. Binding the owner_id means a
+    rival would need the victim's OWNER KEY to be a candidate at all, because a genesis candidate must
+    be self-signed by the owner it declares."""
     if not pin:
+        return False
+    pl = entry.get("payload") or {}
+    if pl.get("owner_id") != pin.get("owner_id"):
+        return False
+    if pin.get("hive_id") and pl.get("hive_id") != pin.get("hive_id"):
         return False
     h = compute_hash(entry)
     if pin.get("genesis_hash"):

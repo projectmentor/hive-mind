@@ -78,7 +78,23 @@ def _load_hv(home, monkeypatch):
     monkeypatch.setattr(d, "hv", m)
     monkeypatch.setattr(d, "_peer_seen", {})
     monkeypatch.delenv("HIVE_SYNC_AUTH", raising=False)
+    _pin_hive(m, monkeypatch)
     return m
+
+
+def _pin_hive(m, monkeypatch):
+    """Leave the temp hive PINNED. Since contract 1.27 a node that has not pinned its genesis serves
+    nothing of its journal to a REMOTE caller (hive-mind-private #14), and every daemon test in this
+    file and in test_hello_sig.py speaks to the daemon as a remote peer — so without this they would be
+    testing the pin gate instead of the read-auth gate they are about. A hive that really has a genesis
+    is pinned for real; one whose governance is monkeypatched (the common case here, see `_admit`) gets
+    a stand-in pin, in exactly the same spirit."""
+    m.JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    if m._auto_pin_genesis(m.merkle.read_all_entries(m.JOURNAL_DIR)) is None:
+        # No genesis to pin, so satisfy the GATE rather than invent a pin. A stand-in pin would make the
+        # projection report `mismatch` (pinned, genesis absent), which correctly fails ingest closed —
+        # and would break the convergence tests here, which are about read-auth and signing.
+        monkeypatch.setattr(d.Handler, "_pinned", lambda self, u: True)
 
 
 def _run(home, *args):

@@ -493,3 +493,116 @@ def test_a_joiner_pins_from_an_invite_fingerprint_then_the_pin_names_the_entry(h
 
 def _pin_matches_via(hv, entry, pin):
     return hv._pin_matches(entry, pin)
+
+
+def test_a_hash_prefix_pin_refuses_a_ground_rival_with_another_owner(hv):
+    """A fingerprint pin carries only a hash PREFIX, which is grindable on its own: an attacker varies
+    `seq` and `timestamp` — fields the owner signature does not cover — until their own self-signed
+    declaration's hash shares it. Eight hex is ~2^32 sha256 evaluations; this test grinds three so it
+    stays fast. What makes the short prefix safe is that the pin binds the declared OWNER first, and a
+    genesis candidate must be self-signed by the owner it declares — so a rival needs the victim's owner
+    key, not a lucky hash."""
+    real, attacker = _owner_key(hv), _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    prefix = hv.compute_hash(genesis).split(":", 1)[-1][:3]
+
+    rival = None
+    for seq in range(1, 200000):                       # grind the attacker's OWN declaration
+        cand = _owner_act(hv, attacker, T_BACKDATED, seq=seq, nid="attackerdev")
+        if hv.compute_hash(cand).split(":", 1)[-1].startswith(prefix):
+            rival = cand
+            break
+    assert rival is not None, "could not grind a colliding prefix"
+
+    hv._write_genesis_pin({"hive_id": HIVE_ID, "owner_id": real[2], "genesis_hash8": prefix})
+    pin = hv._load_genesis_pin()
+    assert hv._pin_matches(genesis, pin) is True        # the real declaration still matches
+    assert hv._pin_matches(rival, pin) is False         # the ground rival does not, despite the prefix
+
+    _on_disk(hv, [])
+    assert hv.append_foreign_entries([rival])[:2] == (0, 0)          # refused at ingest
+    assert hv.append_foreign_entries([genesis])[:2] == (1, 0)        # the real one lands
+    assert hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["owner_id"] == real[2]
+
+
+def test_a_device_signed_rival_owner_act_is_refused_by_the_pin_alone(hv):
+    """The rival-genesis ingest check needs a rival the UNSIGNED rule cannot catch first, or removing
+    that check leaves every test green. This rival is device-signed by the attacker's own device key and
+    owner-signed by the attacker's own owner key: perfectly well-formed, and refused only by the pin."""
+    real, attacker = _owner_key(hv), _owner_key(hv)
+    aseed, apub, _adev = _device_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    _on_disk(hv, [genesis])
+    _pin(hv, genesis)
+
+    rival = _owner_act(hv, attacker, T_BACKDATED, nid=hv._device_id_for_pub(apub), dev=(aseed, apub))
+    assert "sig" in rival and hv._verify_entry(rival) is True        # a valid entry by every other rule
+    assert hv.append_foreign_entries([rival])[:2] == (0, 0)
+    assert hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["owner_id"] == real[2]
+
+
+def test_a_node_pinned_before_its_genesis_arrives_refuses_unadmitted_content(hv):
+    """The fail-closed gate. A joiner that pinned from a fingerprint has a pin but no owner yet, and the
+    pre-owner rule would otherwise accept content from ANY device. Without this gate every test still
+    passes, so it needs its own."""
+    real = _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    fp8 = hv.compute_hash(genesis).split(":", 1)[-1][:8]
+    hv._write_genesis_pin({"hive_id": HIVE_ID, "owner_id": real[2], "genesis_hash8": fp8})
+
+    gov = hv._governance_state([])
+    assert gov["owner_id"] is None and gov["genesis"]["mismatch"] is True
+    dseed, dpub, dev_id = _device_key(hv)
+    stray = _fact(hv, dev_id, T_LATER, "content from an unadmitted device", seq=1, dev=(dseed, dpub))
+    assert hv.append_foreign_entries([stray])[:2] == (0, 0)          # gated, not pre-owner-open
+
+
+def test_the_daemon_actually_serves_the_fingerprint_on_both_paths(daemon, monkeypatch):
+    """Without this, dropping `genesis_fingerprint` from a response leaves every other test green: the
+    signing test builds its own body rather than reading the daemon's."""
+    monkeypatch.setattr(daemon.hv, "_load_genesis_pin",
+                        lambda: {"owner_id": "o1:x", "hive_id": "h1:x", "genesis_ref": "k1:a:1",
+                                 "genesis_hash": "sha256:" + "0" * 64})
+    monkeypatch.setattr(daemon.hv, "_genesis_fingerprint", lambda *a, **k: "h1:x/o1:x/0a1b2c3d")
+    srv = _serve("100.64.0.9")
+    port = srv.server_address[1]
+    try:
+        for path in ("/hive/info", "/sync/hello"):
+            code, body = _status(port, path)
+            assert code == 200, path
+            assert body.get("genesis_fingerprint") == "h1:x/o1:x/0a1b2c3d", path
+    finally:
+        srv.shutdown(); srv.server_close()
+
+
+def test_under_inbound_enforce_an_admitted_device_still_cannot_push_a_rival(hv, monkeypatch):
+    """The plan review's own residual, as a test: `hv sync auth enforce` stops an UNAUTHENTICATED push,
+    but an admitted device can still submit a rival. Only the pin refuses it — so this is the enforce
+    case that matters, pushed through the real handler with a valid signed envelope."""
+    import test_peer_address as tpa
+    real, attacker = _owner_key(hv), _owner_key(hv)
+    aseed, apub, adev = _device_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    _on_disk(hv, [genesis])
+    pin = _pin(hv, genesis)
+    rival = _owner_act(hv, attacker, T_BACKDATED, nid=adev, dev=(aseed, apub))
+    raw = json.dumps({"entries": [rival], "hive_id": HIVE_ID}).encode()
+
+    monkeypatch.setenv("HIVE_SYNC_AUTH", "enforce")
+    monkeypatch.setattr(_d.Handler, "_gov", lambda self: {"owner_id": real[2], "hive_id": HIVE_ID,
+                                                          "admitted": {adev}, "purged": set()})
+    monkeypatch.setattr(_d.hv, "_load_genesis_pin", lambda: pin)
+    monkeypatch.setattr(_d.hv, "append_foreign_entries",
+                        lambda entries, **kw: hv.append_foreign_entries(entries, **kw))
+    srv = _serve("100.64.0.9")
+    port = srv.server_address[1]
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/sync/ingest", data=raw, method="POST",
+                                     headers={**tpa._headers(aseed, "POST", "/sync/ingest", "", raw),
+                                              "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            assert r.status == 200                      # authenticated: the envelope is valid
+            assert json.loads(r.read())["accepted"] == 0   # and the pin still refuses the rival
+    finally:
+        srv.shutdown(); srv.server_close()
+    assert hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["owner_id"] == real[2]

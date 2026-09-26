@@ -37,7 +37,8 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
-from test_peer_address import _daemon, _doctor_fix, _free_port, _headers, _run, _write_peers  # noqa: E402
+from test_peer_address import (_daemon, _doctor_fix, _free_port, _headers, _pin_hive,  # noqa: E402
+                               _run, _write_peers)
 
 os.environ["HIVE_HOME"] = tempfile.mkdtemp(prefix="hive-hellosig-")   # always, even if exported: never the live hive
 
@@ -107,9 +108,12 @@ def _hvmod(home, monkeypatch):
 
 
 def _serve_as(hvm, monkeypatch, addr=None):
-    """The daemon's Handler answers as `hvm`'s hive, advertising `addr`."""
+    """The daemon's Handler answers as `hvm`'s hive, advertising `addr`. The hive is left PINNED: since
+    1.27 an unpinned node serves nothing of its journal to a remote caller (hive-mind-private #14), and
+    these tests are about the read-auth and signing layers, not the pin gate."""
     monkeypatch.setattr(d, "hv", hvm)
     monkeypatch.setattr(d, "_peer_seen", {})
+    _pin_hive(hvm, monkeypatch)
     monkeypatch.setitem(d._ADVERTISED, "addr", addr)
 
 
@@ -889,6 +893,15 @@ def test_two_daemons_on_the_lan_converge_under_inbound_and_outbound_enforce(tmp_
                 except Exception:
                     assert time.time() < deadline, "daemon did not start"
                     time.sleep(0.3)
+        # B is a JOINER: it ran only `key init`, so it has no genesis and no pin, and since 1.27 an
+        # unpinned node serves nothing to a remote caller and takes no push (hive-mind-private #14).
+        # That is the designed join order — a joining node reaches the hive through its OWN pull — so B
+        # pulls first and pins what it pulled, exactly as the installer's join path does.
+        _run(b, "sync", "now")
+        _run(b, "owner", "pin", "--set")
+        # B's pull just made the two identical, so A would take the "in sync" merkle shortcut and never
+        # run a full round. Give it something to exchange again.
+        _run(b, "remember", "gamma from B after pinning")
         out = _run(a, "sync", "now").stdout
         assert "pushed" in out and "hello" not in out, out
         rec = json.loads((a / ".peer_candidates.json").read_text())["devices"][b_dev][lan]

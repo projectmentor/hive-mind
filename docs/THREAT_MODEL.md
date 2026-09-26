@@ -193,8 +193,10 @@ at once). Concretely:
   responder signature, so it cannot be swapped in transit. A join by a **bare address**, with no
   fingerprint to compare, remains trust-on-first-use for that first pull: compare `hv owner show` against
   the inviting device out of band. A node that has not pinned keeps the previous genesis rule — it must,
-  or a mixed fleet would stop converging — so an un-upgraded or unpinned node is still exposed until it
-  pins; `hv doctor genesis` reports exactly that state. And on a first pull of a chain it holds none of,
+  or a mixed fleet would stop syncing — so an un-upgraded or unpinned node is still exposed until it
+  pins, and it can project a different owner than a pinned peer. A rival a peer already stored is never
+  removed, so a node that refused it and a node that holds it keep different Merkle roots permanently;
+  the projections agree once every node pins the same genesis, the roots do not; `hv doctor genesis` reports exactly that state. And on a first pull of a chain it holds none of,
   an admitted peer can advertise a chain that is not the fleet's: every established node refuses anything
   past its own tip, so such an entry cannot become fleet truth, and under `hv sync auth --outbound enforce`
   the peer's identity is proven first.

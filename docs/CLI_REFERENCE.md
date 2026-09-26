@@ -707,11 +707,13 @@ single self-signed declaration. If the journal holds **two**, it refuses and lis
 there is deliberately no timestamp tie-break, because the timestamp is the part an
 attacker controls. Resolve it by re-joining from the device you trust, comparing the
 **genesis fingerprint** (`<hive_id>/<owner_id>/<hash8>`) that `hv owner show` prints; the
-hash prefix is the part a squatter cannot reproduce. `hv doctor genesis` reports an
+hash prefix is the part a squatter cannot reproduce — and the prefix is short enough to grind on its
+own, so what actually stops them is that the pin binds the **declared owner**: a genesis candidate must be
+self-signed by the owner it declares, so a rival needs the victim's owner key. `hv doctor genesis` reports an
 unpinned node, a pin whose declaration has not synced yet, and any journal holding more
 than one declaration.
 
-A node with no pin keeps the older behaviour, so a fleet mid-upgrade still converges.
+A node with no pin keeps the older behaviour, so a fleet mid-upgrade keeps syncing. **The Merkle consequence, plainly.** A rival that a peer already stored is never removed — the journal is append-only. So a node that refused it and a node that holds it differ in their Merkle root from then on, and that difference does not heal. What converges is the *projection*: once every node pins the same genesis, they all agree on the owner. A node that has not pinned keeps the old rule and can project a **different owner** than a pinned peer — visibly, not silently, and `hv doctor genesis` names it.
 `hv owner init --force` re-pins **this** node and is a deliberate fork: peers that keep
 the old pin keep the old owner, and the old declaration stays in the journal, because
 nothing is ever removed from it.

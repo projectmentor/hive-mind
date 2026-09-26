@@ -21,7 +21,10 @@ introduced (a contract) or tagged (a patch).
   existing hive's single declaration and refuses to guess between two; `hv owner pin --fingerprint` pins from
   an invite before the first pull. Ingest refuses any other `owner` act and the projection resolves genesis
   through the pin, so a rival already in the journal loses — nothing is ever removed from it. A node with no
-  pin keeps the old rule, so a mixed fleet still converges, and `hv doctor genesis` says so.
+  pin keeps the old rule, and `hv doctor genesis` says so. **A rival a peer already stored is never
+  removed**, so a node that refused it and a node that holds it keep different Merkle roots from then on;
+  what converges is the projection, once every node pins the same genesis. An unpinned node can project a
+  different owner than a pinned peer — visibly, not silently.
 - **Unsigned entries can no longer fork a device's chain.** An entry with no signature could take an admitted
   device's future `(node_id, seq)` and become that device's chain tip, after which the device's own entry was
   dropped as a duplicate — two bodies under one key. Now, on a chain this node holds, an unsigned entry above
@@ -33,10 +36,14 @@ introduced (a contract) or tagged (a patch).
   `/sync/ingest` answer 403 until the genesis is pinned; `/hive/info` and `/sync/merkle-root` stay open, and
   loopback is never gated, so the operator can always pin. The node still reaches the hive through its own
   outbound pull — that is how it gets the declaration it then pins. `hive-mind update` pins on upgrade, and the
-  periodic `hv doctor --fix` pins when there is exactly one declaration to pin.
+  periodic `hv doctor --fix` pins when there is exactly one declaration to pin. A hive that has **no
+  owner at all** cannot pin, because there is no declaration to pin — so its nodes stop syncing with each
+  other until one of them runs `hv owner init`. That is the bootstrap window closing, and it is the point.
 - **The invite carries a genesis fingerprint.** `hive-mind invite` prints `<address>/<hive_id>/<owner_id>/<hash8>`,
   and the joining device pins that before it trusts any journal, so a squatter advertising this hive's id cannot
-  capture it. The fingerprint is also served in `/hive/info` and `/sync/hello` **inside** the 1.26 responder
+  capture it. The short hash prefix is safe **because the pin binds the declared owner**: a genesis candidate
+  must be self-signed by the owner it declares, so a rival would need the victim's owner key, not a ground
+  hash prefix. The fingerprint is also served in `/hive/info` and `/sync/hello` **inside** the 1.26 responder
   signature, so it cannot be swapped in transit. Older installers strip the path and still read just the address.
 - **`hv doctor` gains `genesis` and `unsigned`.** `genesis` fails on more than one self-signed declaration
   (naming each) or on a pin whose declaration has not synced, and warns when the node is unpinned. `unsigned`

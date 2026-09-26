@@ -9582,6 +9582,18 @@ def main():
         argv = ["doctor", "rebuild"] + argv[1:]
     args = parser.parse_args(argv)
 
+    return dispatch(args)
+
+
+def dispatch(args):
+    """Run the parsed command. Split out of `main` so the control plane (`hivemind_ctl.py`) can reach the
+    library's command table without re-implementing it — the flags are defined once, in `build_parser`,
+    and the routing once, here. 2.0 (#136): the owner-signed handlers move to the control plane in the
+    split; this function is what both planes call in the meantime.
+
+    The store prologue lives HERE rather than in `main`, so a caller that is not the `hv` CLI cannot skip
+    it. It was in `main` when `main` was the only entry point; the control plane calling `dispatch`
+    directly then minted an owner key against an uninitialised store."""
     # Idempotent; also auto-migrates older DBs missing tables/indexes.
     init_db()
     if args.command in _STORE_COMMANDS:
@@ -9592,7 +9604,6 @@ def main():
             # a read proceeds on the store as it is, and a write has its own post-append guard.
             print(f"hv: the local store is busy and could not catch up ({e}); continuing on the store as it is",
                   file=sys.stderr)
-
     if args.command == "remember":
         remember(args)
     elif args.command == "search":
@@ -9648,8 +9659,12 @@ def main():
     elif args.command == "dash":
         dash(args)
     else:
-        parser.print_help()
+        # Unreachable through the CLI: argparse rejects an unknown subcommand before this. Explicit
+        # rather than silent, because the control plane routes through here too and a typo in its own
+        # translation table would otherwise look like a command that did nothing.
+        print(f"hv: unknown command {getattr(args, 'command', None)!r}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

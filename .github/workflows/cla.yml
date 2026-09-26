@@ -38,6 +38,6 @@ jobs:
           path-to-signatures: 'signatures/version1/cla.json'
           path-to-document: 'https://github.com/projectmentor/hive-mind/blob/main/CLA.md'
           branch: 'cla-signatures'
-          allowlist: david,projectmentor,dependabot[bot]
+          allowlist: david,projectmentor,dependabot[bot],hivemind-bot
           custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
           custom-notsigned-prcomment: 'Thanks for your contribution. Before it can be merged, please read our [Contributor License Agreement](https://github.com/projectmentor/hive-mind/blob/main/CLA.md) and sign it by posting the comment below.'

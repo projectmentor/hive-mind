@@ -1,5 +1,5 @@
 {
-  "digest": "54db02aaa8b7cc3011aca373753b7003f6ae3e0d082802bac6f3112090cd8044",
+  "digest": "750c48cc65c7a3c2d11f282a575a095f53ddc87bed919ab14b653bc5fbaa6257",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -100,7 +100,7 @@
     "tests/test_governance.py": "012703d6f82270acd222831bd2f0d02352004ea5b7466edc6349e00553726cc7",
     "tests/test_group.py": "2cd725336a6328a738ee631267ec1f4cd9a2cdc72512deb9787d9419fff3d93a",
     "tests/test_hardening_batch2.py": "780ac325406fdc99c47509374d518f3a34fcb28673793cd7c92d2bf02e45545d",
-    "tests/test_hello_sig.py": "558b73660e82d8e499cc33ee8f7fced259da7155b6ddc9f8d9769505cc6dad59",
+    "tests/test_hello_sig.py": "eab14478a3e436b86f7fb83f3f67fcc1a2f19a7ea04c6f7a70c4635a7e7f5d9a",
     "tests/test_hermes_plugin.py": "8a49ff45f7e62ccaaf144d7f6d14854f584effff17ec18187835e7b998d42dc6",
     "tests/test_hv.py": "03c93a5a51f325ba1df22a4661ac65ea4a966c7bb53a25bc62ce01cc07dd2336",
     "tests/test_ideas.py": "ae01755f9830d9b8136861d36baf103e60816c876afad49c18bfa47a24722a1e",

@@ -814,6 +814,12 @@ def _unsigned_refused(e, pin, tips, held_hash, door=()):
     Returns (refused, why) — `why` is for the operator-facing rejection summary, never the wire."""
     if pin is None or "sig" in e:
         return False, ""
+    if _pin_matches(e, pin):
+        # The PINNED genesis is never refused for being unsigned. The pin names that exact entry by
+        # hash, which is stronger evidence than a device signature — and a hive whose genesis predates
+        # device identity has an unsigned one, so without this a pinned joiner could never accept the
+        # very declaration it pinned, and would sit failing closed forever.
+        return False, ""
     nid, seq = e.get("node_id"), e.get("seq")
     if not isinstance(seq, int):
         return True, "unsigned with no sequence number"

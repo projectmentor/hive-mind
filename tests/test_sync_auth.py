@@ -178,7 +178,7 @@ def test_enforce_matrix(node):
     for path in ("/hive/info", "/sync/merkle-root", "/api/verify"):
         assert _req("127.0.0.1", port, path)[0] == 200
     info = json.loads(_req("127.0.0.1", port, "/hive/info")[1])
-    assert info["protocol_version"] == 2
+    assert info["protocol_version"] == 3
     assert "advertised_addr" in info
     assert CANARY not in json.dumps(info)
 

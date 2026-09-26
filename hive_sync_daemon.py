@@ -6,7 +6,8 @@ endpoints over the Tailnet. Separate process from the Laravel dashboard
 (:8000) — this binds :9876 by default. Reads .peers.json for bind/port.
 
 Endpoints:
-  GET  /sync/hello        -> node_id + journal summary (by_node maxima) + per-node chunk hashes
+  GET  /sync/hello        -> node_id + journal summary (by_node maxima) + per-node chunk hashes, signed
+                             over the caller's nonce (hello_sig, #107) like /hive/info
   GET  /sync/merkle-root  -> global root hash (O(1) "are we identical?")
   GET  /sync/chunk?node=X&start=1&end=100 -> {entries, hash}
   POST /sync/ingest       -> append foreign entries (G-Set dedup), rebuild, {accepted, duplicates}
@@ -61,8 +62,10 @@ _STATIC = {
 # Sync wire-protocol version. Advertised in /sync/hello and /hive/info so additive handshake
 # changes can be negotiated without a journal-schema break. Bumped to 2 with read-authentication
 # (GHSA-242f): a peer reporting >= 2 understands the Hive-Auth-* signed-request envelope, which
-# gates the enforce-flip during a phased rollout.
-PROTOCOL_VERSION = 2
+# gates the enforce-flip during a phased rollout. Bumped to 3 with responder signatures (#107): a
+# peer reporting >= 3 signs its /sync/hello and /hive/info over the caller's nonce (`hello_sig`),
+# which gates the outbound enforce-flip (`hv sync auth --outbound enforce`).
+PROTOCOL_VERSION = 3
 
 # The address:port the daemon actually bound, filled in by make_server() so the handler can
 # advertise a reachable endpoint to peers in /sync/hello and /hive/info.
@@ -192,8 +195,8 @@ def _auth_flag(reason):
         n = _auth_flags[reason]
     if n <= 3 or n % 100 == 0:   # don't spam the journal
         print(f"sync-auth[permissive]: served a remote read that would be blocked under enforce "
-              f"({reason}); count={n}. Flip to enforce once all peers report protocol "
-              f"{PROTOCOL_VERSION}.", file=sys.stderr)
+              f"({reason}); count={n}. Flip to enforce once all peers report protocol 2 or higher.",
+              file=sys.stderr)
 
 
 def _verify_sync_request(headers, method, path, query, body_bytes, gov):
@@ -295,6 +298,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_signed(self, path, body):
+        """#107: send a /sync/hello or /hive/info `body` with this node's `hello_sig` over it and the
+        caller's Hive-Auth-Nonce, when the caller sent a well-formed nonce and this node has a device-key
+        identity (sync_common.sign_hello), whether or not the caller's own envelope verified. Called only
+        from inside do_GET, after _enter took a request slot, so a flood of nonced requests signs at most
+        MAX_CONCURRENT_REQUESTS at a time and is rate-limited per address like any other request."""
+        sig = sync_common.sign_hello(body, self.headers.get("Hive-Auth-Nonce"), path, hv._device_seed(), hv.NODE_ID)
+        if sig:
+            body["hello_sig"] = sig
+        self._send(200, body)
 
     def _serve_static(self, name):
         """Serve one allowlisted dashboard asset (no traversal: name must be a literal key)."""
@@ -446,7 +460,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if u.path == "/sync/hello":            # remote-auth (gated above): per-node maxima + hashes
                 es = _entries()
-                self._send(200, {
+                self._send_signed(u.path, {
                     "node_id": hv.NODE_ID,
                     "hive_id": hv._local_hive_id(),
                     "protocol_version": PROTOCOL_VERSION,
@@ -461,7 +475,7 @@ class Handler(BaseHTTPRequestHandler):
                 # journal — so listing stays open while reads are gated.
                 es = _entries()
                 gov = hv._governance_state(es)
-                self._send(200, {
+                self._send_signed(u.path, {
                     "node_id": hv.NODE_ID,
                     "hive_id": gov["hive_id"],
                     "owner_id": gov["owner_id"],

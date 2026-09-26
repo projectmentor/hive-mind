@@ -12,6 +12,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -31,6 +32,15 @@ PORT_DEFAULT = 9876
 # by HIVE_AUTH_ALG so these signatures can never be confused with journal-entry / governance sigs.
 HIVE_AUTH_ALG = "hive-sig-v1"
 SYNC_AUTH_WINDOW = int(os.environ.get("HIVE_SYNC_AUTH_WINDOW", "300"))  # +/- wall-clock skew tolerated, seconds
+
+# ── responder signatures (#107) ──────────────────────────────────────────────────────────────────
+# The request envelope above proves who ASKS. A /sync/hello or /hive/info response proves who ANSWERED:
+# when the caller sent a well-formed Hive-Auth-Nonce, the responder signs (the nonce, the path, its
+# node_id / hive_id / advertised_addr / protocol_version, a digest of the whole response) with its
+# device key and returns it as `hello_sig`. Domain-separated from request and entry signatures by
+# HELLO_SIG_ALG; fresh by the caller's single-use nonce (no timestamp, so no clock-skew failure mode).
+HELLO_SIG_ALG = "hive-hello-v1"
+_NONCE_RE = re.compile(r"[0-9a-fA-F]{32,64}")
 
 # ── path-MTU resilience (shared by the daemon + client) ──────────────────────────────────────
 # Many tailnets ride an underlay whose effective path MTU is BELOW Tailscale's default 1280, which
@@ -141,8 +151,13 @@ def sign_sync_request(method, path, query, body_bytes=b""):
     """Return the Hive-Auth-* header dict for an outbound sync request, signed with THIS device's
     Ed25519 key. Returns {} when the device has no key yet (pre-key-init) — a permissive/off server
     still accepts, so signing is always safe to attempt."""
+    return signed_request_headers(load_hv()._device_seed(), method, path, query, body_bytes)
+
+
+def signed_request_headers(seed, method, path, query, body_bytes=b""):
+    """sign_sync_request with an explicit device `seed` ({} when it is None). hv's own probes pass their
+    hive's seed, so a freshly loaded hv signs as the hive it runs for."""
     hv = load_hv()
-    seed = hv._device_seed()
     if seed is None or hv._ed25519 is None:
         return {}
     pub = hv._ed25519.pub_from_seed(seed)
@@ -158,6 +173,136 @@ def sign_sync_request(method, path, query, body_bytes=b""):
         "Hive-Auth-Nonce": nonce,
         "Hive-Auth-Sig": base64.b64encode(sig).decode(),
     }
+
+
+def nonce_ok(nonce):
+    """True iff `nonce` is a well-formed Hive-Auth-Nonce (32 to 64 hex characters), the only kind a
+    responder signs over."""
+    return isinstance(nonce, str) and bool(_NONCE_RE.fullmatch(nonce))
+
+
+def hello_body_digest(body):
+    """'sha256:' + the digest of the canonical JSON of a /sync/hello or /hive/info response without its
+    `hello_sig`. Binds every field (chunks, genesis, …) into the responder's signature."""
+    rest = {k: v for k, v in body.items() if k != "hello_sig"}
+    return "sha256:" + hashlib.sha256(load_hv()._canonical(rest)).hexdigest()
+
+
+def hello_signing_bytes(path, nonce, node_id, hive_id, advertised_addr, protocol_version, body_digest):
+    """Canonical bytes a responder signature covers (#107): newline-joined like sync_signing_bytes, under
+    its own domain tag. The path line keeps a /hive/info signature from standing in for a /sync/hello."""
+    parts = [HELLO_SIG_ALG, str(path), str(nonce), str(node_id or ""), str(hive_id or ""),
+             str(advertised_addr or ""), "" if protocol_version is None else str(protocol_version), body_digest]
+    return "\n".join(parts).encode()
+
+
+def sign_hello(body, nonce, path, seed, node_id):
+    """The `hello_sig` for a /sync/hello or /hive/info response `body` asked for under `nonce`, or None
+    when there is nothing to sign with: no well-formed nonce, no device key, or an identity that is not
+    the key's (a HIVE_NODE_ID override or a legacy hostname node). Signs whether or not the caller's own
+    envelope verified, so a caller this node does not yet admit still gets its proof."""
+    hv = load_hv()
+    if not nonce_ok(nonce) or seed is None or hv._ed25519 is None:
+        return None
+    pub = hv._ed25519.pub_from_seed(seed)
+    device = hv._device_id_for_pub(pub)
+    if device != node_id:
+        return None
+    wire = json.loads(json.dumps(body))            # digest what the caller will parse, not the Python dict
+    msg = hello_signing_bytes(path, nonce, wire.get("node_id"), wire.get("hive_id"), wire.get("advertised_addr"),
+                              wire.get("protocol_version"), hello_body_digest(wire))
+    return {"alg": HELLO_SIG_ALG, "device": device, "pub": base64.b64encode(pub).decode(),
+            "sig": base64.b64encode(hv._ed25519.sign(msg, seed)).decode()}
+
+
+def addr_of(url_or_addr):
+    """(host, port) of a base URL or a bare 'host:port', the host lower-cased; None when there is no host.
+    A URL with no port takes its scheme's default. The daemon advertises an IPv6 bind unbracketed
+    ('fd7a::1:9876'), so a bare address with several colons splits at the last one."""
+    scheme, sep, rest = str(url_or_addr or "").strip().partition("://")
+    if not sep:
+        scheme, rest = "", scheme
+    rest = rest.split("/", 1)[0].rsplit("@", 1)[-1]          # the netloc, without any userinfo
+    if rest.startswith("["):
+        host, _, p = rest[1:].partition("]")
+        p = p[1:] if p.startswith(":") else ""
+    elif ":" in rest:
+        host, _, p = rest.rpartition(":")
+    else:
+        host, p = rest, ""
+    if not host:
+        return None
+    return host.lower(), int(p) if p.isdigit() else {"http": 80, "https": 443}.get(scheme.lower())
+
+
+def verify_hello(resp, nonce, path, contacted, gov, expected=None):
+    """#107: what a /sync/hello or /hive/info response proves about who answered. `nonce` is the
+    Hive-Auth-Nonce this node sent (None when it had no key to sign with), `path` the path it asked,
+    `contacted` the base URL it asked, `gov` this node's governance state, `expected` the device the
+    .peers.json entry names (a k1: id), if any. Returns {"outcome", "reason", "device", "other_device"}:
+      verified       a valid signature over our nonce and path, by the device the response names, of
+                     our hive (or no hive on one side), admitted and not purged once an owner exists,
+                     advertising the host:port we contacted
+      addr-unproven  as verified, except advertised_addr is missing or not the host:port we contacted
+      unadmitted     identity proven; an owner exists and the device is not admitted
+      purged         identity proven; the device is purged
+      unsigned       no hello_sig (a pre-v3 peer, a legacy identity), or we sent no nonce
+      invalid        anything else: a bad signature, a fingerprint or node_id mismatch, another nonce (a
+                     replay) or path, a foreign key, another hive
+    `other_device` is True when `expected` names a device other than the one that proved itself."""
+    out = {"outcome": "invalid", "reason": "", "device": None, "other_device": False}
+    hs = resp.get("hello_sig") if isinstance(resp, dict) else None
+    if not nonce_ok(nonce) or hs is None:
+        out.update(outcome="unsigned", reason="no-nonce-sent" if not nonce_ok(nonce) else "no-hello-sig")
+        return out
+    hv = load_hv()
+    try:
+        device, pub, sig = hs["device"], base64.b64decode(hs["pub"]), base64.b64decode(hs["sig"])
+        alg = hs["alg"]
+    except Exception:
+        out["reason"] = "malformed-hello-sig"
+        return out
+    if alg != HELLO_SIG_ALG:
+        out["reason"] = "bad-alg"
+    elif len(pub) != 32 or hv._device_id_for_pub(pub) != device:
+        out["reason"] = "pub-fingerprint-mismatch"
+    elif device != resp.get("node_id"):
+        out["reason"] = "node-id-mismatch"
+    elif hv._ed25519 is None:
+        out["reason"] = "no-verifier"
+    if out["reason"]:
+        return out
+    msg = hello_signing_bytes(path, nonce, resp.get("node_id"), resp.get("hive_id"), resp.get("advertised_addr"),
+                              resp.get("protocol_version"), hello_body_digest(resp))
+    if not hv._ed25519.verify(msg, sig, pub):
+        out["reason"] = "bad-signature"                # also another nonce (a replay) or another path
+        return out
+    out["device"] = device
+    local_hive, peer_hive = gov.get("hive_id") or "", resp.get("hive_id") or ""
+    if local_hive and peer_hive and local_hive != peer_hive:
+        out["reason"] = "different-hive"
+        return out
+    out["other_device"] = bool(expected) and expected != device
+    advertised = addr_of(resp.get("advertised_addr"))
+    if gov.get("owner_id") and device in (gov.get("purged") or ()):
+        out.update(outcome="purged", reason="purged")
+    elif gov.get("owner_id") and device not in (gov.get("admitted") or ()):
+        out.update(outcome="unadmitted", reason="not-admitted")
+    elif advertised is None or advertised != addr_of(contacted):
+        out.update(outcome="addr-unproven", reason=f"advertises {resp.get('advertised_addr') or 'no address'}")
+    else:
+        out.update(outcome="verified", reason="ok")
+    return out
+
+
+def outbound_action(mode, outcome):
+    """#107: what a sync round does with a peer whose hello came back `outcome`, under outbound `mode`:
+    "push" (pull and push), "pull" (pull only: pulled entries are still checked one by one on append,
+    and pulling is how an unadmitted responder's admission reaches us) or "skip". Only `enforce` ever
+    withholds anything; `permissive` flags and `off` does not look."""
+    if mode != "enforce" or outcome == "verified":
+        return "push"
+    return "skip" if outcome in ("purged", "invalid") else "pull"
 
 
 def _is_tailnet_ip(ip):
@@ -266,4 +411,22 @@ def sync_auth_mode(cfg=None):
     if cfg is None:
         cfg = load_peers()
     mode = str(cfg.get("sync_auth", "") or "").strip().lower()
+    return mode if mode in ("off", "permissive", "enforce") else "permissive"
+
+
+def sync_auth_outbound_mode(cfg=None):
+    """#107: what THIS node requires of a peer's signed hello before it PUSHES to it (local, not
+    journaled; separate from sync_auth, because inbound enforce needs every peer at protocol 2 and
+    outbound enforce needs protocol 3). Priority: HIVE_SYNC_AUTH_OUTBOUND env → .peers.json
+    'sync_auth_outbound' → 'permissive'. See outbound_action.
+      off        — never check a hello.
+      permissive — check and flag, never change what a round does (default).
+      enforce    — push only to a verified peer; pull only from an unsigned, addr-unproven or unadmitted
+                   one; skip a purged or invalid one."""
+    env = os.environ.get("HIVE_SYNC_AUTH_OUTBOUND", "").strip().lower()
+    if env in ("off", "permissive", "enforce"):
+        return env
+    if cfg is None:
+        cfg = load_peers()
+    mode = str(cfg.get("sync_auth_outbound", "") or "").strip().lower()
     return mode if mode in ("off", "permissive", "enforce") else "permissive"

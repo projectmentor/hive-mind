@@ -291,7 +291,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.25"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
+CONTRACT_VERSION = "1.26"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
 
 
 # --------------------------------------------------------------------------
@@ -3998,33 +3998,53 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
             "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
 
 
-def _probe_peer_map(timeout=6):   # generous: mobile/Termux nodes over the tailnet can answer in 3-4s
+def _probe_headers(path):
+    """Hive-Auth-* headers for a GET of `path` by one of hv's own probes, signed with THIS hive's device
+    key ({} without one). Their nonce is what a protocol-3 responder signs its answer over (#107)."""
+    import sync_common
+    return sync_common.signed_request_headers(_device_seed(), "GET", path, "")
+
+
+def _probe_peer_map(timeout=6, peerlist=None, identity=None):   # generous: mobile/Termux nodes over the tailnet can answer in 3-4s
     """Concurrently probe the local .peers.json peers — /sync/hello → node_id, /hive/info → label,
     /sync/merkle-root vs ours → in-sync|diverged. Returns {node_id: (address, status, label)}. Bounded
     by ONE short timeout (all probes run concurrently), so offline peers can't serialize into a long
     hang. Empty when `requests` or the peer list is unavailable. Same resolution `hv peers` uses, but
-    parallel — this is what fills in a directly-admitted peer's name/address (the gregorius gap)."""
+    parallel — this is what fills in a directly-admitted peer's name/address (the gregorius gap).
+    The /hive/info probe is signed, so a protocol-3 peer signs its answer over our nonce (#107). Given
+    an `identity` dict, each answering entry's base URL maps to what that answer proves
+    (sync_common.verify_hello) plus the `protocol_version` and `advertised` address it reports: doctor's
+    `peer-identity` check. `peerlist` probes those entries instead of .peers.json's."""
     try:
         import concurrent.futures
         import requests
         import sync_common
-        peerlist = sync_common.load_peers().get("peers", []) or []
+        if peerlist is None:
+            peerlist = sync_common.load_peers().get("peers", []) or []
     except Exception:
         return {}
     if not peerlist:
         return {}
-    local_root = merkle.merkle_root(merkle.chunk_hashes(merkle.read_all_entries(JOURNAL_DIR)))
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
+    gov = _governance_state(entries) if identity is not None else None
 
     def probe(peer):
         url = str(peer.get("url", "")).rstrip("/")
         if not url:
             return None
+        hdrs = _probe_headers("/hive/info")
         try:
             # node_id + label come from /hive/info (open discovery) — NOT /sync/hello, which is now
             # read-gated (GHSA-242f) and would 401 for a not-yet-admitted or unsigned probe.
-            info = requests.get(url + "/hive/info", timeout=timeout).json()
+            info = requests.get(url + "/hive/info", timeout=timeout, headers=hdrs or None).json()
         except Exception:
             return None
+        if identity is not None and isinstance(info, dict):
+            dev = peer.get("id") if _is_device_id(peer.get("id")) else None
+            v = sync_common.verify_hello(info, hdrs.get("Hive-Auth-Nonce"), "/hive/info", url, gov, dev)
+            identity[url] = dict(v, protocol_version=info.get("protocol_version"),
+                                 advertised=info.get("advertised_addr"))
         nid = info.get("node_id")
         if not nid:
             return None
@@ -4436,26 +4456,40 @@ def sync_cmd(args):
     elif args.sync_action == "auth":
         import sync_common
         cfg_path = sync_common.hive_home() / ".peers.json"
-        if not getattr(args, "mode", None):
-            env = os.environ.get("HIVE_SYNC_AUTH", "").strip().lower()
-            src = "HIVE_SYNC_AUTH env" if env in ("off", "permissive", "enforce") else ".peers.json (default permissive)"
-            print(f"sync read-auth mode: {sync_common.sync_auth_mode()}  (from {src})")
+        mode, outbound = getattr(args, "mode", None), getattr(args, "outbound", None)
+        if not mode and not outbound:
+            for label, var, get in (("read-auth", "HIVE_SYNC_AUTH", sync_common.sync_auth_mode),
+                                    ("outbound-auth", "HIVE_SYNC_AUTH_OUTBOUND", sync_common.sync_auth_outbound_mode)):
+                env = os.environ.get(var, "").strip().lower()
+                src = f"{var} env" if env in ("off", "permissive", "enforce") else ".peers.json (default permissive)"
+                print(f"sync {label} mode: {get()}  (from {src})")
             return
         try:
             cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
         except Exception:
             cfg = {}
-        cfg["sync_auth"] = args.mode
+        if mode:
+            cfg["sync_auth"] = mode
+        if outbound:
+            cfg["sync_auth_outbound"] = outbound      # #107: what this node requires before it pushes
         cfg_path.write_text(json.dumps(cfg, indent=2) + "\n")
-        print(f"sync read-auth mode set to '{args.mode}' in {cfg_path}.")
-        if os.environ.get("HIVE_SYNC_AUTH"):
-            print("  note: HIVE_SYNC_AUTH is set in the environment and OVERRIDES this file.")
-        print("  restart the daemon to apply:  systemctl --user restart hive-sync")
-        if args.mode == "enforce":
-            print("  first confirm every peer reports protocol_version 2:  "
-                  "curl <peer>/hive/info | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"protocol_version\"])'")
+        if mode:
+            print(f"sync read-auth mode set to '{mode}' in {cfg_path}.")
+            if os.environ.get("HIVE_SYNC_AUTH"):
+                print("  note: HIVE_SYNC_AUTH is set in the environment and OVERRIDES this file.")
+            print("  restart the daemon to apply:  systemctl --user restart hive-sync")
+            if mode == "enforce":
+                print("  first confirm every peer reports protocol_version 2 or higher: `hv doctor` (peer-identity), or  "
+                      "curl <peer>/hive/info | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"protocol_version\"])'")
+        if outbound:
+            print(f"sync outbound-auth mode set to '{outbound}' in {cfg_path}; it applies from the next sync round.")
+            if os.environ.get("HIVE_SYNC_AUTH_OUTBOUND"):
+                print("  note: HIVE_SYNC_AUTH_OUTBOUND is set in the environment and OVERRIDES this file.")
+            if outbound == "enforce":
+                print("  first confirm every peer answers verified at protocol_version 3: `hv doctor` (peer-identity). "
+                      "Under enforce an unverified peer is pulled from but not pushed to.")
     else:
-        print("usage: hv sync {now|daemon|auth [off|permissive|enforce]}")
+        print("usage: hv sync {now|daemon|auth [off|permissive|enforce] [--outbound off|permissive|enforce]}")
 
 
 # --------------------------------------------------------------------------
@@ -6795,9 +6829,10 @@ def _doctor_status():
             checks.append({"name": "peers", "status": "ok", "detail": f"{len(up)} peer(s) reachable and in sync"})
 
         # peer-address (#7): for each stored address that did not answer just now, has that peer's device
-        # since verified itself from another address (a signed request that reached this node's daemon)?
-        # Reuses the probe above. A candidate counts only while its device would still pass
-        # _verify_sync_request (admitted, not purged), so a purged device is never repointed.
+        # since verified itself from another address (a signed request that reached this node's daemon, or
+        # a signed hello this node asked for)? Reuses the probe above. A candidate counts only while its
+        # device would still pass _verify_sync_request (admitted, not purged), so a purged device is never
+        # repointed. With none, the prover asks the entry's candidate hosts for a signed /hive/info (#107).
         try:
             import sync_common
             pp = sync_common.peers_path()
@@ -6806,9 +6841,20 @@ def _doctor_status():
             if pgov.get("owner_id"):
                 cands = {d: h for d, h in cands.items() if d in pgov["admitted"] and d not in pgov["purged"]}
             checks.append(_peer_address_check(peers, answered, cands, int(pp.stat().st_mtime) if pp else 0,
-                                              _tailscale_hosts))
+                                              _tailscale_hosts, _peer_address_prover(pgov)))
         except Exception as e:
             checks.append({"name": "peer-address", "status": "warn", "detail": f"check error: {e}"})
+
+        # peer-identity (#107): what each ANSWERING peer's signed /hive/info proves, the protocol it
+        # reports, and whether the fleet is ready for inbound and outbound enforce. Advisory.
+        try:
+            import sync_common
+            ident = {}
+            _probe_peer_map(timeout=5, peerlist=[p for p in peers if answered.get(str(p.get("url", "")).rstrip("/"))],
+                            identity=ident)
+            checks.append(_peer_identity_check(peers, ident, sync_common.sync_auth_outbound_mode()))
+        except Exception as e:
+            checks.append({"name": "peer-identity", "status": "warn", "detail": f"check error: {e}"})
 
     return checks
 
@@ -6900,12 +6946,13 @@ def _sync_bind_verdict(resolved, advertised, auto):
 # ── peer-address (#7) ─────────────────────────────────────────────────────────────────────────────
 # A peer whose tailnet IP changed (same device key, new address) used to fail silently until someone
 # edited .peers.json. The daemon now notes where each device VERIFIED itself: a request whose
-# Hive-Auth-* envelope passed _verify_sync_request, from a non-loopback source address. That is the only
-# proof of a peer's identity the transport has (/sync/hello and /hive/info responses are unsigned and
-# self-reported), so it is the only basis on which doctor repoints an entry; tailscale names are shown
-# as unverified hints, never acted on. The file is local operational state: never journaled, never
-# synced, git-ignored. A responder-signed hello, which would also cover a peer that never contacts
-# this node, is the follow-up (#107).
+# Hive-Auth-* envelope passed _verify_sync_request, from a non-loopback source address, and (#107) a
+# /sync/hello this node asked for whose responder signature proved the device at the address contacted
+# ("via": "outbound"). Those are the proofs of a peer's identity the transport has, so they are the only
+# basis on which doctor repoints an entry. For a peer that never contacts this node, doctor also asks the
+# candidate addresses (tailscale names, other sightings, its join-request URL) for a signed /hive/info
+# (_peer_address_prover); a name alone is only ever an unverified hint. The file is local operational
+# state: never journaled, never synced, git-ignored.
 PEER_CANDIDATES_PATH = HIVE_HOME / ".peer_candidates.json"
 _PEER_CANDIDATES_PER_DEVICE = 8       # addresses kept per device, most recently seen first
 _PEER_CANDIDATES_MAX_DEVICES = 256    # a pre-owner hive verifies any valid signature, so bound the file
@@ -6952,10 +6999,11 @@ def _load_peer_candidates():
     return out
 
 
-def _record_peer_candidate(device_id, ip, now=None):
+def _record_peer_candidate(device_id, ip, now=None, via=None):
     """Note that `device_id` verified itself from `ip`. The daemon calls this only after
-    _verify_sync_request passed; loopback is refused here too, since that is this device. Keeps the
-    _PEER_CANDIDATES_PER_DEVICE most recent addresses per device, and writes nothing when nothing
+    _verify_sync_request passed, the sync client only after a `verified` hello (#107, `via="outbound"`,
+    kept on the record of that sighting); loopback is refused here too, since that is this device. Keeps
+    the _PEER_CANDIDATES_PER_DEVICE most recent addresses per device, and writes nothing when nothing
     changed. Returns True when `ip` is new for that device."""
     import sync_common
     ip = str(ip or "")
@@ -6969,6 +7017,8 @@ def _record_peer_candidate(device_id, ip, now=None):
     if rec is not None and rec["last_seen"] >= now:
         return False
     hist[ip] = {"first_seen": rec.get("first_seen", now) if rec else now, "last_seen": now}
+    if via:
+        hist[ip]["via"] = via
     if len(hist) > _PEER_CANDIDATES_PER_DEVICE:
         keep = sorted(hist, key=lambda k: hist[k]["last_seen"], reverse=True)[:_PEER_CANDIDATES_PER_DEVICE]
         cands[device_id] = {k: hist[k] for k in keep}
@@ -7065,12 +7115,105 @@ def _peer_hint_names(entry):
     return names
 
 
-def _peer_address_check(peers, answered, candidates, since, tailscale_hosts=None):
+_PEER_PROBE_MAX = 8          # candidate hosts the peer-address probe asks per failing entry (#107)
+_PEER_PROBE_TIMEOUT = 3      # seconds per probe; an entry's probes run concurrently
+
+
+def _hive_info_fetch(url, headers, timeout):
+    """GET a /hive/info URL as JSON: the peer-address probe's one network call (tests replace it)."""
+    import requests
+    return requests.get(url, headers=headers or None, timeout=timeout).json()
+
+
+def _peer_address_prover(gov):
+    """#107: the peer-address probe, for an entry whose stored address FAILS and whose device is known
+    with no newer verified sighting (verdict `report`), so a peer that never contacts this node can be
+    found too. Returns prove(url, device, hosts): it asks up to _PEER_PROBE_MAX candidate hosts (`hosts`,
+    then the device's join-request host), each with the entry's port, for a /hive/info signed over our
+    nonce, and returns the first host whose answer is `verified` for exactly `device`: admitted and not
+    purged once an owner exists, advertising the host:port asked. None otherwise: another device, an
+    unsigned or invalid answer, a relay (its answer carries the real peer's address) or a purged device
+    never qualifies. Records nothing; `--fix` applies the resulting move."""
+    import concurrent.futures
+    import sync_common
+
+    def proves(base, device):
+        hdrs = _probe_headers("/hive/info")
+        if not hdrs:
+            return False                     # no device key: nothing for a responder to sign over
+        try:
+            info = _hive_info_fetch(base + "/hive/info", hdrs, _PEER_PROBE_TIMEOUT)
+        except Exception:
+            return False
+        v = sync_common.verify_hello(info, hdrs.get("Hive-Auth-Nonce"), "/hive/info", base, gov, device)
+        return v["outcome"] == "verified" and v["device"] == device and not v["other_device"]
+
+    def prove(url, device, hosts):
+        stored, order = _url_host(url), []
+        for h in list(hosts) + [_url_host(_join_request_url(device))]:
+            if h and h != stored and h not in order:
+                order.append(h)
+        order = order[:_PEER_PROBE_MAX]
+        if not order:
+            return None
+        base = str(url).rstrip("/")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(order)) as ex:
+            ok = list(ex.map(lambda h: proves(_url_with_host(base, h), device), order))
+        return next((h for h, good in zip(order, ok) if good), None)
+    return prove
+
+
+def _peer_identity_check(peers, identity, mode):
+    """#107, pure: the advisory `peer-identity` check. `identity` maps each ANSWERING .peers.json entry's
+    base URL to what its signed /hive/info proved (_probe_peer_map), `mode` is the outbound auth mode.
+    Names each peer still below protocol 3 and each whose answer is not `verified` for its entry
+    (invalid, another device than its `id`, addr-unproven, unadmitted, purged, unsigned at protocol 3),
+    and says whether every configured peer is ready for inbound enforce (answers at protocol >= 2) and
+    for outbound enforce (answers verified): the all-upgraded green light. Warns on a peer that is not
+    merely pre-upgrade, or on a pre-upgrade one while outbound enforce holds its push. Never acted on."""
+    old, odd, n_ok, silent = [], [], 0, 0
+    in_ready = out_ready = True
+    for p in peers:
+        url = str(p.get("url", "")).rstrip("/")
+        if not url:
+            continue
+        where, r = url.split("://", 1)[-1], identity.get(url)
+        if not r:
+            silent += 1
+            in_ready = out_ready = False
+            continue
+        pv = r.get("protocol_version") if isinstance(r.get("protocol_version"), int) else 0
+        good = r["outcome"] == "verified" and not r["other_device"]
+        in_ready, out_ready = in_ready and pv >= 2, out_ready and good
+        if good:
+            n_ok += 1
+        elif r["outcome"] == "unsigned" and pv < 3:
+            old.append(f"{where} (protocol {pv or '?'})")
+        elif r["other_device"]:
+            odd.append(f"{where} answered as {r['device'][:11]}…, not the device its entry names")
+        else:
+            odd.append(f"{where} {r['outcome']} ({r['reason']})")
+    bits = [f"outbound {mode}", f"{n_ok} peer(s) verified"]
+    if old:
+        bits.append(f"{len(old)} before protocol 3, unsigned: {', '.join(old)}")
+    if odd:
+        bits.append("not verified: " + ", ".join(odd))
+    if silent:
+        bits.append(f"{silent} not answering (no verdict)")
+    bits.append(f"ready for `hv sync auth enforce`: {'yes' if in_ready else 'no'}, "
+                f"for `hv sync auth --outbound enforce`: {'yes' if out_ready else 'no'}")
+    warn = bool(odd) or (mode == "enforce" and bool(old))
+    return {"name": "peer-identity", "status": "warn" if warn else "ok", "detail": "; ".join(bits)}
+
+
+def _peer_address_check(peers, answered, candidates, since, tailscale_hosts=None, prove=None):
     """#7: the `peer-address` doctor check over the .peers.json `peers` list. `answered` maps each entry's
     base URL to whether it answered the `peers` probe (so there is no second round of network calls; an
     entry missing from it counts as answering and is left alone), `candidates` is _load_peer_candidates()
     and `since` the .peers.json mtime. `tailscale_hosts` supplies the unverified hints and is called
-    only when an unreachable entry has no verified address. The check's `moves` are what `--fix` applies."""
+    only when an unreachable entry has no verified address. `prove` (_peer_address_prover, #107) is asked
+    only for a `report` entry: its tailscale hints and its other sightings, newest first, are the hosts it
+    tries. The check's `moves` are what `--fix` applies."""
     moves, lines, quiet, n_ok, hosts = [], [], 0, 0, None
     for i, p in enumerate(peers):
         url = str(p.get("url", "")).rstrip("/")
@@ -7090,6 +7233,14 @@ def _peer_address_check(peers, answered, candidates, since, tailscale_hosts=None
         if hosts is None:
             hosts = (tailscale_hosts() if tailscale_hosts else None) or []
         names = _peer_hint_names(p)
+        if verdict == "report" and prove:
+            ip = prove(p.get("url"), device, [h for name, ips in hosts if name in names for h in ips]
+                       + sorted(seen, key=lambda h: seen[h], reverse=True))
+            if ip:
+                moves.append({"index": i, "device": device, "url": p.get("url"), "to": _url_with_host(p.get("url"), ip)})
+                lines.append(f"peer {device[:11]}… unreachable at {where}, proved itself at {ip} (signed "
+                             f"/hive/info) — `hv doctor --fix` repoints it")
+                continue
         hints = sorted({f"{h} ({name})" for name, ips in hosts if name in names for h in ips if h != host})
         if not hints:
             quiet += 1
@@ -8895,9 +9046,13 @@ def build_parser():
     sync_subparsers.add_parser("now", help="One-shot bidirectional sync with all peers")
     sync_subparsers.add_parser("daemon", help="Run the sync daemon (serve + periodic sync)")
     sync_auth_p = sync_subparsers.add_parser(
-        "auth", help="Show or set this node's sync read-auth mode (off|permissive|enforce)")
+        "auth", help="Show or set this node's sync read-auth mode (off|permissive|enforce), and with "
+                     "--outbound what it requires of a peer's signed hello before pushing to it")
     sync_auth_p.add_argument("mode", nargs="?", choices=["off", "permissive", "enforce"],
-                             help="omit to show the current mode; set to change it (restart the daemon to apply)")
+                             help="omit to show the current modes; set to change it (restart the daemon to apply)")
+    sync_auth_p.add_argument("--outbound", choices=["off", "permissive", "enforce"], default=None,
+                             help="set the outbound mode (#107): enforce pushes only to a peer whose hello "
+                                  "verified; applies from the next sync round")
 
     tel_parser = subparsers.add_parser("telemetry", help="Local-only session telemetry (observability, NOT facts)")
     tel_sub = tel_parser.add_subparsers(dest="telemetry_action")

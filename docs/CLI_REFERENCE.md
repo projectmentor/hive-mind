@@ -35,7 +35,7 @@ memory.
 | `hv search` | Search facts, decisions and ideas |
 | `hv stats` | See a summary of your memory |
 | `hv unforget` | Owner only: reverse an owner forget (`hv retract --owner`) |
-| `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode |
+| `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode, `auth --outbound` what a peer must prove before this node pushes to it |
 | `hv telemetry` | Local-only session observability (never synced) |
 | `hv verify` | Check that this install is the official, signed release |
 | `hv version` | Print the agent contract version |
@@ -272,10 +272,20 @@ needs attention. It looks at:
   `hive-mind update` avoids the state altogether ([#112](https://github.com/projectmentor/hive-mind/issues/112))
 - **peers** — whether your peer nodes are reachable and in sync
 - **peer-address** — for a peer whose stored address did not answer: whether its device has since
-  reached this node from another address with a verified signed request. If so, `--fix` changes that
-  entry's URL host in `.peers.json` and nothing else. An address that answers is never rewritten. With
-  no verified address it only reports, listing devices of the same name in `tailscale status` as
-  unverified hints (none where there is no `tailscale` CLI, as on Android)
+  reached this node from another address with a verified signed request, or answered one of this
+  node's signed hellos there. If not, and the entry names a known device, doctor asks up to 8 candidate
+  hosts (devices of the same name in `tailscale status`, the device's other recorded addresses, its
+  join-request address; entry's port, 3 s each) for a signed `/hive/info`, and counts only an answer that
+  proves exactly that admitted device at exactly that address (#107). If either finds it, `--fix` changes
+  that entry's URL host in `.peers.json` and nothing else. An address that answers is never rewritten.
+  Otherwise it only reports, listing the same-name devices as unverified hints (none where there is no
+  `tailscale` CLI, as on Android)
+- **peer-identity** — what each answering peer's signed `/hive/info` proves (verified, addr-unproven,
+  unadmitted, purged, unsigned or invalid, and whether another device than the entry's `id` answered),
+  which peers are still below sync protocol 3, and whether every peer is ready for `hv sync auth enforce`
+  (protocol 2 or higher) and for `hv sync auth --outbound enforce` (verified). Advisory; it warns on an
+  answer that is not merely from an older peer, and on older peers while outbound enforce is holding
+  their push. `--fix` never acts on it
 
 A few checks appear only when there is something to report: **crypto-modules** (a bundled
 cryptography module failed to load, so signature checking is degraded), **journal-integrity**
@@ -317,7 +327,8 @@ inline hooks, `--fix` wires the shim, migrates the old hooks away (so nothing fi
 twice), and relinks the skill — leaving your own hooks untouched and taking a
 `.bak.doctor` backup first. It also **repoints a peer that moved**: when the
 `peer-address` check finds a peer's device verified at a new address, `--fix` updates
-that one URL in `.peers.json` (see [SYNC_API.md](SYNC_API.md#configuration-peersjson)).
+that one URL in `.peers.json` (see [SYNC_API.md](SYNC_API.md#configuration-peersjson)); that includes a
+peer found by the signed `/hive/info` probe, which never contacted this node.
 Because the 15-minute `hive-doctor.timer` runs `hv doctor
 --fix`, a node that drifts heals itself with no one re-running the installer. Without
 `--fix`, doctor only reports — it never kills or writes anything, so it stays safe to
@@ -1041,7 +1052,7 @@ hv sync daemon
 |---|---|
 | `now` | Sync with all peers right now and exit. Good for a manual check. |
 | `daemon` | Run continuously — sync automatically every 5 minutes. This is what the background service runs. |
-| `auth [off\|permissive\|enforce]` | Show or set this node's sync read-auth mode (default `permissive`; restart the daemon to apply). `enforce` requires every remote sync read to be signed by an admitted device — switch once all peers report protocol version 2. See [SYNC_API.md](SYNC_API.md#access-control). |
+| `auth [off\|permissive\|enforce] [--outbound off\|permissive\|enforce]` | With no argument, show both modes. The positional mode sets this node's sync read-auth mode (default `permissive`; restart the daemon to apply): `enforce` requires every remote sync read to be signed by an admitted device — switch once all peers report protocol version 2. See [SYNC_API.md](SYNC_API.md#access-control). `--outbound` sets what a peer must prove before this node pushes to it (default `permissive`, which only flags; applies from the next sync round): under `enforce` a peer whose signed hello does not verify is only pulled from, or skipped when the signature is invalid or the device purged — switch once `hv doctor` (`peer-identity`) says every peer is ready. See [SYNC_API.md](SYNC_API.md#responder-signatures-hello_sig). |
 
 **`.peers.json` format** (the installer writes it):
 ```json
@@ -1060,8 +1071,9 @@ hv sync daemon
 - `peers[].id` — a label for logs. Optional.
 - `port` — the port to listen on (default 9876).
 - Optional: `bind` (override the listen address — by default the daemon binds this device's Tailscale
-  IP, else `127.0.0.1`, never all interfaces; a legacy `0.0.0.0` counts as automatic) and
-  `sync_auth` (the read-auth mode, set by `hv sync auth`).
+  IP, else `127.0.0.1`, never all interfaces; a legacy `0.0.0.0` counts as automatic),
+  `sync_auth` (the read-auth mode, set by `hv sync auth`) and `sync_auth_outbound` (the outbound mode,
+  set by `hv sync auth --outbound`).
 
 This file is not synced to git — it's specific to each machine.
 
@@ -1072,6 +1084,10 @@ This file is not synced to git — it's specific to each machine.
 
 # Run the daemon manually (the background service does this automatically)
 ./hv sync daemon
+
+# Show both auth modes; push only to peers whose signed hello verifies
+./hv sync auth
+./hv sync auth --outbound enforce
 
 # Check background service status
 sv status hive-sync                                        # Android (Termux)
@@ -1234,6 +1250,7 @@ On the next `hive-mind install`, if a preserved identity is found it offers to *
 | `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
 | `HIVE_BIND` | automatic | Overrides the sync daemon's listen address (default: this device's Tailscale IP, else `127.0.0.1`). `0.0.0.0` listens on all interfaces and is warned about. |
 | `HIVE_SYNC_AUTH` | from `.peers.json`, else `permissive` | Overrides the sync read-auth mode (`off`, `permissive`, `enforce`). |
+| `HIVE_SYNC_AUTH_OUTBOUND` | from `.peers.json`, else `permissive` | Overrides the outbound mode, what a peer must prove before this node pushes to it (`off`, `permissive`, `enforce`). |
 
 Advanced, rarely needed:
 

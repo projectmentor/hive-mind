@@ -28,7 +28,13 @@ is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mec
    per-node mode (`hv sync auth off|permissive|enforce`, default `permissive`) so a live fleet flips
    to `enforce` independently once all peers speak protocol 2 — no lockstep cutover. Tailscale ACLs
    remain the boundary for *who can connect*; the signed envelope is the boundary for *who can read*.
-   (Closes GHSA-242f-7fxg-f7wm. WRITES were already per-entry authenticated on ingest.)
+   (Closes GHSA-242f-7fxg-f7wm. WRITES were already per-entry authenticated on ingest.) The other
+   direction is authenticated too since protocol 3 (#107): a `/sync/hello` or `/hive/info` answer carries
+   the responder's device signature over the caller's nonce, the path, its identity and advertised
+   address, and a digest of the answer. A separate per-node mode (`hv sync auth --outbound
+   off|permissive|enforce`, default `permissive`, which only flags) makes a node push its journal only to
+   a peer that proved itself, admitted, at the address it contacted; the signed answer is the boundary
+   for *who this node writes to*.
 
 ## Adversary model (what we actively defend against)
 
@@ -132,9 +138,30 @@ at once). Concretely:
 - **Local write races.** Journal appends take an exclusive `flock`, so a daemon and a CLI writing
   the same daily file cannot interleave mid-line and corrupt a record.
 - **Cross-hive contamination.** Sync refuses to merge journals whose `hive_id` differs.
+- **An impostor at a peer's address.** Tailnet IPs get reassigned, and whatever listens at a peer's
+  stale address used to receive that peer's pushes, since a sync round trusted the answering
+  `/sync/hello`. Its answer is now signed by the responder's device key over the caller's single-use
+  nonce (#107), so under outbound `enforce` an impostor gets no push: a forged, replayed or foreign-key
+  answer is `invalid` and skipped, and an unsigned one is only pulled from (pulled entries are checked
+  one by one on append). A relay that forwards the request to the real peer gets back a signature over
+  the peer's real `advertised_addr`, not the address it squats, so it is `addr-unproven` and gets no
+  push either. `hv doctor --fix` repoints a peer to a new address only on the same proof: a verified
+  answer for exactly that device at exactly that address.
 
 ## Known limitations (in scope to document, NOT yet closed)
 
+- **Outbound verification is opt-in.** The outbound mode defaults to `permissive`, which flags and never
+  withholds a push, so a node is protected from an impostor at a peer's address only after it runs
+  `hv sync auth --outbound enforce`; `hv doctor` (`peer-identity`) says when every peer is ready. A peer on
+  a legacy identity (no device key) can never pass `enforce`, and a peer stored under a host name rather
+  than its advertised IP is `addr-unproven`, so `enforce` only pulls from it. The merkle-root comparison
+  that ends a round for a peer already in sync stays unsigned: an impostor that echoes this node's root
+  can stall its sync with that peer (a denial of service, not a disclosure).
+- **Anyone can obtain a responder signature over a nonce it chooses.** `/hive/info` is open discovery,
+  so any reachable host can make a node sign. The statement holds only public facts (node id, hive id,
+  advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`
+  domain tag keeps it from ever passing as a request or entry signature, and the address binding keeps a
+  relayed one from proving anything. Signing runs inside the request-slot cap and per-address rate limit.
 - **Bootstrap / TOFU window.** Before an owner is established, the hive accepts entries permissively
   so the genesis owner declaration can propagate, and owner establishment is trust-on-first-use: the
   first valid self-signed `owner` declaration wins. An attacker who injects an `owner` declaration
@@ -216,8 +243,10 @@ at once). Concretely:
 - **`hv doctor --fix` blast radius.** `--fix` kills orphan daemons (by argv match), restarts the
   managed daemon (systemd unit on Linux/WSL, launchd agent on macOS), rewrites the foreign
   Claude Code config (with a backup), and repoints a `.peers.json` peer's URL host when its stored
-  address fails and its device has since verified itself from another address with a signed request
-  (`peer-address`, [#7](https://github.com/projectmentor/hive-mind/issues/7)). It also restarts the
+  address fails and its device has since verified itself from another address with a signed request,
+  or answers a signed `/hive/info` probe at a candidate host as exactly that admitted device at exactly
+  that address (`peer-address`, [#7](https://github.com/projectmentor/hive-mind/issues/7),
+  [#107](https://github.com/projectmentor/hive-mind/issues/107)). It also restarts the
   managed daemon when the source digest it loaded no longer matches its own checkout (`daemon-code`,
   [#112](https://github.com/projectmentor/hive-mind/issues/112)); a foreign listener on the port never
   triggers that. Run

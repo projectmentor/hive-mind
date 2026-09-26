@@ -41,6 +41,11 @@ from pathlib import Path
 # Make sibling modules (merkle.py) importable when run as ./hv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import merkle  # noqa: E402
+# Owner-key material and owner signing (2.0 S2, public #136). Everything that reads the owner seed or
+# produces a governance signature lives in ownerkey.py, so the split has one module name to assert is
+# absent from hv's import graph. hv still imports it here because the signing CALL SITES have not moved
+# yet — they move in the split, and this import goes with them.
+import ownerkey  # noqa: E402
 try:
     import ed25519 as _ed25519  # bundled pure-Python signature verifier
 except Exception:
@@ -176,14 +181,12 @@ GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"
 
 
 def _owner_seed():
-    """The 32-byte owner seed if this device holds the owner key, else None. Read-only; never creates."""
-    try:
-        if _ed25519 is None or not OWNER_KEY_PATH.exists():
-            return None
-        seed = base64.b64decode(OWNER_KEY_PATH.read_text().strip())
-        return seed if len(seed) == 32 else None
-    except Exception:
-        return None
+    """The 32-byte owner seed if this device holds the owner key, else None. Read-only; never creates.
+
+    The body lives in `ownerkey.load_seed`; this wrapper supplies the path. In the split the five callers
+    that actually sign move to the control plane and this wrapper goes with them, leaving `hv` with a
+    presence check that never opens the file (#136 S2)."""
+    return ownerkey.load_seed(OWNER_KEY_PATH)
 
 
 def _owner_id_for_pub(pub):
@@ -257,44 +260,19 @@ def _owner_unseal(env, passphrase):
 
 def _read_passphrase(prompt, confirm=False):
     """Read a passphrase from $HIVE_OWNER_PASSPHRASE if set (automation/tests; empty = cancel), else
-    prompt on the tty. Returns the passphrase, or None to CANCEL — a blank line, Ctrl-C, Ctrl-D, or a
-    confirmation mismatch all bail out (so the user can change their mind at the prompt)."""
-    env = os.environ.get("HIVE_OWNER_PASSPHRASE")
-    if env is not None:
-        return env or None           # set => use it; empty => cancel
-    import getpass
-    try:
-        pw = getpass.getpass(prompt)
-        if not pw:                   # blank line = bail out
-            return None
-        if confirm and pw != getpass.getpass("Confirm passphrase: "):
-            print("Passphrases do not match.")
-            return None
-    except (EOFError, KeyboardInterrupt):
-        print()
-        return None
-    return pw
+    prompt on the tty. Returns the passphrase, or None to CANCEL. Body in `ownerkey.read_passphrase`."""
+    return ownerkey.read_passphrase(prompt, confirm)
 
 
 def _stash_owner_key(seed):
-    """Best-effort backup of the owner seed to the stable identity stash (survives uninstall; same
-    location as the installer's keep_identity_save). Returns the path written, or None."""
-    try:
-        d = Path(os.environ.get("HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity"))
-        d.mkdir(parents=True, exist_ok=True)
-        try:
-            os.chmod(d, 0o700)
-        except Exception:
-            pass
-        f = d / ".owner-key"
-        f.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(f, 0o600)
-        except Exception:
-            pass
-        return str(f)
-    except Exception:
-        return None
+    """Best-effort backup of the owner seed to the stable identity stash (survives uninstall; the same
+    location as the installer's keep_identity_save). Returns the path written, or None.
+
+    `$HIVE_IDENTITY_STASH` is resolved HERE so that variable keeps exactly one reader; `ownerkey.stash`
+    takes the directory as an argument."""
+    return ownerkey.stash(seed, os.environ.get(
+        "HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity"))
+
 
 # The agent-facing contract version (hv API + Agent Integration Spec), SemVer MAJOR.MINOR.
 # MINOR = additive / backward-compatible (never remove or repurpose existing verbs, flags, or
@@ -611,12 +589,13 @@ def _verify_entry(entry):
 
 def _sign_governance_payload(payload, owner_seed, owner_pub):
     """Attach `owner_pub` then `owner_sig` (the owner's signature over the payload sans owner_sig).
-    This authorizes the governance ACTION independently of which device appends the entry."""
-    payload = dict(payload)
-    payload["owner_pub"] = base64.b64encode(owner_pub).decode()
-    body = _canonical({k: v for k, v in payload.items() if k != "owner_sig"})
-    payload["owner_sig"] = base64.b64encode(_ed25519.sign(body, owner_seed)).decode()
-    return payload
+    This authorizes the governance ACTION independently of which device appends the entry.
+
+    Body in `ownerkey.sign_governance` — the one place a governance signature is produced, and the
+    function the split makes unreachable from `hv`. `_verify_governance` below deliberately does NOT
+    move: the projection must keep verifying owner signatures on every node, including agent nodes that
+    can never produce one."""
+    return ownerkey.sign_governance(payload, owner_seed, owner_pub)
 
 
 def _verify_governance(payload):

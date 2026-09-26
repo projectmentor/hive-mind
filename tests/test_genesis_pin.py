@@ -173,49 +173,116 @@ def test_ingest_still_takes_the_pinned_genesis_as_a_duplicate(hv):
     assert hv.append_foreign_entries([genesis])[:2] == (0, 1)
 
 
-@pytest.mark.xfail(reason="the unsigned-after-pin rule is under review on hive-mind-private #14: "
-                          "rejecting ALL unsigned entries breaks a FRESH node, which must still "
-                          "accept the 225 historical unsigned entries on its first pull or diverge "
-                          "for good. Narrowing proposed: reject only an unsigned entry that EXTENDS "
-                          "a chain this node already holds. Strict, so it trips when the rule lands.",
-                   strict=True)
-def test_ingest_refuses_a_new_unsigned_entry_once_pinned(hv):
-    real = _owner_key(hv)
+def _owned(hv, real, extra=()):
+    """A pinned hive: genesis + an admitted device, plus whatever else is already on disk."""
     dseed, dpub, dev_id = _device_key(hv)
     genesis = _owner_act(hv, real, T_GENESIS)
-    admit = _gov(hv, {"action": "admit", "device_id": dev_id, "principal": "p"}, real[0], real[1], T_GENESIS, seq=2)
-    _on_disk(hv, [genesis, admit])
+    admit = _gov(hv, {"action": "admit", "device_id": dev_id, "principal": "p"},
+                 real[0], real[1], T_GENESIS, seq=2)
+    _on_disk(hv, [genesis, admit] + list(extra))
     _pin(hv, genesis)
-
-    unsigned = _fact(hv, dev_id, T_LATER, "no signature", seq=7)
-    assert hv.append_foreign_entries([unsigned])[:2] == (0, 0)
-    signed = _fact(hv, dev_id, T_LATER, "properly signed", seq=7, dev=(dseed, dpub))
-    assert hv.append_foreign_entries([signed])[:2] == (1, 0)
+    return (dseed, dpub), dev_id
 
 
-@pytest.mark.xfail(reason="the unsigned-after-pin rule is under review on hive-mind-private #14: "
-                          "rejecting ALL unsigned entries breaks a FRESH node, which must still "
-                          "accept the 225 historical unsigned entries on its first pull or diverge "
-                          "for good. Narrowing proposed: reject only an unsigned entry that EXTENDS "
-                          "a chain this node already holds. Strict, so it trips when the rule lands.",
-                   strict=True)
-def test_an_unsigned_claim_on_a_future_seq_is_refused_once_pinned(hv):
-    """Sequence squatting: an unsigned entry taking an admitted device's next (node_id, seq) becomes
-    that device's chain tip, and the device's own later entry is then dropped as a duplicate — two
-    different bodies under one key, which is a permanent merkle fork."""
+def test_an_unsigned_entry_above_a_held_chain_tip_is_refused(hv):
+    """Finding 3, the sequence squat. An unsigned entry claiming a seq beyond a device's tip used to
+    BECOME that device's chain tip, so the device's own later entry was then dropped as a duplicate:
+    two different bodies under one (node_id, seq), which is a permanent merkle fork."""
     real = _owner_key(hv)
+    dev, dev_id = _device_key(hv)[:2], None
     dseed, dpub, dev_id = _device_key(hv)
     genesis = _owner_act(hv, real, T_GENESIS)
-    admit = _gov(hv, {"action": "admit", "device_id": dev_id, "principal": "p"}, real[0], real[1], T_GENESIS, seq=2)
-    _on_disk(hv, [genesis, admit])
+    admit = _gov(hv, {"action": "admit", "device_id": dev_id, "principal": "p"},
+                 real[0], real[1], T_GENESIS, seq=2)
+    held = _fact(hv, dev_id, T_GENESIS, "the device's own first entry", seq=1, dev=(dseed, dpub))
+    _on_disk(hv, [genesis, admit, held])
     _pin(hv, genesis)
 
-    squat = _fact(hv, dev_id, T_LATER, "squatted", seq=99)
+    squat = _fact(hv, dev_id, T_LATER, "squatted", seq=2)                  # unsigned, above the tip
     assert hv.append_foreign_entries([squat])[:2] == (0, 0)
-    real_entry = _fact(hv, dev_id, T_LATER, "the device's own entry", seq=99, dev=(dseed, dpub))
-    assert hv.append_foreign_entries([real_entry])[:2] == (1, 0)
+    mine = _fact(hv, dev_id, T_LATER, "the device's own second entry", seq=2, dev=(dseed, dpub))
+    assert hv.append_foreign_entries([mine])[:2] == (1, 0)                 # signed: lands
     contents = {e["payload"].get("content") for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
-    assert "squatted" not in contents and "the device's own entry" in contents
+    assert "squatted" not in contents and "the device's own second entry" in contents
+
+
+def test_a_different_unsigned_body_at_a_held_sequence_is_refused(hv):
+    """The other half of the fork: rewriting history at a seq this node already holds."""
+    real = _owner_key(hv)
+    dseed, dpub, dev_id = _device_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    admit = _gov(hv, {"action": "admit", "device_id": dev_id, "principal": "p"},
+                 real[0], real[1], T_GENESIS, seq=2)
+    held = _fact(hv, dev_id, T_GENESIS, "the real body", seq=1, dev=(dseed, dpub))
+    _on_disk(hv, [genesis, admit, held])
+    _pin(hv, genesis)
+
+    rewrite = _fact(hv, dev_id, T_GENESIS, "a forged body", seq=1)         # unsigned, same seq
+    assert hv.append_foreign_entries([rewrite])[:2] == (0, 0)             # refused, not counted a dup
+    contents = {e["payload"].get("content") for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
+    assert "a forged body" not in contents and "the real body" in contents
+
+
+def test_an_unsigned_entry_on_an_unheld_chain_is_refused_when_pushed(hv):
+    """A push carries no advertised chunk hashes, so it can never take the first-pull door. This is
+    why a single crafted high seq for a device this node has never seen does not land."""
+    real = _owner_key(hv)
+    _dev, dev_id = _owned(hv, real)
+    stray = _fact(hv, "k1:00000000deadbeef", T_LATER, "from a chain we hold none of", seq=500)
+    assert hv.append_foreign_entries([stray])[:2] == (0, 0)
+
+
+# ── The first-pull door: how a FRESH node still gets the fleet's historical unsigned entries ─────
+
+def test_a_verified_first_pull_brings_in_an_unheld_chain_then_the_tip_rule_applies(hv):
+    """Grok's door. The batch must reproduce the peer's WHOLE advertised chain for that node, from
+    seq 1, window hash for window hash — and once it is stored, the tip rule governs everything after."""
+    real = _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    admit_legacy = _gov(hv, {"action": "admit", "device_id": "k1:00000000000000ff", "principal": "legacy"},
+                        real[0], real[1], T_GENESIS, seq=2)
+    _on_disk(hv, [genesis, admit_legacy])
+    _pin(hv, genesis)
+
+    legacy_id = "k1:00000000000000ff"                                      # a chain this node holds none of
+    history = [_fact(hv, legacy_id, "2025-12-0%dT00:00:00Z" % (i + 1), f"historical {i}", seq=i + 1)
+               for i in range(3)]                                          # unsigned, like the live 225
+    advertised = hv.merkle.node_chunk_hashes(list(history))                # what the peer's /sync/hello says
+
+    assert hv.append_foreign_entries(history, advertised_chunks=advertised)[:2] == (3, 0)
+    contents = {e["payload"].get("content") for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
+    assert {"historical 0", "historical 1", "historical 2"} <= contents
+
+    # The door closes behind it: the chain is now held, so the tip rule refuses the next unsigned seq
+    # even if a peer advertises it.
+    nxt = _fact(hv, legacy_id, T_LATER, "appended after the pull", seq=4)
+    assert hv.append_foreign_entries([nxt], advertised_chunks=hv.merkle.node_chunk_hashes([nxt]))[:2] == (0, 0)
+
+
+def test_the_door_refuses_a_batch_that_does_not_match_what_the_peer_advertised(hv):
+    """The door's whole strength: one altered, missing or extra entry changes its window hash."""
+    real = _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    admit_legacy = _gov(hv, {"action": "admit", "device_id": "k1:00000000000000fe", "principal": "legacy"},
+                        real[0], real[1], T_GENESIS, seq=2)
+    _on_disk(hv, [genesis, admit_legacy])
+    _pin(hv, genesis)
+    legacy_id = "k1:00000000000000fe"
+    history = [_fact(hv, legacy_id, "2025-12-0%dT00:00:00Z" % (i + 1), f"honest {i}", seq=i + 1)
+               for i in range(3)]
+    advertised = hv.merkle.node_chunk_hashes([dict(e) for e in history])
+
+    tampered = [dict(e) for e in history]
+    tampered[1]["payload"] = {"content": "injected", "tags": [], "source": "manual"}
+    assert hv.append_foreign_entries(tampered, advertised_chunks=advertised)[:2] == (0, 0)
+
+    truncated = [dict(history[0])]                                          # missing seq 2 and 3
+    assert hv.append_foreign_entries(truncated, advertised_chunks=advertised)[:2] == (0, 0)
+
+    extra = [dict(e) for e in history] + [_fact(hv, legacy_id, T_LATER, "smuggled", seq=4)]
+    assert hv.append_foreign_entries(extra, advertised_chunks=advertised)[:2] == (0, 0)
+    assert not any(e["payload"].get("content") in {"injected", "smuggled"}
+                   for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR))
 
 
 def test_historical_unsigned_lines_on_disk_still_project(hv):

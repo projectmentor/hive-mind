@@ -793,7 +793,79 @@ def journal_keys():
     }
 
 
-def append_foreign_entries(entries):
+def _unsigned_refused(e, pin, tips, held_hash, door=()):
+    """Whether an UNSIGNED arriving entry is refused (hive-mind-private #14, finding 3; the rule Grok
+    4.7 adjudicated). `_verify_entry` returns True for an entry with no `sig` at all, so before this an
+    unsigned entry naming an admitted device counted as that device's evidence — and one naming a
+    FUTURE `(node_id, seq)` became that device's chain tip, so the device's own later entry was dropped
+    as a duplicate: two different bodies under one key, a permanent merkle fork.
+
+    A blanket "reject every unsigned entry once pinned" cannot be the rule: this hive holds 225
+    historical unsigned entries under real `k1:` device ids, so nothing about an entry's shape
+    distinguishes them from an attack, and a FRESH node must still accept them on its first pull or
+    diverge from the fleet for good. So the rule is positional:
+
+      * a chain this node already holds — refuse an entry ABOVE that chain's tip (the squat), and
+        refuse a DIFFERENT body at a seq already held;
+      * a chain this node does not hold — refuse it unless `door` says this batch IS that chain: one
+        contiguous batch from seq 1 whose every window hash matches what an authenticated peer
+        advertised. A single pushed high seq is never that batch.
+
+    Returns (refused, why) — `why` is for the operator-facing rejection summary, never the wire."""
+    if pin is None or "sig" in e:
+        return False, ""
+    nid, seq = e.get("node_id"), e.get("seq")
+    if not isinstance(seq, int):
+        return True, "unsigned with no sequence number"
+    if nid not in tips:
+        if nid in door:
+            return False, ""                    # the first pull of a chain we do not hold yet
+        return True, "unsigned on a chain this node does not hold (not a verified first pull)"
+    if seq > tips[nid]:
+        return True, "unsigned above the chain tip this node holds (sequence squat)"
+    known = held_hash(nid, seq)
+    if known is not None and known != compute_hash(e):
+        return True, "unsigned, and a different body is already held at that sequence"
+    return False, ""
+
+
+def _first_pull_door(entries, tips, advertised_chunks):
+    """Which not-yet-held chains this batch may bring in UNSIGNED (hive-mind-private #14).
+
+    A fresh node must be able to accept a peer's historical unsigned entries — this hive holds 225 of
+    them — without opening the door to a single crafted high-seq entry. So the door opens per node_id
+    only when the batch reproduces that node's WHOLE chain exactly as the peer advertised it in
+    `/sync/hello`: every window hash equal, from window 0 (seq 1) through the last. Reusing
+    `merkle.node_chunk_hashes` means the comparison is the same function both sides already agree on,
+    and it is strictly stronger than one batch hash — a missing, extra or altered entry anywhere
+    changes its window.
+
+    `advertised_chunks` is passed ONLY by the outbound pull path, which fetched those hashes itself. A
+    PUSH to /sync/ingest never carries it, so a pushed chain is never doored. The residual is that an
+    admitted peer can advertise a false chain to a node that holds none of it; every established node
+    refuses anything past its own tip, so such an entry cannot become fleet truth — and under outbound
+    `enforce` the peer's identity is proven first (#107)."""
+    if not advertised_chunks:
+        return set()
+    by_node = {}
+    for e in entries:
+        nid, seq = e.get("node_id"), e.get("seq")
+        if nid is not None and nid not in tips and isinstance(seq, int):
+            by_node.setdefault(nid, []).append(e)
+    door = set()
+    for nid, ents in by_node.items():
+        advertised = advertised_chunks.get(nid)
+        if not advertised:
+            continue
+        try:
+            if merkle.node_chunk_hashes(list(ents)).get(nid) == list(advertised):
+                door.add(nid)
+        except Exception:
+            continue
+    return door
+
+
+def append_foreign_entries(entries, advertised_chunks=None):
     """Append FOREIGN journal entries verbatim (preserving node_id/seq) with G-Set dedup by
     (node_id, seq). Two membership gates keep the shared journal sound (D0-v2 two-tier membership):
 
@@ -814,6 +886,24 @@ def append_foreign_entries(entries):
     accepted = duplicates = rejected = 0
     arrived_ideas = []
     pin = _load_genesis_pin()        # the one `owner` act this node accepted (hive-mind-private #14)
+    tips = {}                        # node_id -> highest seq this node already holds
+    for _nid, _seq in existing:
+        if isinstance(_seq, int) and _seq > tips.get(_nid, 0):
+            tips[_nid] = _seq
+    _held = {}
+
+    def held_hash(nid, seq):
+        """The hash of the entry already held at (nid, seq), or None. Read lazily: only an unsigned
+        entry landing on a seq we already hold needs it, which is a re-push, not the common case."""
+        if not _held:
+            for h in merkle.read_all_entries(JOURNAL_DIR):
+                if h.get("node_id") is not None and h.get("seq") is not None:
+                    _held[(h["node_id"], h["seq"])] = compute_hash(h)
+            _held.setdefault(("", -1), None)          # mark as loaded even for an empty journal
+        return _held.get((nid, seq))
+
+    door = _first_pull_door(entries, tips, advertised_chunks)
+    unsigned_why = []
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
@@ -824,6 +914,11 @@ def append_foreign_entries(entries):
             continue
         nid, seq = e.get("node_id"), e.get("seq")
         if nid is None or seq is None:
+            continue
+        refused, why = _unsigned_refused(e, pin, tips, held_hash, door)
+        if refused:
+            rejected += 1
+            unsigned_why.append(why)
             continue
         if (nid, seq) in existing:
             duplicates += 1
@@ -866,7 +961,11 @@ def append_foreign_entries(entries):
 
     # Recompute governance AFTER pass 1 so admits that just landed populate the admitted set.
     gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
-    has_owner, admitted = gov["owner_id"] is not None, gov["admitted"]
+    # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
+    # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
+    # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
+    has_owner = gov["owner_id"] is not None or bool((gov.get("genesis") or {}).get("mismatch"))
+    admitted = gov["admitted"]
 
     # ── Pass 2: content, admission-gated once an owner exists ────────────────────────────────────
     for e in entries:
@@ -874,6 +973,11 @@ def append_foreign_entries(entries):
             continue
         nid, seq = e.get("node_id"), e.get("seq")
         if nid is None or seq is None:
+            continue
+        refused, why = _unsigned_refused(e, pin, tips, held_hash, door)
+        if refused:
+            rejected += 1
+            unsigned_why.append(why)
             continue
         if (nid, seq) in existing:
             duplicates += 1
@@ -915,9 +1019,12 @@ def append_foreign_entries(entries):
             pass
 
     if rejected:
+        reasons = "bad signature, malformed timestamp, unauthorized governance, or content from an " \
+                  "unadmitted device"
+        if unsigned_why:
+            reasons += "; " + "; ".join(sorted(set(unsigned_why)))
         print(f"append_foreign_entries: rejected {rejected} entr"
-              f"{'y' if rejected == 1 else 'ies'} (bad signature, malformed timestamp, unauthorized "
-              f"governance, or content from an unadmitted device)", file=sys.stderr)
+              f"{'y' if rejected == 1 else 'ies'} ({reasons})", file=sys.stderr)
     return accepted, duplicates
 
 

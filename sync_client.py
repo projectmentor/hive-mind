@@ -241,7 +241,11 @@ def _sync_with_peer(peer, mode=None):
 
     accepted = duplicates = 0
     if pulled:
-        accepted, duplicates = hv.append_foreign_entries(pulled)
+        # `remote_chunks` is this peer's own advertised per-node window hashes, fetched above. It opens
+        # the first-pull door for a chain we hold none of, so a peer's historical UNSIGNED entries can
+        # still land on a fresh node while a single crafted high-seq entry cannot (hive-mind-private
+        # #14). A PUSH never carries it — /sync/ingest calls this with no advertised chunks.
+        accepted, duplicates = hv.append_foreign_entries(pulled, advertised_chunks=remote_chunks)
         if accepted:
             hv.rebuild_db()
 

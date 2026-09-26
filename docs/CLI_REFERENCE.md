@@ -669,6 +669,7 @@ hv owner heartbeat                             # refresh owner liveness (resets 
 hv owner import FILE [--force]                 # restore it from a file on another device
 hv owner init                                 # mint the owner key and claim ownership (once)
 hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
+hv owner pin [--set] [--force]                # show, or pin, the genesis declaration this node accepts
 hv owner propose-election [--mint | --pub B64] # (admitted device) propose electing a new owner
 hv owner restore                               # recover the key from the hive's escrow
 hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
@@ -684,6 +685,30 @@ It mints a **`hive_id`** (a public identifier that keeps your hive separate from
 any other hive on the same tailnet) and writes an owner declaration into the
 journal that the other nodes pick up on sync. Until you do this, the governance
 rules below are simply off (every device counts, nothing is capped) — so it's opt-in.
+
+**The genesis pin.** One `owner` declaration establishes the hive, and the node records
+which one it accepted in `$HIVE_HOME/.genesis-pin` — a private, per-node file (mode
+`0600`) that is never synced, never written into the journal, and never part of the signed
+source manifest. The pin is what the node resolves genesis through, at ingest and in the
+projection, so another `owner` declaration arriving later cannot replace the owner no
+matter what timestamp it carries. Without it the rule would be "the earliest valid
+self-signed declaration wins", and an entry's timestamp is written by whoever made the
+entry.
+
+`hv owner init` pins the declaration it writes, so a new hive is pinned from the start.
+An existing hive pins on the operator's word: `hv owner pin --set` takes the journal's
+single self-signed declaration. If the journal holds **two**, it refuses and lists them —
+there is deliberately no timestamp tie-break, because the timestamp is the part an
+attacker controls. Resolve it by re-joining from the device you trust, comparing the
+**genesis fingerprint** (`<hive_id>/<owner_id>/<hash8>`) that `hv owner show` prints; the
+hash prefix is the part a squatter cannot reproduce. `hv doctor genesis` reports an
+unpinned node, a pin whose declaration has not synced yet, and any journal holding more
+than one declaration.
+
+A node with no pin keeps the older behaviour, so a fleet mid-upgrade still converges.
+`hv owner init --force` re-pins **this** node and is a deliberate fork: peers that keep
+the old pin keep the old owner, and the old declaration stays in the journal, because
+nothing is ever removed from it.
 
 **The owner key is a single point of failure — back it up.** `hv owner init`
 auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key` (survives uninstall),

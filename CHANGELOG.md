@@ -10,7 +10,46 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.27
+## Unreleased — contract 1.28
+
+- **Contract 1.28: `hv owner init` leaves a new hive closed (#135 part 1).** Before a hive has an owner it
+  has no key to sign a forget with, so an owner-source forget dated before the genesis owner has always been
+  honoured unsigned — the grandfather, kept since 1.4 so that adopting governance never resurrected a
+  deliberately forgotten fact. 1.25 let an owner close it (`hv config set forget_writers owner`), but
+  `legacy` remained the default, so every hive depended on its owner remembering to run that. Now genesis
+  does it: at the end of `hv owner init`, every forget that is in effect **only** because it precedes genesis
+  is re-issued as one ordinary owner-signed `retract` — the same act `hv retract <fact> --owner` writes — and
+  only **then** is `forget_writers=owner` set. Each fact stays forgotten on an owner signature of its own, so
+  a hive born here never depends on the grandfather. `owner init` prints which facts it re-issued. The old
+  unsigned entries stay in the append-only journal and count for nothing.
+- **The order is the design, not an implementation detail.** `hv config set forget_writers owner` refuses
+  while closing would bring a fact back, naming each one with its two remedies (#122). Re-issuing first
+  empties that list, so the flip has nothing left to decide — and the flip still goes through the same guard.
+  That is what makes "closed **and** a fact silently back" unreachable rather than merely unlikely.
+- **Failing does not close the hive.** Every retract is prepared and signed before any of them is appended.
+  If preparation fails, nothing is appended and the config is not set: the journal is as it was. If an append
+  fails after some retracts have landed, the config is still not set and what landed is **not** removed — an
+  append-only journal cannot be rolled back, and those entries are ordinary post-genesis owner forgets, so
+  nothing is resurrected by their presence. Either way `owner init` prints which facts were re-issued, which
+  were not, and the two remedies for each one still open.
+- **What is deliberately left alone.** A grandfathered forget whose target is not a fact in this journal
+  (`dangling`) is not re-issued: it hides nothing, and minting owner authority over a target that does not
+  exist would be a new claim rather than a restatement. A member device's negative-evidence retract is never
+  promoted into an owner act — the list re-issued is already limited to owner-source forgets and is used
+  unfiltered. `owner init --force`, a deliberate re-genesis, gets the same treatment, because skipping it
+  would let a forced re-genesis silently reopen facts. There is no `--no-close` flag: a hive born here starts
+  closed, and an operator who wants `legacy` sets it afterwards.
+- **`hv doctor` says `closed` even with nothing left to ignore.** `forget-authz` used to report the closed
+  state only when there were unsigned pre-genesis forgets to count, so a hive born closed — which has none —
+  reported it by silence. It now states it. Advisory output only: no projection, journal or wire change.
+- **Compatibility.** No new command and no new flag; nothing an adapter calls moves. Everything written is
+  an owner-signed `retract` plus the `set-config` act 1.25 already defined, so the forgotten set converges
+  with any peer that honours an owner-signed retract. A **pre-1.25** peer does not know the `forget_writers`
+  key at all: it lands the act and keeps its own default. That is harmless here precisely because the
+  re-issued retracts are owner-signed post-genesis acts that do not depend on the key — which is the point of
+  doing them first. Part (2) of #135, changing the **default** for hives that already exist, stays a 2.0 item.
+
+## 1.27 — 2026-09-26 · `v1.27.0`
 
 - **Contract 1.27: the genesis declaration is pinned (security).** Which `owner` declaration established
   this hive is now recorded on the node, at `$HIVE_HOME/.genesis-pin` (0600, never synced, never journaled,

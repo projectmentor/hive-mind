@@ -669,6 +669,7 @@ hv owner heartbeat                             # refresh owner liveness (resets 
 hv owner import FILE [--force]                 # restore it from a file on another device
 hv owner init                                 # mint the owner key and claim ownership (once)
 hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
+hv owner pin [--set | --fingerprint FP] [--force]  # show, or pin, the genesis this node accepts
 hv owner propose-election [--mint | --pub B64] # (admitted device) propose electing a new owner
 hv owner restore                               # recover the key from the hive's escrow
 hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
@@ -684,6 +685,38 @@ It mints a **`hive_id`** (a public identifier that keeps your hive separate from
 any other hive on the same tailnet) and writes an owner declaration into the
 journal that the other nodes pick up on sync. Until you do this, the governance
 rules below are simply off (every device counts, nothing is capped) — so it's opt-in.
+
+**The genesis pin.** One `owner` declaration establishes the hive, and the node records
+which one it accepted in `$HIVE_HOME/.genesis-pin` — a private, per-node file (mode
+`0600`) that is never synced, never written into the journal, and never part of the signed
+source manifest. The pin is what the node resolves genesis through, at ingest and in the
+projection, so another `owner` declaration arriving later cannot replace the owner no
+matter what timestamp it carries. Without it the rule would be "the earliest valid
+self-signed declaration wins", and an entry's timestamp is written by whoever made the
+entry.
+
+A **joining** device pins from the invite instead, before it has pulled anything:
+`hv owner pin --fingerprint h1:…/o1:…/0a1b2c3d` (the installer does this for you when the
+pasted invite carries a fingerprint). Only a hash *prefix* travels in an invite, which is
+enough — a squatter can copy a `hive_id` and an `owner_id`, but not the genesis entry's
+hash. The pin then names the exact entry as soon as the declaration itself syncs.
+
+`hv owner init` pins the declaration it writes, so a new hive is pinned from the start.
+An existing hive pins on the operator's word: `hv owner pin --set` takes the journal's
+single self-signed declaration. If the journal holds **two**, it refuses and lists them —
+there is deliberately no timestamp tie-break, because the timestamp is the part an
+attacker controls. Resolve it by re-joining from the device you trust, comparing the
+**genesis fingerprint** (`<hive_id>/<owner_id>/<hash8>`) that `hv owner show` prints; the
+hash prefix is the part a squatter cannot reproduce — and the prefix is short enough to grind on its
+own, so what actually stops them is that the pin binds the **declared owner**: a genesis candidate must be
+self-signed by the owner it declares, so a rival needs the victim's owner key. `hv doctor genesis` reports an
+unpinned node, a pin whose declaration has not synced yet, and any journal holding more
+than one declaration.
+
+A node with no pin keeps the older behaviour, so a fleet mid-upgrade keeps syncing. **The Merkle consequence, plainly.** A rival that a peer already stored is never removed — the journal is append-only. So a node that refused it and a node that holds it differ in their Merkle root from then on, and that difference does not heal. What converges is the *projection*: once every node pins the same genesis, they all agree on the owner. A node that has not pinned keeps the old rule and can project a **different owner** than a pinned peer — visibly, not silently, and `hv doctor genesis` names it.
+`hv owner init --force` re-pins **this** node and is a deliberate fork: peers that keep
+the old pin keep the old owner, and the old declaration stays in the journal, because
+nothing is ever removed from it.
 
 **The owner key is a single point of failure — back it up.** `hv owner init`
 auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key` (survives uninstall),

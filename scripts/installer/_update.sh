@@ -96,6 +96,20 @@ if [ -z "$(git -C "$HIVE_DIR" status --porcelain)" ] && [ "$(_verify_level)" = m
   fi
 fi
 
+# Pin the genesis on an upgrading node (hive-mind-private #14). From this release a node that has not
+# pinned refuses inbound sync, so pin here rather than waiting for the periodic `hv doctor --fix`.
+# `--set` is safe and silent when there is nothing to do: it refuses to guess between two declarations,
+# and it leaves an existing pin alone.
+if [ -x "$HIVE_DIR/hv" ]; then
+  if "$HIVE_DIR/hv" owner pin 2>/dev/null | grep -q "^genesis pinned:"; then
+    :
+  elif "$HIVE_DIR/hv" owner pin --set >/dev/null 2>&1; then
+    ok "Pinned this hive's genesis declaration"
+  else
+    warn "Genesis not pinned on this node — run 'hv doctor genesis' (it says which case you are in)"
+  fi
+fi
+
 # Refresh the command symlinks so new subcommands land without a reinstall.
 # (Older installs had a static dispatcher copy that never picked up new commands.)
 info "Refreshing commands..."

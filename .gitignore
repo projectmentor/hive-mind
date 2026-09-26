@@ -25,6 +25,10 @@ store.db.bak.*
 # Exported owner-key backups (`hv owner export`, default name hive-owner-<id>.key). SECRET.
 hive-owner-*.key
 
+# Genesis pin (hive-mind-private #14): the one `owner` act this node accepted. Per-node, like the
+# device key — never committed, never synced, never in the signed source manifest.
+.genesis-pin
+
 # Nudge config + per-session debounce state (per-node; use config/nudge.env.example as a template)
 nudge.env
 .nudge_state/

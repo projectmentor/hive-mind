@@ -60,10 +60,10 @@ def _service_stub_bin(tmp_path_factory):
 @pytest.fixture(scope="session", autouse=True)
 def _real_home_guard():
     """#109: the suite leaves the real account's Claude wiring and owner-key stash as it found them."""
-    before = _realhome.snapshot(REAL["claude"], REAL["stash"])
+    before = _realhome.snapshot(REAL["claude"], REAL["stash"], REAL["hive"])
     pid = _realhome.live_daemon_pid()
     yield
-    after = _realhome.snapshot(REAL["claude"], REAL["stash"])
+    after = _realhome.snapshot(REAL["claude"], REAL["stash"], REAL["hive"])
     new_pid = _realhome.live_daemon_pid()
     if pid and new_pid and pid != new_pid:
         _DAEMON_NOTES.append(f"the live hive-sync daemon restarted during the run (PID {pid} -> {new_pid}); "

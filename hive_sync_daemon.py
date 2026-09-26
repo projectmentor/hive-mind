@@ -354,6 +354,27 @@ class Handler(BaseHTTPRequestHandler):
     def _gov(self):
         return hv._governance_state(_entries())
 
+    def _pinned(self, u):
+        """Gate a REMOTE sync request on this node having PINNED its genesis (hive-mind-private #14).
+
+        Before a genesis is pinned, a node accepts entries permissively so the real genesis can reach
+        it — which is exactly the window in which a rival `owner` declaration captures the node, and a
+        captured joiner then relays that declaration onward. So an unpinned node serves NOTHING of the
+        journal to a remote caller and accepts no push: /sync/hello, /sync/chunk and /sync/ingest are
+        403. It still reaches the hive, because its OWN OUTBOUND pull is unaffected — that is how it
+        gets the genesis it then pins.
+
+        Loopback is always allowed: the local operator running `hv` is how the node gets pinned at all.
+        /hive/info and /sync/merkle-root stay open, so discovery and the fingerprint comparison a
+        joiner needs keep working. This also covers a build with no ed25519, where every signature
+        check answers True."""
+        if self._is_loopback() or hv._load_genesis_pin() is not None:
+            return True
+        self._send(403, {"error": "genesis not pinned on this node", "accepted": 0,
+                         "hint": "the operator pins with `hv owner pin --set` (or `hv doctor --fix`); "
+                                 "/hive/info carries the fingerprint to compare"})
+        return False
+
     def _authorized(self, u, body=b""):
         """Gate a REMOTE-AUTH read (/sync/hello, /sync/chunk, /sync/ingest). Loopback is always
         allowed. Otherwise honor the node's sync_auth mode: off → allow; permissive → allow but flag;
@@ -421,6 +442,8 @@ class Handler(BaseHTTPRequestHandler):
             if u.path in _REMOTE_AUTH:
                 if not self._authorized(u):
                     return
+                if not self._pinned(u):            # (#14) an unpinned node serves no journal remotely
+                    return
             elif u.path in _LOOPBACK_ONLY:
                 if not self._local_or_signed(u):
                     return
@@ -468,6 +491,9 @@ class Handler(BaseHTTPRequestHandler):
                     "advertised_addr": _ADVERTISED["addr"],
                     "journal_summary": {"total": len(es), "by_node": merkle.node_max_seq(es)},
                     "chunks": merkle.node_chunk_hashes(es),
+                    # (#14) Inside the responder signature, not beside it: _send_signed hashes the whole
+                    # body, so a man in the middle cannot swap the fingerprint a joiner pins against.
+                    "genesis_fingerprint": hv._genesis_fingerprint(es),
                 })
             elif u.path == "/hive/info":
                 # Open discovery: minimal hive metadata + the signed genesis (for verification) + the
@@ -485,6 +511,7 @@ class Handler(BaseHTTPRequestHandler):
                     "contract": hv.CONTRACT_VERSION,       # 1.19 PR2b: the agent contract, for `doctor fleet-contract`
                     "advertised_addr": _ADVERTISED["addr"],
                     "genesis": hv._owner_declaration(es),
+                    "genesis_fingerprint": hv._genesis_fingerprint(es, gov),   # (#14) signed with the body
                 })
             elif u.path == "/sync/merkle-root":
                 es = _entries()                     # open discovery: a single root hash, no content
@@ -576,6 +603,8 @@ class Handler(BaseHTTPRequestHandler):
             # remote-auth: read-auth gate over the exact body bytes, so an unadmitted device can't
             # even attempt an ingest under enforce (entries are still per-entry verified below).
             if not self._authorized(u, body=raw):
+                return
+            if not self._pinned(u):                # (#14) and accepts no push until it has pinned
                 return
             body = json.loads(raw or b"{}")
             # Refuse a cross-hive push: if both sides have a hive_id and they differ, this is a

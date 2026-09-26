@@ -507,13 +507,19 @@ import sys,re
 s=sys.argv[1].strip()
 s=re.sub(r'^[a-zA-Z][a-zA-Z0-9+.-]*://','',s)   # strip scheme
 if '@' in s: s=s.split('@',1)[1]                # strip user@
-s=s.split('/',1)[0]                             # strip path
+addr,_,path=s.partition('/')                    # keep the path: it may carry the genesis fingerprint
+s=addr
 host,port=s,'9876'
 if ':' in s: host,port=s.rsplit(':',1)
 host=host.strip(); port=(port.strip() or '9876')
-print(f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port.isdigit() else '')
+# <hive_id>/<owner_id>/<hash8> — validated properly by `hv owner pin --fingerprint`; here we only
+# pass through something that looks like it, so a stray path never becomes an argument.
+fp=path.strip().strip('/')
+if not re.match(r'^h[12]:[0-9a-f]+/o1:[0-9a-f]+/[0-9a-f]{8,}\$',fp): fp=''
+print(f'{host} {port} {fp}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port.isdigit() else '')
 " "$_ADDR" 2>/dev/null)
         SEED_HOST=$(echo "$_PARSED" | awk '{print $1}'); SEED_PORT=$(echo "$_PARSED" | awk '{print $2}')
+        SEED_FP=$(echo "$_PARSED" | awk '{print $3}')
         SEED_PORT="${SEED_PORT:-9876}"
         if [ -z "$SEED_HOST" ]; then
           warn "Couldn't read an address from that. Paste just the line that 'hive-mind invite' prints."
@@ -567,8 +573,28 @@ print(f'{host} {port}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and port
     # No 'bind' key (GHSA-242f): resolve_bind() picks the tailnet IP (else loopback), never 0.0.0.0.
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'port':9876,'peers':[{'id':sys.argv[2].replace('.','-'),'url':'http://'+sys.argv[2]+':'+sys.argv[3]}]},open(sys.argv[4],'w'),indent=2)" "$THIS_DEVICE" "$PEER_IP" "$PEER_PORT" "$PEERS_FILE"
     ok "Peer configured: $PEER_IP:$PEER_PORT"
+    # Pin the genesis BEFORE the first pull (hive-mind-private #14). Until this node has a pin it
+    # serves nothing of the journal to a remote caller and accepts no push, so an unpinned joiner
+    # cannot be captured by a rival declaration and cannot relay one onward.
+    if [ -n "${SEED_FP:-}" ]; then
+      if ./hv owner pin --fingerprint "$SEED_FP" >/dev/null 2>&1; then
+        ok "Pinned this hive's genesis from the invite ($SEED_FP)."
+      else
+        warn "Couldn't pin the invite's fingerprint — continuing; 'hv doctor genesis' will say why."
+      fi
+    fi
     info "Syncing the hive (pulling its journal + owner declaration)..."
     ./hv sync now >/dev/null 2>&1 || true
+    # No fingerprint in the invite (an older inviting device): pin what the pull brought, but only
+    # when there is exactly one declaration to pin — `--set` refuses to guess between two.
+    if [ -z "${SEED_FP:-}" ]; then
+      ./hv owner pin --set >/dev/null 2>&1 || true
+    fi
+    if ! ./hv owner pin 2>/dev/null | grep -q "^genesis pinned:"; then
+      warn "This device has NOT pinned a genesis yet."
+      warn "  It will refuse inbound sync until it does, and the periodic 'hv doctor --fix' pins it"
+      warn "  once the hive's declaration has synced. 'hv doctor genesis' shows the current state."
+    fi
     ask "Your name (the principal you'd like to be admitted as): "
     read -r PRINCIPAL; PRINCIPAL="${PRINCIPAL:-$THIS_USER}"
     ./hv join --principal "$PRINCIPAL" 2>/dev/null || true

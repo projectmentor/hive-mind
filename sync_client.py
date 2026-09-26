@@ -133,7 +133,21 @@ def _short_err(e):
     if isinstance(e, exc.ConnectionError):
         return "connection refused / unreachable"
     if isinstance(e, exc.HTTPError):
-        return f"HTTP {getattr(getattr(e, 'response', None), 'status_code', '?')}"
+        r = getattr(e, "response", None)
+        code = getattr(r, "status_code", "?")
+        if code == 403:
+            # hive-mind-private #14: a peer that has not pinned its genesis serves nothing remotely.
+            # Reporting that as "unreachable" would send an operator hunting a network fault, when the
+            # peer is up and the fix is one command ON THE PEER. A joiner reaches the hive by pulling.
+            try:
+                hint = (r.json() or {}).get("error", "")
+            except Exception:
+                hint = ""
+            if "genesis not pinned" in str(hint):
+                return ("that peer has not pinned its genesis, so it serves nothing to a remote caller "
+                        "(#14). On the PEER: `hv owner pin --set`, or let it pull first — a joining node "
+                        "gets the hive through its own `hv sync now`")
+        return f"HTTP {code}"
     return (str(e).split("(Caused by", 1)[0].strip()[:80] or e.__class__.__name__)
 
 
@@ -241,7 +255,11 @@ def _sync_with_peer(peer, mode=None):
 
     accepted = duplicates = 0
     if pulled:
-        accepted, duplicates = hv.append_foreign_entries(pulled)
+        # `remote_chunks` is this peer's own advertised per-node window hashes, fetched above. It opens
+        # the first-pull door for a chain we hold none of, so a peer's historical UNSIGNED entries can
+        # still land on a fresh node while a single crafted high-seq entry cannot (hive-mind-private
+        # #14). A PUSH never carries it — /sync/ingest calls this with no advertised chunks.
+        accepted, duplicates = hv.append_foreign_entries(pulled, advertised_chunks=remote_chunks)
         if accepted:
             hv.rebuild_db()
 
@@ -276,7 +294,10 @@ def sync_now():
         try:
             _sync_with_peer(peer, mode)
         except requests.RequestException as e:
-            print(f"  {_peer_label(peer)}: unreachable ({_short_err(e)})")
+            why = _short_err(e)
+            # Only a transport failure is "unreachable"; a peer that answered is up.
+            label = "not ready" if why.startswith("that peer has not pinned") else "unreachable"
+            print(f"  {_peer_label(peer)}: {label} ({why})")
         except Exception as e:
             print(f"  {_peer_label(peer)}: error ({_short_err(e)})")
 

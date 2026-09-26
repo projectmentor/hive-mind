@@ -61,6 +61,14 @@ _tailnet_ip() {
 TS_IP="$(_tailnet_ip)"
 HIVE_ID=""
 [ -x "$HIVE_DIR/hv" ] && HIVE_ID="$("$HIVE_DIR/hv" owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
+# The genesis FINGERPRINT (<hive_id>/<owner_id>/<hash8>), so the new device can pin this hive BEFORE
+# it trusts any journal (hive-mind-private #14). Carried as a PATH after the address: every older
+# installer strips the path when parsing, so an old device still reads just the address.
+GENESIS_FP=""
+[ -x "$HIVE_DIR/hv" ] && GENESIS_FP="$("$HIVE_DIR/hv" owner show 2>/dev/null \
+  | sed -n 's/.*fingerprint \([^ ]*\).*/\1/p' | head -1)"
+PASTE="$TS_IP"
+[ -n "$GENESIS_FP" ] && PASTE="$TS_IP/$GENESIS_FP"
 
 echo ""
 echo -e "${BLD}hive-mind invite${RST}${HIVE_ID:+   (hive $HIVE_ID)}"
@@ -74,7 +82,15 @@ echo "  Add a device to this hive. On the NEW device, run:"
 echo -e "      ${BLD}hive-mind install${RST}"
 echo "  and when it asks for a hive address, paste this:"
 echo ""
-echo -e "      ${GRN}${BLD}${TS_IP}${RST}"
+echo -e "      ${GRN}${BLD}${PASTE}${RST}"
 echo ""
-echo "  (That's this device's Tailscale address — the new device only needs one node to join.)"
+if [ -n "$GENESIS_FP" ]; then
+  echo "  (This device's Tailscale address, then this hive's genesis fingerprint. The new device"
+  echo "   pins that fingerprint before it trusts anything, so another hive advertising this"
+  echo "   hive's id can't capture it. Paste the whole line.)"
+else
+  echo "  (That's this device's Tailscale address — the new device only needs one node to join.)"
+  warn "This device has not pinned its genesis, so the invite carries no fingerprint."
+  warn "Run 'hv owner pin --set' here, then 'hive-mind invite' again."
+fi
 echo ""

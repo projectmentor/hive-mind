@@ -10,7 +10,49 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.26
+## Unreleased — contract 1.27
+
+- **Contract 1.27: the genesis declaration is pinned (security).** Which `owner` declaration established
+  this hive is now recorded on the node, at `$HIVE_HOME/.genesis-pin` (0600, never synced, never journaled,
+  never in the signed manifest), and the pin decides the genesis instead of the entry timestamp. Genesis used
+  to be "the earliest valid self-signed `owner` act wins", and a journal timestamp is written by whoever wrote
+  the entry — so a declaration that arrived later with an earlier timestamp replaced the owner, and the real
+  owner's later acts stopped counting. `hv owner init` pins what it writes; `hv owner pin --set` pins an
+  existing hive's single declaration and refuses to guess between two; `hv owner pin --fingerprint` pins from
+  an invite before the first pull. Ingest refuses any other `owner` act and the projection resolves genesis
+  through the pin, so a rival already in the journal loses — nothing is ever removed from it. A node with no
+  pin keeps the old rule, and `hv doctor genesis` says so. **A rival a peer already stored is never
+  removed**, so a node that refused it and a node that holds it keep different Merkle roots from then on;
+  what converges is the projection, once every node pins the same genesis. An unpinned node can project a
+  different owner than a pinned peer — visibly, not silently.
+- **Unsigned entries can no longer fork a device's chain.** An entry with no signature could take an admitted
+  device's future `(node_id, seq)` and become that device's chain tip, after which the device's own entry was
+  dropped as a duplicate — two bodies under one key. Now, on a chain this node holds, an unsigned entry above
+  the tip or a different body at a held sequence is refused; on a chain it does not hold, only a verified first
+  pull is accepted (one batch reproducing the peer's whole advertised chain, window hash for window hash), so a
+  fresh node still receives the fleet's historical unsigned entries while a single crafted high sequence cannot
+  land. A push never qualifies.
+- **A node that has not pinned serves nothing of its journal remotely.** `/sync/hello`, `/sync/chunk` and
+  `/sync/ingest` answer 403 until the genesis is pinned; `/hive/info` and `/sync/merkle-root` stay open, and
+  loopback is never gated, so the operator can always pin. The node still reaches the hive through its own
+  outbound pull — that is how it gets the declaration it then pins. `hive-mind update` pins on upgrade, and the
+  periodic `hv doctor --fix` pins when there is exactly one declaration to pin. A hive that has **no
+  owner at all** cannot pin, because there is no declaration to pin — so its nodes stop syncing with each
+  other until one of them runs `hv owner init`. That is the bootstrap window closing, and it is the point.
+- **The invite carries a genesis fingerprint.** `hive-mind invite` prints `<address>/<hive_id>/<owner_id>/<hash8>`,
+  and the joining device pins that before it trusts any journal, so a squatter advertising this hive's id cannot
+  capture it. The short hash prefix is safe **because the pin binds the declared owner**: a genesis candidate
+  must be self-signed by the owner it declares, so a rival would need the victim's owner key, not a ground
+  hash prefix. The fingerprint is also served in `/hive/info` and `/sync/hello` **inside** the 1.26 responder
+  signature, so it cannot be swapped in transit. Older installers strip the path and still read just the address.
+- **`hv doctor` gains `genesis` and `unsigned`.** `genesis` fails on more than one self-signed declaration
+  (naming each) or on a pin whose declaration has not synced, and warns when the node is unpinned. `unsigned`
+  counts unsigned entries positioned after genesis. `--fix` pins when there is exactly one candidate.
+- **Test isolation (#142 class).** The governance projection now reads the pin as well as the journal, so tests
+  that project a temp hive in-process point `HIVE_HOME` at it, and the #109 session guard snapshots
+  `.genesis-pin` so a test that writes one into the developer's real hive is caught.
+
+## 1.26 — 2026-09-26 · `v1.26.0`
 
 - **Contract 1.26: a peer proves who answered (#107), sync protocol 3.** A `/sync/hello` or `/hive/info`
   asked for with a signed request now carries `hello_sig`: the responder's device signature over the

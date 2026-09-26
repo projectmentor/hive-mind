@@ -19,7 +19,16 @@ def _run(home, *args):
     return r
 
 
-def _loadhv():
+def _loadhv(home, monkeypatch):
+    """Load hv for in-process projection. `home` MUST be the temp hive whose entries are projected:
+    since the genesis pin (hive-mind-private #14) the governance projection reads
+    $HIVE_HOME/.genesis-pin as well as the journal, so loading against another hive's pin fails on a
+    pinned node and passes on CI (the #142 class of environment-dependent test).
+
+    It must be `monkeypatch.setenv`, never `os.environ`: a bare assignment here leaked HIVE_HOME into
+    every later test in the session, which then projected ITS temp hive against THIS one's pin —
+    `test_succession.py` passed alone and failed 11 after this module ran."""
+    monkeypatch.setenv("HIVE_HOME", str(home))
     m = importlib.machinery.SourceFileLoader("hvmod_ob", str(PROJECT / "hv"))
     s = importlib.util.spec_from_loader("hvmod_ob", m)
     mod = importlib.util.module_from_spec(s)
@@ -32,27 +41,27 @@ def _entries(home):
     return merkle.read_all_entries(str(Path(home) / "journal"))
 
 
-def test_owner_init_mints_a_hive_id(tmp_path):
+def test_owner_init_mints_a_hive_id(tmp_path, monkeypatch):
     out = _run(tmp_path, "owner", "init").stdout
     assert "hive_id: h1:" in out
-    hv = _loadhv()
+    hv = _loadhv(tmp_path, monkeypatch)
     gov = hv._governance_state(_entries(tmp_path))
     assert gov["hive_id"].startswith("h1:") and gov["owner_id"].startswith("o1:")
 
 
-def test_two_hives_get_different_ids(tmp_path):
+def test_two_hives_get_different_ids(tmp_path, monkeypatch):
     a, b = tmp_path / "a", tmp_path / "b"
     _run(a, "owner", "init")
     _run(b, "owner", "init")
-    hv = _loadhv()
+    hv = _loadhv(tmp_path, monkeypatch)
     ha = hv._governance_state(_entries(a))["hive_id"]
     hb = hv._governance_state(_entries(b))["hive_id"]
     assert ha and hb and ha != hb
 
 
-def test_owner_declaration_is_verifiable(tmp_path):
+def test_owner_declaration_is_verifiable(tmp_path, monkeypatch):
     _run(tmp_path, "owner", "init")
-    hv = _loadhv()
+    hv = _loadhv(tmp_path, monkeypatch)
     ents = _entries(tmp_path)
     gen = hv._owner_declaration(ents)
     assert gen is not None

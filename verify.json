@@ -1,5 +1,5 @@
 {
-  "digest": "963493556b8034f9f0a7e9c2149b8dceea3f186d41ea667bbbe2b44211c66d6a",
+  "digest": "132b54ec9c6a01745057b23d4fded6d9c192250d188e409ac4b110777c4286e3",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -25,7 +25,7 @@
     "dashboard/index.html": "1eed5a42ace01be9f9f5d9fe721cfe97c149abd4d095e5b8d316f2fe03081f37",
     "dashboard/logo.svg": "a7a44c7994dda2788c3f89e095b790a3429ace2642746442d41b40de9031458a",
     "docs/ADVISORIES.md": "aee9fab7f28266625d7f9d29a8636197f898ae1e117aea8d62456740892a6422",
-    "docs/AGENT_INTEGRATION.md": "7ffc80222950230dee1c268046b7b47c701633c5a9ddcc354092fd7393fdb58e",
+    "docs/AGENT_INTEGRATION.md": "750c8fdc5a429e008d456b150857ce53cc83310ceacca99de7b632ea4ef9214d",
     "docs/CLI_REFERENCE.md": "d4e45ebc725c33d297e61500fc4dc70d4cc29fa60b169a77075ba821432f6321",
     "docs/CONTRACT_HISTORY.md": "210658c04abea70d5c0cb615b3c71d4e1cef84c75c3f66d5294ae58b3157618c",
     "docs/HV_ARCHITECTURE.md": "48c893e97b3db0aeffb07c5df40b09abd849e653e9a2167e9cc73337ea0490ea",

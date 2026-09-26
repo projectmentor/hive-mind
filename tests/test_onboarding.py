@@ -19,7 +19,14 @@ def _run(home, *args):
     return r
 
 
-def _loadhv():
+def _loadhv(home=None):
+    """Load hv for in-process projection. `home` MUST be the temp hive whose entries are projected:
+    since the genesis pin (hive-mind-private #14) the governance projection reads
+    $HIVE_HOME/.genesis-pin as well as the journal, so loading with the developer's real HIVE_HOME
+    would project a temp hive's entries against the real node's pin — and fail on any pinned node
+    while passing on CI (the #142 class of environment-dependent test)."""
+    if home is not None:
+        os.environ["HIVE_HOME"] = str(home)
     m = importlib.machinery.SourceFileLoader("hvmod_ob", str(PROJECT / "hv"))
     s = importlib.util.spec_from_loader("hvmod_ob", m)
     mod = importlib.util.module_from_spec(s)
@@ -35,7 +42,7 @@ def _entries(home):
 def test_owner_init_mints_a_hive_id(tmp_path):
     out = _run(tmp_path, "owner", "init").stdout
     assert "hive_id: h1:" in out
-    hv = _loadhv()
+    hv = _loadhv(tmp_path)
     gov = hv._governance_state(_entries(tmp_path))
     assert gov["hive_id"].startswith("h1:") and gov["owner_id"].startswith("o1:")
 
@@ -44,7 +51,7 @@ def test_two_hives_get_different_ids(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     _run(a, "owner", "init")
     _run(b, "owner", "init")
-    hv = _loadhv()
+    hv = _loadhv(tmp_path)
     ha = hv._governance_state(_entries(a))["hive_id"]
     hb = hv._governance_state(_entries(b))["hive_id"]
     assert ha and hb and ha != hb
@@ -52,7 +59,7 @@ def test_two_hives_get_different_ids(tmp_path):
 
 def test_owner_declaration_is_verifiable(tmp_path):
     _run(tmp_path, "owner", "init")
-    hv = _loadhv()
+    hv = _loadhv(tmp_path)
     ents = _entries(tmp_path)
     gen = hv._owner_declaration(ents)
     assert gen is not None

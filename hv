@@ -1459,9 +1459,15 @@ def _auto_pin_genesis(entries):
     attacker controls — so pin nothing, let `hv doctor genesis` fail, and leave the choice to the
     operator (re-join with the winner's fingerprint). Returns the pin, or None."""
     existing = _load_genesis_pin()
-    if existing is not None:
-        return existing
     cands = _self_signed_owner_acts(entries)
+    if existing is not None:
+        # A pin taken from an invite fingerprint holds only a hash prefix. Once the declaration itself
+        # has synced, complete the pin so it names the exact entry (and doctor can say so).
+        if not existing.get("genesis_hash"):
+            match = [e for e in cands if _pin_matches(e, existing)]
+            if len(match) == 1:
+                return _write_genesis_pin(_genesis_pin_for(match[0]))
+        return existing
     return _write_genesis_pin(_genesis_pin_for(cands[0])) if len(cands) == 1 else None
 
 
@@ -7861,6 +7867,34 @@ def owner_cmd(args):
     if action == "pin":
         pin = _load_genesis_pin()
         cands = _self_signed_owner_acts(entries)
+        fp = (getattr(args, "fingerprint", "") or "").strip()
+        if fp:
+            # A joiner pins from the invite BEFORE its first pull, so it never trusts a journal it has
+            # not vetted. The invite carries only a hash PREFIX, which is enough: a squatter can copy a
+            # hive_id and an owner_id, but not the genesis entry's hash.
+            parts = [x for x in fp.replace("\\", "/").split("/") if x]
+            if len(parts) < 3:
+                print("A genesis fingerprint looks like <hive_id>/<owner_id>/<hash8>, as `hv owner show`")
+                print("  prints it (an invite line may carry the address in front of it).")
+                return
+            hive_id, owner_id, h8 = parts[-3], parts[-2], parts[-1].lower()
+            if not (hive_id.startswith(("h1:", "h2:")) and owner_id.startswith("o1:")
+                    and len(h8) >= 8 and all(c in "0123456789abcdef" for c in h8)):
+                print(f"That does not parse as a genesis fingerprint: {fp!r}")
+                print("  Expected <hive_id>/<owner_id>/<hash8>, e.g. h1:abc.../o1:def.../0a1b2c3d")
+                return
+            if pin is not None and not getattr(args, "force", False):
+                print(f"Already pinned to {pin.get('genesis_ref') or pin.get('genesis_hash8')} "
+                      f"(owner {pin.get('owner_id')}). Use --force to replace it.")
+                return
+            new_pin = _write_genesis_pin({"hive_id": hive_id, "owner_id": owner_id, "genesis_hash8": h8})
+            print(f"Pinned the genesis fingerprint for hive {hive_id} (owner {owner_id}, {h8}).")
+            print("  Nothing else establishes this hive on this device now. The declaration itself")
+            print("  arrives on the first sync, and `hv doctor genesis` confirms it matched.")
+            if any(_pin_matches(e, new_pin) for e in cands):
+                _write_genesis_pin(_genesis_pin_for(next(e for e in cands if _pin_matches(e, new_pin))))
+                print("  It is already in this journal — the pin now names the exact entry.")
+            return
         if not getattr(args, "set", False):
             if pin is None:
                 print("No genesis pinned on this device.")
@@ -9300,7 +9334,9 @@ def build_parser():
     owner_pin = owner_sub.add_parser("pin", help="Show or set the pinned genesis declaration (no arg shows)")
     owner_pin.add_argument("--set", action="store_true",
                            help="Pin the journal's single self-signed owner declaration (refuses if there are 0 or 2+)")
-    owner_pin.add_argument("--force", action="store_true", help="With --set: replace an existing pin (a deliberate fork)")
+    owner_pin.add_argument("--fingerprint", metavar="FP",
+                           help="Pin from an invite's genesis fingerprint (<hive_id>/<owner_id>/<hash8>), before the first sync")
+    owner_pin.add_argument("--force", action="store_true", help="With --set/--fingerprint: replace an existing pin (a deliberate fork)")
     owner_export = owner_sub.add_parser("export", help="Back up this device's owner key to a file (for recovery)")
     owner_export.add_argument("--out", help="Output file (default ./hive-owner-<owner_id>.key)")
     owner_export.add_argument("--passphrase", action="store_true", help="Encrypt the file with a passphrase (prompted)")

@@ -21,7 +21,10 @@ def session_paths():
     home = Path(os.environ.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude")
     stash = Path(os.environ.get("HIVE_IDENTITY_STASH") or home / ".config" / "hive-mind" / "identity")
-    return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase()}
+    # The live hive's checkout, so the guard can see a .genesis-pin written into it (#14): the pin is
+    # per-node governance authority, in the same class as the owner key.
+    hive = Path(os.environ.get("HIVE_HOME") or Path(__file__).resolve().parent.parent)
+    return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive}
 
 
 def _file_state(p, ctime=False):
@@ -53,7 +56,7 @@ def _hive_hooks(settings):
                   if "hive_dispatch.sh" in h.get("command", ""))
 
 
-def snapshot(claude, stash):
+def snapshot(claude, stash, hive=None):
     """The state `hv doctor --fix` and `hv owner init` would change: the skill symlink's target, the
     Hive-owned hooks, the .bak.doctor that every real --fix write refreshes (hv `_wire_agent`), and
     the owner-key stash a reinstall restores from (hv `_stash_owner_key`)."""
@@ -67,6 +70,7 @@ def snapshot(claude, stash):
         "hive hooks in settings.json": _hive_hooks(Path(claude) / "settings.json"),
         "settings.json.bak.doctor": _file_state(Path(claude) / "settings.json.bak.doctor", ctime=True),
         "owner-key stash": _file_state(Path(stash) / ".owner-key"),
+        "genesis pin": _file_state(Path(hive) / ".genesis-pin") if hive else None,
     }
 
 

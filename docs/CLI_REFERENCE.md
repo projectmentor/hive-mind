@@ -669,7 +669,7 @@ hv owner heartbeat                             # refresh owner liveness (resets 
 hv owner import FILE [--force]                 # restore it from a file on another device
 hv owner init                                 # mint the owner key and claim ownership (once)
 hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
-hv owner pin [--set] [--force]                # show, or pin, the genesis declaration this node accepts
+hv owner pin [--set | --fingerprint FP] [--force]  # show, or pin, the genesis this node accepts
 hv owner propose-election [--mint | --pub B64] # (admitted device) propose electing a new owner
 hv owner restore                               # recover the key from the hive's escrow
 hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
@@ -694,6 +694,12 @@ projection, so another `owner` declaration arriving later cannot replace the own
 matter what timestamp it carries. Without it the rule would be "the earliest valid
 self-signed declaration wins", and an entry's timestamp is written by whoever made the
 entry.
+
+A **joining** device pins from the invite instead, before it has pulled anything:
+`hv owner pin --fingerprint h1:…/o1:…/0a1b2c3d` (the installer does this for you when the
+pasted invite carries a fingerprint). Only a hash *prefix* travels in an invite, which is
+enough — a squatter can copy a `hive_id` and an `owner_id`, but not the genesis entry's
+hash. The pin then names the exact entry as soon as the declaration itself syncs.
 
 `hv owner init` pins the declaration it writes, so a new hive is pinned from the start.
 An existing hive pins on the operator's word: `hv owner pin --set` takes the journal's

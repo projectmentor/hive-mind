@@ -458,3 +458,38 @@ def test_the_genesis_fingerprint_is_inside_the_signed_body(hv):
             "genesis_fingerprint": fp}
     swapped = dict(body, genesis_fingerprint=f"{HIVE_ID}/{real[2]}/deadbeef")
     assert sync_common.hello_body_digest(body) != sync_common.hello_body_digest(swapped)
+
+
+# ── Pinning from an invite, before the first pull (mitigation (c)) ───────────────────────────────
+
+def test_a_joiner_pins_from_an_invite_fingerprint_then_the_pin_names_the_entry(hv):
+    """A joiner must be able to pin BEFORE it trusts a journal, so a squatter advertising the victim's
+    hive_id cannot capture it. Only a hash prefix travels in an invite, which is enough."""
+    real = _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    fp_hash8 = hv.compute_hash(genesis).split(":", 1)[-1][:8]
+
+    hv._write_genesis_pin({"hive_id": HIVE_ID, "owner_id": real[2], "genesis_hash8": fp_hash8})
+    pin = hv._load_genesis_pin()
+    assert pin is not None and _pin_matches_via(hv, genesis, pin)
+
+    # A rival that copies the hive_id AND the owner_id still fails: it cannot reproduce the hash.
+    rival = _owner_act(hv, real, T_BACKDATED, nid="attackerdev")
+    assert not _pin_matches_via(hv, rival, pin)
+
+    # Before the declaration syncs the node has no owner, and it must fail CLOSED, not pre-owner-open.
+    gov = hv._governance_state([])
+    assert gov["owner_id"] is None and gov["genesis"]["mismatch"] is True
+    stray = _fact(hv, "k1:00000000000000cc", T_LATER, "content from anyone", seq=1)
+    assert hv.append_foreign_entries([stray])[:2] == (0, 0)
+
+    # Once it arrives, the fingerprint pin is completed into an exact-entry pin.
+    entries = _on_disk(hv, [genesis])
+    completed = hv._auto_pin_genesis(entries)
+    assert completed["genesis_hash"] == hv.compute_hash(genesis)
+    assert completed["genesis_ref"] == "ownerdev:1"
+    assert hv._governance_state(entries)["owner_id"] == real[2]
+
+
+def _pin_matches_via(hv, entry, pin):
+    return hv._pin_matches(entry, pin)

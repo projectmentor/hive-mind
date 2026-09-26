@@ -6778,6 +6778,62 @@ def _doctor_status():
     except Exception as e:
         checks.append({"name": "owner", "status": "warn", "detail": f"owner check error: {e}"})
 
+    # 3c. Genesis — is the declaration that established this hive pinned, and is it the only one?
+    #     ok   = pinned, and exactly one self-signed `owner` declaration in the journal.
+    #     warn = no pin (legacy behaviour: the earliest declaration wins, and a timestamp is written
+    #            by whoever wrote the entry). Advisory, because an un-upgraded fleet must keep working.
+    #     fail = more than one declaration (one of them is a rival), or a pin whose declaration is not
+    #            in this journal. Both need the operator; neither has a safe automatic answer.
+    try:
+        gov = _governance_state(entries)
+        g = gov.get("genesis") or {}
+        pin = _load_genesis_pin()
+        cands = _self_signed_owner_acts(entries)
+        if not cands and not pin:
+            checks.append({"name": "genesis", "status": "ok",
+                           "detail": "no owner established yet (`hv owner init` pins as it claims)"})
+        elif g.get("mismatch"):
+            checks.append({"name": "genesis", "status": "fail",
+                           "detail": (f"the pinned genesis {pin.get('genesis_ref')} is NOT in this journal, so "
+                                      "this node has no owner and refuses foreign content. Sync from the "
+                                      "device you pinned, or re-pin with `hv owner pin --set --force`")})
+        elif len(cands) > 1:
+            refs = ", ".join(f"{e.get('node_id')}:{e.get('seq')}→{(e.get('payload') or {}).get('owner_id')}"
+                             for e in cands)
+            detail = (f"{len(cands)} self-signed owner declarations in this journal ({refs}) — one is a "
+                      "rival, and the journal never removes it")
+            detail += (f"; the pin keeps {g.get('ref')} as the owner" if g.get("pinned")
+                       else "; UNPINNED, so the earliest timestamp currently wins — pin the one you trust")
+            checks.append({"name": "genesis", "status": "fail", "detail": detail})
+        elif not g.get("pinned"):
+            checks.append({"name": "genesis", "status": "warn", "detail": (
+                f"genesis {g.get('ref')} is not pinned on this device — another `owner` declaration with "
+                "an earlier timestamp would replace the owner. `hv owner pin --set` (or `hv doctor --fix`)")})
+        else:
+            checks.append({"name": "genesis", "status": "ok",
+                           "detail": f"genesis {g.get('ref')} pinned; fingerprint {_genesis_fingerprint(entries, gov)}"})
+    except Exception as e:
+        checks.append({"name": "genesis", "status": "warn", "detail": f"genesis check error: {e}"})
+
+    # 3d. Unsigned entries after genesis — visibility on the class the pin closes going forward. The
+    #     historical pre-genesis ones are expected and are never counted as a problem.
+    try:
+        gov = _governance_state(entries)
+        gts = gov.get("owner_ts") or ""
+        if gts:
+            after = [e for e in entries if "sig" not in e and (e.get("timestamp") or "") > gts]
+            if after:
+                by = sorted({e.get("node_id") for e in after})
+                checks.append({"name": "unsigned", "status": "warn", "detail": (
+                    f"{len(after)} unsigned entr{'y' if len(after) == 1 else 'ies'} positioned after "
+                    f"genesis, from {', '.join(map(str, by))} — ingest refuses new ones once pinned; "
+                    "these are already stored and the journal never removes them")})
+            else:
+                checks.append({"name": "unsigned", "status": "ok",
+                               "detail": "no unsigned entries after genesis"})
+    except Exception as e:
+        checks.append({"name": "unsigned", "status": "warn", "detail": f"unsigned check error: {e}"})
+
     # 3b. Device keys — every admitted device must have a usable Curve25519 key derived from its
     #     OWN signed identity (capsules seal to that). `missing` = admitted but hasn't synced a
     #     signed entry yet (normal/transient → warn, never fail). `suspect` = a curve_pub was
@@ -7587,6 +7643,22 @@ def doctor_cmd(args):
                           f"propagates on the next sync.")
         except Exception as e:
             print(f"\n--fix: key-announce heal error: {e}")
+
+        # Pin the genesis when there is exactly one candidate. A plain `hv doctor` stays read-only and
+        # only warns; pinning is a mutation, so it belongs behind --fix (and `hv owner pin --set`).
+        # Never guesses: two candidates mean a rival is stored, and doctor fails instead.
+        try:
+            _pe = merkle.read_all_entries(JOURNAL_DIR)
+            if _load_genesis_pin() is None and len(_self_signed_owner_acts(_pe)) == 1:
+                if dry:
+                    print("\n  would pin this hive's single genesis declaration "
+                          f"({GENESIS_PIN_PATH.name}, 0600, never synced).")
+                else:
+                    _p = _auto_pin_genesis(_pe)
+                    if _p:
+                        print(f"\n--fix: pinned genesis {_p['genesis_ref']} (owner {_p['owner_id']}).")
+        except Exception as e:
+            print(f"\n--fix: genesis-pin heal error: {e}")
 
         restarted = False
         orphans = [p for c in checks for p in (c.get("orphans") or [])]

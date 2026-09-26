@@ -1,5 +1,5 @@
 {
-  "digest": "750c48cc65c7a3c2d11f282a575a095f53ddc87bed919ab14b653bc5fbaa6257",
+  "digest": "963493556b8034f9f0a7e9c2149b8dceea3f186d41ea667bbbe2b44211c66d6a",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -10,7 +10,7 @@
     ".github/workflows/ci.yml": "943a0faa45eb49787400c7af7a600454c136cc3a0abea76590a2f6cc88ded917",
     ".github/workflows/cla.yml": "900240ebc0ee273c4e29e791790a357532b038ac0dcfe61fe9a76772b0c6896a",
     ".github/workflows/sign.yml": "432f7702e5b901c432e936ff7e4858855e869fe7fb7804a68368d086858989b2",
-    "CHANGELOG.md": "5b21c9670d6f4556b2c4d7824fb54ea07c935ba562f4d8ccb6627eab6bde9bd0",
+    "CHANGELOG.md": "31aff64a201e87b35d48cb22d3413b659c924a0b7781648ff7541173301c4000",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "9f14417f7463317c3d597b244a28066c0b88e80c2c0193f0511cbd547fb0da6d",
     "README.md": "17fd15a3ca21cd085b54cea21f5eebba96729bad825df2368df1a90d23483ba3",
@@ -25,9 +25,9 @@
     "dashboard/index.html": "1eed5a42ace01be9f9f5d9fe721cfe97c149abd4d095e5b8d316f2fe03081f37",
     "dashboard/logo.svg": "a7a44c7994dda2788c3f89e095b790a3429ace2642746442d41b40de9031458a",
     "docs/ADVISORIES.md": "aee9fab7f28266625d7f9d29a8636197f898ae1e117aea8d62456740892a6422",
-    "docs/AGENT_INTEGRATION.md": "00f62478edc8cac5f0c8443563419f86deae48bf0d2eb726872e5b38e36da835",
+    "docs/AGENT_INTEGRATION.md": "7ffc80222950230dee1c268046b7b47c701633c5a9ddcc354092fd7393fdb58e",
     "docs/CLI_REFERENCE.md": "d4e45ebc725c33d297e61500fc4dc70d4cc29fa60b169a77075ba821432f6321",
-    "docs/CONTRACT_HISTORY.md": "d69749ee7f13a879ec25e45015e2fe0f8d65c32738fefcde2f8882da9a7dcc48",
+    "docs/CONTRACT_HISTORY.md": "210658c04abea70d5c0cb615b3c71d4e1cef84c75c3f66d5294ae58b3157618c",
     "docs/HV_ARCHITECTURE.md": "48c893e97b3db0aeffb07c5df40b09abd849e653e9a2167e9cc73337ea0490ea",
     "docs/INTERNALS.md": "1298eb315ce226ebeafaed6894d220824cf8128d2d3e95cb8cccef92bbf3b495",
     "docs/P2P_DESIGN.md": "82e70c7f0be8fe6854ef72c0b1e21afce1067c66c489b6018cfa0d190a23e6de",
@@ -37,7 +37,7 @@
     "ed25519.py": "d0dd375112f33e527021b3654558d296e60c594c52fd17826e84493e418fccd4",
     "glama.json": "324dd61ba65a72154bb599baf92da55d6d9f34a952371681360fd55bf9e12b8d",
     "hive_sync_daemon.py": "fe449c6bec6c56e1c5502d82f33737ee2a80d79e79da6d86bd69b89dfad60e21",
-    "hv": "8d1627615434b14181c06121c6cd537a8769fa1dae1a7f6cc0cfce404c63d22d",
+    "hv": "74211184af4c60a4e22c08ae8f74ff86e59106e04072e4aa4ad22a0b55ae0392",
     "integrations/claude-code/hive-memory/SKILL.md": "ad7fa1943c6b8174084c509743dae05af544a9ba6314a49ccf6a4d1b8c45ee71",
     "integrations/claude-code/install.sh": "e2f2831359968dce15110190660bc26aad9faae4e662d4d2289b46b60985614c",
     "integrations/claude-code/wire-up/SKILL.md": "53622492cf82dffe837d73af4d190fc945f816085a74925ed37124256ece1d63",
@@ -93,7 +93,7 @@
     "tests/test_doctor_crypto.py": "d7028ff3088be2b5011e6a57a1228583d4c0e68fff8a7435ff8b49175d9dab05",
     "tests/test_ed25519.py": "def4b5275768ce98ca9289fdaf45f6324641de113c9fd8bf7f8156922e883924",
     "tests/test_forget_authz.py": "d029fcec8f5314e8995bb38af7ddeafbc7a946ad9c91424d9c8c02b5d3b63075",
-    "tests/test_forget_writers.py": "3b0ecba7e4510119bd84d5dc2e7003921c1bfbf4d1847dbffa0fdf6c63456063",
+    "tests/test_forget_writers.py": "5ce27b25f50fa18284a82e03c41bb9bb4643d0694281ac718d3c62e006f13d85",
     "tests/test_genesis_convergence.py": "a13412442db67a66c72007009707fd3b2315e20adc51374599008a400c90b29f",
     "tests/test_genesis_pin.py": "eaad6c40f6e6131d8fbef8ffe9667aa8c28da0f9f0acc292e4e1fbfb54332d13",
     "tests/test_gitignore.py": "53c09d3586ab3c5846a05782151625cf54a0171557823ee555b8c259f6f34763",
@@ -116,6 +116,7 @@
     "tests/test_nudge.py": "075ad55162f866316d4e756ae5d5dc51116c55b5d50f17aaf284aa5f1f6988b5",
     "tests/test_onboarding.py": "049ef19e1077170303aad2e2fc1cb5d36379d9c741cfd8c80a44d98c5a7a5df0",
     "tests/test_outcomes.py": "89abdf4936bd16fe83cbe2db25a11fb8ea838f5e23d5c365428c942b0a5e7145",
+    "tests/test_owner_init_closes.py": "90010ea294aa9efe9e2f49d24c0f651b784517d06f823d21c6c04c36797094e4",
     "tests/test_peer_address.py": "1193cb53aa3f8fa46c677c4b39055b7809d1778ebb16d9b965c520f9fa3c0c3f",
     "tests/test_perf.py": "4d7ca8ed5f70bc3a5cd257870dd2fe31b21095e206072c5cf99c3fbefb1d8d86",
     "tests/test_projection_authz.py": "9b30f24ba052d75d6fd89f1d9cdea23c10ad0f0174aaef6601282f2c64e07227",
@@ -141,5 +142,5 @@
     "utilities/migrate_journal.py": "aa00124580fcb0e33d4a2e7aadf0a19fe7c6dab39b07d1309e3b9816e7a7120f",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
-  "version": "1.27"
+  "version": "1.28"
 }

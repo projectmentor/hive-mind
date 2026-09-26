@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.26`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 1.27`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -246,6 +246,15 @@ when it must re-wire.
   off|permissive|enforce` (default `permissive`) decides whether this node pushes only to verified peers;
   `hv doctor` gains the advisory `peer-identity`. Operator-only; adapters are unaffected. A foreign sync client
   may ignore the field. No journal change.
+- `1.27` — **the genesis declaration is pinned** (security). Nothing an adapter calls changes: no verb, flag or
+  output format moves. Two effects worth knowing. A node that has not pinned its genesis answers `403` to a
+  remote `/sync/hello`, `/sync/chunk` and `/sync/ingest` until the operator pins (`hv owner pin --set`, or
+  `hive-mind update`, or the periodic `hv doctor --fix`) — loopback, `/hive/info` and `/sync/merkle-root` are
+  never gated, so an adapter on the node itself is unaffected. And an entry with no signature is now refused
+  when it would extend or rewrite a device's chain, so any adapter that writes through `hv` on a keyed node
+  (every supported one) is unaffected, while a hand-built unsigned entry is not accepted.
+- `1.26` — **a peer proves who answered** (#107), sync protocol 3. Additive: one new flag
+  (`hv sync auth --outbound`), one new response field, one new `hv doctor` check. No adapter change.
 - `1.25` — **owner forgets can require a signature** (#122): a governed config key, `hv config set
   forget_writers owner`, closes the pre-genesis grandfather. Owner-only, no new command or flag; adapters
   are unaffected. No wire change.

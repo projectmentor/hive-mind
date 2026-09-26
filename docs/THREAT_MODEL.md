@@ -137,7 +137,32 @@ at once). Concretely:
   journal stays convergent. See "Known limitations" for the residual.
 - **Local write races.** Journal appends take an exclusive `flock`, so a daemon and a CLI writing
   the same daily file cannot interleave mid-line and corrupt a record.
-- **Cross-hive contamination.** Sync refuses to merge journals whose `hive_id` differs.
+- **Cross-hive contamination.** Sync refuses to merge journals whose `hive_id` differs — but only when
+  BOTH sides present one: the check compares the `hive_id` in the request body, and a push that simply
+  omits it is not caught by this guard. That is deliberate (an empty id on either side is the pre-owner
+  bootstrap case, which has to be allowed so a genesis can propagate), and it is why the guard is not
+  what keeps a rival `owner` declaration out. **Genesis pinning** is (below).
+- **Genesis pinning.** Which `owner` declaration established this hive is recorded on the node, at
+  `$HIVE_HOME/.genesis-pin` (0600, never synced, never journaled, never in the signed manifest), and the
+  pin — not the entry timestamp — decides. This matters because genesis used to be "the earliest valid
+  self-signed `owner` act wins" and a journal timestamp is written by whoever wrote the entry, so a
+  declaration arriving later with an earlier timestamp replaced the established owner, after which the
+  real owner's own acts stopped counting (only the current owner's acts are honoured). The pin binds the
+  whole entry by hash, so a declaration that copies the `hive_id` and the `owner_id` still fails to match.
+  Ingest refuses any other `owner` act, and the projection resolves genesis through the pin, so a rival
+  already on disk loses — an append-only journal never removes it. Honest nodes sharing one pin drop the
+  same acts, so journals stay convergent, exactly as they already do for forged acts. A node that has not
+  pinned serves no journal to a remote caller and accepts no push (403 on `/sync/hello`, `/sync/chunk`
+  and `/sync/ingest`; `/hive/info` and `/sync/merkle-root` stay open; loopback is never gated), which
+  closes the window in which a joiner could be captured and then relay a rival onward.
+- **Unsigned entries cannot fork a chain.** `_verify_entry` accepts an entry with no signature at all
+  (historical entries predate device keys), so an unsigned entry could take an admitted device's future
+  `(node_id, seq)`, become that device's chain tip, and make the device's own later entry drop as a
+  duplicate — two different bodies under one key, and a permanent Merkle divergence. On a chain this node
+  holds, an unsigned entry above the tip, or a different body at a sequence already held, is now refused.
+  On a chain it does not hold, only a verified first pull is accepted: one batch reproducing that peer's
+  whole advertised chain, window hash for window hash from sequence 1, which only the node's own outbound
+  pull can present. A push never qualifies.
 - **An impostor at a peer's address.** Tailnet IPs get reassigned, and whatever listens at a peer's
   stale address used to receive that peer's pushes, since a sync round trusted the answering
   `/sync/hello`. Its answer is now signed by the responder's device key over the caller's single-use
@@ -162,12 +187,17 @@ at once). Concretely:
   advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`
   domain tag keeps it from ever passing as a request or entry signature, and the address binding keeps a
   relayed one from proving anything. Signing runs inside the request-slot cap and per-address rate limit.
-- **Bootstrap / TOFU window.** Before an owner is established, the hive accepts entries permissively
-  so the genesis owner declaration can propagate, and owner establishment is trust-on-first-use: the
-  first valid self-signed `owner` declaration wins. An attacker who injects an `owner` declaration
-  before the legitimate one can front-run ownership. *Mitigation:* establish the owner before
-  exposing the daemon, and verify the genesis `hive_id`/`owner_id` out-of-band when joining. Closing
-  this in code is consensus-critical and has not been done; the mitigation above is the defence.
+- **What genesis pinning leaves.** Pinning (above) decides which declaration establishes the hive, but a
+  device still has to learn the right fingerprint once. An invite carries it
+  (`<address>/<hive_id>/<owner_id>/<hash8>`), and `/hive/info` and `/sync/hello` serve it inside the
+  responder signature, so it cannot be swapped in transit. A join by a **bare address**, with no
+  fingerprint to compare, remains trust-on-first-use for that first pull: compare `hv owner show` against
+  the inviting device out of band. A node that has not pinned keeps the previous genesis rule — it must,
+  or a mixed fleet would stop converging — so an un-upgraded or unpinned node is still exposed until it
+  pins; `hv doctor genesis` reports exactly that state. And on a first pull of a chain it holds none of,
+  an admitted peer can advertise a chain that is not the fleet's: every established node refuses anything
+  past its own tip, so such an entry cannot become fleet truth, and under `hv sync auth --outbound enforce`
+  the peer's identity is proven first.
 - **Join-request replay semantics.** Join-requests are last-write-wins per `device_id`; a denied
   device can re-ask, and clearing a deny makes an older request visible again. This is intended
   (a device may legitimately re-request), but it is not replay-bounded. Documented, not changed.

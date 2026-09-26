@@ -301,7 +301,7 @@ def _stash_owner_key(seed):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "1.26"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
+CONTRACT_VERSION = "1.27"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
 
 
 # --------------------------------------------------------------------------

@@ -24,9 +24,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-sys.path.insert(0, str(ROOT))          # an entry point may set sys.path; a library module may not
 
-import commandmap  # noqa: E402
+# NO sys.path insert, and none is needed. Run as a script, Python already puts this file's directory
+# first on sys.path; imported by a test, the caller has already put the project there. An insert at
+# import time would be the same fault #152 fixed in `ownerkey.py`: this file is BOTH an entry point and
+# an imported module, so an import-time insert would prepend the real source directory and hide a staged
+# copy for everything loaded afterwards. Entry-point-only path setup would still be legitimate — but it
+# would have to happen inside the function the dispatcher runs, not here.
+import commandmap
 
 _hv = None
 

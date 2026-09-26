@@ -136,3 +136,50 @@ def test_the_dispatcher_routes_the_control_plane_verbs():
         assert verb in src.split("owner|group|admit|config|unforget|retract")[0] or True
     assert "owner|group|admit|config|unforget|retract)" in src
     assert not (PROJECT / "hive-mind").exists(), "no extensionless entry point; the manifest would skip it"
+
+
+# ── the boundary the control plane must not undo ─────────────────────────────────────────────────
+
+def test_the_control_plane_does_not_mutate_sys_path_at_import():
+    """Same fault #152 fixed in `ownerkey.py`, and this file is more exposed to it: it is BOTH an entry
+    point and an imported module, so an import-time insert would prepend the real source directory and
+    hide a staged copy for everything loaded afterwards. Entry-point path setup would be legitimate, but
+    it has to happen inside the function the dispatcher runs."""
+    import ast
+    src = (PROJECT / "hivemind_ctl.py").read_text()
+    tree = ast.parse(src)
+    for node in tree.body:                       # module level only: a function may legitimately do it
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Attribute) and sub.attr in ("insert", "append", "extend"):
+                val = sub.value
+                if isinstance(val, ast.Attribute) and val.attr == "path" and not isinstance(node, ast.FunctionDef):
+                    raise AssertionError("hivemind_ctl mutates sys.path at import time")
+
+
+def test_hv_does_not_import_the_control_plane():
+    """The back door into S2. `hv` must not import `hivemind_ctl`, because the control plane imports
+    `ownerkey` — so that edge would give `hv` a TRANSITIVE path to owner signing, and the import-graph
+    test in 2b would be satisfied by neither module importing `ownerkey` directly."""
+    # Check the AST, not the source text: `hv` mentions this module in a docstring explaining why
+    # `dispatch` exists, and a substring scan would fail on documentation. (Third time today that
+    # distinction has mattered — a text scan conflates what the code does with what it says.)
+    import ast
+    imported = set()
+    for node in ast.walk(ast.parse((PROJECT / "hv").read_text())):
+        if isinstance(node, ast.Import):
+            imported.update(a.name.split(".")[0] for a in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+    assert "hivemind_ctl" not in imported, "hv imports the control plane: a transitive path to ownerkey"
+    # and for the same reason, nothing else hv imports may reach it either
+    assert "ownerkey" in imported, "in 2a hv still imports ownerkey directly; 2b removes exactly this"
+
+
+def test_the_control_plane_reaches_signing_and_the_library():
+    """What it must be able to do, stated positively: reach the library for the projection and journal,
+    and reach `ownerkey` for signing. That pairing is why the split needs two modules rather than one."""
+    src = (PROJECT / "hivemind_ctl.py").read_text()
+    assert "commandmap" in src
+    m = hivemind_ctl.hv()
+    assert callable(m.dispatch) and callable(m.build_parser)
+    assert hasattr(m, "ownerkey"), "in 2a the library still owns signing; 2b moves it here"

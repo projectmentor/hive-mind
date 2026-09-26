@@ -163,6 +163,16 @@ NODE_LABEL = _human_label()
 # derives the same admitted set / principal map / config and confidence stays identical across nodes
 # (the convergence invariant). Minted only by `hv owner init`; importing hv never creates it.
 OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
+# Genesis pin (hive-mind-private #14). Genesis used to be "the earliest valid self-signed `owner`
+# act wins", and an entry's timestamp is written by whoever made the entry — so a rival `owner` act
+# carrying an EARLIER timestamp TOOK the hive, before or after genesis, and silenced the real owner's
+# later acts (only the current owner's acts are honoured). This file records the one `owner` act this
+# node accepted and is the authority for both ingest and the projection. It is written only by a
+# deliberate act (`owner init`, a join carrying the genesis fingerprint, or `hv owner pin` after a
+# trust-on-first-use pull). Per-node data like the device key: 0600, never synced, never journaled,
+# never in the signed source manifest. A node with no pin keeps the legacy rule so a mixed fleet still
+# converges, and `hv doctor genesis` fails until the operator pins.
+GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"
 
 
 def _owner_seed():
@@ -803,6 +813,7 @@ def append_foreign_entries(entries):
     existing = journal_keys()
     accepted = duplicates = rejected = 0
     arrived_ideas = []
+    pin = _load_genesis_pin()        # the one `owner` act this node accepted (hive-mind-private #14)
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
@@ -822,6 +833,12 @@ def append_foreign_entries(entries):
             continue
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
+            continue
+        if pin is not None and (e.get("payload") or {}).get("action") == "owner" and not _pin_matches(e, pin):
+            rejected += 1
+            # A RIVAL genesis. Its owner signature is perfectly valid — it is signed by the attacker's
+            # OWN owner key — so only the pin can tell it from ours. Dropping it is deterministic, so
+            # every pinned node drops the same act and the journals stay converged.
             continue
         if (e.get("payload", {}).get("action") not in ("join-request", "propose-election", "vote-election",
                                                        "announce")
@@ -1274,6 +1291,73 @@ def _content_unauthorized(entries, gov, want_type, policy_key):
 _GOV_CACHE = {}     # signature(governance entries) -> projected gov dict (master copy, never handed out)
 
 
+def _genesis_pin_for(entry):
+    """The pin a given `owner` act would produce: which hive, which owner, and WHICH ENTRY. The hash
+    binds the whole entry, so a rival that copies the hive_id and the owner_id still fails to match."""
+    p = entry.get("payload", {}) or {}
+    return {"hive_id": p.get("hive_id", ""), "owner_id": p.get("owner_id"),
+            "genesis_ref": f"{entry.get('node_id')}:{entry.get('seq')}",
+            "genesis_hash": compute_hash(entry)}
+
+
+def _load_genesis_pin():
+    """This node's pin, or None when it has never pinned (legacy). A malformed or half-written file is
+    NOT a pin: an unreadable pin must fail to the documented legacy behaviour, never to "any owner"."""
+    try:
+        pin = json.loads(GENESIS_PIN_PATH.read_text())
+    except Exception:
+        return None
+    if not isinstance(pin, dict) or not pin.get("owner_id"):
+        return None
+    return pin if (pin.get("genesis_hash") or pin.get("genesis_hash8")) else None
+
+
+def _write_genesis_pin(pin):
+    """Write the pin 0600 and atomically — a torn pin would silently unpin the node on the next read."""
+    GENESIS_PIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not GENESIS_PIN_PATH.exists():
+        GENESIS_PIN_PATH.touch(mode=0o600)
+    _atomic_write_text(GENESIS_PIN_PATH, json.dumps(pin, sort_keys=True) + "\n")
+    os.chmod(GENESIS_PIN_PATH, 0o600)
+    return pin
+
+
+def _pin_matches(entry, pin):
+    """True when this `owner` act IS the pinned genesis. A pin taken from an invite fingerprint carries
+    only a hash prefix (`genesis_hash8`), so both forms are honoured; the full hash wins when present."""
+    if not pin:
+        return False
+    h = compute_hash(entry)
+    if pin.get("genesis_hash"):
+        return h == pin["genesis_hash"]
+    short = str(pin.get("genesis_hash8") or "")
+    return bool(short) and h.split(":", 1)[-1].startswith(short)
+
+
+def _self_signed_owner_acts(entries):
+    """Every genesis CANDIDATE: a governance `owner` act whose payload is signed by the very owner it
+    declares. Sorted the way the projection sorts governance, so the legacy pick — candidate 0 — is
+    byte-identical to the pre-pin behaviour on every node."""
+    out = [e for e in entries
+           if e.get("type") == "governance"
+           and (e.get("payload") or {}).get("action") == "owner"
+           and _verify_governance(e.get("payload") or {}) == (e.get("payload") or {}).get("owner_id")]
+    out.sort(key=lambda e: (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)))
+    return out
+
+
+def _auto_pin_genesis(entries):
+    """Pin on upgrade, but only when there is nothing to guess: EXACTLY ONE candidate. Two means a
+    rival is already stored (or `owner init` ran twice), and the earlier timestamp is precisely what an
+    attacker controls — so pin nothing, let `hv doctor genesis` fail, and leave the choice to the
+    operator (re-join with the winner's fingerprint). Returns the pin, or None."""
+    existing = _load_genesis_pin()
+    if existing is not None:
+        return existing
+    cands = _self_signed_owner_acts(entries)
+    return _write_genesis_pin(_genesis_pin_for(cands[0])) if len(cands) == 1 else None
+
+
 def _governance_state(entries):
     """Memoized wrapper over the (pure, deterministic) governance projection. The projection reads
     ONLY governance entries, so the cache key is a content signature of just those — a plain `fact`
@@ -1284,9 +1368,10 @@ def _governance_state(entries):
     govs_raw = [e for e in entries if e.get("type") == "governance"]
     sig = hashlib.sha256(
         "\x01".join(
-            json.dumps([e.get("node_id"), e.get("seq"), e.get("timestamp"),
-                        e.get("sig"), e.get("payload")], sort_keys=True, separators=(",", ":"))
-            for e in govs_raw).encode()
+            [json.dumps(_load_genesis_pin(), sort_keys=True, separators=(",", ":"))] +   # the pin decides
+            [json.dumps([e.get("node_id"), e.get("seq"), e.get("timestamp"),             # genesis (#14)
+                         e.get("sig"), e.get("payload")], sort_keys=True, separators=(",", ":"))
+             for e in govs_raw]).encode()
     ).hexdigest()
     master = _GOV_CACHE.get(sig)
     if master is None:
@@ -1330,16 +1415,27 @@ def _governance_state_uncached(entries):
         govs.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p, signer))
     govs.sort(key=lambda x: (x[0], x[1], x[2]))   # deterministic order across nodes
 
-    # 1) Establish the owner: the first valid self-signed `owner` declaration wins (TOFU).
-    gen_pos = None
-    for _ts, _nid, _seq, p, signer in govs:
-        if p.get("action") == "owner" and signer == p.get("owner_id"):
-            gov["owner_id"], gov["owner_pub"], gov["owner_ts"] = p.get("owner_id"), p.get("owner_pub"), _ts
-            gov["hive_id"] = p.get("hive_id", "")
-            gen_pos = (_ts, str(_nid), _seq)          # genesis (term-0) position for the owner timeline
-            break
-    if gov["owner_id"] is None:
+    # 1) Establish the owner. The PINNED genesis wins (hive-mind-private #14): the pin decides, not
+    #    the timestamp, so a rival `owner` act cannot take the hive — including one already on disk,
+    #    which an append-only journal never removes. With NO pin this node keeps the legacy rule (the
+    #    earliest valid self-signed declaration, TOFU), so it still converges with an un-upgraded
+    #    fleet; `hv doctor genesis` is what tells the operator to pin. A pin whose genesis entry has
+    #    not synced yet leaves the hive owner-less HERE and sets `mismatch` — ingest fails CLOSED on
+    #    that state rather than falling back to pre-owner permissiveness.
+    pin = _load_genesis_pin()
+    cands = _self_signed_owner_acts(entries)
+    chosen = (next((e for e in cands if _pin_matches(e, pin)), None) if pin
+              else (cands[0] if cands else None))
+    gov["genesis"] = {"pinned": pin is not None, "candidates": len(cands), "ref": None,
+                      "mismatch": bool(pin) and chosen is None}
+    if chosen is None:
         return gov
+    cp = chosen.get("payload") or {}
+    gov["owner_id"], gov["owner_pub"] = cp.get("owner_id"), cp.get("owner_pub")
+    gov["owner_ts"] = chosen.get("timestamp", "")
+    gov["hive_id"] = cp.get("hive_id", "")
+    gen_pos = (gov["owner_ts"], str(chosen.get("node_id", "")), chosen.get("seq", 0))
+    gov["genesis"]["ref"] = f"{chosen.get('node_id')}:{chosen.get('seq')}"
 
     # 2) Single deterministic walk: the OWNER SUCCESSION CHAIN (Stage B) and the QUORUM ELECTION
     #    OVERRIDE (Stage C) interleaved with the membership/config/escrow acts. `current` is the owner
@@ -5135,7 +5231,8 @@ _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", 
 # verify.json.sig signs it, and hivemind.pub is the anchor (its integrity comes from the published
 # copy at the canonical site, not from being self-listed). Listing any of them would be circular.
 _VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env",
-                         ".peers.json", ".peer_candidates.json", ".device-key", ".device-id", ".owner-key"}
+                         ".peers.json", ".peer_candidates.json", ".device-key", ".device-id", ".owner-key",
+                         ".genesis-pin"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg",
                 ".html", ".css", ".js", ".svg"}   # .html/.css/.js/.svg: the dashboard SPA + assets the
                                                   # daemon serves are signed too (tamper-evident over HTTP)

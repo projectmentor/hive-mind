@@ -19,12 +19,53 @@ import pytest
 
 PROJECT = Path(__file__).resolve().parent.parent
 SMOKE = PROJECT / "scripts" / "common" / "sync_smoke.sh"
+POSIX = os.name != "nt"
 HV = PROJECT / "hv"
+
+
+# A smoke run takes ~20s. Past this it is hung, and the test fails with its output rather than
+# holding an xdist worker until the CI job is cancelled with none (#159's macOS run, #161).
+SMOKE_TIMEOUT = 300
+
+
+def _stop_group(proc):
+    """Stop a smoke run and everything it started. SIGTERM to the process group first, so the script's
+    EXIT trap kills its daemons and removes its temp hives; SIGKILL would skip the trap and orphan them."""
+    import signal
+    for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(proc.pid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(grace)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _start_smoke(env=None):
+    return subprocess.Popen([str(SMOKE)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            env=env, start_new_session=POSIX)
+
+
+def _finish_smoke(proc, timeout=SMOKE_TIMEOUT):
+    try:
+        out, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _stop_group(proc)
+        out, _ = proc.communicate()
+        pytest.fail(f"sync_smoke.sh hung past {timeout}s:\n{out}")
+    return subprocess.CompletedProcess(proc.args, proc.returncode, out, "")
+
+
+def _smoke(env=None, timeout=SMOKE_TIMEOUT):
+    return _finish_smoke(_start_smoke(env), timeout)
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
 def test_two_node_convergence():
-    r = subprocess.run([str(SMOKE)], capture_output=True, text=True)
+    r = _smoke()
     assert r.returncode == 0, f"sync_smoke.sh failed:\n{r.stdout}\n{r.stderr}"
 
 
@@ -36,8 +77,128 @@ def test_two_node_convergence_under_aggressive_pagination():
     # accidentally dropping/duplicating entries. Runs on macos-latest too (where the clamp no-ops and
     # pagination alone carries it).
     env = dict(os.environ, HIVE_SYNC_PULL_PAGE="1", HIVE_SYNC_PUSH_PAGE="1", HIVE_SYNC_MAXSEG="600")
-    r = subprocess.run([str(SMOKE)], capture_output=True, text=True, env=env)
+    r = _smoke(env)
     assert r.returncode == 0, f"sync_smoke.sh under pagination/clamp failed:\n{r.stdout}\n{r.stderr}"
+
+
+# ── #161: two smoke runs at once, and a smoke whose port is taken ────────────────────────────────────
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
+def test_two_smoke_runs_at_once_do_not_share_daemons():
+    """The race itself: before #161 both runs bound 19876/19877, so under xdist one run's B pulled the
+    other run's A (a failure) or the two deadlocked (a hang). Each run now picks its own free ports."""
+    procs = [_start_smoke() for _ in range(2)]
+    try:
+        runs = [_finish_smoke(p) for p in procs]
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                _stop_group(p)
+    for r in runs:
+        assert r.returncode == 0, f"a concurrent sync_smoke.sh run failed:\n{r.stdout}"
+
+
+class _Squatter:
+    """Holds a port the smoke is told to use.
+
+    - `silent` accepts and never answers.
+    - `hive` answers /sync/merkle-root like another hive's daemon: the smoke's daemon sees a healthy hive
+      there and exits ("already owns"), which is #161's collision.
+    - `impostor` answers that only to curl. The daemon's own probe (urllib) gets a 404, so it takes the
+      port for a non-hive squatter, moves to the next port and stays up (`make_server`'s fallback). Only
+      the smoke's root comparison can then tell it is talking to the wrong process."""
+
+    def __init__(self, kind):
+        self.kind = kind
+        import http.server
+        import threading
+        if kind == "silent":
+            self.sock = socket.socket()
+            self.sock.bind(("127.0.0.1", 0))
+            self.sock.listen(8)
+            self.port = self.sock.getsockname()[1]
+            self._close = self.sock.close
+            return
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                curl = self.headers.get("User-Agent", "").startswith("curl/")
+                if self.path.split("?")[0] != "/sync/merkle-root" or (kind == "impostor" and not curl):
+                    self.send_error(404)
+                    return
+                body = json.dumps({"root_hash": "sha256:" + "0" * 64}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self._close = lambda: (srv.shutdown(), srv.server_close())
+
+    def close(self):
+        self._close()
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
+@pytest.mark.parametrize("kind, why", [
+    ("silent", ("did not serve",)),                        # accepts, never answers: the wait is bounded
+    ("hive", ("exited before serving", "Another process holds the port")),     # whichever it sees first
+    ("impostor", ("Another process holds the port",)),     # our daemon is up elsewhere; the root says so
+])
+def test_a_taken_port_fails_the_smoke_quickly_and_says_why(kind, why):
+    squatter = _Squatter(kind)
+    try:
+        env = dict(os.environ, HIVE_SMOKE_PORT_A=str(squatter.port), SMOKE_WAIT_SECONDS="8")
+        t0 = time.time()
+        r = _smoke(env, timeout=120)
+        elapsed = time.time() - t0
+    finally:
+        squatter.close()
+    assert r.returncode != 0 and "daemon A failed to start" in r.stdout, r.stdout
+    assert any(w in r.stdout for w in why), r.stdout
+    assert elapsed < 90, f"a taken port must fail the smoke, not stall it ({elapsed:.0f}s)"
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
+def test_a_daemon_that_dies_at_startup_is_reported_at_once():
+    """Port 70000 does not exist: the daemon raises on bind and exits. The smoke says so straight away,
+    with the daemon's log, rather than polling a dead port until its deadline."""
+    t0 = time.time()
+    r = _smoke(dict(os.environ, HIVE_SMOKE_PORT_A="70000", SMOKE_WAIT_SECONDS="60"), timeout=120)
+    elapsed = time.time() - t0
+    assert r.returncode != 0 and "exited before serving" in r.stdout, r.stdout
+    assert elapsed < 30, f"a dead daemon was polled until the deadline ({elapsed:.0f}s)"
+
+
+def _curl_calls(script):
+    """Each curl invocation in a smoke script, as its argument text up to the end of the command."""
+    import re
+    code = "\n".join(line for line in script.read_text().splitlines() if not line.lstrip().startswith("#"))
+    return re.findall(r"\bcurl\b[^|;)\n]*", code)
+
+
+@pytest.mark.parametrize("name", ["sync_smoke.sh", "sync_auth_smoke.sh", "_smoke_daemon.sh"])
+def test_every_curl_in_the_smokes_is_bounded(name):
+    """A curl with no --max-time against a daemon that accepts and never answers hangs the script: the
+    orphaned curl on #159's cancelled macOS job. And --retry-delay 0 is curl's backoff to 10 minutes."""
+    calls = _curl_calls(PROJECT / "scripts" / "common" / name)
+    assert calls, f"no curl found in {name}; the check would pass vacuously"
+    for c in calls:
+        assert "--max-time" in c, f"unbounded curl in {name}: {c.strip()}"
+        assert "--retry" not in c, f"curl retry backoff in {name}: {c.strip()}"
+
+
+def test_the_smokes_pick_their_ports_per_run():
+    for name in ("sync_smoke.sh", "sync_auth_smoke.sh"):
+        text = (PROJECT / "scripts" / "common" / name).read_text()
+        for fixed in ("19876", "19877", "19886", "19887", "29876"):
+            assert fixed not in text, f"{name} still binds the fixed port {fixed} (#161)"
 
 
 def test_mss_clamp_lowers_segment_size_where_supported():

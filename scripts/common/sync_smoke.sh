@@ -15,11 +15,14 @@ set -uo pipefail
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HV="$PROJECT/hv"
 cd "$PROJECT"
+. "$PROJECT/scripts/common/_smoke_daemon.sh"
 
-A=$(mktemp -d); B=$(mktemp -d)
-PA=19876; PB=19877
+A=$(mktemp -d); B=$(mktemp -d); LOGS=$(mktemp -d)
+# Free ports per run, so two runs at once never share a daemon (#161). HIVE_SMOKE_PORT_* pins one.
+PA="${HIVE_SMOKE_PORT_A:-$(smoke_free_port)}"; PB="${HIVE_SMOKE_PORT_B:-$(smoke_free_port)}"
+PC="${HIVE_SMOKE_PORT_C:-$(smoke_free_port)}"
 DA=""; DB=""
-cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B"; }
+cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B" "$LOGS"; }
 trap cleanup EXIT
 
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B_=$'\033[1m'; N=$'\033[0m'; else G=""; R=""; B_=""; N=""; fi
@@ -66,12 +69,12 @@ env $EA HIVE_NODE_ID=nodeY "$HV" retract "$RFID" --source peerY >/dev/null
 env $EA HIVE_NODE_ID=nodeZ "$HV" retract "$RFID" --source peerZ >/dev/null
 
 # Start both daemons (serve-only).
-env $EA python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
-env $EB python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DB=$!
+env $EA python3 -c "import hive_sync_daemon as d; d.serve_forever()" >"$LOGS/A.log" 2>&1 & DA=$!
+env $EB python3 -c "import hive_sync_daemon as d; d.serve_forever()" >"$LOGS/B.log" 2>&1 & DB=$!
 
-# Wait for readiness via curl retry (no sleep).
-curl -sf --retry 50 --retry-connrefused --retry-delay 0 "http://127.0.0.1:$PA/sync/merkle-root" >/dev/null || { no "daemon A failed to start"; exit 1; }
-curl -sf --retry 50 --retry-connrefused --retry-delay 0 "http://127.0.0.1:$PB/sync/merkle-root" >/dev/null || { no "daemon B failed to start"; exit 1; }
+# Wait until each daemon serves its own hive: bounded, and never satisfied by another run's daemon.
+smoke_wait_daemon A "$DA" 127.0.0.1 "$PA" "$A" "$LOGS/A.log" || { no "daemon A failed to start"; exit 1; }
+smoke_wait_daemon B "$DB" 127.0.0.1 "$PB" "$B" "$LOGS/B.log" || { no "daemon B failed to start"; exit 1; }
 
 printf '\n%s── one-shot sync from A ──%s\n' "$B_" "$N"
 env $EA "$HV" sync now | sed 's/^/  /'
@@ -125,11 +128,11 @@ C=$(mktemp -d)
 env HIVE_HOME="$C" "$HV" owner init >/dev/null
 env HIVE_HOME="$C" "$HV" remember "only in hive C" --source agent >/dev/null
 A_BEFORE=$(count "$A" facts)
-printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":29876}' "$PA" > "$C/.peers.json"
+printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":%s}' "$PA" "$PC" > "$C/.peers.json"
 env HIVE_HOME="$C" "$HV" sync now 2>&1 | sed 's/^/  /'
 eq "C did not pull A's alpha fact"  "$(HIVE_HOME="$C" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$C','store.db')).execute(\"SELECT count(*) FROM facts WHERE content LIKE 'alpha%'\").fetchone()[0])")" "0"
 eq "A did not ingest C's fact"      "$(count "$A" facts)" "$A_BEFORE"
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
+CODE=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
 eq "cross-hive /sync/ingest rejected" "$CODE" "409"
 rm -rf "$C"
 

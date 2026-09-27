@@ -537,8 +537,10 @@ def _now_iso():
 
 
 def _canonical(obj):
-    """Stable bytes for hashing — must match merkle._canonical."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
+    """Stable bytes for hashing. The definition is `merkle._canonical` (#153): one copy, so no two can
+    diverge into a hash or signature the fleet disagrees on. The name stays here for hv's own callers and
+    for `sync_common.load_hv()` consumers."""
+    return merkle._canonical(obj)
 
 
 def compute_hash(entry):

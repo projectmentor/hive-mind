@@ -144,6 +144,7 @@ rm -rf "$HOME/.hive-mind/logs" 2>/dev/null || true   # Android/Termux daemon log
 _KEY_DIR="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" dir || true)"
 _KEY_DEV="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" device || true)"
 _KEY_OWN="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" owner || true)"
+_KEY_SEAL="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" sealed || true)"
 
 # ── 4. Identity + Hive data ──────────────────────────────────────────────────
 # Preserve the device IDENTITY (to the stable stash) whenever the user asked to keep anything, so
@@ -166,6 +167,7 @@ if [ -n "$KEEP_HIVE" ]; then
   done
   [ -n "$_KEY_DEV" ] && [ -e "$_KEY_DEV" ] && cp -a "$_KEY_DEV" "$KEEP_DIR/.device-key" 2>/dev/null
   [ -n "$_KEY_OWN" ] && [ -e "$_KEY_OWN" ] && cp -a "$_KEY_OWN" "$KEEP_DIR/.owner-key" 2>/dev/null
+  [ -n "$_KEY_SEAL" ] && [ -e "$_KEY_SEAL" ] && cp -a "$_KEY_SEAL" "$KEEP_DIR/.owner-key.sealed" 2>/dev/null
   echo ""
   ok "App removed. Full Hive backup (journal + keys) at:"
   echo "    $KEEP_DIR"
@@ -189,7 +191,8 @@ cd "$HOME"
 # The keys outside the tree go with the Hive data. Only the files hive-mind wrote, then the directory if
 # it is empty — never a recursive delete, since $HIVE_KEY_DIR may point anywhere the operator chose.
 if [ -n "$_KEY_DIR" ] && [ -d "$_KEY_DIR" ]; then
-  rm -f "$_KEY_DIR/device-key" "$_KEY_DIR/owner-key" "$_KEY_DIR/owner-pub" 2>/dev/null || true
+  rm -f "$_KEY_DIR/device-key" "$_KEY_DIR/owner-key" "$_KEY_DIR/owner-key.sealed" "$_KEY_DIR/owner-pub" \
+    2>/dev/null || true
   rmdir "$_KEY_DIR" 2>/dev/null || true
 fi
 exec rm -rf "$HIVE_DIR"

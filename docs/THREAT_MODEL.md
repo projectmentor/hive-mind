@@ -13,8 +13,13 @@ is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mec
    group/other-readable key or an open key directory, and `--fix` re-tightens it (and now loudly
    reports if the chmod itself fails). Moving the seeds out of `HIVE_HOME` keeps them out of the
    directory agent CLIs run in, index and pass to tools; it is not a boundary against code running as
-   the same user, which can still read a 0600 file. Sealing the owner key at rest (2.0 PR 3b) is what
-   narrows that.
+   the same user, which can still read a 0600 file. That is why the **owner** key is also sealed at rest
+   (2.0): `owner-key.sealed`, scrypt then ChaCha20-Poly1305 under a passphrase the operator types, and
+   unlocked once per `hive-mind` command. A process running as the same user can read the ciphertext but
+   cannot sign governance without the passphrase, unless it can also read the passphrase where it is
+   typed or supplied (a keylogger, a `HIVE_OWNER_KEY_PASSPHRASE` left in an agent's environment); that
+   stays out of scope. The device key is not sealed: every entry is device-signed, unattended, including
+   by the sync daemon, and a device key's authority is its admission, which the owner can revoke.
 2. **The journal is an append-only, signed G-Set.** Every entry is signed by its device key and
    `node_id = "k1:"+sha256(pub)[:16]`, so an entry cannot be attributed to a device whose key you
    do not hold. Governance acts that bear authority (owner/admit/config) additionally carry an owner

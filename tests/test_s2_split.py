@@ -344,14 +344,16 @@ def test_presence_has_four_honest_answers(tmp_path, monkeypatch):
     assert m._owner_key_state(gov) == "held"
     m.OWNER_PUB_PATH.unlink()
     assert m._owner_key_state(gov) == "present", "no recorded pub: hv cannot say whose key it is"
-    m.OWNER_KEY_PATH.unlink()
+    m.OWNER_SEALED_PATH.unlink()
     assert m._owner_key_state(gov) == "absent"
 
     class Denied:
         def stat(self):
-            raise PermissionError("sealed")
-    monkeypatch.setattr(m, "OWNER_KEY_PATH", Denied())
-    assert m._owner_key_state(gov) == "unknown", "permission denied is not 'absent'"
+            raise PermissionError("key directory not searchable")
+    for which in ("OWNER_SEALED_PATH", "OWNER_KEY_PATH"):
+        with monkeypatch.context() as mp:
+            mp.setattr(m, which, Denied())
+            assert m._owner_key_state(gov) == "unknown", f"permission denied on {which} is not 'absent'"
 
 
 # ── links: device-signed through hv, owner-signed through hive-mind (decision h:34cc1dbcd3) ──────────
@@ -400,7 +402,7 @@ def test_an_owner_policy_cell_publish_points(tmp_path):
 def test_doctor_fix_repairs_the_device_key_on_hv_and_the_owner_key_on_hive_mind(tmp_path):
     home = tmp_path / "h"
     assert _ctl(home, "owner", "init").returncode == 0
-    owner_key = _keys.key_path(home, "owner-key")
+    owner_key = _keys.key_path(home, "owner-key.sealed")
     os.chmod(owner_key, 0o644)
     r = _hv(home, "doctor", "--fix")
     assert r.returncode != 2, "the 15-minute timer runs `hv doctor --fix`; it must not become a pointer"

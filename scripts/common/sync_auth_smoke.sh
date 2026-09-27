@@ -54,6 +54,7 @@ printf '%ssync-auth smoke (ENFORCE)%s  LAN=%s  A=:%s  B=:%s\n' "$B_" "$N" "$LAN"
 
 # Real device identities (node_id == Ed25519 fingerprint — no HIVE_NODE_ID override).
 export HIVE_OWNER_PASSPHRASE=smoke-pass
+export HIVE_OWNER_KEY_PASSPHRASE="${HIVE_OWNER_KEY_PASSPHRASE:-smoke-pass}"   # the sealed owner key (2.0 PR 3b)
 HIVE_HOME="$A" "$HV" key init >/dev/null
 HIVE_HOME="$B" "$HV" key init >/dev/null
 DEVA="$(cat "$A/.device-id")"; DEVB="$(cat "$B/.device-id")"

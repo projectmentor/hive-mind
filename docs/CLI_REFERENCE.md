@@ -673,6 +673,7 @@ hv owner nominate <successor_pub>             # nominate a NEW owner key as succ
 hv owner pin [--set | --fingerprint FP] [--force]  # show, or pin, the genesis this node accepts
 hv owner propose-election [--mint | --pub B64] # (admitted device) propose electing a new owner
 hv owner restore                               # recover the key from the hive's escrow
+hive-mind owner seal                           # seal a plaintext owner key at rest under a passphrase (2.0)
 hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
 hv owner show                                 # the established owner + admitted devices + config
 hv owner standby <device_id> [--off]          # declare an advisory standby key holder
@@ -719,8 +720,15 @@ A node with no pin keeps the older behaviour, so a fleet mid-upgrade keeps synci
 the old pin keep the old owner, and the old declaration stays in the journal, because
 nothing is ever removed from it.
 
-**The owner key is a single point of failure — back it up.** `hv owner init`
-auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key` (survives uninstall),
+**The owner key is sealed at rest (2.0).** Every new owner key is written only as `owner-key.sealed` in the
+key directory: the passphrase envelope `owner escrow` uses (scrypt, then ChaCha20-Poly1305). `hive-mind`
+asks for the passphrase once per command that owner-signs, however many signatures that command makes, and
+`$HIVE_OWNER_KEY_PASSPHRASE` supplies it for automation. A cancelled or wrong passphrase signs nothing. A
+key from before 2.0 is still plaintext: `hive-mind owner seal` converts it in place (same owner, no journal
+change), and `hv doctor` fails until you do. `hv` never opens the key in either form.
+
+**The owner key is a single point of failure — back it up.** `hive-mind owner init`
+auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key.sealed` (survives uninstall; sealed since 2.0),
 and `hv owner export` writes a portable copy you can store off-device (use
 `--passphrase` to encrypt it; an exported key is total hive authority, so treat it
 like an SSH private key). If the owner device dies, `hv owner import` installs the
@@ -1295,7 +1303,9 @@ Advanced, rarely needed:
 | `HIVE_SYNC_AUTH_WINDOW` | `300` | Seconds of clock skew tolerated on a signed sync request |
 | `HIVE_SYNC_PULL_PAGE` / `HIVE_SYNC_PUSH_PAGE` | `25` | Entries per sync request when pulling / pushing |
 | `HIVE_SYNC_MAXSEG` | `1000` | TCP segment-size clamp for sync connections, for tailnet paths with MTU below 1280 (`0` disables) |
-| `HIVE_OWNER_PASSPHRASE` | — | Supplies the owner-key passphrase non-interactively (automation and tests) |
+| `HIVE_OWNER_PASSPHRASE` | — | Supplies the passphrase that encrypts an owner-key export or escrow, non-interactively (automation and tests) |
+| `HIVE_OWNER_KEY_PASSPHRASE` | — | Unlocks the owner key sealed at rest (2.0), non-interactively; empty cancels. Anything that can read this variable can owner-sign, so set it only for the command that needs it |
+| `HIVE_KEY_DIR` | the path in `HIVE_HOME/.key-dir`, else `~/.hive/keys/<id>` | Where the private keys live, outside the checkout (2.0) |
 | `HIVE_IDENTITY_STASH` | `~/.config/hive-mind/identity` | Where the owner key and `uninstall --keep-identity` stash identity files |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Where `hv wire claude` looks for Claude Code's config, honoured exactly as Claude Code does |
 

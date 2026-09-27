@@ -133,7 +133,8 @@ def test_owner_init_through_the_control_plane_establishes_and_pins(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "Owner established:" in r.stdout
     assert "pinned" in r.stdout                                  # 1.27's genesis pin still happens
-    assert _keys.key_path(tmp_path, "owner-key").exists()
+    assert _keys.key_path(tmp_path, "owner-key.sealed").exists()      # sealed at rest (2.0 PR 3b)
+    assert not _keys.key_path(tmp_path, "owner-key").exists(), "no plaintext copy beside it"
     assert (tmp_path / ".genesis-pin").exists()
     # and the data plane reads it back: `owner show` is a read and stays on hv
     s = _run_hv(tmp_path, "owner", "show")

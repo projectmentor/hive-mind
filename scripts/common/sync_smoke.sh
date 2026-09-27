@@ -116,6 +116,8 @@ printf '\n%s── governance converges across nodes (D0-v2) ──%s\n' "$B_" "
 # governance and compute the SAME governed confidence (nodeC excluded by the admission gate → 0.45).
 env $EA "$HV" remember "gov claim" --source agent >/dev/null
 env $EA HIVE_NODE_ID=nodeC "$HV" remember "gov claim" --source agent >/dev/null
+# The owner key is sealed at rest (2.0 PR 3b): each owner-signing command unlocks it from this.
+export HIVE_OWNER_KEY_PASSPHRASE="${HIVE_OWNER_KEY_PASSPHRASE:-smoke-pass}"
 env $EA python3 "$HM" owner init >/dev/null
 env $EA python3 "$HM" group admit nodeA --principal david >/dev/null
 env $EA python3 "$HM" group admit nodeB --principal david >/dev/null

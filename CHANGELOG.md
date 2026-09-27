@@ -67,6 +67,23 @@ introduced (a contract) or tagged (a patch).
     directory or an empty file in the key's place reads as *present*, not held (#159 review).
   - The signed manifest names its one extensionless file, `hv`. A test fails if another runnable
     extensionless file would ship unsigned.
+- **PR 3b: the owner key is sealed at rest** (private #27). A 0600 file outside the checkout is still
+  readable by every process running as the owner's user, the agents included.
+  - Every new owner key (`owner init`, `mint`, `import`, `restore`, `claim`) is written only as
+    `owner-key.sealed`: the envelope `owner escrow` already uses, scrypt then ChaCha20-Poly1305, written at
+    0600 atomically. The seal is opened once before any plaintext copy is removed.
+  - `hive-mind` unlocks it **once per command** (h:af5ecf48c5), from the tty with three tries, or from
+    `$HIVE_OWNER_KEY_PASSPHRASE` with one. A cancel or a wrong passphrase exits 1 having signed nothing.
+    That variable is separate from `$HIVE_OWNER_PASSPHRASE`, which still encrypts an export or an escrow.
+  - `hive-mind owner seal` converts a plaintext key in place: same owner id, no journal change. It
+    refuses when two different keys are on the device. `hv owner seal` points at it.
+  - Doctor's new `owner-seal` check **fails** while a plaintext owner key exists (the key directory's or
+    the legacy root's), and names the fix.
+  - `hv` never opens either form: presence is still a `stat`, of `owner-key.sealed` first. A test asserts
+    `hv` calls neither the opener nor the sealed-key reader.
+  - The identity stash, the keep-hive backup, restore and uninstall carry `.owner-key.sealed`. A stash
+    holding the sealed form drops its plaintext copy.
+  - The installer asks for the new passphrase once, at bootstrap, for `owner init` and the self-admit.
 
 ## Unreleased — contract 1.28
 

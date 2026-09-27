@@ -21,8 +21,9 @@ def session_paths():
     home = Path(os.environ.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude")
     stash = Path(os.environ.get("HIVE_IDENTITY_STASH") or home / ".config" / "hive-mind" / "identity")
-    # The live hive's checkout, so the guard can see a .genesis-pin written into it (#14): the pin is
-    # per-node governance authority, in the same class as the owner key.
+    # The live hive's checkout, so the guard can see a .genesis-pin or a key written into it (#14, #160):
+    # the pin is per-node governance authority, in the same class as the owner key. This is the exported
+    # HIVE_HOME, read BEFORE conftest replaces it with a sandbox.
     hive = Path(os.environ.get("HIVE_HOME") or Path(__file__).resolve().parent.parent)
     return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive}
 
@@ -71,7 +72,54 @@ def snapshot(claude, stash, hive=None):
         "settings.json.bak.doctor": _file_state(Path(claude) / "settings.json.bak.doctor", ctime=True),
         "owner-key stash": _file_state(Path(stash) / ".owner-key"),
         "genesis pin": _file_state(Path(hive) / ".genesis-pin") if hive else None,
+        # The real hive's key material and identity (#160): operator state, which nothing a developer or
+        # an agent does during a test run changes, so any change is the suite's.
+        **{f"real hive {name}": (_file_state(Path(hive) / name) if hive else None) for name in HIVE_KEY_FILES},
     }
+
+
+# Key material and identity in the checkout: the device and owner seeds, the public owner half, the cached
+# device id, and the key-directory pointer.
+HIVE_KEY_FILES = (".device-key", ".owner-key", ".owner-pub", ".device-id", ".key-dir")
+# A hive marked with this file is a DECOY that only the test suite may see (#160): the guard then holds the
+# whole tree to byte-identical, which it cannot do for a live hive whose daemon ingests from peers.
+DECOY_MARKER = ".hive-test-decoy"
+
+
+def activity(hive):
+    """The live hive's journal files and store as (size, mtime_ns): reported, never failed on. Its daemon
+    appends peers' entries and rebuilds the store during any run, and another session on this machine may
+    write to it, so a change here is a note unless the hive is a decoy."""
+    hive = Path(hive)
+    out = {}
+    for p in sorted((hive / "journal").glob("*.jsonl")) + [hive / "store.db"]:
+        try:
+            st = p.stat()
+            out[str(p.relative_to(hive))] = (st.st_size, st.st_mtime_ns)
+        except (FileNotFoundError, ValueError):
+            pass
+    return out
+
+
+def decoy_state(hive):
+    """If `hive` is a decoy (it holds DECOY_MARKER), every file under it as relative path -> sha256; else
+    None. The guard requires a decoy byte-identical at the end of the session."""
+    hive = Path(hive)
+    if not (hive / DECOY_MARKER).is_file():
+        return None
+    out = {}
+    for p in sorted(hive.rglob("*")):
+        if p.is_file():
+            out[str(p.relative_to(hive))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
+
+
+def decoy_diff(before, after):
+    """Changes to a decoy hive, one line each."""
+    out = [f"decoy hive {k} {'removed' if k not in after else 'changed'}"
+           for k in before if after.get(k) != before[k]]
+    out += [f"decoy hive {k} created" for k in after if k not in before]
+    return out
 
 
 def diff(before, after):

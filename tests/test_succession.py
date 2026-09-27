@@ -41,10 +41,7 @@ def _propose_minted(home, now=None, check=True, **kw):
 
 
 def _gov(home):
-    loader = importlib.machinery.SourceFileLoader("hvmod_succ", str(PROJECT / "hv"))
-    m = importlib.util.module_from_spec(importlib.util.spec_from_loader("hvmod_succ", loader))
-    loader.exec_module(m)
-    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
+    m = _planes.load_hv(home, "hvmod_succ")      # #160: this hive's pin and keys, not whatever HIVE_HOME is
     import merkle
     return m, m._governance_state(merkle.read_all_entries(str(home / "journal")))
 

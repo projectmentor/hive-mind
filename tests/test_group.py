@@ -3,8 +3,6 @@ through the governance projection (admission gate + confidence). Drives the real
 an isolated temp HIVE_HOME, writing the same content from DISTINCT devices (HIVE_NODE_ID) where
 independent corroboration is intended. Mirrors tests/test_governance.py helpers."""
 
-import importlib.machinery
-import importlib.util
 import os
 import sqlite3
 import subprocess
@@ -38,11 +36,7 @@ def _conf(home, content):
 
 
 def _gov(home):
-    loader = importlib.machinery.SourceFileLoader("hvmod_grp", str(PROJECT / "hv"))
-    spec = importlib.util.spec_from_loader("hvmod_grp", loader)
-    m = importlib.util.module_from_spec(spec)
-    loader.exec_module(m)
-    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
+    m = _planes.load_hv(home, "hvmod_grp")      # #160: this hive's pin and keys, not whatever HIVE_HOME is
     import merkle
     return m, m._governance_state(merkle.read_all_entries(str(home / "journal")))
 

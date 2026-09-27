@@ -13,10 +13,11 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _run(home, *args):
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args],
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args],
                        env=dict(os.environ, HIVE_HOME=str(home)), capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r
@@ -28,6 +29,7 @@ def _loadhv(home, monkeypatch):
     spec = importlib.util.spec_from_loader("hvmod_ap", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 

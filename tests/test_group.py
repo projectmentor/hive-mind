@@ -13,13 +13,14 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _run(home, *args, node_id=None, check=True):
     env = dict(os.environ, HIVE_HOME=str(home))
     if node_id:
         env["HIVE_NODE_ID"] = node_id
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env,
                        capture_output=True, text=True)
     if check:
         assert r.returncode == 0, r.stderr
@@ -41,6 +42,7 @@ def _gov(home):
     spec = importlib.util.spec_from_loader("hvmod_grp", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     import merkle
     return m, m._governance_state(merkle.read_all_entries(str(home / "journal")))
 

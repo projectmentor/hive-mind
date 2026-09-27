@@ -4,11 +4,11 @@ The split gives the fleet two commands over one library: `hv` is the agent **dat
 the **control plane**, where the owner key is loaded and governance is signed. Requirement S2 is that
 `hv` cannot owner-sign at all, and the static tests assert it.
 
-**In this change nothing has moved yet.** This module is a front end: it parses the control-plane surface
-and delegates to the handlers that still live in the library. So `hv` keeps working exactly as it does
-today, no logic is duplicated, and the suite stays green. The next change moves the handler bodies here,
-drops `hv`'s `import ownerkey`, and turns the old `hv` names into pointers — that is where the guarantee
-arrives, and where it should be reviewed on its own.
+**The split (PR 2b).** `hv` no longer imports `ownerkey` and produces no owner signature. Every owner step
+lives in `hivemind_owner.py`, which `install` runs into the library's namespace in THIS process only: its
+definitions replace `hv`'s data-plane placeholders (which refuse with the `hive-mind` form to run), so a
+command's structure is written once, in `hv`, and the flags once, in `hv`'s parser (S1). The old `hv` names
+point here and exit 2 (S6).
 
 Why a `.py` module rather than an extensionless `hive-mind` binary: the signed source manifest covers
 tracked files by suffix and special-cases only the name `hv`, so an extensionless second entry point
@@ -34,19 +34,36 @@ ROOT = Path(__file__).resolve().parent
 import commandmap
 
 _hv = None
+OWNER_SRC = ROOT / "hivemind_owner.py"
 
 
 def hv():
-    """The library, loaded once. `hv` has no `.py` extension, so it is loaded by path — the same way
-    `sync_common.load_hv` does it for the sync daemon, which has consumed `hv` as a library since #7."""
+    """The library, loaded once, with its owner steps installed. `hv` has no `.py` extension, so it is
+    loaded by path — the same way `sync_common.load_hv` does it for the sync daemon, which has consumed
+    `hv` as a library since #7."""
     global _hv
     if _hv is None:
         loader = importlib.machinery.SourceFileLoader("hvlib", str(ROOT / "hv"))
         spec = importlib.util.spec_from_loader("hvlib", loader)
         mod = importlib.util.module_from_spec(spec)
         loader.exec_module(mod)
-        _hv = mod
+        _hv = install(mod)
     return _hv
+
+
+def install(lib):
+    """Give a loaded library its owner steps, in this process only (2.0 S2). Runs `hivemind_owner.py` in
+    the library's own namespace, so each definition there replaces the data-plane placeholder of the same
+    name and the moved bodies keep their names, globals and bytes. Idempotent. Tests that call an owner
+    step in-process install it the same way."""
+    if getattr(lib, "_CONTROL_PLANE", False):
+        return lib
+    ns = lib.__dict__
+    ns["_data_plane_owner_cmd"] = ns["owner_cmd"]           # wrapped: `hv` keeps show/elections/propose/vote
+    ns["_data_plane_link_payload"] = ns["_link_payload"]    # wrapped: `hv` builds, this plane owner-signs
+    exec(compile(OWNER_SRC.read_text(), str(OWNER_SRC), "exec"), ns)
+    lib._CONTROL_PLANE = True
+    return lib
 
 
 # Control-plane argv -> the library argv that implements it. The only entries that differ are the ones
@@ -73,12 +90,24 @@ def _is_control_plane(argv):
     """Whether this invocation belongs to the control plane, per the shared table."""
     if not argv:
         return False
+    head = argv[0]
     if tuple(argv[:1]) in {("unforget",), ("admit",)}:
         return True
-    # Flag-conditional: `retract --owner` is governance and belongs here; plain `hv retract` is peer
-    # negative evidence and stays on the data plane. The flag, not the verb, decides.
-    if argv[0] == "retract":
+    # The owner-signed form of the link verbs (decision h:34cc1dbcd3): through `hv` their links are
+    # device-signed; here, with source `manual`, they are owner-signed.
+    if head in commandmap.OWNER_LINK_VERBS:
+        return True
+    # Flag-conditional: the flag, not the verb, decides. `retract --owner` is governance; plain `hv retract`
+    # is peer negative evidence. `doctor --fix` here makes the operator-state repairs. A capsule write or
+    # `wire --add` here can owner-sign, which an owner policy requires.
+    if head == "retract":
         return "--owner" in argv
+    if head == "doctor":
+        return "--fix" in argv
+    if head == "capsule":
+        return argv[1:2] in (["put"], ["rotate"], ["rm"])
+    if head == "wire":
+        return "--add" in argv
     lib = _to_library_argv(argv)
     return commandmap.lookup(lib) is not None
 

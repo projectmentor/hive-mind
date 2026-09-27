@@ -47,6 +47,7 @@ import merkle  # noqa: E402
 import sync_common  # noqa: E402
 import hive_sync_daemon as d  # noqa: E402
 import sync_client as sc  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 URL = "http://100.64.0.2:9876"
 ADDR = "100.64.0.2:9876"
@@ -104,6 +105,7 @@ def _hvmod(home, monkeypatch):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 

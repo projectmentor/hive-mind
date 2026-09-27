@@ -235,6 +235,16 @@ The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
   through a migration window; §0 fires a loud re-integrate nudge; and — because every adapter call
   is best-effort and `exit 0` (§4) — an un-migrated adapter **degrades gracefully** (its nudges
   silently no-op) rather than crashing. Migrate to the new major within the window.
+- **The 2.0 amendment: owner-only commands do not get working shims** (public #136, S6). 2.0 moves every
+  command that reads the owner seed, writes owner-key material or owner-signs off `hv`, onto the control
+  plane, `hive-mind`. For those commands only, `hv` does not keep a working shim, because a working shim
+  would keep an owner-signing path in `hv` and undo the split (S2). Instead, through the 2.x line, it
+  prints the exact `hive-mind` command to run — this invocation's arguments included — and **exits 2**,
+  acting on nothing. Exit 0 would let a script believe the old command worked. The pointers are removed at
+  3.0. **Adapters are unaffected**: no MCP or Hermes tool ever called an owner-only command, and every
+  data-plane verb, flag and output keeps §7's promise. One visible change is not a pointer: a link written
+  through `hv` as source `manual` on the owner device is now device-signed. The owner-signed form is the
+  same verb through `hive-mind` (decision `h:34cc1dbcd3`).
 
 This is what makes future breaking changes safe: additive-within-major keeps old adapters running,
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly

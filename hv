@@ -41,11 +41,10 @@ from pathlib import Path
 # Make sibling modules (merkle.py) importable when run as ./hv
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import merkle  # noqa: E402
-# Owner-key material and owner signing (2.0 S2, public #136). Everything that reads the owner seed or
-# produces a governance signature lives in ownerkey.py, so the split has one module name to assert is
-# absent from hv's import graph. hv still imports it here because the signing CALL SITES have not moved
-# yet — they move in the split, and this import goes with them.
-import ownerkey  # noqa: E402
+# 2.0 S2 (public #136): `hv` does NOT import `ownerkey`, directly or through anything it imports, and
+# produces no `owner_sig` by any route. Reading the owner seed and owner signing live on the control plane
+# (`hivemind_ctl.py`, `hivemind_owner.py`); two static tests keep both facts true.
+import commandmap  # noqa: E402  (a table only: what moved to `hive-mind`, and the pointer text)
 try:
     import ed25519 as _ed25519  # bundled pure-Python signature verifier
 except Exception:
@@ -168,6 +167,9 @@ NODE_LABEL = _human_label()
 # derives the same admitted set / principal map / config and confidence stays identical across nodes
 # (the convergence invariant). Minted only by `hv owner init`; importing hv never creates it.
 OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
+# The owner key's PUBLIC half, written by the control plane whenever it reads or writes the key (2.0 PR 2b).
+# `hv` reads this, never the seed, to tell whether this device holds the established owner's key.
+OWNER_PUB_PATH = HIVE_HOME / ".owner-pub"
 # Genesis pin (hive-mind-private #14). Genesis used to be "the earliest valid self-signed `owner`
 # act wins", and an entry's timestamp is written by whoever made the entry — so a rival `owner` act
 # carrying an EARLIER timestamp TOOK the hive, before or after genesis, and silenced the real owner's
@@ -180,13 +182,46 @@ OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
 GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"
 
 
-def _owner_seed():
-    """The 32-byte owner seed if this device holds the owner key, else None. Read-only; never creates.
+class NotOnDataPlane(Exception):
+    """Raised by a data-plane placeholder for an owner step (2.0 S2, public #136). `hv` catches it in
+    `main`, prints the `hive-mind` form to run and exits 2, having acted on nothing. On the control plane
+    `hivemind_ctl.install` replaces every placeholder with the real owner step, so it is never raised there.
 
-    The body lives in `ownerkey.load_seed`; this wrapper supplies the path. In the split the five callers
-    that actually sign move to the control plane and this wrapper goes with them, leaving `hv` with a
-    presence check that never opens the file (#136 S2)."""
-    return ownerkey.load_seed(OWNER_KEY_PATH)
+    `key` is a `commandmap.MOVED` argv tuple or a `commandmap.FLAG_CONDITIONAL` key."""
+
+    def __init__(self, key):
+        super().__init__(key)
+        self.key = key
+
+
+def _owner_key_state(gov=None):
+    """Whether THIS device holds the owner key, answered WITHOUT reading the seed (2.0 S2): one of
+    'absent', 'unknown', 'present' or 'held'.
+
+    - 'absent': no key file.
+    - 'unknown': the key's location cannot be examined (permission denied; the sealed key of PR 3). A
+      two-state check would report "not held" here as a fact, which is a lie.
+    - 'present': a key file exists but its public half is not recorded (`OWNER_PUB_PATH`), or `gov` has
+      no owner to compare with, so `hv` cannot say whose key it is.
+    - 'held': a key file exists and its recorded public half is the established owner's.
+
+    The comparison reads only the public sidecar, which the control plane writes whenever it touches the
+    key. A stale or forged sidecar misleads a display, never authority: authority is a signature `hv`
+    cannot produce."""
+    try:
+        OWNER_KEY_PATH.stat()
+    except FileNotFoundError:
+        return "absent"
+    except OSError:
+        return "unknown"
+    try:
+        owner_id = (gov or {}).get("owner_id")
+        if not owner_id or not OWNER_PUB_PATH.exists():
+            return "present"
+        pub = base64.b64decode(OWNER_PUB_PATH.read_text().strip())
+        return "held" if len(pub) == 32 and _owner_id_for_pub(pub) == owner_id else "present"
+    except Exception:
+        return "present"
 
 
 def _owner_id_for_pub(pub):
@@ -243,11 +278,11 @@ def _owner_seal(seed, passphrase):
 def _owner_unseal(env, passphrase):
     """Decrypt an owner-seed envelope (v2 only — the hand-rolled v1 scheme is gone). ChaCha20-Poly1305
     authenticates before releasing the seed. Raises ValueError on a wrong passphrase / tampering, or on
-    a legacy/unknown `enc` scheme (re-mint with `hv owner escrow`)."""
+    a legacy/unknown `enc` scheme (re-mint with `hive-mind owner escrow`)."""
     if _chacha is None:
         raise RuntimeError("chacha20poly1305 module unavailable")
     if env.get("enc") != _OWNER_SEAL_ALG:
-        raise ValueError(f"unsupported owner-seal scheme {env.get('enc')!r} — re-run `hv owner escrow`")
+        raise ValueError(f"unsupported owner-seal scheme {env.get('enc')!r} — re-run `hive-mind owner escrow`")
     salt, nonce, ct, tag = (base64.b64decode(env[k]) for k in ("salt", "nonce", "ct", "tag"))
     n, r, p = int(env["n"]), int(env["r"]), int(env["p"])
     key = hashlib.scrypt(passphrase.encode(), salt=salt, n=n, r=r, p=p, dklen=32, maxmem=128 * 1024 * 1024)
@@ -258,20 +293,8 @@ def _owner_unseal(env, passphrase):
         raise ValueError("wrong passphrase or corrupted file")
 
 
-def _read_passphrase(prompt, confirm=False):
-    """Read a passphrase from $HIVE_OWNER_PASSPHRASE if set (automation/tests; empty = cancel), else
-    prompt on the tty. Returns the passphrase, or None to CANCEL. Body in `ownerkey.read_passphrase`."""
-    return ownerkey.read_passphrase(prompt, confirm)
-
-
-def _stash_owner_key(seed):
-    """Best-effort backup of the owner seed to the stable identity stash (survives uninstall; the same
-    location as the installer's keep_identity_save). Returns the path written, or None.
-
-    `$HIVE_IDENTITY_STASH` is resolved HERE so that variable keeps exactly one reader; `ownerkey.stash`
-    takes the directory as an argument."""
-    return ownerkey.stash(seed, os.environ.get(
-        "HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity"))
+# `_read_passphrase` and `_stash_owner_key` moved to the control plane with every owner-key write
+# (2.0 PR 2b, `hivemind_owner.py`).
 
 
 # The agent-facing contract version (hv API + Agent Integration Spec), SemVer MAJOR.MINOR.
@@ -587,15 +610,9 @@ def _verify_entry(entry):
         return False
 
 
-def _sign_governance_payload(payload, owner_seed, owner_pub):
-    """Attach `owner_pub` then `owner_sig` (the owner's signature over the payload sans owner_sig).
-    This authorizes the governance ACTION independently of which device appends the entry.
-
-    Body in `ownerkey.sign_governance` — the one place a governance signature is produced, and the
-    function the split makes unreachable from `hv`. `_verify_governance` below deliberately does NOT
-    move: the projection must keep verifying owner signatures on every node, including agent nodes that
-    can never produce one."""
-    return ownerkey.sign_governance(payload, owner_seed, owner_pub)
+# `_sign_governance_payload` moved to the control plane (2.0 S2, `hivemind_owner.py`). `_verify_governance`
+# below deliberately stays: every node, agent nodes included, keeps verifying owner signatures it can never
+# produce.
 
 
 def _verify_governance(payload):
@@ -1805,7 +1822,7 @@ def _content_evidence(entries, gov=None):
     precedes the genesis owner (grandfathered, signed or not) while the governed `forget_writers` policy is
     `legacy`, the default; `forget_writers=owner` closes that grandfather (#122 step 2). Before any owner
     exists, the legacy source-tag forget (`owner:owner/owner`) is honored — so existing forgets are never
-    resurrected, and after `hv owner init` a forged unsigned forget no longer carries authority.
+    resurrected, and after `hive-mind owner init` a forged unsigned forget no longer carries authority.
 
     Unforget (1.24, #46): an owner-signed `retract` carrying `unretracts_ref` (and no `retracts_ref`, so
     a pre-1.24 node skips it) reverses a forget. The owner acts on one CONTENT form a timeline sorted on
@@ -2755,21 +2772,17 @@ _LINK_RESOLVERS = {
 
 def _link_payload(kind, from_ref, to_ref, source, data=None, channel=None):
     """The ONE builder for every `link` the CLI writes (1.19 PR2b; #114: all eight kinds, `outcome-of`
-    and `informed` included). The payload is owner-signed (`_sign_governance_payload`), so the
-    projection reads it as `hard` under §5 wherever it lands, only when this machine holds the OWNER
-    key AND the write's source is `manual`: a person at the CLI acting as owner (#114, D-5). Every
-    other source (an agent: claude-code, hermes, grok, claude-ai …) is device-signed by
-    `append_journal`, exactly as on a member device: `hard` only where this device authored the
-    target, `evidence` elsewhere. Before #114 an agent on the owner device borrowed owner authority
-    for every link it wrote. Never dual-emitted: the verb writes this link INSTEAD of its legacy
-    field/entry."""
+    and `informed` included). On the data plane every link is DEVICE-signed by `append_journal`, whatever
+    its source (2.0 S2): `hard` only where this device authored the target, `evidence` elsewhere.
+
+    Owner authority over a link is an explicit act (decision h:34cc1dbcd3): the same verb run through
+    `hive-mind remember|decide|entity` owner-signs the link when the source is `manual` (#114, D-5),
+    which the control plane does by wrapping this builder. Never dual-emitted: the verb writes this link
+    INSTEAD of its legacy field/entry."""
     lp = {"kind": kind, "from_ref": list(from_ref), "to_ref": list(to_ref), "data": dict(data or {}),
           "source": source}
     if channel:
         lp["channel"] = channel
-    seed = _owner_seed() if source == "manual" else None
-    if seed is not None and _ed25519 is not None:
-        lp = _sign_governance_payload(lp, seed, _ed25519.pub_from_seed(seed))
     return lp
 
 
@@ -3290,7 +3303,7 @@ def remember(args):
     print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
     if resolves_ref:
         print(f"  ↩ resolved fact {rsid} {_signing_note(resolves_link)} (soft retract — reversible; "
-              f"`hv retract {rsid} --owner` to forget it decisively)")
+              f"`hive-mind retract {rsid} --owner` to forget it decisively)")
     if outcome_ref:
         sign = "+1" if polarity > 0 else ("−1" if polarity < 0 else "0")
         print(f"  ↗ outcome ({sign}) of decision {_ref_str(outcome_ref)} {_signing_note(outcome_link)}"
@@ -3311,6 +3324,12 @@ def remember(args):
     if auto_volatile:
         print("  ↻ tagged volatile (transient status — the audit will flag it to re-check; "
               "use --no-volatile to opt out)")
+
+
+def _owner_forget(ref, reason):
+    """Placeholder for the owner step of `retract --owner`. On the control plane `hivemind_owner.py`
+    replaces it with the step that signs and appends the owner-forget; here it refuses (2.0 S2)."""
+    raise NotOnDataPlane("retract --owner")
 
 
 def retract(args):
@@ -3337,19 +3356,9 @@ def retract(args):
         sys.exit(1)
     content = row["content"]
     if args.owner:
-        # Owner-forget. Once an owner is established it must be cryptographically authorized:
-        # require the owner key and sign the retract, so a bare `--owner` source tag can no longer
-        # forge governance. Before any owner exists, the legacy unsigned forget still works.
-        gov0 = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
-        owner_seed = _owner_seed()
-        if gov0["owner_id"] and owner_seed is None:
-            print("Owner-forget now requires the owner key (an owner is established). "
-                  "Run this on the owner machine.")
+        rentry = _owner_forget(ref, args.reason)      # the owner step: control plane only (2.0 S2)
+        if rentry is None:
             return
-        payload = {"retracts_ref": ref, "reason": args.reason or "", "source": "owner:owner/owner"}
-        if owner_seed is not None:
-            payload = _sign_governance_payload(payload, owner_seed, _ed25519.pub_from_seed(owner_seed))
-        rentry = append_journal("retract", payload)
     else:
         source = args.source or os.environ.get("HERMES_AGENT", "manual")
         rentry = append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
@@ -3372,57 +3381,9 @@ def retract(args):
 
 
 def unforget(args):
-    """Owner only (1.24, #46): reverse an owner-forget. Journals an owner-signed `retract` carrying
-    `unretracts_ref` (no `retracts_ref`, so a pre-1.24 node skips it: projection skew, never divergence).
-    It acts on the fact's CONTENT, like forget: every row with the same text comes back. The latest act
-    the owner signed wins (`_content_evidence`), so forget → unforget → forget ends forgotten. The
-    fact's confidence re-derives from its surviving evidence. Kept off MCP with the other owner verbs."""
-    conn = get_conn()
-    try:
-        ref = _resolve_id_arg(conn, args.fact_id, "fact", "unforget")
-    except ValueError as e:
-        conn.close()
-        print(f"unforget: {e}", file=sys.stderr)
-        sys.exit(1)
-    rid = _index_row(conn, ref)
-    row = conn.execute("SELECT id, content FROM facts WHERE id = ?", (rid[1],)).fetchone() if rid else None
-    sid = _sid_of(conn, "fact", rid[1]) if rid else None
-    conn.close()
-    if row is None:
-        print(f"unforget: no fact {args.fact_id}", file=sys.stderr)
-        sys.exit(1)
-    content = row["content"]
-    entries0 = merkle.read_all_entries(JOURNAL_DIR)
-    gov0 = _governance_state(entries0)
-    owner_seed = _owner_seed()
-    if not gov0["owner_id"] or owner_seed is None or _ed25519 is None:
-        print("unforget: needs the owner key of an established owner. Run it on the owner machine.",
-              file=sys.stderr)
-        sys.exit(1)
-    if _owner_id_for_pub(_ed25519.pub_from_seed(owner_seed)) != gov0["owner_id"]:
-        print("unforget: the owner key on this device is not the hive's current owner; the projection "
-              "would ignore its signature.", file=sys.stderr)
-        sys.exit(1)
-    if not _content_evidence(entries0, gov0).get(content, {}).get("forget"):
-        print(f"unforget: fact {sid} is not forgotten; nothing written.", file=sys.stderr)
-        sys.exit(1)
-    payload = {"unretracts_ref": ref, "reason": args.reason, "source": "owner:owner/owner"}
-    payload = _sign_governance_payload(payload, owner_seed, _ed25519.pub_from_seed(owner_seed))
-    uentry = append_journal("retract", payload)
-    try:
-        conn = get_conn()
-        all_entries = merkle.read_all_entries(JOURNAL_DIR)
-        gov = _governance_state(all_entries)
-        ev = _content_evidence(all_entries, gov).get(
-            content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
-        conf = _content_confidence(ev, gov)
-        _apply_content_confidence(conn, content, ev, gov)
-        _mark_projected(conn, all_entries, [uentry])
-        conn.commit()
-        conn.close()
-    except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
-        _store_deferred(uentry, e, "Unforget")
-    print(f"Fact {sid} (#{row['id']}) UNFORGOTTEN (owner) → confidence {conf:.2f}")
+    """Owner only (1.24, #46): reverse an owner-forget. The command moved to the control plane in 2.0
+    (`hive-mind unforget`, `hivemind_owner.py`); this placeholder refuses (S2)."""
+    raise NotOnDataPlane(("unforget",))
 
 
 def _fts_query(raw):
@@ -3780,12 +3741,11 @@ def decide(args):
 # they never write the journal or store.db. The daemon already serves the corpus over the tailnet
 # via /sync/chunk, so /api/* exposes nothing the sync surface doesn't already.
 def _is_self_owner(gov):
-    """True iff THIS device holds the owner key AND is the established owner (same test the
-    boot-time pending-admissions notice uses). Best-effort; False when no owner key is present."""
+    """True iff THIS device holds the established owner's key (same test the boot-time pending-admissions
+    notice uses), decided without reading the seed (2.0 S2, `_owner_key_state`). Best-effort; False when
+    it cannot tell."""
     try:
-        if _ed25519 is None or _owner_seed() is None:
-            return False
-        return gov.get("owner_id") == _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed()))
+        return _owner_key_state(gov) == "held"
     except Exception:
         return False
 
@@ -4897,19 +4857,18 @@ def _pending_admissions(entries, gov):
 
 def _print_pending_admissions():
     """SessionStart: on the OWNER node, surface pending join-requests into the agent's context, so
-    admitting a teammate's device bubbles up like an interrupt. Silent on non-owner nodes."""
+    admitting a teammate's device bubbles up like an interrupt. Silent on non-owner nodes, and silent when
+    this device cannot tell (2.0 S2: decided from the public sidecar, never the seed)."""
     try:
-        if _ed25519 is None or _owner_seed() is None:
-            return
         entries = merkle.read_all_entries(JOURNAL_DIR)
         gov = _governance_state(entries)
-        if gov["owner_id"] != _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())):
-            return   # this device holds an owner key, but isn't the established owner
+        if _owner_key_state(gov) != "held":
+            return   # not the established owner's key, or no way to tell without reading the seed
         pend = _pending_admissions(entries, gov)
         if pend:
             who = ", ".join(f"{r['label'] or r['device_id']} ({r['device_id']})" for r in pend[:5])
             print(f"[hive] {len(pend)} device(s) awaiting admission: {who}. "
-                  "Review with `hv admit`; admit with `hv admit <device_id> --principal <name>`.")
+                  "Review with `hv group list`; admit with `hive-mind group admit <device_id> --principal <name>`.")
     except Exception:
         return
 
@@ -4919,8 +4878,7 @@ def _self_membership(gov):
     'owner' | 'fertile' | 'sterile' | 'no-hive'. Pure projection over governance — same on every node."""
     if not gov.get("owner_id"):
         return "no-hive", None
-    if (_ed25519 is not None and _owner_seed() is not None
-            and _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())) == gov["owner_id"]):
+    if _owner_key_state(gov) == "held":             # 2.0 S2: the public sidecar, never the seed
         return "owner", gov["principals"].get(NODE_ID)
     if NODE_ID in gov["admitted"]:
         return "fertile", gov["principals"].get(NODE_ID)
@@ -4957,7 +4915,7 @@ def whoami_cmd(args):
         print(f"address:   {_addr}   (share via `hive-mind invite`)")
     if not gov["owner_id"]:
         print("hive:      (none — no owner established yet)")
-        print("status:    UNAFFILIATED  (`hv owner init` to start a hive, or sync one then `hv join`)")
+        print("status:    UNAFFILIATED  (`hive-mind owner init` to start a hive, or sync one then `hv join`)")
         return
     status, principal = _self_membership(gov)
     print(f"hive:      {gov['hive_id']}")
@@ -4972,16 +4930,16 @@ def whoami_cmd(args):
         print(f"principal: {principal}")
     if status == "owner" and gov["nominations"]:
         sids = sorted(_owner_id_for_pub(base64.b64decode(c)) for c in gov["nominations"])
-        print(f"           open succession nomination(s): {', '.join(sids)} (successor runs `hv owner claim`)")
+        print(f"           open succession nomination(s): {', '.join(sids)} (successor runs `hive-mind owner claim`)")
     if gov["elections"] and status in ("owner", "fertile"):
         armed = sum(1 for e in gov["elections"] if e["armed"] and not e["installed"])
-        tail = (" — heartbeat to defend (`hv owner heartbeat`)" if status == "owner" and armed
+        tail = (" — heartbeat to defend (`hive-mind owner heartbeat`)" if status == "owner" and armed
                 else " (vote with `hv owner vote <id>`)" if status == "fertile" else "")
         print(f"           {len(gov['elections'])} open owner-election(s)"
               + (f", {armed} dead-man-armed" if armed else "") + tail)
     if status == "sterile":
         pending = any(r["device_id"] == NODE_ID for r in _pending_admissions(entries, gov))
-        print("           " + (f"join request pending — owner runs `hv admit {NODE_ID}`" if pending
+        print("           " + (f"join request pending — owner runs `hive-mind group admit {NODE_ID}`" if pending
                                else "`hv join --principal <you>` to request write access"))
 
 
@@ -6245,10 +6203,10 @@ def wire_cmd(args):
         gov = _governance_state(entries)
         writers = gov.get("config", {}).get("cell_writers", "owner")
         if gov.get("owner_id"):                 # cells are executable: gate the write (hive #60)
-            if writers == "owner" and _owner_seed() is None:
+            if writers == "owner" and not _holds_owner_key("wire --add (cell_writers=owner)"):
                 print("Publishing cells/combs is owner-only here (config cell_writers=owner) — the "
                       "projection would decline a non-owner definition. Run on the owner device, or "
-                      "`hv config set cell_writers fertile`."); return
+                      "`hive-mind config set cell_writers fertile`."); return
             if writers == "fertile" and NODE_ID not in gov.get("admitted", set()):
                 print("Only admitted devices may publish cells/combs on this hive."); return
         payload.setdefault("version", 1)
@@ -6429,16 +6387,19 @@ def _my_curve_scalar():
     return _x25519.ed_seed_to_curve_scalar(seed)
 
 
+def _holds_owner_key(what):
+    """Placeholder: can this device owner-sign `what` (a capsule or cell write under an owner policy)?
+    `hv` cannot answer by reading the seed (2.0 S2), so it refuses and points at `hive-mind`, which
+    replaces this with the real check (`hivemind_owner.py`)."""
+    raise NotOnDataPlane(what)
+
+
 def _authorize_content_payload(payload):
-    """If this device holds the owner key, attach an owner signature so the projection can authorize an
-    authority-bearing content write (capsule, cell, comb) under the owner policy — the writer PROVES
-    owner-key possession, exactly like a governance act (the entry is otherwise only device-signed). A
-    no-op without the owner key: a fertile-policy write is authorized by device admission and needs no
-    owner_sig. For capsules the owner_sig is NOT part of the AAD (`alg|hive_id|name|version`), so it
-    never affects sealing/opening. Mutates and returns `payload`."""
-    seed = _owner_seed()
-    if seed is not None and _ed25519 is not None:
-        return _sign_governance_payload(payload, seed, _ed25519.pub_from_seed(seed))
+    """On the data plane an authority-bearing content write (capsule, cell, comb) is DEVICE-signed only
+    (2.0 S2): under a `fertile` policy that is all it needs, since device admission authorizes it. Under
+    an `owner` policy the write is refused before it gets here (`_holds_owner_key`) and runs through
+    `hive-mind`, whose replacement of this function attaches the owner signature — outside the capsule
+    AAD, so it never affects sealing or opening. Returns `payload` unchanged."""
     return payload
 
 
@@ -6480,7 +6441,7 @@ def capsule_cmd(args):
     if action == "rm":
         putters = gov.get("config", {}).get("capsule_putters", "owner")
         if gov.get("owner_id"):
-            if putters == "owner" and _owner_seed() is None:
+            if putters == "owner" and not _holds_owner_key("capsule rm (capsule_putters=owner)"):
                 print("Tombstoning capsules is owner-only here (config capsule_putters=owner) — the "
                       "projection would decline a non-owner tombstone. Run on the owner device."); return 1
             if putters == "fertile" and NODE_ID not in gov.get("admitted", set()):
@@ -6498,9 +6459,9 @@ def capsule_cmd(args):
     if action in ("put", "rotate"):
         putters = gov.get("config", {}).get("capsule_putters", "owner")
         if gov.get("owner_id"):
-            if putters == "owner" and _owner_seed() is None:
+            if putters == "owner" and not _holds_owner_key(f"capsule {action} (capsule_putters=owner)"):
                 print("Storing capsules is owner-only here (config capsule_putters=owner). Run on the "
-                      "owner device, or `hv config set capsule_putters fertile`."); return 1
+                      "owner device, or `hive-mind config set capsule_putters fertile`."); return 1
             if putters == "fertile" and NODE_ID not in gov.get("admitted", set()):
                 print("Only admitted devices may store capsules on this hive."); return 1
         recips, missing, suspect = _recipient_pubkeys(entries, gov)
@@ -6574,11 +6535,19 @@ def _secret_key_files():
     return [("device-key", DEVICE_KEY_PATH), ("owner-key", OWNER_KEY_PATH)]
 
 
-def _leaky_key_files():
+def _fixable_key_files():
+    """The key files `hv doctor --fix` may re-tighten: the DEVICE key only (2.0 PR 2b). The owner key is
+    operator state, re-tightened by `hive-mind doctor --fix`, which replaces this. The device key stays
+    here so an agent-only node's 15-minute `hv doctor --fix` timer still repairs a leaky one."""
+    return [(lbl, p) for lbl, p in _secret_key_files() if lbl == "device-key"]
+
+
+def _leaky_key_files(files=None):
     """Existing secret key files whose POSIX mode grants ANY group/other access. Returns
-    [(label, path, mode)]; empty when all are 0600-or-tighter (or absent). POSIX-only."""
+    [(label, path, mode)]; empty when all are 0600-or-tighter (or absent). POSIX-only. `files` defaults
+    to every secret key file; stat only, never a read."""
     out = []
-    for label, pth in _secret_key_files():
+    for label, pth in (files if files is not None else _secret_key_files()):
         try:
             if pth.exists():
                 mode = pth.stat().st_mode & 0o777
@@ -6594,7 +6563,7 @@ def _fix_key_perms():
     NOT be swallowed — a private key left group/other-readable collapses the whole threat model, so
     the caller surfaces `failed` loudly rather than reporting a clean fix."""
     fixed, failed = [], []
-    for label, pth, _mode in _leaky_key_files():
+    for label, pth, _mode in _leaky_key_files(_fixable_key_files()):
         try:
             os.chmod(pth, 0o600)
             fixed.append(label)
@@ -6744,10 +6713,9 @@ def _doctor_status():
     try:
         gov = _governance_state(entries)
         if not gov["owner_id"]:
-            checks.append({"name": "owner", "status": "ok", "detail": "no owner established yet (`hv owner init`)"})
+            checks.append({"name": "owner", "status": "ok", "detail": "no owner established yet (`hive-mind owner init`)"})
         else:
-            held = (_ed25519 is not None and _owner_seed() is not None
-                    and _owner_id_for_pub(_ed25519.pub_from_seed(_owner_seed())) == gov["owner_id"])
+            held = _owner_key_state(gov) == "held"     # 2.0 S2: never reads the seed
             notes = []
             if gov["owner_term"]:
                 notes.append(f"{gov['owner_term']} handoff(s) from genesis")
@@ -6794,12 +6762,12 @@ def _doctor_status():
         cands = _self_signed_owner_acts(entries)
         if not cands and not pin:
             checks.append({"name": "genesis", "status": "ok",
-                           "detail": "no owner established yet (`hv owner init` pins as it claims)"})
+                           "detail": "no owner established yet (`hive-mind owner init` pins as it claims)"})
         elif g.get("mismatch"):
             checks.append({"name": "genesis", "status": "fail",
                            "detail": (f"the pinned genesis {pin.get('genesis_ref')} is NOT in this journal, so "
                                       "this node has no owner and refuses foreign content. Sync from the "
-                                      "device you pinned, or re-pin with `hv owner pin --set --force`")})
+                                      "device you pinned, or re-pin with `hive-mind owner pin --set --force`")})
         elif len(cands) > 1:
             refs = ", ".join(f"{e.get('node_id')}:{e.get('seq')}→{(e.get('payload') or {}).get('owner_id')}"
                              for e in cands)
@@ -6811,7 +6779,7 @@ def _doctor_status():
         elif not g.get("pinned"):
             checks.append({"name": "genesis", "status": "warn", "detail": (
                 f"genesis {g.get('ref')} is not pinned on this device — another `owner` declaration with "
-                "an earlier timestamp would replace the owner. `hv owner pin --set` (or `hv doctor --fix`)")})
+                "an earlier timestamp would replace the owner. `hive-mind owner pin --set` (or `hive-mind doctor --fix`)")})
         else:
             checks.append({"name": "genesis", "status": "ok",
                            "detail": f"genesis {g.get('ref')} pinned; fingerprint {_genesis_fingerprint(entries, gov)}"})
@@ -6940,15 +6908,15 @@ def _doctor_status():
             checks.append({"name": "forget-authz", "status": "warn",
                            "detail": f"{len(hides)} fact(s) kept forgotten only by a pre-genesis owner forget, "
                                      f"which needs no signature (#122): {', '.join(hides[:10])}{more} — if you "
-                                     f"did not make it, `hv unforget` the fact on the owner machine"
+                                     f"did not make it, `hive-mind unforget` the fact on the owner machine"
                                      + (f"; {len(dangling)} more such forget(s) target nothing in the journal"
                                         if dangling else "")
-                                     + "; `hv config set forget_writers owner` closes this (#122)"})
+                                     + "; `hive-mind config set forget_writers owner` closes this (#122)"})
         elif dangling:
             checks.append({"name": "forget-authz", "status": "ok",
                            "detail": f"{len(dangling)} pre-genesis owner forget(s) are honoured without a "
                                      f"signature (#122), but none hides a fact: their targets are not in the "
-                                     f"journal; `hv config set forget_writers owner` closes this"})
+                                     f"journal; `hive-mind config set forget_writers owner` closes this"})
     except Exception:
         pass
 
@@ -6982,7 +6950,7 @@ def _doctor_status():
                                "detail": f"{len(fc['behind'])} peer(s) below contract {_LINK_WRITE_PATH_MIN}, "
                                          f"{len(fc['unverified'])} unverifiable — {'; '.join(parts)}. A peer on a "
                                          f"pre-1.19 build lands but does not honour the `link` entries this node's "
-                                         f"verbs now write: upgrade it (`git pull`), or `hv group purge` a dead device"})
+                                         f"verbs now write: upgrade it (`git pull`), or `hive-mind group purge` a dead device"})
     except Exception:
         pass
 
@@ -7634,6 +7602,11 @@ def doctor_cmd(args):
                 if failed:
                     print(f"\n--fix: FAILED to tighten {', '.join(failed)} — these private key(s) are "
                           f"STILL group/other-readable; fix manually (`chmod 600`) NOW.")
+                left = [lbl for lbl, _p, _m in _leaky_key_files()
+                        if lbl not in {f for f, _q in _fixable_key_files()}]
+                if left:
+                    print(f"\n--fix: {', '.join(left)} is STILL group/other-readable. It is operator state: "
+                          "run `hive-mind doctor --fix` to re-tighten it (2.0).")
 
         # Self-announce this device's signing key: a device admitted directly by the owner that
         # never authored an entry has no harvestable pub (the device-keys advisory above), so it
@@ -7654,18 +7627,10 @@ def doctor_cmd(args):
             print(f"\n--fix: key-announce heal error: {e}")
 
         # Pin the genesis when there is exactly one candidate. A plain `hv doctor` stays read-only and
-        # only warns; pinning is a mutation, so it belongs behind --fix (and `hv owner pin --set`).
-        # Never guesses: two candidates mean a rival is stored, and doctor fails instead.
+        # only warns; pinning is operator state, so it is `hive-mind doctor --fix` (2.0 PR 2b), and this
+        # plane's placeholder only says so. Never guesses: two candidates mean a rival is stored.
         try:
-            _pe = merkle.read_all_entries(JOURNAL_DIR)
-            if _load_genesis_pin() is None and len(_self_signed_owner_acts(_pe)) == 1:
-                if dry:
-                    print("\n  would pin this hive's single genesis declaration "
-                          f"({GENESIS_PIN_PATH.name}, 0600, never synced).")
-                else:
-                    _p = _auto_pin_genesis(_pe)
-                    if _p:
-                        print(f"\n--fix: pinned genesis {_p['genesis_ref']} (owner {_p['owner_id']}).")
+            _heal_genesis_pin(merkle.read_all_entries(JOURNAL_DIR), dry)
         except Exception as e:
             print(f"\n--fix: genesis-pin heal error: {e}")
 
@@ -7767,20 +7732,18 @@ def doctor_cmd(args):
     sys.exit(1 if fails else 0)
 
 
+def _heal_genesis_pin(entries, dry):
+    """Placeholder for the genesis-pin repair (2.0 PR 2b). Pinning is operator state, so the repair is
+    `hive-mind doctor --fix` (`hivemind_owner.py` replaces this); `hv doctor --fix` only points at it."""
+    if _load_genesis_pin() is None and len(_self_signed_owner_acts(entries)) == 1:
+        print("\n--fix: this hive's single genesis declaration is not pinned on this device. Pinning is "
+              "operator state: run `hive-mind doctor --fix` (or `hive-mind owner pin --set`).")
+
+
 def _append_governance(action_payload):
-    """Owner-sign and append a governance entry, then rebuild so confidence reflects it. Requires
-    the owner key on this device. Returns the entry, or None if this device isn't the owner."""
-    seed = _owner_seed()
-    if seed is None:
-        print("This device does not hold the owner key — run governance commands on the owner machine.")
-        return None
-    pub = _ed25519.pub_from_seed(seed)
-    # $HIVE_NOW (when set) dates the entry, so owner-liveness vs. an election basis_ts is drivable
-    # deterministically in tests; in production it is unset and the wall clock is used.
-    entry = append_journal("governance", _sign_governance_payload(action_payload, seed, pub),
-                           timestamp=os.environ.get("HIVE_NOW") or None)
-    rebuild_db()
-    return entry
+    """Placeholder: owner-sign and append a governance entry. Every owner-signed governance act is on the
+    control plane (2.0 S2, `hivemind_owner.py`); here it refuses."""
+    raise NotOnDataPlane(("owner",))
 
 
 def _append_governance_device(action_payload):
@@ -7825,114 +7788,38 @@ def _emit_key_announce():
 def _grandfather_remedy(sids):
     """The two remedies `_config_set`'s #122 guard prints, for the facts a failed close left behind."""
     for sid in sids:
-        print(f"    {sid}   keep it forgotten: hv retract {sid} --owner   |   "
-              f"let it back: hv unforget {sid} --reason …")
-    print("    Then close the grandfather by hand:  hv config set forget_writers owner")
+        print(f"    {sid}   keep it forgotten: hive-mind retract {sid} --owner   |   "
+              f"let it back: hive-mind unforget {sid} --reason …")
+    print("    Then close the grandfather by hand:  hive-mind config set forget_writers owner")
 
 
-def _close_grandfather_at_genesis(owner_seed, owner_pub):
-    """#135 part (1), contract 1.28: a hive born by `hv owner init` starts CLOSED, so it never depends on
-    the pre-genesis grandfather. Called at the end of `owner init` with the genesis `owner` act already
-    appended and pinned: re-issue every forget that is in effect ONLY because it precedes genesis as an
-    ordinary owner-signed `retract` — the shape `hv retract <fact> --owner` writes — and only THEN set
-    `forget_writers=owner`.
-
-    THE ORDER IS LOAD-BEARING. `_config_set`'s #122 guard refuses to close while `_forgets_grandfathered`'s
-    `hides` is non-empty, because closing would silently bring those facts back. Re-issuing first empties
-    `hides`, so the flip has nothing left to decide — and the flip still goes through that guard, which is
-    what makes "closed AND a fact silently back" unreachable rather than merely unlikely.
-
-    `hides` is taken from `_forgets_grandfathered` UNCHANGED and is not filtered further: it is already
-    limited to OWNER-SOURCE forgets, so a member device's negative-evidence retract is never promoted into
-    an irreversible owner act. Its second list (`dangling` — a grandfathered forget whose target is not a
-    fact in this journal) is NOT re-issued: it hides nothing, and minting owner authority over a target
-    that does not exist would be a new claim rather than a restatement. `hv doctor` (`forget-authz`) keeps
-    counting those. The old unsigned entries stay in the append-only journal and, once the policy is
-    `owner`, count for nothing.
-
-    FAILURE. Every retract is prepared AND SIGNED before any of them is appended.
-      • preparation fails  → nothing is appended and the config is not set; the journal is as it was.
-      • an append fails    → the config is still not set, and what landed is NOT removed. An append-only
-        journal cannot be rolled back, and pretending otherwise would be the worse bug; those entries are
-        ordinary post-genesis owner forgets, so nothing is resurrected by their presence.
-    Either way both lists are reported, with the same two remedies the #122 guard prints. The one state
-    that must be impossible is `forget_writers=owner` together with a fact silently back."""
-    entries = merkle.read_all_entries(JOURNAL_DIR)
-    gov = _governance_state(entries)
-    hides, _dangling = _forgets_grandfathered(entries, gov)
-    # Phase 1 — prepare and sign EVERY re-issue before appending any of them.
-    prepared = []                                  # [(sid, signed payload)], nothing written yet
-    resolved = []                                  # the sids we got as far as naming, for the failure report
-    try:
-        conn = get_conn()
-        try:
-            for label in hides:                    # 'forget <entry>→<node_id>:<seq>' (the target fact)
-                node, seq = label.split("→", 1)[1].rsplit(":", 1)
-                row = conn.execute("SELECT sid FROM journal_index WHERE node_id = ? AND seq = ?",
-                                   (node, int(seq))).fetchone()
-                resolved.append(((row["sid"] if row and row["sid"] else _short_id(node, int(seq))),
-                                 [node, int(seq)]))
-        finally:
-            conn.close()
-        for sid, ref in resolved:
-            prepared.append((sid, _sign_governance_payload(
-                {"retracts_ref": ref, "source": "owner:owner/owner",
-                 "reason": "re-issued owner-signed at genesis (#135): it was honoured only by the "
-                           "pre-genesis grandfather"},
-                owner_seed, owner_pub)))
-    except Exception as e:
-        print(f"  COULD NOT re-issue {len(hides)} pre-genesis forget(s): {e}")
-        print("    NOTHING was written: forget_writers stays `legacy`, the grandfather is intact and no")
-        print("    fact came back. Decide each of these, then close it yourself:")
-        _grandfather_remedy([sid for sid, _ in resolved] or hides)
-        return
-    # Phase 2 — append them. Only now can the journal change.
-    done = []
-    for i, (sid, payload) in enumerate(prepared):
-        try:
-            # $HIVE_NOW (when set) dates the entry, exactly as it dates the genesis act just above, so the
-            # re-issue is deterministically positioned AFTER genesis (same node_id, higher seq).
-            append_journal("retract", payload, timestamp=os.environ.get("HIVE_NOW") or None)
-        except Exception as e:
-            left = [s for s, _ in prepared[i:]]
-            rebuild_db()
-            print(f"  PARTLY re-issued the pre-genesis forget(s) — an append failed: {e}")
-            print(f"    re-issued owner-signed: {', '.join(done) or '(none)'}")
-            print(f"    NOT re-issued: {', '.join(left)}")
-            print("    forget_writers stays `legacy`, so nothing came back. The journal is append-only: the")
-            print("    re-issued acts stay as ordinary post-genesis owner forgets and are NOT removed.")
-            _grandfather_remedy(left)
-            return
-        done.append(sid)
-    if done:
-        rebuild_db()
-        print(f"  re-issued {len(done)} pre-genesis forget(s) owner-signed, so no fact here depends on the "
-              f"grandfather: {', '.join(done)}")
-    # Phase 3 — the flip, through the #122 guard (`hides` is empty now, so it has nothing to decide).
-    _config_set("forget_writers", "owner")
-    if (_governance_state(merkle.read_all_entries(JOURNAL_DIR)).get("config") or {}).get(
-            "forget_writers") == "owner":
-        print("  forget_writers=owner: only a forget signed by the owner as of its position hides a fact in")
-        print("    this hive (#135). Pre-genesis unsigned forgets count for nothing.")
+# `_close_grandfather_at_genesis` (#135 part 1) moved with `owner init` to the control plane
+# (`hivemind_owner.py`, 2.0 PR 2b).
 
 
 def owner_cmd(args):
-    """Show or create the governance owner identity (the root of trust for membership + config)."""
+    """`hv owner …`: the read-only and DEVICE-signed owner actions — show, elections, propose-election
+    --pub and vote — so dead-man recovery works on a node that has only `hv`. Every action that reads the
+    owner seed, writes owner-key material or owner-signs is `hive-mind owner …` (2.0 S2)."""
     action = getattr(args, "owner_action", None) or "show"
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     if action == "show":
         if not gov["owner_id"]:
-            print("No owner established. Run `hv owner init` to mint the owner key and claim it.")
+            print("No owner established. Run `hive-mind owner init` to mint the owner key and claim it.")
             return
-        seed = _owner_seed()
-        held = seed is not None and _owner_id_for_pub(_ed25519.pub_from_seed(seed)) == gov["owner_id"]
-        print(f"owner: {gov['owner_id']}" + ("  (this device holds the owner key)" if held else ""))
+        key = _owner_key_state(gov)                 # 2.0 S2: decided without reading the seed
+        held = key == "held"
+        print(f"owner: {gov['owner_id']}" + ("  (this device holds the owner key)" if held else
+                                             "  (an owner key is on this device, not verified from `hv`)"
+                                             if key == "present" else
+                                             "  (whether this device holds the owner key cannot be told)"
+                                             if key == "unknown" else ""))
         print(f"  hive_id: {gov['hive_id']}")
         g = gov.get("genesis") or {}
         fp = _genesis_fingerprint(entries, gov)
         print(f"  genesis: {g.get('ref') or '?'}" + (f"  fingerprint {fp}" if fp else "")
-              + ("  (pinned)" if g.get("pinned") else "  (NOT PINNED — `hv owner pin --set`)"))
+              + ("  (pinned)" if g.get("pinned") else "  (NOT PINNED — `hive-mind owner pin --set`)"))
         if g.get("candidates", 0) > 1:
             print(f"  WARNING: {g['candidates']} self-signed owner declarations in this journal "
                   "— see `hv doctor genesis`")
@@ -7957,314 +7844,9 @@ def owner_cmd(args):
             sids = sorted(_owner_id_for_pub(base64.b64decode(c)) for c in gov["nominations"])
             print(f"  open nominations ({len(sids)}): {', '.join(sids)}")
         if gov["escrows"]:
-            print(f"  live escrows: {len(gov['escrows'])} (recover with `hv owner restore`)")
+            print(f"  live escrows: {len(gov['escrows'])} (recover with `hive-mind owner restore`)")
         if not held:
             print("  This is a member node; membership and config changes run on the owner device.")
-        return
-    if action == "pin":
-        pin = _load_genesis_pin()
-        cands = _self_signed_owner_acts(entries)
-        fp = (getattr(args, "fingerprint", "") or "").strip()
-        if fp:
-            # A joiner pins from the invite BEFORE its first pull, so it never trusts a journal it has
-            # not vetted. The invite carries only a hash PREFIX, which is enough: a squatter can copy a
-            # hive_id and an owner_id, but not the genesis entry's hash.
-            parts = [x for x in fp.replace("\\", "/").split("/") if x]
-            if len(parts) < 3:
-                print("A genesis fingerprint looks like <hive_id>/<owner_id>/<hash8>, as `hv owner show`")
-                print("  prints it (an invite line may carry the address in front of it).")
-                return
-            hive_id, owner_id, h8 = parts[-3], parts[-2], parts[-1].lower()
-            if not (hive_id.startswith(("h1:", "h2:")) and owner_id.startswith("o1:")
-                    and len(h8) >= 8 and all(c in "0123456789abcdef" for c in h8)):
-                print(f"That does not parse as a genesis fingerprint: {fp!r}")
-                print("  Expected <hive_id>/<owner_id>/<hash8>, e.g. h1:abc.../o1:def.../0a1b2c3d")
-                return
-            if pin is not None and not getattr(args, "force", False):
-                print(f"Already pinned to {pin.get('genesis_ref') or pin.get('genesis_hash8')} "
-                      f"(owner {pin.get('owner_id')}). Use --force to replace it.")
-                return
-            new_pin = _write_genesis_pin({"hive_id": hive_id, "owner_id": owner_id, "genesis_hash8": h8})
-            print(f"Pinned the genesis fingerprint for hive {hive_id} (owner {owner_id}, {h8}).")
-            print("  Nothing else establishes this hive on this device now. The declaration itself")
-            print("  arrives on the first sync, and `hv doctor genesis` confirms it matched.")
-            if any(_pin_matches(e, new_pin) for e in cands):
-                _write_genesis_pin(_genesis_pin_for(next(e for e in cands if _pin_matches(e, new_pin))))
-                print("  It is already in this journal — the pin now names the exact entry.")
-            return
-        if not getattr(args, "set", False):
-            if pin is None:
-                print("No genesis pinned on this device.")
-                print("  Legacy behaviour applies: the EARLIEST self-signed owner declaration in the")
-                print("  journal establishes the hive — and an entry's timestamp is written by whoever")
-                print("  made the entry. Pin with `hv owner pin --set`.")
-            else:
-                print(f"genesis pinned: {pin.get('genesis_ref')}")
-                print(f"  owner: {pin.get('owner_id')}")
-                print(f"  hive_id: {pin.get('hive_id')}")
-                print(f"  hash: {pin.get('genesis_hash') or pin.get('genesis_hash8')}")
-                print(f"  file: {GENESIS_PIN_PATH} (private to this node, never synced)")
-                if not any(_pin_matches(e, pin) for e in cands):
-                    print("  MISMATCH: the pinned declaration is not in this journal. Until it syncs,")
-                    print("    this node has no owner and refuses foreign content — see `hv doctor genesis`.")
-            if len(cands) > 1:
-                print(f"  {len(cands)} self-signed owner declaration(s) present — `hv doctor genesis`")
-            return
-        if pin is not None and not getattr(args, "force", False):
-            print(f"Already pinned to {pin.get('genesis_ref')} (owner {pin.get('owner_id')}).")
-            print("  A pin changes only by a deliberate act: `hv owner pin --set --force`, or re-joining.")
-            return
-        if len(cands) != 1:
-            print(f"Not pinning: this journal holds {len(cands)} self-signed owner declaration(s).")
-            for e in cands:
-                pl = e.get("payload") or {}
-                print(f"  {e.get('node_id')}:{e.get('seq')}  owner {pl.get('owner_id')}  "
-                      f"hive {pl.get('hive_id')}  {e.get('timestamp')}")
-            if len(cands) > 1:
-                print("  Two or more declarations means one is a rival. There is NO timestamp tie-break:")
-                print("  the timestamp is exactly what an attacker controls. Re-join from the device you")
-                print("  trust, using the genesis fingerprint from its `hv owner show`.")
-            return
-        new_pin = _write_genesis_pin(_genesis_pin_for(cands[0]))
-        print(f"Pinned genesis {new_pin['genesis_ref']}")
-        print(f"  owner: {new_pin['owner_id']}")
-        print(f"  hive_id: {new_pin['hive_id']}")
-        print(f"  file: {GENESIS_PIN_PATH} (private to this node, never synced)")
-        return
-    if action == "export":
-        seed = _owner_seed()
-        if seed is None:
-            print("This device does not hold the owner key — nothing to export.")
-            return
-        oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
-        out = Path(getattr(args, "out", None) or f"hive-owner-{oid}.key")
-        env = {"hive_id": gov.get("hive_id", ""), "owner_id": oid}
-        if getattr(args, "passphrase", False):
-            pw = _read_passphrase("Passphrase to encrypt the owner key (blank line / Ctrl-C to cancel): ",
-                                  confirm=True)
-            if pw is None:
-                print("Cancelled — nothing exported.")
-                return
-            env.update(_owner_seal(seed, pw))
-        else:
-            env["enc"] = "none"
-            env["seed"] = base64.b64encode(seed).decode()
-        out.write_text(json.dumps(env, indent=2) + "\n")
-        try:
-            os.chmod(out, 0o600)
-        except Exception:
-            pass
-        print(f"Owner key exported to {out} (chmod 600).")
-        if env.get("enc") == "none":
-            print("  UNENCRYPTED — treat this like an SSH private key; anyone holding it is the owner.")
-            print("  Re-run with --passphrase to encrypt it for transport.")
-        return
-    if action == "import":
-        try:
-            env = json.loads(Path(args.file).read_text())
-        except Exception as e:
-            print(f"Could not read {args.file}: {e}")
-            return
-        if env.get("enc", "none") == "none":
-            seed = base64.b64decode(env.get("seed", ""))
-        else:
-            pp = _read_passphrase("Passphrase (blank line / Ctrl-C to cancel): ")
-            if pp is None:
-                print("Cancelled.")
-                return
-            try:
-                seed = _owner_unseal(env, pp)
-            except Exception as e:
-                print(f"Could not decrypt: {e}")
-                return
-        if len(seed) != 32:
-            print("Invalid owner key (bad length).")
-            return
-        imported = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
-        if gov["owner_id"] and imported != gov["owner_id"] and not getattr(args, "force", False):
-            print(f"Refusing: this key is owner {imported}, but the journal's established owner is "
-                  f"{gov['owner_id']}. Importing would create a disagreeing owner. Use --force to override.")
-            return
-        HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
-        _stash_owner_key(seed)
-        print(f"Owner key installed ({imported}). This device can now sign governance.")
-        return
-    if action == "standby":
-        enabled = not getattr(args, "off", False)
-        if _append_governance({"action": "standby", "device_id": args.device_id, "enabled": enabled}):
-            if enabled:
-                print(f"Declared standby: {args.device_id}")
-                print("  It must hold a copy of the owner key to actually act — give it one with "
-                      "`hv owner export` then `hv owner import` on that device.")
-            else:
-                print(f"Removed standby: {args.device_id}")
-        return
-    if action == "escrow":
-        seed = _owner_seed()
-        if seed is None:
-            print("This device does not hold the owner key — nothing to escrow.")
-            return
-        print("This stores your owner key, passphrase-ENCRYPTED, INSIDE the hive journal.")
-        print("  • It syncs to EVERY device that reads the hive (including read-only members) and is")
-        print("    PERMANENT (append-only — it cannot be un-published). The passphrase is then your")
-        print("    hive master key: anyone with hive read access can attempt to crack it offline,")
-        print("    forever. Use a STRONG passphrase. (Your off-device `hv owner export` file covers")
-        print("    the other case — not trusting the shared store.)")
-        pw = _read_passphrase("Strong passphrase to encrypt the owner key (blank line / Ctrl-C to cancel): ",
-                              confirm=True)
-        if pw is None:
-            print("Cancelled — the owner key was NOT escrowed.")
-            return
-        if len(pw) < 12:
-            print("Refusing: passphrase too short (need ≥ 12 chars) — it guards a key readable by every node.")
-            return
-        oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
-        if _append_governance({"action": "owner-escrow", "owner_id": oid, "envelope": _owner_seal(seed, pw)}):
-            print(f"Owner key escrowed to the hive (encrypted; owner {oid}).")
-            print("  Recover on any synced device with:  hv owner restore")
-        return
-    if action == "restore":
-        # gov["escrows"] is already owner-signed, revocation-filtered, and sorted (see
-        # _governance_state) — a `revoke-escrow` tombstone drops a compromised blob from here.
-        if not gov["escrows"]:
-            print("No (live) owner-escrow found in the hive. Sync the hive first (`hv sync now`), or "
-                  "recover from a file with `hv owner import <file>`.")
-            return
-        # latest live escrow wins, but only a scheme this build can open (v1 was retired in 1.14).
-        openable = [e for e in gov["escrows"] if e[3].get("enc") == _OWNER_SEAL_ALG]
-        if not openable:
-            print(f"The only live escrow(s) use a retired scheme ({gov['escrows'][-1][3].get('enc')!r}). "
-                  "Re-escrow from a device that still holds the owner key (`hv owner escrow`), or recover "
-                  "from a file with `hv owner import <file>`.")
-            return
-        env = openable[-1][3]
-        pp = _read_passphrase("Passphrase (blank line / Ctrl-C to cancel): ")
-        if pp is None:
-            print("Cancelled.")
-            return
-        try:
-            seed = _owner_unseal(env, pp)
-        except Exception as e:
-            print(f"Could not decrypt: {e}")
-            return
-        if len(seed) != 32:
-            print("Invalid owner key (bad length).")
-            return
-        oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
-        if gov["owner_id"] and oid != gov["owner_id"]:
-            print(f"Refusing: the escrowed key is owner {oid}, but the established owner is {gov['owner_id']}.")
-            return
-        HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
-        _stash_owner_key(seed)
-        print(f"Owner key recovered from the hive ({oid}). This device can now sign governance.")
-        return
-    if action == "nominate":
-        cp = _canon_pub(args.successor_pub)
-        if not cp:
-            print("Not a valid owner pubkey (need base64 of a 32-byte ed25519 key, e.g. from "
-                  "`hv owner claim --mint` on the successor device).")
-            return
-        sid = _owner_id_for_pub(base64.b64decode(cp))
-        if _append_governance({"action": "nominate-successor", "successor_owner_pub": cp}):
-            print(f"Nominated successor {sid}.")
-            print("  The successor claims it with `hv owner claim` on the device that holds that key.")
-        return
-    if action == "unnominate":
-        cp = _canon_pub(args.successor_pub)
-        if not cp:
-            print("Not a valid owner pubkey.")
-            return
-        if _append_governance({"action": "revoke-nomination", "successor_owner_pub": cp}):
-            print(f"Revoked the nomination of {_owner_id_for_pub(base64.b64decode(cp))}.")
-        return
-    if action == "claim":
-        if _ed25519 is None:
-            print("ed25519 unavailable; cannot claim ownership.")
-            return
-        seed = _owner_seed()
-        mint = getattr(args, "mint", False) or seed is None
-        if mint:
-            if seed is not None and not getattr(args, "force", False):
-                # Holding a key already — minting a fresh one would discard it. Only refuse if it is
-                # the live owner key (losing that is the dangerous case); otherwise allow the reuse.
-                held_oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
-                if held_oid == gov["owner_id"]:
-                    print("This device already holds the live owner key. `--force` to mint a NEW key anyway.")
-                    return
-            seed = os.urandom(32)
-        pub = _ed25519.pub_from_seed(seed)
-        oid = _owner_id_for_pub(pub)
-        cp = _canon_pub(base64.b64encode(pub).decode())
-        if oid == gov["owner_id"]:
-            print(f"This device's key is already the established owner ({oid}). Nothing to claim.")
-            return
-        # Install the (possibly freshly minted) key locally so a later claim can reuse it.
-        HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
-        _stash_owner_key(seed)
-        if cp not in gov["nominations"]:
-            print(f"Prospective owner key ready on this device: {oid}")
-            print(f"  pub: {cp}")
-            print(f"  Have the current owner run:  hv owner nominate {cp}")
-            print( "  then re-run `hv owner claim` here to take ownership.")
-            return
-        if _append_governance({"action": "claim-succession", "owner_id": oid}):
-            print(f"Claimed ownership: {oid} is now the hive owner (term {gov['owner_term'] + 1}).")
-            print("  The previous owner key can no longer sign governance.")
-        return
-    if action == "transfer":
-        cp = _canon_pub(args.new_owner_pub)
-        if not cp:
-            print("Not a valid owner pubkey (base64 of a 32-byte ed25519 key).")
-            return
-        nid = _owner_id_for_pub(base64.b64decode(cp))
-        if nid == gov["owner_id"]:
-            print(f"{nid} is already the owner. Nothing to transfer.")
-            return
-        print(f"Immediate handoff: ownership moves to {nid}.")
-        print("  WARNING: that device must already HOLD this key or governance becomes unsignable.")
-        print("  (Use `hv owner nominate` + `hv owner claim` for the safer claim-based handoff.)")
-        if _append_governance({"action": "transfer", "new_owner_pub": cp}):
-            print(f"Transferred ownership to {nid} (term {gov['owner_term'] + 1}).")
-        return
-    if action == "revoke-escrow":
-        ref = args.ref
-        if ref != "all":
-            ok = any(f"{nid}:{seq}" == ref for _ts, nid, seq, _env in gov["escrows"])
-            if not ok:
-                print(f"No live escrow {ref!r}. Live escrows (node_id:seq):")
-                for _ts, nid, seq, _env in gov["escrows"]:
-                    print(f"  {nid}:{seq}")
-                if not gov["escrows"]:
-                    print("  (none)")
-                print("  Use `all` to tombstone every escrow.")
-                return
-        if _append_governance({"action": "revoke-escrow", "escrow_ref": ref}):
-            print(f"Tombstoned escrow {ref} — `hv owner restore` will skip it.")
-            print("  NOTE: the ciphertext stays in the append-only journal forever. If the passphrase")
-            print("  leaked, ROTATE the owner key (`hv owner nominate`+`claim`, or `transfer`) so the")
-            print("  old escrow blob unlocks a key that is no longer the owner.")
-        return
-    if action == "heartbeat":
-        if _owner_seed() is None:
-            print("This device does not hold the owner key — heartbeat must run on a key holder.")
-            return
-        if _append_governance({"action": "heartbeat"}):
-            print("Heartbeat recorded — owner liveness refreshed (resets the dead-man timer).")
         return
     if action == "propose-election":
         if not gov["owner_id"]:
@@ -8272,7 +7854,7 @@ def owner_cmd(args):
             return
         if int(gov["config"].get("quorum_m", 0) or 0) <= 0:
             print("Quorum elections are OFF (quorum_m=0). The owner must enable them first:")
-            print("  hv config quorum set quorum_m <N>")
+            print("  hive-mind config set quorum_m <N>")
             return
         if NODE_ID not in gov["admitted"]:
             print("Only an ADMITTED device can propose an election (you are not admitted here).")
@@ -8281,21 +7863,13 @@ def owner_cmd(args):
             print("ed25519 unavailable; cannot propose an election.")
             return
         if getattr(args, "mint", False):
-            seed = os.urandom(32)
-            HIVE_HOME.mkdir(parents=True, exist_ok=True)
-            OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-            try:
-                os.chmod(OWNER_KEY_PATH, 0o600)
-            except Exception:
-                pass
-            _stash_owner_key(seed)
-            new_pub = _canon_pub(base64.b64encode(_ed25519.pub_from_seed(seed)).decode())
-            print(f"Minted a prospective owner key on this device ({_owner_id_for_pub(_ed25519.pub_from_seed(seed))}).")
-        else:
-            new_pub = _canon_pub(getattr(args, "pub", "") or "")
-            if not new_pub:
-                print("Provide the proposed owner key: `--mint` (mint one here) or `--pub <base64>`.")
-                return
+            # Minting writes owner-key material, so it is `hive-mind owner mint` (2.0 S2). Proposing the
+            # minted key is device-signed and stays here: `hv owner propose-election --pub <b64>`.
+            raise NotOnDataPlane("owner propose-election --mint")
+        new_pub = _canon_pub(getattr(args, "pub", "") or "")
+        if not new_pub:
+            print("Provide the proposed owner key: `--pub <base64>` (mint one with `hive-mind owner mint`).")
+            return
         basis_ts = os.environ.get("HIVE_NOW") or _now_iso()
         pid = _election_id(new_pub, basis_ts)
         new_oid = _owner_id_for_pub(base64.b64decode(new_pub))
@@ -8335,54 +7909,8 @@ def owner_cmd(args):
                 flags.append("dead-man armed" if e["armed"] else "owner active")
             print(f"  {e['proposal_id']}  ->  {e['new_owner_id']}   [{', '.join(flags)}]")
         return
-    if action == "init":
-        if _ed25519 is None:
-            print("ed25519 unavailable; cannot create an owner key.")
-            return
-        if OWNER_KEY_PATH.exists() and not args.force:
-            print(f"Owner key already exists at {OWNER_KEY_PATH}. Use --force to replace it.")
-            return
-        if gov["owner_id"] and not args.force:
-            print(f"An owner is already established ({gov['owner_id']}). Use --force to override "
-                  "(risks governance disagreement across nodes).")
-            return
-        seed = os.urandom(32)
-        HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
-        pub = _ed25519.pub_from_seed(seed)
-        oid = _owner_id_for_pub(pub)
-        # The genesis owner declaration also mints the hive_id: a public, owner-attested identifier
-        # that scopes sync, so two hives on one tailnet never merge their journals. Random (no key).
-        hive_id = "h1:" + os.urandom(8).hex()
-        genesis = append_journal("governance", _sign_governance_payload(
-            {"action": "owner", "owner_id": oid, "hive_id": hive_id}, seed, pub),
-            timestamp=os.environ.get("HIVE_NOW") or None)
-        # Pin the declaration we just made. Without this the node would accept a rival `owner` act
-        # with an earlier timestamp and project IT as the owner (hive-mind-private #14). --force is a
-        # deliberate FORK: it re-pins here, and peers that keep the old pin keep the old owner.
-        forked = _load_genesis_pin() is not None
-        _write_genesis_pin(_genesis_pin_for(genesis))
-        rebuild_db()
-        stashed = _stash_owner_key(seed)
-        print(f"Owner established: {oid}")
-        print(f"  hive_id: {hive_id}")
-        print(f"  genesis: {genesis['node_id']}:{genesis['seq']}  pinned ({GENESIS_PIN_PATH.name})")
-        if forked:
-            print("  FORKED: this device re-pinned its genesis. Peers that keep the old pin keep the")
-            print("    OLD owner, and the old declaration stays in the journal — it is never removed.")
-            print("    Every other device must re-join against this genesis to follow this owner.")
-        print(f"  key: {OWNER_KEY_PATH} (private — never commit or sync it)")
-        if stashed:
-            print(f"  backup: {stashed} (auto-stash; `hv owner export` for a portable copy)")
-        # #135 part (1), 1.28: leave this hive closed. Re-issue every forget kept in effect only by the
-        # pre-genesis grandfather as an owner-signed one, THEN set forget_writers=owner. --force (a
-        # deliberate re-genesis) gets the same treatment: skipping it would silently reopen those facts.
-        _close_grandfather_at_genesis(seed, pub)
-        print("  Admit your devices next: `hv admit <device_id> --principal <name>`")
+    # Every other action reads the owner seed, writes owner-key material or owner-signs: control plane.
+    raise NotOnDataPlane(("owner", action))
 
 
 def _self_tailnet_ip():
@@ -8485,49 +8013,14 @@ def _add_peer(url, label):
 
 
 def admit_cmd(args):
-    """Admit a device into the corroboration set and optionally tag its principal (owner-only).
-    With no device_id, LIST the devices awaiting admission (their pending join-requests).
-    On admit, the owner also SEEDS a reciprocal peer from the join-request's advertised URL, so
-    sync is symmetric (the owner syncs to the member, not only the member to the owner)."""
-    if not getattr(args, "device_id", None):
-        entries = merkle.read_all_entries(JOURNAL_DIR)
-        pend = _pending_admissions(entries, _governance_state(entries))
-        if not pend:
-            print("No devices awaiting admission.")
-            return
-        print(f"Devices awaiting admission ({len(pend)}):")
-        for r in pend:
-            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hv group admit {r['device_id']} --principal <name>")
-        return
-    if args.device_id in _governance_state(merkle.read_all_entries(JOURNAL_DIR))["purged"]:
-        print(f"{args.device_id} is purged (tombstoned) — purge is permanent; it cannot be re-admitted.")
-        return
-    payload = {"action": "admit", "device_id": args.device_id}
-    if args.principal:
-        payload["principal"] = args.principal
-    if _append_governance(payload):
-        print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else ""))
-        if _add_peer(_join_request_url(args.device_id), args.principal or args.device_id):
-            print("  + reciprocal peer added from its join-request URL — the owner now syncs to "
-                  "this device too (daemon picks it up next cycle, or `hv sync now`).")
+    """Placeholder: admitting a device is owner-signed, so it is `hive-mind group admit` (2.0 S2,
+    `hivemind_owner.py`). The pending list is also `hv group list`."""
+    raise NotOnDataPlane(("group", "admit"))
 
 
 def _group_change(action, device_id, principal=None):
-    """Append an owner-signed membership action (revoke/deny/change/purge) + confirm. Owner-only;
-    `_append_governance` signs and rebuilds so confidence re-derives over the new governance."""
-    payload = {"action": action, "device_id": device_id}
-    if principal:
-        payload["principal"] = principal
-    if not _append_governance(payload):
-        return
-    msg = {
-        "revoke": f"Revoked {device_id} — returned to STERILE (re-admit to restore).",
-        "deny":   f"Denied {device_id} — dropped from pending join-requests (a later admit overrides).",
-        "change": f"Re-tagged {device_id} → principal: {principal}.",
-        "purge":  f"Purged {device_id} (tombstoned) — its entries stay in the journal but no longer "
-                  f"count; permanent (cannot be re-admitted).",
-    }.get(action, f"{action} {device_id}")
-    print(msg)
+    """Placeholder: revoke / deny / change / purge are owner-signed — `hive-mind group …` (2.0 S2)."""
+    raise NotOnDataPlane(("group", action))
 
 
 def _group_list():
@@ -8535,7 +8028,7 @@ def _group_list():
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     if not gov["owner_id"]:
-        print("No owner established yet — no membership to list. Run `hv owner init`.")
+        print("No owner established yet — no membership to list. Run `hive-mind owner init`.")
         return
     print(f"hive {gov['hive_id']} — owner {gov['owner_id']}")
     print(f"admitted ({len(gov['admitted'])}):")
@@ -8546,7 +8039,7 @@ def _group_list():
     if pend:
         print(f"pending ({len(pend)}):")
         for r in pend:
-            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hv group admit {r['device_id']} --principal <name>")
+            print(f"  {r['device_id']}  ({r['label'] or '?'})  →  hive-mind group admit {r['device_id']} --principal <name>")
     if gov["denied"]:
         print(f"denied ({len(gov['denied'])}):")
         for d in sorted(gov["denied"]):
@@ -8591,84 +8084,15 @@ def group_cmd(args):
 
 
 def _config_set(key, value):
-    """Set a journaled, owner-signed tunable parameter (same on every node). Owner-only. Covers every
-    governed key, whichever `hv config` sub-namespace it is set from: the confidence knobs
-    (same_device_lambda, cap_self, introspect_support_weight), the salience/decay knobs
-    (importance_self_cap, w_links, w_volatile, halflife_fact/idea/volatile), the trust-velocity knobs
-    (trust_long_days, trust_short_days, trust_drift_threshold), the quorum-election knobs (quorum_m,
-    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers, forget_writers)."""
-    coercers = {"same_device_lambda": float, "cap_self": float,
-                "quorum_m": int, "quorum_by": str, "dead_man_days": float,
-                "capsule_putters": str, "cell_writers": str, "forget_writers": str,
-                "introspect_support_weight": float,
-                "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float,
-                **{k: float for k in _PR6_KNOB_DEFAULTS}}
-    if key not in coercers:
-        print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
-        return
-    try:
-        val = coercers[key](value)
-    except (TypeError, ValueError):
-        print(f"bad value for {key}: {value!r}")
-        return
-    if key == "quorum_by" and val not in ("device", "principal"):
-        print("quorum_by must be 'device' or 'principal'")
-        return
-    if key in ("capsule_putters", "cell_writers") and val not in ("owner", "fertile"):
-        print(f"{key} must be 'owner' (default) or 'fertile' (any admitted device)")
-        return
-    if key == "forget_writers":
-        if val not in ("legacy", "owner"):
-            print("forget_writers must be 'legacy' (default: an unsigned owner forget dated before the genesis "
-                  "owner still counts) or 'owner' (only forgets signed by the owner as of their position count)")
-            return
-        # #122 step 2 guard, no flag: closing must not silently bring a fact back. Every fact still kept
-        # forgotten only by an unsigned pre-genesis forget needs an explicit owner decision first.
-        entries = merkle.read_all_entries(JOURNAL_DIR)
-        gov = _governance_state(entries)
-        hides, _dangling = _forgets_grandfathered(entries, gov)
-        if val == "owner" and hides:
-            conn = get_conn()
-            print(f"Not set: closing the grandfather would bring back {len(hides)} fact(s) kept forgotten only by "
-                  f"an unsigned pre-genesis forget (#122). Decide each first, then run this again:")
-            for label in hides:
-                ref = label.split("→", 1)[1].rsplit(":", 1)
-                row = conn.execute("SELECT sid FROM journal_index WHERE node_id = ? AND seq = ?",
-                                   (ref[0], int(ref[1]))).fetchone()
-                sid = (row["sid"] if row and row["sid"] else _short_id(ref[0], int(ref[1])))
-                print(f"  {sid}   keep it forgotten: hv retract {sid} --owner   |   let it back: hv unforget {sid} --reason …")
-            conn.close()
-            return
-        if val == "legacy" and hides and (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
-            print(f"Note: reopening the grandfather hides {len(hides)} fact(s) again (listed by `hv doctor`, "
-                  f"forget-authz).")
-    if key == "quorum_m" and val < 0:
-        print("quorum_m must be >= 0 (0 disables elections)")
-        return
-    if key == "introspect_support_weight" and not (0.0 <= val <= 1.0):
-        print("introspect_support_weight must be in [0, 1] (default 0: reasoning never moves confidence)")
-        return
-    if key in ("trust_long_days", "trust_short_days") and val <= 0:
-        print(f"{key} must be > 0 days")
-        return
-    if key == "trust_drift_threshold" and not (-1.0 <= val <= 0.0):
-        print("trust_drift_threshold must be in [-1, 0] (a negative delta = reliability falling)")
-        return
-    if key.startswith("halflife_") and not (val > 0):
-        print(f"{key} must be > 0 days (defaults: fact {HALFLIFE_DAYS:g}, idea {HALFLIFE_IDEA_DAYS:g}, "
-              f"volatile {HALFLIFE_VOLATILE_DAYS:g})")
-        return
-    if key in ("importance_self_cap", "w_links", "w_volatile") and not (0.0 <= val <= 1.0):
-        print(f"{key} must be in [0, 1]")
-        return
-    if _append_governance({"action": "set-config", "key": key, "value": val}):
-        print(f"set {key} = {val}")
+    """Placeholder: setting a governed parameter is owner-signed — `hive-mind config set` (2.0 S2,
+    `hivemind_owner.py`)."""
+    raise NotOnDataPlane(("config", "set"))
 
 
 def config_cmd(args):
     """Settings: `hv config identity show|init` (this device's key) and
-    `hv config confidence set <param> <value>` (owner-signed hive params).
-    `hv config set …` is kept as a silent alias for `config confidence set`."""
+    `hive-mind config set <param> <value>` (owner-signed hive params).
+    `hive-mind config set …` is kept as a silent alias for `config confidence set`."""
     action = getattr(args, "config_action", None)
     if action == "identity":
         sub = getattr(args, "config_identity_action", None) or "show"
@@ -8682,17 +8106,17 @@ def config_cmd(args):
         if getattr(args, "config_confidence_action", None) == "set":
             _config_set(args.key, args.value)
         else:
-            print("usage: hv config confidence set <same_device_lambda|cap_self> <value>")
+            print("usage: hive-mind config set <same_device_lambda|cap_self> <value>")
     elif action == "quorum":
         if getattr(args, "config_quorum_action", None) == "set":
             _config_set(args.key, args.value)
         else:
-            print("usage: hv config quorum set <quorum_m|quorum_by|dead_man_days> <value>")
+            print("usage: hive-mind config set <quorum_m|quorum_by|dead_man_days> <value>")
     elif action == "set":            # silent back-compat alias for `config confidence set`
         _config_set(args.key, args.value)
     else:
-        print("usage: hv config identity show|init  |  hv config confidence set <key> <value>  |  "
-              "hv config quorum set <key> <value>")
+        print("usage: hv config identity show|init  |  hive-mind config set <key> <value>  |  "
+              "hive-mind config set <key> <value>")
 
 
 def _peer_status(url, local_root):
@@ -8730,11 +8154,11 @@ def peers_cmd(args):
     .peers.json peers (/sync/hello -> node_id) first, then the advertised join-request URL — so a
     reachable peer (e.g. gregorius) shows its address even if it never advertised one. LAST SEEN is
     the date of the device's newest journal entry, so dormant/dead devices are obvious; a footer
-    surfaces ready `hv group purge` commands for devices idle >14 days. Read-only."""
+    surfaces ready `hive-mind group purge` commands for devices idle >14 days. Read-only."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     if not gov["owner_id"]:
-        print("No owner established yet — no hive members to list. (`hv owner init`, or sync a hive then `hv join`.)")
+        print("No owner established yet — no hive members to list. (`hive-mind owner init`, or sync a hive then `hv join`.)")
         return
     local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
 
@@ -8824,9 +8248,9 @@ def peers_cmd(args):
     if stale:
         print("\n  Stale candidate(s) — no activity in >14 days. To remove (owner only):")
         for d, name, seen, age in stale:
-            print(f"    hv group purge {d}    # {name}, last seen {seen} ({age}d ago)")
+            print(f"    hive-mind group purge {d}    # {name}, last seen {seen} ({age}d ago)")
     else:
-        print("\n  Stale/dead device? Owner: hv group purge <device_id>  (tombstone; entries stay in the journal but stop counting)")
+        print("\n  Stale/dead device? Owner: hive-mind group purge <device_id>  (tombstone; entries stay in the journal but stop counting)")
 
 
 def discover_cmd(args):
@@ -8896,7 +8320,7 @@ def join_cmd(args):
     # attacker the ability to churn fresh payloads pre-admission). A DENIED device is excluded
     # from _pending_admissions, so it can still re-ask after a denial.
     if any(r["device_id"] == NODE_ID for r in _pending_admissions(entries, gov)):
-        print(f"Join request for {NODE_ID} is already pending — ask the owner to `hv admit {NODE_ID}`.")
+        print(f"Join request for {NODE_ID} is already pending — ask the owner to `hive-mind group admit {NODE_ID}`.")
         return
     payload = {"action": "join-request", "device_id": NODE_ID, "label": NODE_LABEL}
     if args.principal:
@@ -8907,7 +8331,7 @@ def join_cmd(args):
     append_journal("governance", payload)   # device-signed by append_journal; NOT owner-signed
     rebuild_db()
     print(f"Join request sent for {NODE_ID}. Ask the hive owner to admit you:")
-    print(f"  hv admit {NODE_ID}" + (f" --principal {args.principal}" if args.principal else ""))
+    print(f"  hive-mind group admit {NODE_ID}" + (f" --principal {args.principal}" if args.principal else ""))
 
 
 # --------------------------------------------------------------------------
@@ -9246,7 +8670,7 @@ def build_parser():
             '  hv search "X" [--min-confidence -1] [--format json]        # ranked by effective confidence\n'
             '  hv decide "chose Y" --rationale "because"                  # record a decision\n'
             "  hv retract <fact-id> [--reason ...]                        # peer negative evidence (rejected)\n"
-            "  hv retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
+            "  hive-mind retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
             "  hv stats | sync now|daemon\n"
             "  hv doctor [--format json] [--fix]                          # health check (+ self-heal)\n"
             "  hv doctor merkle | migrate-identity --map m.json | rebuild | wire-agent   # sync diag / re-stamp / rebuild db / wire Claude hooks\n"
@@ -9450,7 +8874,7 @@ def build_parser():
     owner_sub.add_parser("escrow", help="Store the owner key, passphrase-encrypted, IN the hive (syncs to all nodes)")
     owner_sub.add_parser("restore", help="Recover the owner key from the hive's escrow (needs the passphrase)")
     owner_nominate = owner_sub.add_parser("nominate", help="Nominate a successor owner key (the successor then `claim`s)")
-    owner_nominate.add_argument("successor_pub", help="The successor's owner pubkey (base64; from `hv owner claim --mint`)")
+    owner_nominate.add_argument("successor_pub", help="The successor's owner pubkey (base64; from `hive-mind owner claim --mint`)")
     owner_unnominate = owner_sub.add_parser("unnominate", help="Withdraw a pending successor nomination")
     owner_unnominate.add_argument("successor_pub", help="The nominated successor's owner pubkey (base64)")
     owner_claim = owner_sub.add_parser("claim", help="Claim ownership on this device against an open nomination (successor side)")
@@ -9461,14 +8885,17 @@ def build_parser():
     owner_revoke_escrow = owner_sub.add_parser("revoke-escrow", help="Tombstone an escrowed key so `restore` skips it")
     owner_revoke_escrow.add_argument("ref", help="Escrow ref `node_id:seq`, or `all`")
     owner_sub.add_parser("heartbeat", help="Refresh owner liveness (resets the dead-man timer; owner key holder)")
+    owner_mint = owner_sub.add_parser("mint", help="[hive-mind] Mint a prospective owner key on this device, "
+                                                  "to propose with `hv owner propose-election --pub`")
+    owner_mint.add_argument("--force", action="store_true", help="Replace an owner key already on this device")
     owner_propose = owner_sub.add_parser("propose-election", help="Propose electing a new owner (admitted devices; needs quorum + a dark owner)")
-    owner_propose.add_argument("--mint", action="store_true", help="Mint a fresh owner key on THIS device as the proposed owner")
-    owner_propose.add_argument("--pub", help="Propose this base64 owner pubkey instead of minting")
+    owner_propose.add_argument("--mint", action="store_true", help="[moved] minting is `hive-mind owner mint` (2.0)")
+    owner_propose.add_argument("--pub", help="Propose this base64 owner pubkey (mint one with `hive-mind owner mint`)")
     owner_vote = owner_sub.add_parser("vote", help="Vote for an open election proposal (admitted devices)")
     owner_vote.add_argument("proposal_id", help="The election's proposal_id (from `hv owner elections`)")
     owner_sub.add_parser("elections", help="List open owner-election proposals and their tallies")
 
-    admit_parser = subparsers.add_parser("admit", help="[alias of `hv group admit`] Admit a device; no arg lists pending")
+    admit_parser = subparsers.add_parser("admit", help="[alias of `hive-mind group admit`] Admit a device; no arg lists pending")
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
     admit_parser.add_argument("--principal", help="Tag the person or agent who owns this device")
 
@@ -9580,9 +9007,44 @@ def main():
         argv = ["doctor", "migrate-identity"] + argv[1:]
     elif argv[:1] == ["rebuild"]:                       # folded into `hv doctor rebuild`
         argv = ["doctor", "rebuild"] + argv[1:]
+    # 2.0 S2/S6 (public #136): a command that moved to the control plane is pointed at BEFORE parsing, so
+    # it acts on nothing whatever its arguments, and exits 2 so no script mistakes it for success.
+    moved = _moved_key(argv)
+    if moved is not None:
+        return _point(argv, moved)
     args = parser.parse_args(argv)
 
     return dispatch(args)
+
+
+def _moved_key(argv):
+    """The `commandmap` key an `hv` invocation moved under, or None. Whole commands by longest argv
+    prefix (`MOVED`); two flag-conditional ones by their flag. The policy-conditional capsule and wire
+    writes can only be told once the hive's config is read, so their handlers raise `NotOnDataPlane`."""
+    hit = commandmap.lookup(argv)
+    if hit is not None:
+        return hit[0]
+    if argv[:1] == ["retract"] and "--owner" in argv:
+        return "retract --owner"
+    if argv[:2] == ["owner", "propose-election"] and "--mint" in argv:
+        return "owner propose-election --mint"
+    return None
+
+
+def _point(argv, key):
+    """Print where a moved command went — the exact `hive-mind` command to type, this invocation's
+    arguments included — and return the pointer exit code (2). Acts on nothing."""
+    argv = list(argv)
+    if isinstance(key, tuple) and key in commandmap.MOVED:
+        new_form, why = commandmap.MOVED[key]
+        run = new_form.split() + argv[len(key):]          # renames and collapses keep the rest as typed
+    elif key in commandmap.FLAG_CONDITIONAL:
+        new_form, why = commandmap.FLAG_CONDITIONAL[key]
+        run = new_form.split() if key == "owner propose-election --mint" else argv
+    else:
+        why, run = "", argv
+    print(commandmap.pointer_text(argv, " ".join(run), why), file=sys.stderr)
+    return commandmap.POINTER_EXIT
 
 
 def dispatch(args):
@@ -9594,6 +9056,13 @@ def dispatch(args):
     The store prologue lives HERE rather than in `main`, so a caller that is not the `hv` CLI cannot skip
     it. It was in `main` when `main` was the only entry point; the control plane calling `dispatch`
     directly then minted an owner key against an uninitialised store."""
+    try:
+        return _dispatch(args)
+    except NotOnDataPlane as e:            # an owner step reached on the data plane (2.0 S2)
+        return _point(sys.argv[1:], e.key)
+
+
+def _dispatch(args):
     # Idempotent; also auto-migrates older DBs missing tables/indexes.
     init_db()
     if args.command in _STORE_COMMANDS:

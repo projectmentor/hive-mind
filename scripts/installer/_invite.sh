@@ -91,6 +91,6 @@ if [ -n "$GENESIS_FP" ]; then
 else
   echo "  (That's this device's Tailscale address — the new device only needs one node to join.)"
   warn "This device has not pinned its genesis, so the invite carries no fingerprint."
-  warn "Run 'hv owner pin --set' here, then 'hive-mind invite' again."
+  warn "Run 'hive-mind owner pin --set' here, then 'hive-mind invite' again."
 fi
 echo ""

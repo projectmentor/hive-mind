@@ -22,13 +22,20 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import (_loadhv, _owned_hive, _fact, _decision, _link, _project, _entry, _conf)  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
-def _owner_hive(tmp_path):
-    """A CLI hive whose device holds the owner key (like test_links.test_config_knob_bounds_via_cli)."""
+def _owner_hive(tmp_path, owner_links=False):
+    """A CLI hive whose device holds the owner key (like test_links.test_config_knob_bounds_via_cli).
+
+    `owner_links=True` writes the link verbs (remember, decide, entity) through `hive-mind`: since 2.0 that
+    is how a person acting as owner owner-signs a link (decision h:34cc1dbcd3). Through `hv` the same
+    verbs are device-signed."""
     def run(*args, check=True):
         env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_IDENTITY_STASH=str(tmp_path / "stash"))
-        r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+        script = (_planes.CTL if owner_links and args and args[0] in ("remember", "decide", "entity")
+                  else _planes.entry_for(args))
+        r = subprocess.run([sys.executable, str(script), *args], env=env, capture_output=True, text=True)
         if check:
             assert r.returncode == 0, r.stderr
         return r
@@ -45,7 +52,7 @@ def _owner_hive(tmp_path):
 # ── owner machine: only a PERSON's links are owner-signed (1.23, #114) ─────────────────────────
 
 def test_owner_machine_owner_signs_manual_links_and_they_are_hard(tmp_path):
-    run, entries = _owner_hive(tmp_path)
+    run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: a person acting as owner, via hive-mind
     run("remember", "issue Z is open")
     run("remember", "issue Z is fixed", "--resolves", "1")
     run("decide", "plan A", "--rationale", "r")
@@ -102,7 +109,7 @@ def test_an_agent_on_the_owner_machine_writes_device_signed_links_of_all_eight_k
 
 
 def test_a_person_on_the_owner_machine_writes_owner_signed_links_of_all_eight_kinds(tmp_path):
-    run, entries = _owner_hive(tmp_path)
+    run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: through hive-mind
     out = _all_eight(run, [])                                         # no --source: `manual`, a person
     links = [e for e in entries() if e["type"] == "link"]
     assert sorted({l["payload"]["kind"] for l in links}) == EIGHT
@@ -277,7 +284,7 @@ import pytest              # noqa: E402
 def _as(tmp_path, node, *args, check=True):
     """Run `hv` as a given device (HIVE_NODE_ID) in one temp hive; no owner, so devices are principals."""
     env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_NODE_ID=node)
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
     if check:
         assert r.returncode == 0, r.stderr
     return r

@@ -97,13 +97,14 @@ if [ -z "$(git -C "$HIVE_DIR" status --porcelain)" ] && [ "$(_verify_level)" = m
 fi
 
 # Pin the genesis on an upgrading node (hive-mind-private #14). From this release a node that has not
-# pinned refuses inbound sync, so pin here rather than waiting for the periodic `hv doctor --fix`.
+# pinned refuses inbound sync, so pin here. Pinning is operator state: since 2.0 it runs on the control plane
+# (`hive-mind owner pin`), and the periodic `hv doctor --fix` only points at it (public #136).
 # `--set` is safe and silent when there is nothing to do: it refuses to guess between two declarations,
 # and it leaves an existing pin alone.
-if [ -x "$HIVE_DIR/hv" ]; then
-  if "$HIVE_DIR/hv" owner pin 2>/dev/null | grep -q "^genesis pinned:"; then
+if [ -x "$HIVE_DIR/hv" ] && [ -f "$HIVE_DIR/hivemind_ctl.py" ]; then
+  if python3 "$HIVE_DIR/hivemind_ctl.py" owner pin 2>/dev/null | grep -q "^genesis pinned:"; then
     :
-  elif "$HIVE_DIR/hv" owner pin --set >/dev/null 2>&1; then
+  elif python3 "$HIVE_DIR/hivemind_ctl.py" owner pin --set >/dev/null 2>&1; then
     ok "Pinned this hive's genesis declaration"
   else
     warn "Genesis not pinned on this node — run 'hv doctor genesis' (it says which case you are in)"

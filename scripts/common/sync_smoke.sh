@@ -14,6 +14,8 @@ set -uo pipefail
 
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HV="$PROJECT/hv"
+# 2.0 (public #136): owner acts run on the control plane, `hive-mind`; `hv` cannot owner-sign.
+HM="$PROJECT/hivemind_ctl.py"
 cd "$PROJECT"
 . "$PROJECT/scripts/common/_smoke_daemon.sh"
 
@@ -114,9 +116,9 @@ printf '\n%s── governance converges across nodes (D0-v2) ──%s\n' "$B_" "
 # governance and compute the SAME governed confidence (nodeC excluded by the admission gate → 0.45).
 env $EA "$HV" remember "gov claim" --source agent >/dev/null
 env $EA HIVE_NODE_ID=nodeC "$HV" remember "gov claim" --source agent >/dev/null
-env $EA "$HV" owner init >/dev/null
-env $EA "$HV" admit nodeA --principal david >/dev/null
-env $EA "$HV" admit nodeB --principal david >/dev/null
+env $EA python3 "$HM" owner init >/dev/null
+env $EA python3 "$HM" group admit nodeA --principal david >/dev/null
+env $EA python3 "$HM" group admit nodeB --principal david >/dev/null
 env $EA "$HV" sync now >/dev/null
 eq "governed conf converges (B has no owner key)" "$(conf "$A" "gov claim")" "$(conf "$B" "gov claim")"
 eq "admission gate applied (A)"  "$(conf "$A" "gov claim")" "0.45"
@@ -125,7 +127,7 @@ eq "admission gate applied (B)"  "$(conf "$B" "gov claim")" "0.45"
 printf '\n%s── two hives on one wire do NOT merge (onboarding) ──%s\n' "$B_" "$N"
 # C is its OWN hive (different hive_id). Pointed at A's daemon, it must refuse to merge either way.
 C=$(mktemp -d)
-env HIVE_HOME="$C" "$HV" owner init >/dev/null
+env HIVE_HOME="$C" python3 "$HM" owner init >/dev/null
 env HIVE_HOME="$C" "$HV" remember "only in hive C" --source agent >/dev/null
 A_BEFORE=$(count "$A" facts)
 printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":%s}' "$PA" "$PC" > "$C/.peers.json"

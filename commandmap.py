@@ -22,7 +22,7 @@ an owner-signing path in `hv` and undo S2. The window preserves discoverability,
 # (old hv argv prefix) -> (new hive-mind argv prefix, one-line why)
 #
 # Every target here must resolve to a real command on the control plane, and a test walks the library's
-# actual subparsers to prove it. `owner mint` is deliberately ABSENT until the change that implements it:
+# actual subparsers to prove it. `owner mint` joined in 2b, with the subcommand that implements it:
 # advertising a command that does not exist is the failure this table exists to prevent, and it is worse
 # than the command being missing, because the operator is told to type something that cannot work.
 MOVED = {
@@ -40,6 +40,8 @@ MOVED = {
     ("owner", "revoke-escrow"):     ("owner revoke",            "owner-signed; S5 renames it here"),
     ("owner", "heartbeat"):         ("owner heartbeat",         "owner-signed"),
     ("owner", "pin"):               ("owner pin",               "operator state: the genesis pin"),
+    ("owner", "mint"):              ("owner mint",              "mints owner-key material; propose it "
+                                                                "with `hv owner propose-election --pub`"),
 
     # Membership. `hv admit` was already an alias; it resolves to the group form on the control plane.
     ("admit",):                     ("group admit",             "owner-signed"),
@@ -80,11 +82,20 @@ FLAG_CONDITIONAL = {
     "retract --owner": ("retract --owner", "owner-signed; plain `hv retract` stays"),
     "capsule put (capsule_putters=owner)": ("capsule put", "owner-signed under that policy; reads and "
                                                           "fertile puts stay on hv"),
+    "capsule rotate (capsule_putters=owner)": ("capsule rotate", "owner-signed under that policy"),
+    "capsule rm (capsule_putters=owner)": ("capsule rm", "owner-signed under that policy"),
     "wire --add (cell_writers=owner)": ("wire --add", "owner-signed under that policy"),
     "owner propose-election --mint": ("owner mint", "mints owner-key material; use --pub on hv"),
-    "doctor --fix (key perms, genesis pin)": ("doctor --fix", "operator state; the peer-address repoint "
-                                                             "stays on hv"),
+    "doctor --fix (key perms, genesis pin)": ("doctor --fix", "operator state: the owner key's permissions "
+                                                             "and the genesis pin. `hv doctor --fix` keeps "
+                                                             "every data-plane repair, the device key's "
+                                                             "permissions included, and points at this"),
 }
+
+# Data-plane verbs the control plane ALSO accepts, for the owner-signed form of the links they write
+# (decision h:34cc1dbcd3). Through `hv` their links are device-signed; through `hive-mind`, with source
+# `manual`, they are owner-signed (#114). Not pointers: `hv` keeps running them.
+OWNER_LINK_VERBS = ("remember", "decide", "entity")
 
 POINTER_EXIT = 2
 

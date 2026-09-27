@@ -253,7 +253,7 @@ def test_a_signing_failure_appends_nothing_and_leaves_the_hive_legacy(tmp_path, 
     assert _conf(hv, "the backup runs at 02:00") == FORGET_FLOOR          # the grandfather still holds it
     sid = hv._short_id(*refs["the backup runs at 02:00"])
     assert "COULD NOT re-issue" in out and "NOTHING was written" in out and sid in out
-    assert f"hv retract {sid} --owner" in out and f"hv unforget {sid}" in out
+    assert f"hive-mind retract {sid} --owner" in out and f"hive-mind unforget {sid}" in out
 
 
 def test_an_append_that_fails_partway_never_sets_the_config(tmp_path, monkeypatch, capsys):
@@ -323,5 +323,5 @@ def test_the_122_guard_still_refuses_where_a_fact_would_come_back(tmp_path):
     sid = _backdate_forget(tmp_path, run, "the backup runs at 02:00")
     r = run("config", "set", "forget_writers", "owner")
     assert "Not set" in r.stdout and sid in r.stdout
-    assert f"hv retract {sid} --owner" in r.stdout and f"hv unforget {sid}" in r.stdout
+    assert f"hive-mind retract {sid} --owner" in r.stdout and f"hive-mind unforget {sid}" in r.stdout
     assert len(_policy_acts(tmp_path)) == base                            # nothing new written

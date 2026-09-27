@@ -23,6 +23,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import _loadhv, _owner_key, _device, _gov, _entry, _fact, _project, T0  # noqa: E402
 from test_unforget import _act, _hive, _transfer, _row, FORGET_FLOOR, PRE  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _policy(hv, owner, value, ts, seq):
@@ -139,7 +140,7 @@ def test_a_pre_1_25_node_ignores_the_policy(tmp_path, monkeypatch):
 def _cli(tmp_path):
     def run(*args, check=True):
         env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_IDENTITY_STASH=str(tmp_path / "stash"))
-        r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
         if check:
             assert r.returncode == 0, r.stderr
         return r
@@ -187,7 +188,7 @@ def test_config_set_refuses_while_a_fact_would_come_back_and_names_it(tmp_path):
     base = _legacy_hive(tmp_path, run)
     sid = _backdate_forget(tmp_path, run, "the backup runs at 02:00")
     r = run("config", "set", "forget_writers", "owner")
-    assert "Not set" in r.stdout and sid in r.stdout and "hv retract" in r.stdout and "hv unforget" in r.stdout
+    assert "Not set" in r.stdout and sid in r.stdout and "hive-mind retract" in r.stdout and "hive-mind unforget" in r.stdout
     assert len(_policy_acts(tmp_path)) == base                             # nothing written
     doc = json.loads(run("doctor", "--format", "json", check=False).stdout)
     fa = {c["name"]: c for c in doc["checks"]}["forget-authz"]

@@ -22,7 +22,8 @@ store.db.bak.*
 
 # Governance owner key (Ed25519 root of trust). SECRET — never commit or sync it.
 .owner-key
-# Exported owner-key backups (`hv owner export`, default name hive-owner-<id>.key). SECRET.
+.owner-pub
+# Exported owner-key backups (`hive-mind owner export`, default name hive-owner-<id>.key). SECRET.
 hive-owner-*.key
 
 # Genesis pin (hive-mind-private #14): the one `owner` act this node accepted. Per-node, like the

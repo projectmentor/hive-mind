@@ -59,9 +59,10 @@ HIVE_HOME="$B" "$HV" key init >/dev/null
 DEVA="$(cat "$A/.device-id")"; DEVB="$(cat "$B/.device-id")"
 
 # A is the owner and admits BOTH device fingerprints.
-HIVE_HOME="$A" "$HV" owner init >/dev/null
-HIVE_HOME="$A" "$HV" group admit "$DEVA" --principal me >/dev/null
-HIVE_HOME="$A" "$HV" group admit "$DEVB" --principal me >/dev/null
+# Owner acts run on the control plane since 2.0 (public #136).
+HIVE_HOME="$A" python3 "${HV%/hv}/hivemind_ctl.py" owner init >/dev/null
+HIVE_HOME="$A" python3 "${HV%/hv}/hivemind_ctl.py" group admit "$DEVA" --principal me >/dev/null
+HIVE_HOME="$A" python3 "${HV%/hv}/hivemind_ctl.py" group admit "$DEVB" --principal me >/dev/null
 
 # Peer configs: bind the LAN IP (so peer traffic is non-loopback), point at each other.
 cat > "$A/.peers.json" <<JSON

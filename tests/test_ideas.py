@@ -20,6 +20,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import (_loadhv, _owned_hive, _fact, _link, _project, _entry, _device, _gov)  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _json(hive, *args):
@@ -210,7 +211,7 @@ def _as(hive, node, *args, check=True):
     """Run `hv` as a given device (HIVE_NODE_ID), so one temp hive holds two principals (no owner yet:
     different devices are different principals)."""
     env = dict(os.environ, HIVE_HOME=str(hive.home), HIVE_NODE_ID=node)
-    r = subprocess.run([sys.executable, str(PROJECT_HV), *args], env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
     if check and r.returncode != 0:
         raise AssertionError(f"`hv {' '.join(args)}` failed ({r.returncode}):\n{r.stderr}")
     return r

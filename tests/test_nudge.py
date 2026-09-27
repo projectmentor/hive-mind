@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 PROJECT = Path(__file__).resolve().parent.parent
 HV = PROJECT / "hv"
@@ -18,7 +19,7 @@ HV = PROJECT / "hv"
 def run_hv(home, *args, stdin="", **env):
     e = dict(os.environ, HIVE_HOME=str(home))
     e.update({k: str(v) for k, v in env.items()})
-    return subprocess.run([sys.executable, str(HV), *args], input=stdin,
+    return subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], input=stdin,
                           env=e, capture_output=True, text=True)
 
 

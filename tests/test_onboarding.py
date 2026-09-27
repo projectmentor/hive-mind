@@ -13,7 +13,7 @@ sys.path.insert(0, str(PROJECT))
 
 
 def _run(home, *args):
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args],
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args],
                        env=dict(os.environ, HIVE_HOME=str(home)), capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r
@@ -33,6 +33,7 @@ def _loadhv(home, monkeypatch):
     s = importlib.util.spec_from_loader("hvmod_ob", m)
     mod = importlib.util.module_from_spec(s)
     m.exec_module(mod)
+    _planes.install_control_plane(mod)   # 2.0: the owner steps live on the control plane
     return mod
 
 
@@ -72,10 +73,11 @@ def test_owner_declaration_is_verifiable(tmp_path, monkeypatch):
 
 
 import sqlite3
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _run_as(home, node_id, *args):
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args],
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args],
                        env=dict(os.environ, HIVE_HOME=str(home), HIVE_NODE_ID=node_id),
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr

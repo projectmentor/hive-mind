@@ -145,7 +145,7 @@ def _short_err(e):
                 hint = ""
             if "genesis not pinned" in str(hint):
                 return ("that peer has not pinned its genesis, so it serves nothing to a remote caller "
-                        "(#14). On the PEER: `hv owner pin --set`, or let it pull first — a joining node "
+                        "(#14). On the PEER: `hive-mind owner pin --set`, or let it pull first — a joining node "
                         "gets the hive through its own `hv sync now`")
         return f"HTTP {code}"
     return (str(e).split("(Caused by", 1)[0].strip()[:80] or e.__class__.__name__)

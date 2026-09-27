@@ -158,7 +158,7 @@ def test_resolves_accepts_sid_and_kind_mismatch_aborts(hive):
     facts, dec = _seed(hive)
     f1 = facts["the deploy succeeded at commit abc123"]
     r = hive.run("remember", "the deploy actually failed", "--resolves", f1["sid"], "--source", "bob")
-    assert f"resolved fact {f1['sid']}" in r.stdout and f"`hv retract {f1['sid']} --owner`" in r.stdout
+    assert f"resolved fact {f1['sid']}" in r.stdout and f"`hive-mind retract {f1['sid']} --owner`" in r.stdout
     assert hive.query("SELECT confidence FROM facts WHERE id = ?", (f1["id"],))[0]["confidence"] <= 0
     # a decision named as the resolve target is an error, not a silent no-link write
     before = len(hive.entries())

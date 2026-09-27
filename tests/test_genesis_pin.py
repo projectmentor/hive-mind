@@ -32,6 +32,7 @@ import pytest
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 HIVE_ID = "h1:cf5b2e8adbe05936"
 T_GENESIS = "2026-01-01T00:00:00Z"
@@ -45,6 +46,7 @@ def _loadhv(home, monkeypatch):
     spec = importlib.util.spec_from_loader("hvmod_pin", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     m.JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
     return m
 
@@ -389,7 +391,7 @@ def test_an_unpinned_node_refuses_remote_sync_but_stays_discoverable(daemon, mon
         assert _status(port, "/sync/chunk?node=k1:x&start=1&end=1")[0] == 403
         code, body = _status(port, "/sync/ingest", "POST", {"entries": []})
         assert code == 403 and body.get("accepted") == 0
-        assert "hv owner pin" in body.get("hint", "")          # the 403 says how to clear it
+        assert "hive-mind owner pin" in body.get("hint", "")          # the 403 says how to clear it
         assert _status(port, "/hive/info")[0] == 200           # discovery stays open...
         assert _status(port, "/sync/merkle-root")[0] == 200    # ...and so does the root probe
     finally:

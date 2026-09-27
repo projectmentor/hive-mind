@@ -20,6 +20,7 @@ sys.path.insert(0, str(PROJECT))
 import x25519        # noqa: E402
 import ed25519       # noqa: E402
 import merkle        # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _load(name, home, monkeypatch, **env):
@@ -33,6 +34,8 @@ def _load(name, home, monkeypatch, **env):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    if name == "hv":
+        _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 

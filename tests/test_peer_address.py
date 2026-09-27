@@ -35,6 +35,7 @@ os.environ["HIVE_HOME"] = tempfile.mkdtemp(prefix="hive-peeraddr-")   # always, 
 import ed25519  # noqa: E402
 import sync_common  # noqa: E402
 import hive_sync_daemon as d  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 OLD, NEW, OTHER = "100.64.0.2", "100.64.0.9", "100.64.0.7"
 
@@ -75,6 +76,7 @@ def _load_hv(home, monkeypatch):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     monkeypatch.setattr(d, "hv", m)
     monkeypatch.setattr(d, "_peer_seen", {})
     monkeypatch.delenv("HIVE_SYNC_AUTH", raising=False)
@@ -100,7 +102,7 @@ def _pin_hive(m, monkeypatch):
 def _run(home, *args):
     env = dict(os.environ, HIVE_HOME=str(home), HIVE_OWNER_PASSPHRASE="testpass",
                HIVE_IDENTITY_STASH=str(Path(home) / "stash"))      # `owner init` must not touch ~/.config
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r
 

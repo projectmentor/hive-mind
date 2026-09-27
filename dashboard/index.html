@@ -371,7 +371,7 @@ function hiveShell(peers,probing){
   $('#app').innerHTML=`<div class="panel"><h2>Peers <span class="count">${peers.length} admitted</span>${probing?'<span class="spin" style="width:12px;height:12px"></span>':''}</h2>
      <table><thead><tr><th>Name</th><th>Device</th><th>Principal</th><th>Address</th><th>Last seen</th><th>Status</th></tr></thead>
      <tbody>${peerRows(peers,probing)||'<tr><td colspan=6 class="empty">no peers</td></tr>'}</tbody></table></div>
-   <div class="note">Click a node for its overview, corpus, stats &amp; telemetry · Stale device? Owner: <span class="mono">hv group purge &lt;device_id&gt;</span></div>
+   <div class="note">Click a node for its overview, corpus, stats &amp; telemetry · Stale device? Owner: <span class="mono">hive-mind group purge &lt;device_id&gt;</span></div>
    <div class="grid cards" style="margin-top:16px">
      <div class="card"><div class="lbl">Owner</div><div class="stat" style="font-size:17px">${META.role==='OWNER'?esc(META.node):'(remote)'}</div><div class="sub mono">${esc(META.owner_id||'—')}</div></div>
      <div class="card"><div class="lbl">Hive</div><div class="stat mono" style="font-size:14px;color:var(--ink)">${esc(META.hive||'—')}</div></div>

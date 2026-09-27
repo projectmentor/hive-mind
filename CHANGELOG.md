@@ -10,6 +10,45 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## Unreleased — 2.0, in progress on `release/2.0` (public #136)
+
+- **PR 2b, the split: `hv` cannot owner-sign.** `hv` is the agent data plane and `hive-mind` the
+  owner/operator control plane. Every code path that reads the owner seed, writes owner-key material or
+  produces an owner signature now lives on the control plane (`hivemind_ctl.py`, `hivemind_owner.py`), and
+  `hv` reaches none of it. Two static tests hold that true: `hv`'s import graph never reaches `ownerkey` or
+  the control plane, and no `owner_sig` is produced anywhere `hv` can reach. The second one catches an
+  inline signer, which imports nothing. Each check is shown failing on mutants in the suite.
+- **Moved commands point, exit 2, and act on nothing.** These moved: `hv owner` (init, export, import,
+  standby, escrow, restore, nominate, unnominate, claim, transfer, revoke-escrow, heartbeat, pin), `hv admit`,
+  `hv group admit|revoke|deny|change|purge`, `hv config set` (with its `confidence set` and `quorum set` forms),
+  `hv unforget` and `hv retract --owner`. Each now prints the exact `hive-mind` command to run, this
+  invocation's arguments included, and exits 2 (contract §7's 2.0 amendment). `revoke-escrow` becomes
+  `hive-mind owner revoke` (S5), and the three `config … set` forms collapse into `hive-mind config set`.
+- **What stays on `hv`:**
+  - the reads, and the device-signed dead-man recovery: `owner show`, `owner elections`,
+    `owner propose-election --pub` and `owner vote`. A member node that has only `hv` can still elect a
+    new owner.
+  - `hv owner propose-election --mint` points at the new `hive-mind owner mint`, which no longer
+    overwrites a key already on the device without `--force`.
+- **Owner-signed links come from the control plane** (decision `h:34cc1dbcd3`). Through `hv`, every link is
+  device-signed, including source `manual` on the owner device. The same verb through `hive-mind remember`,
+  `decide` or `entity` owner-signs its links, when the source is `manual` (#114). Using owner authority is an
+  explicit act: typing `hive-mind`.
+- **Owner-policy content writes.** Under `capsule_putters=owner` or `cell_writers=owner`, `hv capsule
+  put|rotate|rm` and `hv wire --add` point at `hive-mind`. Under `fertile` they run on `hv` as before,
+  device-signed.
+- **`doctor --fix` is split by what it touches** (5848736351).
+  - `hv doctor --fix`, which the 15-minute timer runs, keeps every data-plane repair: the device key's
+    permissions, orphan daemons, restarts, the key announce, the skill relink and the peer-address repoint.
+  - The owner key's permissions and the genesis pin are operator state, so they move to
+    `hive-mind doctor --fix`. `hv doctor --fix` says when either is needed.
+  - `hive-mind update` and the installer now pin through the control plane.
+- **Key presence without reading the seed.** `hv whoami`, `hv owner show`, `hv doctor` and the admission hint
+  decide whether this device holds the owner key from the key file's metadata and a public sidecar,
+  `.owner-pub`, which the control plane writes. They never read the seed. They can say *unknown*: permission
+  denied is not "absent".
+- **No journal or wire change** (S7). A mixed 1.x and 2.0 fleet converges.
+
 ## Unreleased — contract 1.28
 
 - **Contract 1.28: `hv owner init` leaves a new hive closed (#135 part 1).** Before a hive has an owner it

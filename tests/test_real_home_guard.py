@@ -19,12 +19,13 @@ import pytest
 
 import _realhome
 from conftest import HV, PROJECT, REAL, SERVICE_STUBS
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shells and symlinks")
 
 
 def _hv(env, *args):
-    return subprocess.run([sys.executable, str(HV), *args], env=env, capture_output=True, text=True,
+    return subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True,
                           timeout=120)
 
 

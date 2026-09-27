@@ -1,8 +1,8 @@
-"""The control plane exists and routes (2.0 PR 2a, public #136).
+"""The control plane exists and routes (2.0 PR 2a, public #136), and after the flip (PR 2b) it is the only
+place the owner steps run.
 
-This slice is **additive**: `hive-mind` gains the owner/operator surface by delegating to the handlers
-that still live in the library, so `hv` behaves exactly as it did and the suite does not move. The flip —
-`hv` losing the ability to owner-sign at all — is the next change, and it is where the S2 assertions land.
+2a made `hive-mind` a front end over the library; 2b moved every owner step onto it, so `hv` cannot
+owner-sign at all. The S2 assertions themselves live in `tests/test_s2_split.py`.
 
 What is worth pinning here is the part that would otherwise drift silently: that the two planes agree
 about which commands belong to which, in both directions. A pointer naming a command the control plane
@@ -117,10 +117,12 @@ def test_the_s5_rename_translates_to_the_library_verb():
 
 
 def test_a_data_plane_command_is_refused_with_the_hv_form(tmp_path):
-    r = _run_ctl(tmp_path, "remember", "nope")
+    # `remember` is no longer the example: since 2b it is also the owner-signed form of its links
+    # (decision h:34cc1dbcd3). A pure read never is.
+    r = _run_ctl(tmp_path, "search", "nope")
     assert r.returncode == 2
     assert "not a control-plane command" in r.stderr
-    assert "hv remember nope" in r.stderr          # names what to type instead
+    assert "hv search nope" in r.stderr            # names what to type instead
 
 
 # ── it actually works, end to end ───────────────────────────────────────────────────────────────
@@ -147,21 +149,23 @@ def test_the_control_plane_runs_the_store_prologue(tmp_path):
     assert (tmp_path / "store.db").exists()
 
 
-# ── 2a is additive: hv is unchanged here, which is what makes 2b's diff readable ─────────────────
+# ── 2b is the flip: hv cannot owner-sign ─────────────────────────────────────────────────────────
 
-def test_hv_still_owner_signs_in_this_slice(tmp_path):
-    """Deliberately asserting the OLD behaviour. 2a must not change it; when this test has to be
-    inverted, that inversion is the security change, visible on its own."""
-    assert _run_hv(tmp_path, "owner", "init").returncode == 0
-    assert (tmp_path / ".owner-key").exists()
+def test_hv_cannot_owner_sign_after_the_split(tmp_path):
+    """The inversion of 2a's `test_hv_still_owner_signs_in_this_slice` — the security change, visible on
+    its own. `hv owner init` points at the control plane and acts on nothing; the loaded library has no
+    signer and never imported `ownerkey`."""
+    r = _run_hv(tmp_path, "owner", "init")
+    assert r.returncode == 2 and "Run: hive-mind owner init" in r.stderr
+    assert not (tmp_path / ".owner-key").exists()
     import importlib.machinery
     import importlib.util
-    loader = importlib.machinery.SourceFileLoader("hv_2a", str(PROJECT / "hv"))
-    spec = importlib.util.spec_from_loader("hv_2a", loader)
+    loader = importlib.machinery.SourceFileLoader("hv_2b", str(PROJECT / "hv"))
+    spec = importlib.util.spec_from_loader("hv_2b", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
-    assert hasattr(m, "ownerkey"), "hv still imports ownerkey in 2a; 2b removes it"
-    assert callable(m._sign_governance_payload)
+    assert not hasattr(m, "ownerkey"), "hv imports ownerkey (S2)"
+    assert not hasattr(m, "_sign_governance_payload"), "hv has an owner signer (S2)"
 
 
 def test_the_dispatcher_routes_the_control_plane_verbs():
@@ -170,9 +174,7 @@ def test_the_dispatcher_routes_the_control_plane_verbs():
     name `hv`, so the file holding the owner-key path would ship unsigned."""
     src = (PROJECT / "scripts" / "installer" / "dispatcher.sh").read_text()
     assert "hivemind_ctl.py" in src
-    for verb in ("owner", "group", "admit", "config", "unforget", "retract"):
-        assert verb in src.split("owner|group|admit|config|unforget|retract")[0] or True
-    assert "owner|group|admit|config|unforget|retract)" in src
+    assert "owner|group|admit|config|unforget|retract|remember|decide|entity|capsule|wire|doctor)" in src
     assert not (PROJECT / "hive-mind").exists(), "no extensionless entry point; the manifest would skip it"
 
 
@@ -209,8 +211,8 @@ def test_hv_does_not_import_the_control_plane():
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
     assert "hivemind_ctl" not in imported, "hv imports the control plane: a transitive path to ownerkey"
-    # and for the same reason, nothing else hv imports may reach it either
-    assert "ownerkey" in imported, "in 2a hv still imports ownerkey directly; 2b removes exactly this"
+    # and 2b removed exactly this: hv no longer imports ownerkey (the transitive walk is test_s2_split)
+    assert "ownerkey" not in imported, "hv imports ownerkey directly (S2)"
 
 
 def test_the_control_plane_reaches_signing_and_the_library():
@@ -220,4 +222,5 @@ def test_the_control_plane_reaches_signing_and_the_library():
     assert "commandmap" in src
     m = hivemind_ctl.hv()
     assert callable(m.dispatch) and callable(m.build_parser)
-    assert hasattr(m, "ownerkey"), "in 2a the library still owns signing; 2b moves it here"
+    assert hasattr(m, "ownerkey"), "the control plane installs the owner steps, which reach ownerkey"
+    assert callable(m._sign_governance_payload) and m._CONTROL_PLANE

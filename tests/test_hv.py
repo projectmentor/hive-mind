@@ -25,13 +25,14 @@ def _hash(entry):
 
 import os  # noqa: E402
 import subprocess  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _as(home, node_id, *args):
     """Run hv against `home` under a specific device identity (HIVE_NODE_ID) — for writing the
     same content from DISTINCT devices, which (post D0-v2) is what earns full corroboration."""
     env = dict(os.environ, HIVE_HOME=str(home), HIVE_NODE_ID=node_id)
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r
@@ -259,6 +260,7 @@ def _loadhv():
     loader = importlib.machinery.SourceFileLoader("hvmod", str(PROJECT / "hv"))
     spec = importlib.util.spec_from_loader("hvmod", loader)
     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 
@@ -566,6 +568,7 @@ def test_is_salient_shim_is_the_admission_gate():
     spec = importlib.util.spec_from_loader("hv_cli_gate", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
+    _planes.install_control_plane(mod)   # 2.0: the owner steps live on the control plane
     assert mod._is_salient is mod._is_admissible
     assert mod._is_admissible("The node-b deploy succeeded at commit abc123.")
     assert not mod._is_admissible("hi there")

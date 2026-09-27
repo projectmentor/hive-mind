@@ -105,9 +105,11 @@ class Hive:
         self.db = self.home / "store.db"
 
     def run(self, *args, check=True):
+        # A command that moved off `hv` in 2.0 runs where it now lives, `hive-mind` (tests/_planes.py).
+        import _planes
         env = dict(os.environ, HIVE_HOME=str(self.home))
         r = subprocess.run(
-            [sys.executable, str(HV), *args],
+            [sys.executable, str(_planes.entry_for(args)), *args],
             env=env, capture_output=True, text=True,
         )
         if check and r.returncode != 0:

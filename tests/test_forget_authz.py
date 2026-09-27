@@ -92,4 +92,4 @@ def test_doctor_reports_forget_authz(tmp_path, monkeypatch):
                        capture_output=True, text=True)
     checks = {c["name"]: c for c in json.loads(r.stdout)["checks"]}
     assert checks["forget-authz"]["status"] == "warn"
-    assert "hv unforget" in checks["forget-authz"]["detail"] and "#122" in checks["forget-authz"]["detail"]
+    assert "hive-mind unforget" in checks["forget-authz"]["detail"] and "#122" in checks["forget-authz"]["detail"]

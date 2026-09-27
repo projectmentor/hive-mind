@@ -101,7 +101,7 @@ def test_an_evidence_revoke_is_recorded_but_not_in_effect(tmp_path):
 
 
 def test_on_the_owner_machine_a_person_revokes_with_owner_authority(tmp_path):
-    run, entries = _owner_hive(tmp_path)
+    run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: owner authority is `hive-mind decide`
     sid = _first_sid(run("decide", "plan A", "--rationale", "r").stdout)
     r = run("decide", "--revoke", sid, "--rationale", "wrong")
     assert r.stdout.startswith(f'Revoked decision {sid} ("plan A") (owner-signed: source manual)')

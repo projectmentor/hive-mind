@@ -1,10 +1,9 @@
 """The owner-key boundary (2.0 S2, public #136), and the library contract the daemon depends on.
 
-`ownerkey.py` is the one place the owner seed is read and a governance signature is produced. The split
-will assert it is absent from `hv`'s transitive imports; that cannot be true yet, because the five
-signing call sites have not moved, so `hv` still imports it. What IS assertable today is everything that
-must hold for that later assertion to be reachable — and those are the properties a future refactor
-would quietly break:
+`ownerkey.py` is the one place the owner seed is read and a governance signature is produced. Since the
+split (2.0 PR 2b) it is absent from `hv`'s transitive imports — `tests/test_s2_split.py` asserts that, and
+that no `owner_sig` is produced anywhere `hv` reaches. This file keeps the properties that make the
+boundary hold, which a future refactor would quietly break:
 
   * the dependency points one way (`hv` -> `ownerkey`, never back);
   * `ownerkey` owns no path and no hive location, so it cannot disagree with `hv` about which file the
@@ -95,12 +94,39 @@ def test_there_is_no_third_canonicaliser():
     assert "merkle._canonical" in OWNERKEY_SRC
 
 
-def test_hv_reads_the_seed_only_through_ownerkey():
-    """One reader of the seed file. `hv`'s wrapper supplies the path; the read lives in `ownerkey`."""
+def _owner_key_reads(src):
+    """Lines where a source passes OWNER_KEY_PATH to something that reads a file."""
+    import ast
+    reads = []
+    for node in ast.walk(ast.parse(src)):
+        if isinstance(node, ast.Call):
+            f = node.func
+            if (isinstance(f, ast.Attribute) and f.attr in ("read_text", "read_bytes", "open")
+                    and isinstance(f.value, ast.Name) and f.value.id == "OWNER_KEY_PATH"):
+                reads.append(node.lineno)
+            if (isinstance(f, ast.Name) and f.id == "open" and node.args
+                    and isinstance(node.args[0], ast.Name) and node.args[0].id == "OWNER_KEY_PATH"):
+                reads.append(node.lineno)
+    return reads
+
+
+@pytest.mark.parametrize("mutant", ["seed = OWNER_KEY_PATH.read_text()", "b = OWNER_KEY_PATH.read_bytes()",
+                                    "fh = open(OWNER_KEY_PATH)", "fh = OWNER_KEY_PATH.open()"])
+def test_the_seed_read_check_fails_on_a_reader(mutant):
+    """Not trusted on its docstring (h:157bd5e469): each way of reading the key is caught."""
+    assert _owner_key_reads(mutant) == [1]
+
+
+def test_hv_never_reads_the_seed_and_the_one_reader_is_on_the_control_plane():
+    """One reader of the seed file, and it is not `hv` (2.0 PR 2b). The control plane's wrapper supplies the
+    path; the read lives in `ownerkey`. `hv` never passes OWNER_KEY_PATH to anything that reads a file —
+    its presence check only stats it (checked on the AST, not the text, per h:157bd5e469)."""
     import ownerkey
-    assert "ownerkey.load_seed(OWNER_KEY_PATH)" in HV_SRC
-    body = HV_SRC[HV_SRC.index("def _owner_seed():"):HV_SRC.index("def _owner_id_for_pub")]
-    assert "read_text" not in body and "b64decode" not in body, "hv still decodes the seed itself"
+    owner_src = (PROJECT / "hivemind_owner.py").read_text()
+    assert "ownerkey.load_seed(OWNER_KEY_PATH)" in owner_src
+    assert "def _owner_seed" not in HV_SRC, "hv still has a seed reader"
+    reads = _owner_key_reads(HV_SRC)
+    assert not reads, f"hv reads the owner key file at lines {reads}"
     assert "read_text" in (PROJECT / "ownerkey.py").read_text()
     assert callable(ownerkey.load_seed)
 
@@ -122,6 +148,10 @@ def test_signing_is_byte_identical_and_still_verifies(tmp_path, monkeypatch):
     pub = hv._ed25519.pub_from_seed(seed)
     payload = {"action": "set-config", "key": "forget_writers", "value": "owner"}
 
+    # 2.0 PR 2b: `hv` has no signer at all; the control plane installs one into the library.
+    assert not hasattr(hv, "_sign_governance_payload"), "hv can still owner-sign (S2)"
+    import hivemind_ctl
+    hivemind_ctl.install(hv)
     through_hv = hv._sign_governance_payload(dict(payload), seed, pub)
     direct = ownerkey.sign_governance(dict(payload), seed, pub)
     assert through_hv == direct                                   # the wrapper adds nothing

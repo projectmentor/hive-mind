@@ -23,6 +23,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import _loadhv, _owner_key, _device, _gov, _entry, _fact, _project, T0  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 FORGET_FLOOR = -1.0
 PRE = "2025-12-31T00:00:00Z"                     # before the genesis owner (T0)
@@ -255,7 +256,7 @@ def test_a_pre_1_24_node_skips_the_unforget(tmp_path, monkeypatch):
 def _cli(tmp_path):
     def run(*args, check=True):
         env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_IDENTITY_STASH=str(tmp_path / "stash"))
-        r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
         if check:
             assert r.returncode == 0, r.stderr
         return r

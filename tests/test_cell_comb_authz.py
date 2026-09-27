@@ -16,6 +16,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import ed25519  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _loadhv(home, monkeypatch):
@@ -24,6 +25,7 @@ def _loadhv(home, monkeypatch):
     spec = importlib.util.spec_from_loader("hvmod_cellauthz", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 

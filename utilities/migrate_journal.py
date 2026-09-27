@@ -34,12 +34,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # utilities/ â†
 import merkle  # noqa: E402
 
 
-def _canonical(obj):
-    return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
-
-
 def _hash(entry):
-    return "sha256:" + hashlib.sha256(_canonical(entry)).hexdigest()
+    # merkle._canonical is the one definition (#153): this chain must be the one hv verifies.
+    return "sha256:" + hashlib.sha256(merkle._canonical(entry)).hexdigest()
 
 
 def build_localid_maps(entries):

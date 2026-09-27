@@ -16,10 +16,10 @@ Two deliberate properties, both there to keep the boundary honest:
 * **No path constant, and no configuration about *where* the hive lives.** Every entry point takes its
   paths as arguments. So there is no `HIVE_HOME` default duplicated between here and `hv`, and nothing
   here can disagree with `hv` about which file is the owner key.
-* **No third canonicaliser.** `sign_governance` hashes through `merkle._canonical`. `hv` carries its
-  own byte-identical copy, whose docstring and merkle's each say "must match the other" — a third copy
-  of the function that produces *the signed bytes* is the last thing this module should introduce, since
-  a divergence would not be a bug in one node but a signature that fails to verify across the fleet.
+* **No second canonicaliser.** `sign_governance` hashes through `merkle._canonical`, the one definition
+  (#153; `hv._canonical` delegates to it). A copy of the function that produces *the signed bytes* is the
+  last thing this module should introduce, since a divergence would not be a bug in one node but a
+  signature that fails to verify across the fleet; tests/test_one_canonical.py fails on one.
 """
 
 import base64

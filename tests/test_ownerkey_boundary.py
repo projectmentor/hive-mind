@@ -87,9 +87,10 @@ def test_ownerkey_does_not_touch_sys_path():
 
 
 def test_there_is_no_third_canonicaliser():
-    """`hv` and `merkle` already carry byte-identical `_canonical` copies, each documented as having to
-    match the other. A third copy — in the module that produces the bytes a signature covers — would turn
-    a divergence from a local bug into a signature that fails to verify fleet-wide."""
+    """`merkle._canonical` is the one definition and `hv._canonical` delegates to it (#153;
+    tests/test_one_canonical.py guards the whole tree). A copy here, in the module that produces the bytes
+    a signature covers, would turn a divergence from a local bug into a signature that fails to verify
+    fleet-wide."""
     assert "def _canonical" not in OWNERKEY_SRC
     assert "merkle._canonical" in OWNERKEY_SRC
 

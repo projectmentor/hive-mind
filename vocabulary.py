@@ -4,8 +4,8 @@ A journal entry whose type, link kind or governance action a node does not recog
 projects to nothing: that is how an older node stays converged with a newer one. The journal is permanent,
 so the same rule has a cost. If a module wrote a name that a later core feature then reused, every entry
 the module had written would be read with the new meaning, on every node, forever. So core reserves the
-bare names listed here, and a module's names take a prefix (`x-<module>:<name>`; the form is pending the
-owner's word on #136). The 2.1 module API enforces the prefix. 2.0 reserves and documents.
+bare names listed here, and a module's names take a prefix, `x-<module>:<name>` (decision h:af137f9421).
+The 2.1 module API enforces the prefix. 2.0 reserves and documents.
 
 This file is the registry the code is checked against, not a description of it. `tests/test_vocabulary.py`
 reads `hv`, `hivemind_owner.py` and the sync modules with `ast`, at enumerated sites, and fails both ways: a

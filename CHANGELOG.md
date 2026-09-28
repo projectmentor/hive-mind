@@ -105,7 +105,7 @@ introduced (a contract) or tagged (a patch).
   contract version that introduced it, and one line of meaning.
   - [`docs/NAMESPACES.md`](docs/NAMESPACES.md) is generated from it by `scripts/common/gen_namespaces.py`, and
     states the rule: core reserves every bare name, and a module's names take a prefix, `x-<module>:<name>`
-    (the form is pending), which the 2.1 module API enforces. A test fails when the page and the generator
+    (decision `h:af137f9421`), which the 2.1 module API enforces. A test fails when the page and the generator
     differ.
   - `tests/test_vocabulary.py` holds the registry to the code both ways, by AST at enumerated writer and
     reader sites. A name written or read there that is not registered fails, and so does a registered name

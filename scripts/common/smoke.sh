@@ -19,10 +19,12 @@ HV="$PROJECT/hv"
 QUIET=0
 [ "${1:-}" = "-q" ] && QUIET=1
 
-# Isolated sandbox; cleaned up on exit.
-SANDBOX="$(mktemp -d)"
+# Isolated sandbox; cleaned up on exit. Its own HOME and identity stash too (#170).
+SANDBOX="$(mktemp -d)"; ISO="$(mktemp -d)"
 export HIVE_HOME="$SANDBOX"
-trap 'rm -rf "$SANDBOX"' EXIT
+trap 'rm -rf "$SANDBOX" "$ISO"' EXIT
+. "$PROJECT/scripts/common/_smoke_isolate.sh"
+smoke_isolate "$ISO"
 
 pass=0; fail=0
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B=$'\033[1m'; N=$'\033[0m'; else G=""; R=""; B=""; N=""; fi

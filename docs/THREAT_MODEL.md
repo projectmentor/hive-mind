@@ -114,7 +114,11 @@ at once). Concretely:
   #122):** `hv config set forget_writers owner` makes only forgets signed by the owner as of their position
   count, so a backdated unsigned forget erases nothing, including one appended after the close. The policy
   is a set-config act honoured only from the owner at its position, and it stores no journal refs, so no
-  future re-keying can orphan it (#130). A legitimate legacy forget is kept by re-issuing it signed. Once set,
+  future re-keying can orphan it (#130). A legitimate legacy forget is kept by re-issuing it signed. *(2.0, 4c)* The default stays `legacy`, since a
+default flip would re-show every fact a grandfathered forget hides. Instead `hv doctor` fails `forget-authz` on
+any owned hive still open, and `hive-mind doctor --fix` closes it: it lists each dependent fact with its text,
+and on the owner's `y` re-signs those forgets and then sets the policy through the same guard. The list is
+shown because a planted forget would be re-signed too. Once set,
   the 1.19 property "a compromised admitted device can never erase, only weigh" holds for fact forgets
   too. Residual: a hive still on `legacy` (the default), and nodes before 1.25, which ignore the key and
   keep honouring the grandfather until they upgrade (projection skew).

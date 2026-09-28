@@ -244,3 +244,55 @@ def test_resign_pending_hint_reads_the_checkout(sandbox):
     assert hint and "re-sign is probably still pending" in hint
     (sb.hive / "README.md").write_text("a local edit\n")
     assert hv._resign_pending_hint(sb.hive) is None
+
+
+# ── 4c: the update's last word on the pre-genesis forget grandfather (decision h:696638b9b7) ─────────
+
+def _ctl(sb, *args):
+    return subprocess.run([sys.executable, str(sb.hive / "hivemind_ctl.py"), *args], capture_output=True,
+                          text=True, env=sb.env(), timeout=120)
+
+
+def _backdated_forget(sb, text):
+    """A fact, then an unsigned owner-source forget of it dated before genesis (#122's shape)."""
+    assert sb.hv("remember", text, "--source", "test").returncode == 0
+    ref = [x for x in json.loads(sb.hv("search", text.split()[1], "--format", "json").stdout)
+           if x.get("kind") == "fact"][0]["ref"]
+    node, seq = ref.rsplit(":", 1)
+    jf = sorted((sb.hive / "journal").glob("*.jsonl"))[0]
+    with open(jf, "a") as fh:
+        fh.write(json.dumps({"node_id": "legacy-dev", "seq": 1, "type": "retract", "timestamp": "2020-01-01T00:00:00Z",
+                             "payload": {"retracts_ref": [node, int(seq)], "reason": "",
+                                         "source": "owner:owner/owner"}}) + "\n")
+    assert sb.hv("doctor", "rebuild").returncode == 0
+    return _load_hv()._short_id(node, int(seq))
+
+
+@pytest.mark.parametrize("state", ["open, a fact depends", "open, nothing depends", "closed", "no owner"])
+def test_d_an_open_forget_grandfather_ends_the_update_with_action_required(sandbox, state):
+    sb = sandbox()
+    sid = None
+    if state != "no owner":
+        assert _ctl(sb, "owner", "init").returncode == 0                  # 1.28: born closed
+    if state.startswith("open"):
+        assert _ctl(sb, "config", "set", "forget_writers", "legacy").returncode == 0   # a pre-1.28 hive
+    if state == "open, a fact depends":
+        sid = _backdated_forget(sb, "the backup runs at 02:00")
+    r = sb.update()
+    out = r.stdout
+    if state.startswith("open"):
+        assert r.returncode != 0, out + r.stderr
+        assert "ACTION REQUIRED" in out and "hive-mind doctor --fix" in out and "Update complete" not in out
+        assert "here (this device keeps an owner key)" in out
+        # after the restart, the rebuild and the re-wire, and the last thing printed
+        assert out.index("Restarting sync daemon") < out.index("Rebuilding database") \
+            < out.index("Re-asserting Claude Code hooks") < out.index("ACTION REQUIRED")
+        assert out.rstrip().endswith("every `hive-mind update` ends here.")
+        if sid:
+            assert sid in out and "the backup runs at 02:00" in out and "asks y/N" in out
+        else:
+            assert "closes without asking" in out
+        assert out.count("ACTION REQUIRED") == 1                          # the re-exec'd copy runs it once
+    else:
+        assert r.returncode == 0, out + r.stderr
+        assert "ACTION REQUIRED" not in out and "Update complete" in out

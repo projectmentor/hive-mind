@@ -3004,6 +3004,66 @@ def _forgets_grandfathered(entries, gov):
     return hides, dangling
 
 
+def _grandfather_facts(entries, hides):
+    """The facts behind `_forgets_grandfathered`'s `hides`, one per label, in its order:
+    `{"sid", "ref": [node_id, seq], "content"}`. `sid` is the `h:` id, the one form `hive-mind retract
+    --owner` and `hive-mind unforget` accept (2.0 refuses local ids), so every list and remedy that names
+    these facts names them the same way (4c). Pure over the journal."""
+    content_of = {(e.get("node_id"), e.get("seq")): (e.get("payload") or {}).get("content")
+                  for e in entries if e.get("type") == "fact"}
+    out = []
+    for label in hides:                            # 'forget <entry>→<node_id>:<seq>' (the target fact)
+        node, seq = label.split("→", 1)[1].rsplit(":", 1)
+        out.append({"sid": _short_id(node, int(seq)), "ref": [node, int(seq)],
+                    "content": content_of.get((node, int(seq))) or ""})
+    return out
+
+
+def _forget_authz_check(entries, gov):
+    """`hv doctor`'s `forget-authz` check, or None when it has nothing to say (no owner yet: nothing is
+    grandfathered before genesis). Shared with `hive-mind update`, which ends on it (4c).
+
+    2.0 (4c, decisions h:af137f9421 and h:696638b9b7): an owned hive whose `forget_writers` is not `owner`
+    FAILS, whether or not a fact depends on the pre-genesis grandfather. An unset policy still projects as
+    `legacy`, so nothing reappears; the open policy is the hole, because an admitted device can still
+    backdate an unsigned owner forget and have it honoured (#122). The close is the owner's
+    `hive-mind doctor --fix`: it re-signs the dependent forgets (after a y/N), then sets
+    `forget_writers=owner` through the #122 guard. The data plane cannot sign, so it only points there.
+    A dependent fact is listed by its `h:` id, the form both remedies accept."""
+    if not gov.get("owner_id"):
+        return None
+    hides, dangling = _forgets_grandfathered(entries, gov)
+    n_dangling = (f"; {len(dangling)} more pre-genesis owner forget(s) target nothing in the journal"
+                  if dangling else "")
+    if (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
+        # 1.28 (#135): say `closed` even with nothing left to ignore. A hive born by `owner init` re-issues
+        # its grandfathered forgets owner-signed, so both lists come back empty and the closed state would
+        # otherwise be reported by silence.
+        n = len(hides) + len(dangling)
+        return {"name": "forget-authz", "status": "ok",
+                "detail": (f"closed (forget_writers=owner): {n} unsigned pre-genesis owner forget(s) are "
+                           f"ignored (#122)") if n else
+                          "closed (forget_writers=owner): every fact forgotten here is hidden by a forget the "
+                          "owner signed; none depends on the pre-genesis grandfather (#122, #135)"}
+    where = ("here (this device keeps an owner key)" if _owner_key_state(gov) in ("held", "present")
+             else "on the owner machine")
+    facts = _grandfather_facts(entries, hides)
+    if facts:
+        sids = [f["sid"] for f in facts]
+        more = f" and {len(sids) - 10} more" if len(sids) > 10 else ""
+        detail = (f"open (forget_writers=legacy): {len(facts)} fact(s) kept forgotten only by an unsigned "
+                  f"pre-genesis owner forget, which an admitted device could also have written (#122): "
+                  f"{', '.join(sids[:10])}{more}. Run `hive-mind doctor --fix` {where}: it lists them, and on "
+                  f"`y` re-signs those forgets so the facts stay hidden, then closes. Or decide each: keep it "
+                  f"forgotten `hive-mind retract <h:id> --owner`, let it back `hive-mind unforget <h:id> "
+                  f"--reason …`{n_dangling}")
+    else:
+        detail = (f"open (forget_writers=legacy): no fact depends on the pre-genesis grandfather, but an "
+                  f"unsigned owner forget dated before genesis would still be honoured (#122). Close it: "
+                  f"`hive-mind doctor --fix` {where}{n_dangling}")
+    return {"name": "forget-authz", "status": "fail", "detail": detail, "open": True, "facts": facts}
+
+
 def _links_unauthorized(entries, gov):
     """`supersedes`/`resolves` links the projection DOWNGRADED to evidence (signer neither the owner-at-
     position nor the target's author) — surfaced by `hv doctor` (`link-authz`) so the owner can ratify
@@ -7002,37 +7062,13 @@ def _doctor_status():
     except Exception:
         pass
 
-    # 3f2. Owner FORGETS honoured only by the pre-genesis grandfather (#122): they need no signature and
-    #      ingest does not check timestamps, so an admitted device can erase a fact with a backdated unsigned
-    #      owner forget. Warn when one is what keeps a fact forgotten now (`hv unforget` undoes it); a forget
-    #      whose target is not in the journal hides nothing and is only counted. Advisory; #122 step 2 closes it.
+    # 3f2. The pre-genesis forget grandfather (#122, #135). An owned hive whose `forget_writers` is still
+    #      open FAILS (2.0, 4c): an admitted device can backdate an unsigned owner forget and have it honoured.
+    #      `_forget_authz_check` lists every fact that depends on it; `hive-mind doctor --fix` closes it.
     try:
-        hides, dangling = _forgets_grandfathered(entries, gov)
-        more = f" and {len(hides) - 10} more" if len(hides) > 10 else ""
-        if (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
-            # 1.28 (#135): say `closed` even with nothing left to ignore. A hive born by `hv owner init`
-            # re-issues its grandfathered forgets owner-signed, so both lists come back empty and the
-            # closed state would otherwise be reported by silence.
-            n = len(hides) + len(dangling)
-            checks.append({"name": "forget-authz", "status": "ok",
-                           "detail": (f"closed (forget_writers=owner): {n} unsigned pre-genesis owner "
-                                      f"forget(s) are ignored (#122)") if n else
-                                     "closed (forget_writers=owner): every fact forgotten here is hidden by a "
-                                     "forget the owner signed; none depends on the pre-genesis grandfather "
-                                     "(#122, #135)"})
-        elif hides:
-            checks.append({"name": "forget-authz", "status": "warn",
-                           "detail": f"{len(hides)} fact(s) kept forgotten only by a pre-genesis owner forget, "
-                                     f"which needs no signature (#122): {', '.join(hides[:10])}{more} — if you "
-                                     f"did not make it, `hive-mind unforget` the fact on the owner machine"
-                                     + (f"; {len(dangling)} more such forget(s) target nothing in the journal"
-                                        if dangling else "")
-                                     + "; `hive-mind config set forget_writers owner` closes this (#122)"})
-        elif dangling:
-            checks.append({"name": "forget-authz", "status": "ok",
-                           "detail": f"{len(dangling)} pre-genesis owner forget(s) are honoured without a "
-                                     f"signature (#122), but none hides a fact: their targets are not in the "
-                                     f"journal; `hive-mind config set forget_writers owner` closes this"})
+        c = _forget_authz_check(entries, gov)
+        if c is not None:
+            checks.append(c)
     except Exception:
         pass
 
@@ -7743,6 +7779,13 @@ def doctor_cmd(args):
         except Exception as e:
             print(f"\n--fix: genesis-pin heal error: {e}")
 
+        # Close the pre-genesis forget grandfather (4c). It is an owner-signed act, so on this plane the
+        # placeholder only points at `hive-mind doctor --fix`; the 15-minute timer never sets the policy.
+        try:
+            _heal_forget_authz(merkle.read_all_entries(JOURNAL_DIR), dry)
+        except Exception as e:
+            print(f"\n--fix: forget-authz heal error: {e}")
+
         restarted = False
         orphans = [p for c in checks for p in (c.get("orphans") or [])]
         if not orphans:
@@ -7838,6 +7881,15 @@ def doctor_cmd(args):
         except Exception as e:
             print(f"\n--fix: agent-hooks heal error: {e}")
 
+        # The forget grandfather is the one failing check `--fix` can settle in place (on the control plane,
+        # 4c), so re-read it: a hive closed just now exits clean instead of on the pre-fix verdict.
+        if not dry and any(c["name"] == "forget-authz" for c in fails):
+            _es = merkle.read_all_entries(JOURNAL_DIR)
+            now = _forget_authz_check(_es, _governance_state(_es))
+            if now is None or now["status"] != "fail":
+                fails = [c for c in fails if c["name"] != "forget-authz"]
+                print(f"\n  forget-authz now: {now['detail'] if now else 'nothing to check'}")
+
     sys.exit(1 if fails else 0)
 
 
@@ -7847,6 +7899,16 @@ def _heal_genesis_pin(entries, dry):
     if _load_genesis_pin() is None and len(_self_signed_owner_acts(entries)) == 1:
         print("\n--fix: this hive's single genesis declaration is not pinned on this device. Pinning is "
               "operator state: run `hive-mind doctor --fix` (or `hive-mind owner pin --set`).")
+
+
+def _heal_forget_authz(entries, dry):
+    """Placeholder for closing the pre-genesis forget grandfather (4c). The close re-signs forgets and sets
+    `forget_writers=owner`, both owner-signed, so it is `hive-mind doctor --fix` (`hivemind_owner.py`
+    replaces this). Here it only says so, and `hv doctor` keeps failing `forget-authz` until it is done."""
+    c = _forget_authz_check(entries, _governance_state(entries))
+    if c is not None and c.get("open"):
+        print("\n--fix: the pre-genesis forget grandfather is open (forget-authz). Closing it is an owner act: "
+              "run `hive-mind doctor --fix` on the owner machine.")
 
 
 def _append_governance(action_payload):

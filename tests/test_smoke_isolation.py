@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,10 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 COMMON = PROJECT / "scripts" / "common"
 SMOKES = ("smoke.sh", "sync_smoke.sh", "sync_auth_smoke.sh")
+# sync_auth_smoke.sh binds its daemons to the LAN address, and a non-loopback `hv sync daemon` does not serve
+# on GitHub macOS runners (the known quirk in tests/test_sync_auth.py; #177's first macOS run hit it). Its
+# isolation is still checked statically below, and end to end on Linux.
+_LAN_DAEMONS_UNSUPPORTED = sys.platform == "darwin"
 
 
 def _files(root):
@@ -28,6 +33,9 @@ def _files(root):
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl required for daemon readiness")
 @pytest.mark.parametrize("smoke", SMOKES)
 def test_a_smoke_run_by_hand_leaves_the_callers_home_alone(tmp_path, smoke):
+    if smoke == "sync_auth_smoke.sh" and _LAN_DAEMONS_UNSUPPORTED:
+        pytest.skip("macOS CI: a non-loopback `hv sync daemon` does not serve on GitHub macOS runners "
+                    "(tests/test_sync_auth.py); the call order is checked statically")
     home = tmp_path / "real-home"
     home.mkdir()
     env = dict(os.environ, HOME=str(home), HIVE_KEY_DIR=str(home / "relocated-keys"))

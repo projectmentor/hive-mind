@@ -91,5 +91,9 @@ def test_doctor_reports_forget_authz(tmp_path, monkeypatch):
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), "doctor", "--format", "json"], env=env,
                        capture_output=True, text=True)
     checks = {c["name"]: c for c in json.loads(r.stdout)["checks"]}
-    assert checks["forget-authz"]["status"] == "warn"
-    assert "hive-mind unforget" in checks["forget-authz"]["detail"] and "#122" in checks["forget-authz"]["detail"]
+    # 2.0 (4c, h:af137f9421): an owned hive with the grandfather open FAILS (was `warn`), and names the
+    # fact by its `h:` id, the form both remedies accept.
+    fa = checks["forget-authz"]
+    assert fa["status"] == "fail" and r.returncode != 0
+    assert hv._short_id(f["node_id"], f["seq"]) in fa["detail"]
+    assert "hive-mind unforget" in fa["detail"] and "hive-mind doctor --fix" in fa["detail"] and "#122" in fa["detail"]

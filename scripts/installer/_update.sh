@@ -32,6 +32,50 @@ print(hv._verify_status(root, check_anchor=False)["level"])
 PY
 }
 
+# 2.0 (4c, decision h:696638b9b7): the update's last word on the pre-genesis forget grandfather. An owned hive
+# whose `forget_writers` is still open gets an ACTION REQUIRED block: the facts that depend on it and the one
+# command that closes it, `hive-mind doctor --fix`. Exit 3 means "print nothing more, fail the update"; 0 means
+# closed or no owner. Reads no stdin: the y/N belongs to `doctor --fix`, run by the owner.
+_forget_authz_gate() {
+  HIVE_HOME="$HIVE_DIR" python3 - "$HIVE_DIR" 2>/dev/null <<'PY'
+import importlib.util, sys
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+root = Path(sys.argv[1])
+loader = SourceFileLoader("hv_update_gate", str(root / "hv"))
+spec = importlib.util.spec_from_loader("hv_update_gate", loader)
+hv = importlib.util.module_from_spec(spec)
+loader.exec_module(hv)
+entries = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+gov = hv._governance_state(entries)
+c = hv._forget_authz_check(entries, gov)
+if c is None or not c.get("open"):
+    sys.exit(0)
+here = hv._owner_key_state(gov) in ("held", "present")
+facts = c["facts"]
+print("")
+print("\033[0;33m[!!]\033[0m  \033[1mACTION REQUIRED: the pre-genesis forget grandfather is open (forget-authz)\033[0m")
+print("      2.0 is installed and running, and nothing that was forgotten has come back. But an unsigned")
+print("      owner forget dated before genesis is still honoured, and an admitted device can write one (#122).")
+if facts:
+    print(f"      {len(facts)} fact(s) are kept forgotten only by such a forget:")
+    for f in facts[:10]:
+        text = " ".join(f["content"].split())
+        print(f"        {f['sid']}  {text[:80]}{'…' if len(text) > 80 else ''}")
+    if len(facts) > 10:
+        print(f"        … and {len(facts) - 10} more (`hv doctor` lists them all)")
+print("      Run once, " + ("here (this device keeps an owner key):" if here else "on the owner machine:"))
+print("        hive-mind doctor --fix")
+if facts:
+    print("      It lists these facts and asks y/N. y re-signs those forgets, so the facts stay hidden, and closes")
+    print("      the hive. N writes nothing, and names how to let a fact back instead.")
+else:
+    print("      No fact depends on the grandfather, so it closes without asking.")
+print("      Until then `hv doctor` fails forget-authz, and every `hive-mind update` ends here.")
+sys.exit(3)
+PY
+}
+
 # The daemon's configured port (.peers.json `port`, default 9876), read the way the daemon reads it.
 _daemon_port() {
   python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import sync_common; \
@@ -162,6 +206,14 @@ if [ -d "$HOME/.claude" ] || command -v claude >/dev/null 2>&1; then
   info "Re-asserting Claude Code hooks..."
   "$HIVE_DIR/hv" wire claude >/dev/null 2>&1 && ok "Claude Code hooks wired" || true
 fi
+
+# Last, after the restart, the rebuild and the re-wire: an open forget grandfather fails the update (4c).
+_gate=0; _forget_authz_gate || _gate=$?
+if [ "$_gate" = 3 ]; then
+  echo ""
+  exit 1
+fi
+[ "$_gate" = 0 ] || warn "Could not check the forget grandfather; run 'hv doctor' to see forget-authz."
 
 echo ""
 ok "Update complete"

@@ -132,6 +132,23 @@ introduced (a contract) or tagged (a patch).
     exit 2, the same shape as a moved command. They are kept through 2.x and deleted at 3.0. Their table is
     `commandmap.RENAMED`, beside `MOVED`. `hive-mind` suggests the new name too. The installer, the smokes and CI
     call the new names; a test fails if shipped shell or a workflow calls an old one.
+- **4c: the pre-genesis forget grandfather is closed by the owner, not by a default flip** (#135 part 2;
+  decisions `h:af137f9421`, `h:696638b9b7`).
+  - **Nothing reappears.** An unset `forget_writers` still projects as `legacy`. A default that meant `owner`
+    only when nothing depends on the grandfather would project the same forgotten set in every case, because
+    the two policies disagree exactly on the facts `_forgets_grandfathered` lists, and it would not close
+    #122 either. So the projection does not change, and a mixed 1.x/2.0 fleet agrees by construction.
+  - **`hv doctor` fails `forget-authz` on an owned hive whose policy is still open**, whether or not a fact
+    depends on it. Each dependent fact is listed by `h:` id, the form both remedies accept. A closed hive
+    reports `ok`, and a hive with no owner reports nothing.
+  - **`hive-mind doctor --fix` closes it.** With nothing depending, it closes at once through the #122 guard.
+    Otherwise it lists each dependent fact with its text and asks y/N at a terminal, default N, before the
+    owner key is unlocked. `y` runs 1.28's `owner init` routine with its own reason: every dependent forget
+    is re-issued owner-signed, then `forget_writers=owner` is set. `N`, a piped answer or no terminal writes
+    nothing. `hv doctor --fix` (the 15-minute timer) cannot owner-sign, so it only points there.
+  - **`hive-mind update` ends with ACTION REQUIRED** on an owned open hive, after the restart, the rebuild
+    and the re-wire: the dependent facts and the one command. It exits non-zero, and prints the note on every
+    update until the hive is closed. A closed or unowned hive ends as before.
 
 ## Unreleased — contract 1.28
 

@@ -192,7 +192,8 @@ def test_config_set_refuses_while_a_fact_would_come_back_and_names_it(tmp_path):
     assert len(_policy_acts(tmp_path)) == base                             # nothing written
     doc = json.loads(run("doctor", "--format", "json", check=False).stdout)
     fa = {c["name"]: c for c in doc["checks"]}["forget-authz"]
-    assert fa["status"] == "warn" and "forget_writers owner" in fa["detail"]
+    # 2.0 (4c): `fail`, not `warn`, and the one command that closes it is `hive-mind doctor --fix`.
+    assert fa["status"] == "fail" and sid in fa["detail"] and "hive-mind doctor --fix" in fa["detail"]
 
 
 @pytest.mark.parametrize("decision", ["keep", "release"])

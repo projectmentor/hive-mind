@@ -363,12 +363,19 @@ def _append_governance(action_payload):
     return entry
 
 
-def _close_grandfather_at_genesis(owner_seed, owner_pub):
+_GENESIS_REISSUE_REASON = "re-issued owner-signed at genesis (#135): it was honoured only by the pre-genesis grandfather"
+
+
+def _close_grandfather_at_genesis(owner_seed, owner_pub, reason=_GENESIS_REISSUE_REASON):
     """#135 part (1), contract 1.28: a hive born by `hive-mind owner init` starts CLOSED, so it never depends on
     the pre-genesis grandfather. Called at the end of `owner init` with the genesis `owner` act already
     appended and pinned: re-issue every forget that is in effect ONLY because it precedes genesis as an
     ordinary owner-signed `retract` — the shape `hive-mind retract <fact> --owner` writes — and only THEN set
     `forget_writers=owner`.
+
+    2.0 (4c, decision h:696638b9b7): `hive-mind doctor --fix` runs the same routine, with its own `reason`,
+    on an established hive that never closed, after the owner answers `y` to the list. It mints no owner and
+    pins nothing; the re-issues are positioned now, after genesis, and signed by the current owner.
 
     THE ORDER IS LOAD-BEARING. `_config_set`'s #122 guard refuses to close while `_forgets_grandfathered`'s
     `hides` is non-empty, because closing would silently bring those facts back. Re-issuing first empties
@@ -397,21 +404,10 @@ def _close_grandfather_at_genesis(owner_seed, owner_pub):
     prepared = []                                  # [(sid, signed payload)], nothing written yet
     resolved = []                                  # the sids we got as far as naming, for the failure report
     try:
-        conn = get_conn()
-        try:
-            for label in hides:                    # 'forget <entry>→<node_id>:<seq>' (the target fact)
-                node, seq = label.split("→", 1)[1].rsplit(":", 1)
-                row = conn.execute("SELECT sid FROM journal_index WHERE node_id = ? AND seq = ?",
-                                   (node, int(seq))).fetchone()
-                resolved.append(((row["sid"] if row and row["sid"] else _short_id(node, int(seq))),
-                                 [node, int(seq)]))
-        finally:
-            conn.close()
+        resolved = [(f["sid"], f["ref"]) for f in _grandfather_facts(entries, hides)]
         for sid, ref in resolved:
             prepared.append((sid, _sign_governance_payload(
-                {"retracts_ref": ref, "source": "owner:owner/owner",
-                 "reason": "re-issued owner-signed at genesis (#135): it was honoured only by the "
-                           "pre-genesis grandfather"},
+                {"retracts_ref": ref, "source": "owner:owner/owner", "reason": reason},
                 owner_seed, owner_pub)))
     except Exception as e:
         print(f"  COULD NOT re-issue {len(hides)} pre-genesis forget(s): {e}")
@@ -447,6 +443,63 @@ def _close_grandfather_at_genesis(owner_seed, owner_pub):
             "forget_writers") == "owner":
         print("  forget_writers=owner: only a forget signed by the owner as of its position hides a fact in")
         print("    this hive (#135). Pre-genesis unsigned forgets count for nothing.")
+
+
+_FIX_REISSUE_REASON = ("re-issued owner-signed by `hive-mind doctor --fix` (2.0, #135): it was honoured only by "
+                       "the pre-genesis grandfather")
+
+
+def _confirmed(question):
+    """A y/N answer from a terminal, default N. No terminal on stdin means no: this is the only interactive
+    read on the control plane, and an answer piped in or a closed stdin must never re-sign anything."""
+    try:
+        if sys.stdin is None or not sys.stdin.isatty():
+            return False
+        return input(question).strip().lower() in ("y", "yes")
+    except (EOFError, KeyboardInterrupt, OSError):
+        return False
+
+
+def _heal_forget_authz(entries, dry):
+    """`hive-mind doctor --fix` closes the pre-genesis forget grandfather (4c, decision h:696638b9b7).
+
+    Nothing depends on it: close at once, through `_config_set`'s #122 guard. The forgotten set cannot change,
+    and the open policy is the remaining hole. Facts depend on it: list each by `h:` id with its text, then
+    ask y/N (default N) BEFORE unlocking the owner key. `y` runs `_close_grandfather_at_genesis`: every
+    dependent forget re-issued owner-signed first, the close last. A forget a member device planted (#122)
+    would be re-signed too, which is why the text is shown and the default is N. `N`, or no terminal,
+    writes nothing and asks for no passphrase. No owner key here: write nothing, say where to run it."""
+    gov = _governance_state(entries)
+    c = _forget_authz_check(entries, gov)
+    if c is None or not c.get("open"):
+        return
+    facts = c["facts"]
+    if dry:
+        print(f"\n  would {'ask to re-sign ' + str(len(facts)) + ' pre-genesis forget(s), then ' if facts else ''}"
+              f"close the forget grandfather (forget_writers=owner)")
+        return
+    if not _owner_key_exists():
+        print("\n--fix: the forget grandfather is open, and this device does not hold the owner key. Run "
+              "`hive-mind doctor --fix` on the owner machine.")
+        return
+    if not facts:
+        print("\n--fix: closing the forget grandfather; no fact depends on it (#122, #135).")
+        _config_set("forget_writers", "owner")
+        return
+    print(f"\n--fix: {len(facts)} fact(s) are kept forgotten only by an unsigned pre-genesis owner forget. An "
+          f"admitted device could have written one (#122), so read each:")
+    for f in facts:
+        text = " ".join(f["content"].split())
+        print(f"  {f['sid']}  {text[:100]}{'…' if len(text) > 100 else ''}")
+    if not _confirmed(f"Re-sign these {len(facts)} forget(s) so the facts stay hidden, then close? [y/N] "):
+        print("  Nothing was written. To let a fact back instead, or to decide them one by one:")
+        _grandfather_remedy([f["sid"] for f in facts])
+        return
+    seed = _owner_seed()                           # unlocked once, after the answer, for the whole routine
+    if seed is None:
+        print("  This device does not hold the owner key: nothing was written.")
+        return
+    _close_grandfather_at_genesis(seed, _ed25519.pub_from_seed(seed), reason=_FIX_REISSUE_REASON)
 
 
 # `_data_plane_owner_cmd` is `hv`'s own `owner_cmd` (show, elections, propose-election --pub, vote),
@@ -951,16 +1004,11 @@ def _config_set(key, value):
         gov = _governance_state(entries)
         hides, _dangling = _forgets_grandfathered(entries, gov)
         if val == "owner" and hides:
-            conn = get_conn()
             print(f"Not set: closing the grandfather would bring back {len(hides)} fact(s) kept forgotten only by "
                   f"an unsigned pre-genesis forget (#122). Decide each first, then run this again:")
-            for label in hides:
-                ref = label.split("→", 1)[1].rsplit(":", 1)
-                row = conn.execute("SELECT sid FROM journal_index WHERE node_id = ? AND seq = ?",
-                                   (ref[0], int(ref[1]))).fetchone()
-                sid = (row["sid"] if row and row["sid"] else _short_id(ref[0], int(ref[1])))
+            for f in _grandfather_facts(entries, hides):
+                sid = f["sid"]
                 print(f"  {sid}   keep it forgotten: hive-mind retract {sid} --owner   |   let it back: hive-mind unforget {sid} --reason …")
-            conn.close()
             return
         if val == "legacy" and hides and (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
             print(f"Note: reopening the grandfather hides {len(hides)} fact(s) again (listed by `hv doctor`, "

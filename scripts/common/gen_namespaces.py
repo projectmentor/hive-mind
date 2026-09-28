@@ -60,7 +60,19 @@ def render():
 
 
 def main(argv):
-    out = Path(argv[1]) if len(argv) > 1 else ROOT / "docs" / "NAMESPACES.md"
+    import argparse
+    ap = argparse.ArgumentParser(prog="gen_namespaces.py",
+                                 description="Write docs/NAMESPACES.md from vocabulary.py (deterministic).")
+    ap.add_argument("out", nargs="?", default=str(ROOT / "docs" / "NAMESPACES.md"),
+                    help="where to write (default: docs/NAMESPACES.md)")
+    ap.add_argument("--check", action="store_true",
+                    help="write nothing; exit 1 if the file differs from what would be generated")
+    args = ap.parse_args(argv[1:])
+    out = Path(args.out)
+    if args.check:
+        same = out.exists() and out.read_bytes() == render().encode()
+        print(f"{out}: {'up to date' if same else 'STALE — run scripts/common/gen_namespaces.py'}")
+        sys.exit(0 if same else 1)
     out.write_bytes(render().encode())
     print(f"wrote {out}: {sum(len(t) for *_, t in vocabulary.CATEGORIES)} names in "
           f"{len(vocabulary.CATEGORIES)} categories")

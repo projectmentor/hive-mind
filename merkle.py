@@ -1,7 +1,7 @@
 """
 Merkle index over the Hive Mind journal.
 
-Pure functions, no side effects. Used now for `hv merkle` (verification) and by
+Pure functions, no side effects. Used now for `hv doctor merkle` (verification) and by
 the Phase 2 sync daemon for bandwidth-efficient delta detection.
 
 The journal is a G-Set CRDT: a set of entries keyed by (node_id, seq). To make

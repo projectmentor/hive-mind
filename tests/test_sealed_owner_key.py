@@ -286,7 +286,7 @@ def test_identity_stash_carries_the_sealed_key(tmp_path):
     for d in (src, dst):
         d.mkdir()
         (d / "hv").symlink_to(PROJECT / "hv")
-    assert _hv(src, "key", "init").returncode == 0 and _ctl(src, "owner", "init").returncode == 0
+    assert _hv(src, "config", "identity", "init").returncode == 0 and _ctl(src, "owner", "init").returncode == 0
     script = f'''
         export HIVE_IDENTITY_STASH="{stash}"
         . "{PROJECT}/scripts/installer/_identity.sh"

@@ -153,7 +153,7 @@ def test_confidence_is_pure_projection_across_rebuild(hive):
     before = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
     )[0]["confidence"]
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
     after = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
     )[0]["confidence"]
@@ -231,7 +231,7 @@ def test_retract_is_pure_projection_across_rebuild(hive):
     _as(hive.home, "dev-b", "retract", hive.sid(fid), "--source", "bob")
     _as(hive.home, "dev-c", "retract", hive.sid(fid), "--source", "carol")
     before = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
     after = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
     assert abs(before - after) < 1e-9 and abs(before - (-0.45)) < 1e-6
 
@@ -313,7 +313,7 @@ def test_remember_resolves_survives_rebuild(hive):
     hive.run("remember", "host parked", "--source", "alice")
     hive.run("remember", "host live", "--resolves", hive.sid(_fid(hive, "host parked")), "--source", "alice")
     before = hive.query("SELECT confidence FROM facts WHERE content=?", ("host parked",))[0]["confidence"]
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
     new_id, old_id = _fid(hive, "host live"), _fid(hive, "host parked")
     assert hive.query("SELECT resolves FROM facts WHERE id=?", (new_id,))[0]["resolves"] == old_id
     after = hive.query("SELECT confidence FROM facts WHERE content=?", ("host parked",))[0]["confidence"]
@@ -385,7 +385,7 @@ def test_rebuild_roundtrip(hive):
         "links": hive.query("SELECT count(*) c FROM entity_facts")[0]["c"],
     }
 
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
 
     after = {
         "facts": hive.query("SELECT count(*) c FROM facts")[0]["c"],

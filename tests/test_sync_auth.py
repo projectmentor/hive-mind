@@ -113,7 +113,7 @@ def node(hive, monkeypatch):
                     "GitHub macOS runners; the remote-auth path is covered by "
                     "test_sync_request_signing.py + the Linux wire run + the Docker PoC")
     monkeypatch.setenv("HIVE_OWNER_PASSPHRASE", "testpass")
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("owner", "init")
     dev = (hive.home / ".device-id").read_text().strip()
     hive.run("group", "admit", dev, "--principal", "me")

@@ -27,7 +27,7 @@ def _decoy(tmp_path):
     """A live-looking hive (an owner, a genesis pin, keys, a journal) marked as a decoy."""
     decoy = tmp_path / "decoy-real-hive"
     env = dict(os.environ, HIVE_HOME=str(decoy), HIVE_IDENTITY_STASH=str(tmp_path / "decoy-stash"))
-    for argv in (["hv", "key", "init"], ["hivemind_ctl.py", "owner", "init"]):
+    for argv in (["hv", "config", "identity", "init"], ["hivemind_ctl.py", "owner", "init"]):
         r = subprocess.run([sys.executable, str(PROJECT / argv[0]), *argv[1:]], env=env,
                            capture_output=True, text=True)
         assert r.returncode == 0, r.stdout + r.stderr

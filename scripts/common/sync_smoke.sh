@@ -33,7 +33,7 @@ ok() { pass=$((pass+1)); printf '  %s✓%s %s\n' "$G" "$N" "$1"; }
 no() { fail=$((fail+1)); printf '  %s✗ %s%s\n' "$R" "$1" "$N"; }
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 — got '$2' want '$3'"; fi; }
 
-root() { HIVE_HOME="$1" "$HV" merkle | awk '/^Root:/{print $2}'; }
+root() { HIVE_HOME="$1" "$HV" doctor merkle | awk '/^Root:/{print $2}'; }
 count() { HIVE_HOME="$1" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$1','store.db')).execute('SELECT count(*) FROM $2').fetchone()[0])"; }
 conf() { HIVE_HOME="$1" python3 -c "import sqlite3,os,sys;print(sqlite3.connect(os.path.join(sys.argv[1],'store.db')).execute('SELECT confidence FROM facts WHERE content=?',(sys.argv[2],)).fetchone()[0])" "$1" "$2"; }
 

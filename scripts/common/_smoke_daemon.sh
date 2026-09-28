@@ -47,7 +47,7 @@ PY
 smoke_wait_daemon() {
   local name="$1" pid="$2" host="$3" port="$4" home="$5" log="$6"
   local want got deadline
-  want="$(HIVE_HOME="$home" "$HV" merkle | awk '/^Root:/{print $2}')"
+  want="$(HIVE_HOME="$home" "$HV" doctor merkle | awk '/^Root:/{print $2}')"
   deadline=$(( $(date +%s) + ${SMOKE_WAIT_SECONDS:-45} ))
   while [ "$(date +%s)" -lt "$deadline" ]; do
     if ! kill -0 "$pid" 2>/dev/null; then

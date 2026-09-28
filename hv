@@ -8,7 +8,7 @@ Architecture (see docs/P2P_DESIGN.md):
   The journal (journal/*.jsonl) is the SOURCE OF TRUTH. Every local write goes
   through append_journal(); foreign entries arrive via append_foreign_entries().
   SQLite (store.db) is a DERIVED index/cache rebuilt from the journal by
-  `hv rebuild`.
+  `hv doctor rebuild`.
 
 Cross-node identity (Phase 2):
   Rows reference each other by JOURNAL identity (node_id, seq), not by local
@@ -161,7 +161,7 @@ def _write_private(path, text):
 # lives in the key directory as `device-key` (0600, never synced, never in the source manifest), and
 # the derived fingerprint (public) is cached at HIVE_HOME/.device-id so resolving NODE_ID stays cheap.
 # Journal entries are signed by the device key and verified on ingest, so a peer cannot forge
-# another node's identity to launder corroboration. A key is minted only by `hv key init` or the
+# another node's identity to launder corroboration. A key is minted only by `hv config identity init` or the
 # migration — importing hv NEVER creates one, so a legacy hostname node keeps its identity until
 # it is deliberately migrated. HIVE_NODE_ID still overrides (tests / two instances on one box).
 DEVICE_KEY_PATH = _effective_key_path("device-key", LEGACY_DEVICE_KEY_PATH)
@@ -5695,7 +5695,7 @@ def _key_announce():
         print(f"Device key created. device_id: {NODE_ID}")
     if _ed25519 is None or _device_seed() is None:
         print("No device key — this device uses its legacy hostname identity, so there is no key")
-        print("to announce. Mint one with `hv key init` (a device with hostname history: see `hv doctor`).")
+        print("to announce. Mint one with `hv config identity init` (a device with hostname history: see `hv doctor`).")
         return
     if not _announce_needed(merkle.read_all_entries(JOURNAL_DIR)):
         print(f"This device's key is already harvestable (a signed entry by {NODE_ID} exists) — "
@@ -5723,7 +5723,7 @@ def _write_device_key(seed):
 
 def _ensure_device_key():
     """Auto-mint a device key on first use if this is a FRESH node, so joining/capsules work without a
-    manual `hv key init`. Returns True iff it just minted one (caller can notify). Safe by construction:
+    manual `hv config identity init`. Returns True iff it just minted one (caller can notify). Safe by construction:
     it NEVER splits identity — it refuses when a key already exists, when HIVE_NODE_ID overrides the
     identity (tests / two instances on one box), or when the journal already has entries under this
     hostname (that case is the coordinated migration path, not a silent re-mint)."""
@@ -5744,17 +5744,6 @@ def _ensure_device_key():
     DEVICE_ID_PATH.write_text(did + "\n")
     NODE_ID = did                          # adopt the freshly minted identity for the rest of this run
     return True
-
-
-def key_cmd(args):
-    """[alias of `hv config identity`] Show or create this device's Ed25519 device identity."""
-    action = getattr(args, "key_action", None) or "show"
-    if action == "init":
-        _identity_init(getattr(args, "force", False))
-    elif action == "announce":
-        _key_announce()
-    else:
-        _identity_show()
 
 
 def _is_daemon_cmdline(toks):
@@ -5878,7 +5867,7 @@ def _kill_orphans(orphans):
 #
 # This is the SINGLE source of truth, shared by `hv doctor` (the `agent-hooks` check + the `--fix`
 # self-heal the 15-min timer runs) and by integrations/claude-code/install.sh + the updater, which
-# delegate via `hv doctor wire-agent`. Commands use the literal "$HOME/..." form so they dedupe
+# delegate via `hv wire claude`. Commands use the literal "$HOME/..." form so they dedupe
 # byte-for-byte across nodes. (event, command, timeout) — timeouts cover the sum of a shim's
 # behaviors (session telemetry ~12s + nudge ~8s on the session events). This is currently the only
 # foreign-config integration; plugin agents (Hermes/OpenClaw/MCP) are our signed code and need no shim.
@@ -6192,7 +6181,7 @@ def _wire_one(cell, name, env_file=None):
 def wire_cmd(args):
     """`hv wire <name>` provisions a cell, auto-dispatching by its `kind` (`agent`→reconcile foreign
     config; `tool`→run its recipe). `--comb <name>` runs every member cell; `--list`/`--show`/`--add`
-    manage the registry. Absorbs the former `hv doctor wire-agent` (kept as a hidden alias)."""
+    manage the registry. Absorbs the former `hv doctor wire-agent`, removed in 2.0."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
 
     if getattr(args, "list", False):
@@ -6457,7 +6446,7 @@ def capsule_cmd(args):
             print("This capsule belongs to a different hive — refusing."); return 1
         sc = _my_curve_scalar()
         if sc is None:
-            print("No device key on this node — cannot open capsules (`hv key init`)."); return 1
+            print("No device key on this node — cannot open capsules (`hv config identity init`)."); return 1
         try:
             val = _capsule_open(c, sc, NODE_ID)
         except ValueError as e:
@@ -6500,7 +6489,7 @@ def capsule_cmd(args):
             if sc is not None:
                 recips = {NODE_ID: _x25519.scalarmult_base(sc)}
         if not recips:
-            print("No recipient device key available — run `hv key init` first."); return 1
+            print("No recipient device key available — run `hv config identity init` first."); return 1
 
         if action == "rotate":
             names = [args.name] if getattr(args, "name", None) else list(live)
@@ -6953,7 +6942,7 @@ def _doctor_status():
                                "detail": f"{len(missing)} admitted device(s) have no synced device key yet "
                                          f"(can't receive capsules until they sync): {', '.join(missing)} — "
                                          f"they self-announce via `doctor --fix` within ~15 min once on "
-                                         f"contract ≥1.18, or run `hv key announce` on that device"})
+                                         f"contract ≥1.18, or run `hv config identity announce` on that device"})
             else:
                 checks.append({"name": "device-keys", "status": "ok",
                                "detail": "all admitted devices have an identity-derived capsule key"})
@@ -7663,30 +7652,13 @@ def doctor_cmd(args):
     the skill symlink (the 15-min `hive-doctor.timer` runs `--fix`, so a node that drifted self-heals
     unattended). Exits non-zero if any check FAILED; warnings keep a zero exit (so cron/monitors alert
     only on real breakage). Subcommands fold in the rarely-used device maintenance ops: `hv doctor
-    merkle` (sync diagnostic), `hv doctor rebuild` (reconstruct store.db from the journal) and `hv doctor wire-agent`
-    ((re)wire the Claude Code integration)."""
+    merkle` (sync diagnostic) and `hv doctor rebuild` (reconstruct store.db from the journal)."""
     action = getattr(args, "doctor_action", None)
     if action == "rebuild":
         rebuild(args)
         return
     if action == "merkle":
         merkle_cmd(args)
-        return
-    if action == "wire-agent":
-        w = _wire_agent(_builtin_claude_cell(), write=True)
-        if not w["applicable"]:
-            print("Claude Code (~/.claude) not present on this node — nothing to wire.")
-            return
-        if w["wrote"]:
-            acts = []
-            if w["missing"]:
-                acts.append(f"wired {len(w['missing'])} dispatch shim(s)")
-            if w["stale"]:
-                acts.append(f"migrated {len(w['stale'])} legacy hook(s)")
-            print("Claude Code integration: " + "; ".join(acts) + ".")
-        else:
-            print("Claude Code integration already wired (dispatch shim present).")
-        print("hive-memory skill: " + ("linked" if w["skill_ok"] else "NOT linked (skill source missing?)"))
         return
     checks = _doctor_status()
     fails = [c for c in checks if c["status"] == "fail"]
@@ -7749,7 +7721,7 @@ def doctor_cmd(args):
         # never authored an entry has no harvestable pub (the device-keys advisory above), so it
         # can never receive capsules. One authority-less `announce` (kind:key) fixes that, and the
         # 15-min doctor timer makes it unattended fleet-wide. Gated on an established owner so a
-        # standalone / pre-owner node never auto-appends governance noise (`hv key announce`
+        # standalone / pre-owner node never auto-appends governance noise (`hv config identity announce`
         # covers deliberate pre-owner use).
         try:
             _es = merkle.read_all_entries(JOURNAL_DIR)
@@ -8477,7 +8449,7 @@ def join_cmd(args):
 # Session telemetry (who/where/when + token usage + cost) is observability, NOT
 # knowledge. It must never enter the facts journal/merkle: that would pollute the
 # corpus, inflate confidence, and sync as "knowledge". So it lives in its own
-# SQLite file under .telemetry/ that `hv rebuild` never touches and sync never sees.
+# SQLite file under .telemetry/ that `hv doctor rebuild` never touches and sync never sees.
 # node_id is part of the primary key, so per-node stores are non-colliding shards
 # that a future release can union for cross-node aggregation with no schema change.
 
@@ -8496,7 +8468,7 @@ _TELEMETRY_PRICES = {
 
 def telemetry_conn():
     """Open (and lazily create) the local-only telemetry DB. Separate file from store.db so
-    `hv rebuild` never wipes it and sync never sees it."""
+    `hv doctor rebuild` never wipes it and sync never sees it."""
     TELEMETRY_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(TELEMETRY_DB)
     conn.row_factory = sqlite3.Row
@@ -8810,7 +8782,8 @@ def build_parser():
             "  hive-mind retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
             "  hv stats | sync now|daemon\n"
             "  hv doctor [--format json] [--fix]                          # health check (+ self-heal)\n"
-            "  hv doctor merkle | rebuild | wire-agent   # sync diag / rebuild db / wire Claude hooks\n"
+            "  hv doctor merkle | rebuild                                 # sync diag / rebuild db\n"
+            "  hv wire claude                                             # (re)wire the Claude Code hooks + skill\n"
             "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
             "decays with age ($HIVE_NOW injectable); owner-forget = -1.0."
         ),
@@ -8942,9 +8915,7 @@ def build_parser():
                                help="With --fix: PREVIEW the remedial actions (kill/restart/rewire) without making any change")
     doctor_sub = doctor_parser.add_subparsers(dest="doctor_action")
     doctor_sub.add_parser("merkle", help="Show the Merkle index over the journal (sync diagnostic)")
-    doctor_sub.add_parser("rebuild", help="Rebuild store.db from the journal (was `hv rebuild`)")
-    doctor_sub.add_parser("wire-agent",
-                          help="[deprecated alias of `hv wire claude`] (re)wire the Claude Code hooks + skill")
+    doctor_sub.add_parser("rebuild", help="Rebuild store.db from the journal")
 
     wire_parser = subparsers.add_parser("wire",
                                         help="Wire an agent/tool from its cell (auto-dispatch by kind), or a comb of cells")
@@ -8975,12 +8946,6 @@ def build_parser():
     cap_rot = capsule_sub.add_parser("rotate", help="Re-seal to the current device set (run after admit/revoke/purge)")
     cap_rot.add_argument("name", nargs="?", help="Capsule to rotate (omit = all openable capsules)")
 
-    key_parser = subparsers.add_parser("key", help="Show or create this device's device identity")
-    key_sub = key_parser.add_subparsers(dest="key_action")
-    key_sub.add_parser("announce", help="Publish this device's signing key as a signed journal entry (makes it capsule-addressable)")
-    key_sub.add_parser("show", help="Show this device's device_id and pubkey")
-    key_init = key_sub.add_parser("init", help="Mint a device key (fresh install)")
-    key_init.add_argument("--force", action="store_true", help="Replace an existing key / skip the populated-journal guard")
 
 
     owner_parser = subparsers.add_parser("owner", help="Show or create the governance owner identity")
@@ -9130,14 +9095,15 @@ _STORE_COMMANDS = {"remember", "search", "decide", "propose", "retract", "entity
 
 def main():
     parser = build_parser()
-    # Back-compat: the old top-level `hv merkle` now lives under
-    # `hv doctor` (denser surface). Rewrite their argv to the canonical subcommand so the old
-    # invocations keep working without cluttering the top-level help.
     argv = sys.argv[1:]
-    if argv[:1] == ["merkle"]:
-        argv = ["doctor", "merkle"] + argv[1:]
-    elif argv[:1] == ["rebuild"]:                       # folded into `hv doctor rebuild`
-        argv = ["doctor", "rebuild"] + argv[1:]
+    # 2.0 S8 (#136): the 1.x aliases `hv rebuild`, `hv merkle`, `hv key` and `hv doctor wire-agent` are
+    # removed. Each names the `hv` command it became and exits 2, having acted on nothing, like a moved
+    # command, so a script still calling one fails loudly (decision h:af137f9421).
+    old = commandmap.renamed(argv)
+    if old is not None:
+        _key, new_argv, why = old
+        print(commandmap.renamed_text(argv, new_argv, why), file=sys.stderr)
+        return commandmap.POINTER_EXIT
     # 2.0 (#136): the June-era hostname-to-device-key migration is gone. Say what to do instead of letting
     # argparse report an unknown command, and act on nothing (exit 2, like the moved commands).
     if argv[:2] == ["doctor", "migrate-identity"] or argv[:1] == ["migrate-device-identity"]:
@@ -9236,8 +9202,6 @@ def _dispatch(args):
         wire_cmd(args)
     elif args.command == "capsule":
         capsule_cmd(args)
-    elif args.command == "key":
-        key_cmd(args)
     elif args.command == "owner":
         owner_cmd(args)
     elif args.command == "admit":

@@ -47,7 +47,7 @@ pass=0; fail=0
 ok() { pass=$((pass+1)); printf '  %s✓%s %s\n' "$G" "$N" "$1"; }
 no() { fail=$((fail+1)); printf '  %s✗ %s%s\n' "$R" "$1" "$N"; }
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 — got '$2' want '$3'"; fi; }
-root() { HIVE_HOME="$1" "$HV" merkle | awk '/^Root:/{print $2}'; }
+root() { HIVE_HOME="$1" "$HV" doctor merkle | awk '/^Root:/{print $2}'; }
 count() { HIVE_HOME="$1" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$1','store.db')).execute('SELECT count(*) FROM $2').fetchone()[0])"; }
 
 printf '%ssync-auth smoke (ENFORCE)%s  LAN=%s  A=:%s  B=:%s\n' "$B_" "$N" "$LAN" "$PA" "$PB"
@@ -55,8 +55,8 @@ printf '%ssync-auth smoke (ENFORCE)%s  LAN=%s  A=:%s  B=:%s\n' "$B_" "$N" "$LAN"
 # Real device identities (node_id == Ed25519 fingerprint — no HIVE_NODE_ID override).
 export HIVE_OWNER_PASSPHRASE=smoke-pass
 export HIVE_OWNER_KEY_PASSPHRASE="${HIVE_OWNER_KEY_PASSPHRASE:-smoke-pass}"   # the sealed owner key (2.0 PR 3b)
-HIVE_HOME="$A" "$HV" key init >/dev/null
-HIVE_HOME="$B" "$HV" key init >/dev/null
+HIVE_HOME="$A" "$HV" config identity init >/dev/null
+HIVE_HOME="$B" "$HV" config identity init >/dev/null
 DEVA="$(cat "$A/.device-id")"; DEVB="$(cat "$B/.device-id")"
 
 # A is the owner and admits BOTH device fingerprints.

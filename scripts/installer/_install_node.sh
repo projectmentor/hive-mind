@@ -639,8 +639,8 @@ cd "$HIVE_DIR"
 if [ -f store.db ]; then
   ok "store.db already exists"
 else
-  info "Running hv rebuild to initialise database..."
-  ./hv rebuild
+  info "Running hv doctor rebuild to initialise database..."
+  ./hv doctor rebuild
   ok "store.db created"
 fi
 ./hv stats

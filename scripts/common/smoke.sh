@@ -142,7 +142,7 @@ assert_eq "journal_mode is WAL" "$MODE" "wal"
 
 # ── Merkle ──────────────────────────────────────────────────────────────────
 sect "Merkle index"
-MROOT="$("$HV" merkle | awk '/^Root:/{print $2}')"
+MROOT="$("$HV" doctor merkle | awk '/^Root:/{print $2}')"
 case "$MROOT" in
   sha256:genesis) no "Merkle root is genesis (expected real hash over entries)";;
   sha256:?*)      ok "Merkle root computed over journal ($MROOT)";;
@@ -153,7 +153,7 @@ esac
 sect "rebuild round-trip (SQLite is derived)"
 BEFORE="$("$HV" stats | grep -E 'Facts:|Decisions:|Entities:')"
 rm -f "$SANDBOX"/store.db*            # nuke the derived index entirely
-"$HV" rebuild >/dev/null
+"$HV" doctor rebuild >/dev/null
 AFTER="$("$HV" stats | grep -E 'Facts:|Decisions:|Entities:')"
 assert_eq "counts identical after rebuild from journal" "$AFTER" "$BEFORE"
 assert_contains "FTS index survives rebuild" "$("$HV" search parallel)" "parallel delegation"

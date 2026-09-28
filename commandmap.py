@@ -17,6 +17,9 @@ Each entry maps the OLD `hv` invocation to the NEW `hive-mind` one. `hv` prints 
 deliberate amendment to contract §7, which promises the previous major keeps working as deprecated
 shims: for a command whose whole purpose is being removed from the data plane, a working shim would keep
 an owner-signing path in `hv` and undo S2. The window preserves discoverability, not behaviour.
+
+`RENAMED` gives the same treatment to the old `hv` names that 2.0 removes while the command itself stays
+on `hv` under its newer name.
 """
 
 # (old hv argv prefix) -> (new hive-mind argv prefix, one-line why)
@@ -98,6 +101,20 @@ FLAG_CONDITIONAL = {
 # `manual`, they are owner-signed (#114). Not pointers: `hv` keeps running them.
 OWNER_LINK_VERBS = ("remember", "decide", "entity")
 
+# Old `hv` names for commands that stay on `hv` under a new name. Through 1.x each was a hidden alias that
+# still worked; 2.0 removes them (S8). Each one now points like a moved command: it acts on nothing, exits
+# 2 and names the replacement, which is another `hv` command. They are kept through 2.x and deleted at 3.0
+# (decision h:af137f9421). A test walks `hv`'s real parser to prove every replacement exists.
+#
+# (old hv argv prefix) -> (new hv argv prefix, one-line why)
+RENAMED = {
+    ("rebuild",):                   ("doctor rebuild",          "folded under `hv doctor` in 1.8"),
+    ("merkle",):                    ("doctor merkle",           "folded under `hv doctor`"),
+    ("key",):                       ("config identity",         "the device key is `hv config identity`"),
+    ("doctor", "wire-agent"):       ("wire claude",             "`hv wire <agent>` is the one "
+                                                                "agent-neutral wiring verb"),
+}
+
 POINTER_EXIT = 2
 
 
@@ -121,3 +138,31 @@ def lookup(argv):
         if key in MOVED:
             return key, MOVED[key]
     return None
+
+
+def renamed(argv):
+    """The `hv` command an old name became, as the full argv to type, or None.
+
+    Returns `(old_key, new_argv, why)`. The rest of the invocation is carried over, so `hv key init --force`
+    names `hv config identity init --force`. `doctor wire-agent` is matched wherever `wire-agent` falls
+    after `doctor`, since `hv doctor --fix wire-agent` parsed as the same subcommand. It took no arguments
+    and always wired Claude, so its replacement is exactly `hv wire claude`."""
+    argv = list(argv)
+    if argv[:1] == ["doctor"] and "wire-agent" in argv[1:]:
+        key = ("doctor", "wire-agent")
+        new_form, why = RENAMED[key]
+        return key, new_form.split(), why
+    key = tuple(argv[:1])
+    if key in RENAMED:
+        new_form, why = RENAMED[key]
+        return key, new_form.split() + argv[1:], why
+    return None
+
+
+def renamed_text(old_argv, new_argv, why=""):
+    """The message `hv` prints for a removed alias. Unlike a moved command, the replacement is on `hv`."""
+    lines = [f"`hv {' '.join(old_argv)}` was removed in 2.0.",
+             f"  Run: hv {' '.join(new_argv)}"]
+    if why:
+        lines.append(f"  ({why}.)")
+    return "\n".join(lines)

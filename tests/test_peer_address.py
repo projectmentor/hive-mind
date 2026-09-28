@@ -401,10 +401,10 @@ def test_b_moves_contacts_a_once_and_a_doctor_fix_repoints_it(tmp_path, monkeypa
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
-    _run(b, "key", "init")
+    _run(b, "config", "identity", "init")
     b_dev = (b / ".device-id").read_text().strip()
     b_seed = base64.b64decode(_keys.key_path(b, "device-key").read_text().strip())
-    _run(a, "key", "init")
+    _run(a, "config", "identity", "init")
     _run(a, "owner", "init")
     _run(a, "group", "admit", b_dev, "--principal", "b")           # real governance: B is admitted on A
 

@@ -13,6 +13,10 @@ name written or read at one of those sites that is missing here, and a name here
 (`written`) or reads (`legacy`, `read`). `docs/NAMESPACES.md` is generated from it by
 `scripts/common/gen_namespaces.py`, and a test fails when the committed page differs from the output.
 
+It also lists what a module may add per category (rule 4), and, apart from the journal tables, the local
+per-node files and the `via` values of a peer sighting (#150, decision h:a1e3e7cd73). Those are not journal
+vocabulary; the same test holds them to the code's path literals, both ways.
+
 Deliberately importable by `hv`: it holds no secret, reads no configuration, and imports nothing, like
 `commandmap.py`, so `hv`'s import graph (S2) is unchanged. It is a `.py`, so the signed manifest covers it.
 
@@ -216,6 +220,72 @@ ENVELOPE_FIELDS = {
     "to":        _v(RESERVED, "2.0", "Reserved for the module envelope (#150): the entry an edge points to. A "
                                      "link carries `to_ref` today."),
     "type":      _v(WRITTEN, "1.0", "The entry type (see Entry types)."),
+}
+
+# ── local files: per-node names under $HIVE_HOME and in the key directory. NOT journal vocabulary ────
+# They never enter the journal or the wire. They are listed apart from the journal tables so a module never
+# claims one, and so a file name is never mistaken for vocabulary (the #146 category error; #150, decision
+# h:a1e3e7cd73). `where`: "hive" is $HIVE_HOME, the checkout; "keys" is the 0700 key directory (2.0 PR 3a).
+# tests/test_vocabulary.py holds this table to the path literals in the code, both ways.
+LOCAL_FILES = {
+    ".bus":                  _v(WRITTEN, "1.10", "Directory for the local event log, `introspect.log`; never synced.",
+                                where="hive"),
+    ".device-id":            _v(WRITTEN, "1.3", "This device's id, `k1:` and 16 hex of its key's sha256.", where="hive"),
+    ".device-key":           _v(LEGACY, "1.3", "The device key's pre-2.0 path in the checkout. It still loads, with a "
+                                               "`keyperm` warning, and `hv doctor --fix` moves it.", where="hive"),
+    ".genesis-pin":          _v(WRITTEN, "1.27", "Which `owner` declaration established this hive (0600, never "
+                                                 "synced).", where="hive"),
+    ".key-dir":              _v(WRITTEN, "2.0", "The path of this checkout's key directory, so a renamed checkout keeps "
+                                                "its keys.", where="hive"),
+    ".nudge_state":          _v(WRITTEN, "1.0", "When the save and audit nudges last fired.", where="hive"),
+    ".owner-key":            _v(LEGACY, "1.4", "The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` "
+                                               "moves it.", where="hive"),
+    ".owner-pub":            _v(LEGACY, "2.0", "The owner key's public half at its first 2.0 path. `hive-mind doctor "
+                                               "--fix` moves it.", where="hive"),
+    ".peer_candidates.json": _v(WRITTEN, "1.21", "The addresses each admitted device verified itself from; local, never "
+                                                 "journaled (see `via` values).", where="hive"),
+    ".peers.json":           _v(WRITTEN, "1.0", "This node's sync settings and its peers' addresses.", where="hive"),
+    ".telemetry":            _v(WRITTEN, "1.1", "Directory for the local-only session telemetry store; never synced.",
+                                where="hive"),
+    "journal":               _v(WRITTEN, "1.0", "The journal's day files: the source of truth, and all that sync "
+                                                "carries.", where="hive"),
+    "nudge.env":             _v(READ, "1.0", "Optional nudge settings (`KEY=value`), read here or at the repository "
+                                             "root.", where="hive"),
+    "store.db":              _v(WRITTEN, "1.0", "The SQLite index derived from the journal; `hv doctor rebuild` "
+                                                "recreates it.", where="hive"),
+    "device-key":            _v(WRITTEN, "2.0", "This device's Ed25519 seed (0600). Not sealed: every entry is "
+                                                "device-signed unattended.", where="keys"),
+    "owner-key":             _v(LEGACY, "2.0", "An unsealed owner seed. It still loads, `hv doctor` fails until "
+                                               "`hive-mind owner seal` seals it, and that removes it.", where="keys"),
+    "owner-key.sealed":      _v(WRITTEN, "2.0", "The owner seed, sealed at rest: scrypt, then ChaCha20-Poly1305.",
+                                where="keys"),
+    "owner-pub":             _v(WRITTEN, "2.0", "The owner key's public half (0644), so `hv` can tell whose key is here "
+                                                "without opening it.", where="keys"),
+}
+
+# ── `via`: how a `.peer_candidates.json` sighting was verified. Local, never journaled ──────────────
+# Only the values the code writes or compares are listed. A sighting with no `via` came from a signed inbound
+# request to the daemon.
+VIA_VALUES = {
+    "outbound": _v(WRITTEN, "1.26", "The sync client saw the device answer a signed `/sync/hello` at this address "
+                                    "(#107)."),
+}
+
+# ── what a module may add, per journal category (#150 rule 4, decision h:a1e3e7cd73) ──────────────────
+# Every name a module adds takes the prefix `x-<module>:` (decision h:af137f9421). Rule 4 is which categories
+# a module may extend at all. The link-kind rule is rule 1's contract: `_LINK_RESOLVERS` has no resolver for a
+# module's kind, so its entries land and project to nothing (tests/test_links.py).
+MODULE_RULES = {
+    "entry_types":        "No. A new entry type needs a core projection.",
+    "link_kinds":         "Yes, prefixed. It lands, and projects to nothing on a node without a resolver for it.",
+    "governance_actions": "No. An action needs the core governance projection.",
+    "config_keys":        "Yes, prefixed. An older node ignores a key it does not know.",
+    "channels":           "No. Closed: an unrecognised channel counts as `introspect`.",
+    "behaviour_tags":     "Only prefixed, like every module name.",
+    "announce_kinds":     "Only prefixed. A node accepts an unknown kind and ignores it.",
+    "source_apps":        "Only prefixed, like every module name.",
+    "source_contexts":    "Only prefixed, like every module name. An unrecognised class weighs 1.0.",
+    "envelope_fields":    "No. The core builds the envelope around a module's payload.",
 }
 
 # The categories, in the order the generated document lists them: (key, title, what the names are, table).

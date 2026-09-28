@@ -34,6 +34,9 @@ module had written would be read with the new meaning, on every node, from then 
 - **Core reserves every bare name on this page**, in its category.
 - **A module's names take a prefix: `x-<module>:<name>`**, for example `x-hwatch:heartbeat` (decision
   `h:af137f9421`). No core name starts with `x-`.
+- **What a module may add** (decision `h:a1e3e7cd73`): a link kind or a config key, prefixed. Never an entry
+  type, a governance action or a channel: each needs a core projection, and channels are closed. Each table
+  below says which, under *Modules*.
 - **The 2.1 module API enforces the prefix.** 2.0 reserves the names and documents them.
 - **Envelope fields are the entry's structure**, not vocabulary a module picks. A module never writes its
   own: the core builds the envelope around a module's payload.
@@ -49,13 +52,40 @@ module had written would be read with the new meaning, on every node, from then 
 changelog and the contract history as a best effort, and never derived from git."""
 
 
+LOCAL_INTRO = """\
+## Local files
+
+Not journal vocabulary. These are the per-node files and directories core keeps under `$HIVE_HOME` (the
+checkout) and in the key directory (`$HIVE_KEY_DIR`, else the path in `$HIVE_HOME/.key-dir`, else
+`~/.hive/keys/<16 hex>`). None of them enters the journal or the wire. A module never claims one of these
+names. They are listed apart from the tables above so that a file name is never mistaken for vocabulary.
+Here `legacy` means core no longer writes the file at that path and still reads it."""
+
+VIA_INTRO = """\
+### `via` values
+
+How a `.peer_candidates.json` sighting was verified. Local, never journaled. A sighting with no `via` came
+from a signed inbound request to the daemon."""
+
+WHERE = {"hive": "`$HIVE_HOME`", "keys": "key directory"}
+
+
 def render():
     lines = [INTRO]
-    for _key, title, what, table in vocabulary.CATEGORIES:
-        lines += ["", f"## {title}", "", what, "", "| Name | Status | Since | Meaning |", "|---|---|---|---|"]
+    for key, title, what, table in vocabulary.CATEGORIES:
+        lines += ["", f"## {title}", "", what, "", f"*Modules:* {vocabulary.MODULE_RULES[key]}", "",
+                  "| Name | Status | Since | Meaning |", "|---|---|---|---|"]
         for name in sorted(table):
             rec = table[name]
             lines.append(f"| `{name}` | {rec['status']} | {rec['since']} | {rec['meaning']} |")
+    lines += ["", LOCAL_INTRO, "", "| Name | Where | Status | Since | Meaning |", "|---|---|---|---|---|"]
+    for name in sorted(vocabulary.LOCAL_FILES, key=lambda n: (vocabulary.LOCAL_FILES[n]["where"] != "hive", n)):
+        rec = vocabulary.LOCAL_FILES[name]
+        lines.append(f"| `{name}` | {WHERE[rec['where']]} | {rec['status']} | {rec['since']} | {rec['meaning']} |")
+    lines += ["", VIA_INTRO, "", "| Name | Status | Since | Meaning |", "|---|---|---|---|"]
+    for name in sorted(vocabulary.VIA_VALUES):
+        rec = vocabulary.VIA_VALUES[name]
+        lines.append(f"| `{name}` | {rec['status']} | {rec['since']} | {rec['meaning']} |")
     return "\n".join(lines) + "\n"
 
 

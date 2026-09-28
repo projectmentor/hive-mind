@@ -48,8 +48,10 @@ See [`docs/ADVISORIES.md`](docs/ADVISORIES.md) for every published advisory and 
   both (`hv owner export`, `hv owner escrow`).
 - **Admit only devices you control** (`hv group admit`); `revoke` or `purge` a lost device, then
   `hv capsule rotate` **and** rotate the upstream secret, since removed devices keep old ciphertext.
-- **Keep key files private:** `hv doctor` fails if `.device-key` or `.owner-key` is readable by
-  anyone but you, and `hv doctor --fix` re-tightens them.
+- **Keep key files private:** the device and owner keys live in a key directory outside the checkout
+  (`hv whoami` prints where). `hv doctor` fails if either key is readable by anyone but you, or the key
+  directory is not 0700. `hv doctor --fix` re-tightens the device key and `hive-mind doctor --fix` the
+  owner key, and each moves its key out of the checkout if it is still there.
 - **Switch sync to `enforce`** (`hv sync auth enforce`) once every peer reports protocol version 2,
   and don't set `HIVE_BIND=0.0.0.0`.
 - **Restrict who can connect** with Tailscale ACLs; HiveMind's signed reads decide who can *read*.

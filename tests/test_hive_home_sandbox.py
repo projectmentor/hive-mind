@@ -56,7 +56,7 @@ def _nested(decoy, mode, *tests, **extra):
     own markers (PYTEST_XDIST_WORKER, the exported-home record) are dropped, so the nested one starts as a
     developer's run would."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith("PYTEST_") and k != _realhome.EXPORTED_HOME_VAR}
+           if not k.startswith("PYTEST_") and k not in (_realhome.EXPORTED_HOME_VAR, _realhome.REAL_HOME_VAR)}
     env["HIVE_HOME"] = str(decoy)
     env.update(extra)
     flags = ["-p", "no:xdist"] if mode == "serial" else ["-n", "2"]
@@ -83,24 +83,28 @@ def test_the_session_guard_fails_a_run_that_writes_into_the_exported_hive(tmp_pa
     writes into the exported (decoy) hive must fail, and name the file. Under xdist this failed open
     before the exported-home record (Fable on #165): every worker watched the controller's sandbox."""
     decoy = _decoy(tmp_path)
-    r = _nested(decoy, mode, "tests/_guard_probe.py", HIVE_TEST_PROBE_TARGET=str(decoy))
+    r = _nested(decoy, mode, "tests/_guard_probe.py::test_writes_into_the_exported_hive_on_purpose",
+                HIVE_TEST_PROBE_TARGET=str(decoy))
     assert "1 passed" in r.stdout, "the probe itself must succeed; only the guard may fail the run"
     out = r.stdout + r.stderr
     assert r.returncode != 0, out[-3000:]
-    assert "real hive .key-dir created" in out and "decoy hive .key-dir created" in out, out[-3000:]
+    assert "real hive .owner-key created" in out and "decoy hive .owner-key created" in out, out[-3000:]
 
 
 def test_the_guard_fails_on_a_write_into_the_exported_hive(tmp_path):
     """Fail-closed (h:157bd5e469): a key written into the exported hive, and any write into a decoy, are
     reported by the same comparison the session guard makes."""
-    claude, stash, hive = tmp_path / "c", tmp_path / "s", tmp_path / "hive"
-    for d in (claude, stash, hive / "journal"):
+    claude, stash, hive, kd = tmp_path / "c", tmp_path / "s", tmp_path / "hive", tmp_path / "keys"
+    for d in (claude, stash, hive / "journal", kd):
         d.mkdir(parents=True)
-    before = _realhome.snapshot(claude, stash, hive)
+    before = _realhome.snapshot(claude, stash, hive, kd)
     for name in _realhome.HIVE_KEY_FILES:
         (hive / name).write_text("x\n")
-    changes = _realhome.diff(before, _realhome.snapshot(claude, stash, hive))
-    assert sorted(changes) == sorted(f"real hive {n} created" for n in _realhome.HIVE_KEY_FILES)
+    for name in _realhome.KEY_DIR_FILES:                    # the key directory outside the tree (2.0 PR 3a)
+        (kd / name).write_text("x\n")
+    changes = _realhome.diff(before, _realhome.snapshot(claude, stash, hive, kd))
+    assert sorted(changes) == sorted([f"real hive {n} created" for n in _realhome.HIVE_KEY_FILES]
+                                     + [f"real key dir {n} created" for n in _realhome.KEY_DIR_FILES])
 
     # A live hive's journal moving is a note, not a failure: its daemon and other sessions write it.
     act = _realhome.activity(hive)
@@ -125,3 +129,28 @@ def test_the_helpers_that_mean_a_hive_use_the_explicit_loader(mod):
     calls = [n for n in ast.walk(gov) if isinstance(n, ast.Call)]
     names = {getattr(c.func, "attr", getattr(c.func, "id", None)) for c in calls}
     assert "load_hv" in names and "SourceFileLoader" not in names, names
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_the_session_guard_fails_a_run_that_leaks_a_key_dir_into_the_real_home(tmp_path, mode):
+    """A new directory under the real ~/.hive/keys is named by the guard, in both modes (Fable on #166).
+    HOME points at a decoy home for the nested session, so the real one is never touched."""
+    decoy, home = _decoy(tmp_path), tmp_path / "decoy-home"
+    home.mkdir()
+    r = _nested(decoy, mode, "tests/_guard_probe.py::test_leaks_a_key_dir_into_the_real_home_on_purpose",
+                HOME=str(home), HIVE_TEST_PROBE_HOME=str(home))
+    out = r.stdout + r.stderr
+    assert "1 passed" in r.stdout, "the probe itself must succeed; only the guard may fail the run"
+    assert r.returncode != 0 and "real ~/.hive/keys/leaked0000000000 created" in out, out[-3000:]
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_a_module_scoped_owner_init_writes_no_key_into_the_real_home(tmp_path, mode):
+    """The leak itself, as a regression: `test_s2_split`'s module-scoped `owned_hive` runs `owner init`
+    before `isolation`, and on a 3a tree that wrote an owner key into the real ~/.hive/keys. With HOME
+    sandboxed at import, the decoy home stays empty."""
+    decoy, home = _decoy(tmp_path), tmp_path / "decoy-home"
+    home.mkdir()
+    r = _nested(decoy, mode, "tests/test_s2_split.py", "-k", "every_moved_command_points and owner", HOME=str(home))
+    assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
+    assert not (home / ".hive").exists(), sorted(str(p) for p in home.rglob("*"))

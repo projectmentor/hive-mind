@@ -45,9 +45,28 @@ introduced (a contract) or tagged (a patch).
   - `hive-mind update` and the installer now pin through the control plane.
 - **Key presence without reading the seed.** `hv whoami`, `hv owner show`, `hv doctor` and the admission hint
   decide whether this device holds the owner key from the key file's metadata and a public sidecar,
-  `.owner-pub`, which the control plane writes. They never read the seed. They can say *unknown*: permission
+  `owner-pub`, which the control plane writes. They never read the seed. They can say *unknown*: permission
   denied is not "absent".
 - **No journal or wire change** (S7). A mixed 1.x and 2.0 fleet converges.
+- **PR 3a: private keys leave the working tree** (private #27). `HIVE_HOME` is the git checkout, which
+  every agent CLI runs in and some index, so a 0600 seed there was one `cat` away from any tool running
+  as the user.
+  - The seeds now live in a key directory (0700): `$HIVE_KEY_DIR`, else the path recorded in
+    `$HIVE_HOME/.key-dir`, else `~/.hive/keys/<sha256 of the checkout's path, 16 hex>`. The files are
+    `device-key`, `owner-key` (0600) and `owner-pub` (0644). The pointer keeps a renamed checkout on its
+    keys.
+  - Keys at the old root paths keep working, with a `keyperm` warning. Each plane's `doctor --fix` moves
+    its own: `hv` the device key, `hive-mind` the owner key and its public half. A move never overwrites
+    a key already in the key directory, and finishes one that was interrupted after the copy.
+  - `keyperm` fails on a key directory that is not 0700.
+  - The installer's identity stash saves from and restores into the key directory, and the uninstaller
+    removes only the three key files there.
+  - `hv whoami`, the doctor `owner` check and the dashboard label the device and owner ids as public ids
+    and say where the private keys are, without printing them.
+  - Presence (`_owner_key_state`) now answers *held* only for a regular file of a seed's size, so a
+    directory or an empty file in the key's place reads as *present*, not held (#159 review).
+  - The signed manifest names its one extensionless file, `hv`. A test fails if another runnable
+    extensionless file would ship unsigned.
 
 ## Unreleased — contract 1.28
 

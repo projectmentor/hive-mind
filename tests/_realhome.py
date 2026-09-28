@@ -14,6 +14,14 @@ from pathlib import Path
 
 
 EXPORTED_HOME_VAR = "HIVE_TEST_EXPORTED_HOME"
+# The same record for HOME, which conftest also sandboxes at import (2.0 PR 3a; Fable on #166): an xdist
+# worker inherits the sandbox, so it reads the real home from here.
+REAL_HOME_VAR = "HIVE_TEST_REAL_HOME"
+
+
+def real_home():
+    """The HOME this session was launched with, else the passwd entry."""
+    return os.environ.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir
 
 
 def session_paths():
@@ -21,7 +29,7 @@ def session_paths():
     under a deliberate HOME=/tmp/x), else the passwd entry; an exported CLAUDE_CONFIG_DIR or
     HIVE_IDENTITY_STASH wins over the default under that home, exactly as `hv` resolves them.
     Call it before any fixture redirects the environment."""
-    home = Path(os.environ.get("HOME") or pwd.getpwuid(os.getuid()).pw_dir)
+    home = Path(os.environ.get(REAL_HOME_VAR) or real_home())
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude")
     stash = Path(os.environ.get("HIVE_IDENTITY_STASH") or home / ".config" / "hive-mind" / "identity")
     # The live hive's checkout, so the guard can see a .genesis-pin or a key written into it (#14, #160):
@@ -32,7 +40,23 @@ def session_paths():
     if exported is None:
         exported = os.environ.get("HIVE_HOME")
     hive = Path(exported or Path(__file__).resolve().parent.parent)
-    return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive}
+    return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive,
+            "key_dir": key_dir_of(hive, home), "keys_root": home / ".hive" / "keys"}
+
+
+def key_dir_of(hive, home):
+    """The exported hive's key directory (2.0 PR 3a), by `hv`'s rule but without importing `hv`:
+    $HIVE_KEY_DIR, else the path recorded in `<hive>/.key-dir`, else `<home>/.hive/keys/<16 hex>`."""
+    env = os.environ.get("HIVE_KEY_DIR")
+    if env:
+        return Path(env).expanduser()
+    try:
+        recorded = (Path(hive) / ".key-dir").read_text().strip()
+        if recorded:
+            return Path(recorded)
+    except OSError:
+        pass
+    return Path(home) / ".hive" / "keys" / hashlib.sha256(str(Path(hive).resolve()).encode()).hexdigest()[:16]
 
 
 def _file_state(p, ctime=False):
@@ -64,7 +88,7 @@ def _hive_hooks(settings):
                   if "hive_dispatch.sh" in h.get("command", ""))
 
 
-def snapshot(claude, stash, hive=None):
+def snapshot(claude, stash, hive=None, key_dir=None, keys_root=None):
     """The state `hv doctor --fix` and `hv owner init` would change: the skill symlink's target, the
     Hive-owned hooks, the .bak.doctor that every real --fix write refreshes (hv `_wire_agent`), and
     the owner-key stash a reinstall restores from (hv `_stash_owner_key`)."""
@@ -82,12 +106,20 @@ def snapshot(claude, stash, hive=None):
         # The real hive's key material and identity (#160): operator state, which nothing a developer or
         # an agent does during a test run changes, so any change is the suite's.
         **{f"real hive {name}": (_file_state(Path(hive) / name) if hive else None) for name in HIVE_KEY_FILES},
+        # ...and its key directory outside the checkout (2.0 PR 3a), where the seeds live now.
+        **{f"real key dir {name}": (_file_state(Path(key_dir) / name) if key_dir else None)
+           for name in KEY_DIR_FILES},
+        # ...and every key directory under the real ~/.hive/keys: `hv`'s default key directory is there,
+        # so a key written before HOME is redirected (a module-scoped fixture, a module-level loader) makes
+        # a NEW directory beside the exported hive's (Fable on #166).
+        KEY_DIRS: _listing(keys_root) if keys_root else None,
     }
 
 
 # Key material and identity in the checkout: the device and owner seeds, the public owner half, the cached
 # device id, and the key-directory pointer.
 HIVE_KEY_FILES = (".device-key", ".owner-key", ".owner-pub", ".device-id", ".key-dir")
+KEY_DIR_FILES = ("device-key", "owner-key", "owner-key.sealed", "owner-pub")
 # A hive marked with this file is a DECOY that only the test suite may see (#160): the guard then holds the
 # whole tree to byte-identical, which it cannot do for a live hive whose daemon ingests from peers.
 DECOY_MARKER = ".hive-test-decoy"
@@ -129,11 +161,26 @@ def decoy_diff(before, after):
     return out
 
 
+KEY_DIRS = "real ~/.hive/keys"
+
+
+def _listing(d):
+    try:
+        return tuple(sorted(p.name for p in Path(d).iterdir()))
+    except FileNotFoundError:
+        return ()
+
+
 def diff(before, after):
     """Human-readable changes between two snapshots. A path absent before and present after is
     reported as created; the guard's contract is 'unchanged, or not created'."""
     out = []
+    if before.get(KEY_DIRS) is not None and after.get(KEY_DIRS) is not None:
+        out += [f"{KEY_DIRS}/{n} created" for n in after[KEY_DIRS] if n not in before[KEY_DIRS]]
+        out += [f"{KEY_DIRS}/{n} removed" for n in before[KEY_DIRS] if n not in after[KEY_DIRS]]
     for key in before:
+        if key == KEY_DIRS:
+            continue
         if before[key] != after[key]:
             verb = "created" if before[key] is None else ("removed" if after[key] is None else "changed")
             out.append(f"{key} {verb}")

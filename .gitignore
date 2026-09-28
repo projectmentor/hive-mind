@@ -23,6 +23,7 @@ store.db.bak.*
 # Governance owner key (Ed25519 root of trust). SECRET — never commit or sync it.
 .owner-key
 .owner-pub
+.key-dir
 # Exported owner-key backups (`hive-mind owner export`, default name hive-owner-<id>.key). SECRET.
 hive-owner-*.key
 

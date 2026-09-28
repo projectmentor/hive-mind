@@ -9,8 +9,9 @@ test that ran `hv owner init` could overwrite the owner-key stash a reinstall re
 Every test now runs with:
 
   * HOME, CLAUDE_CONFIG_DIR, HIVE_IDENTITY_STASH and HIVE_HOME pointed at a per-test temp dir (setenv,
-    so a developer's own exported values are overridden too). HIVE_HOME is ALSO replaced at import with
-    a session sandbox (#160), before any test module loads `hv`: `hv` resolves every path from it when
+    so a developer's own exported values are overridden too). HOME and HIVE_HOME are ALSO replaced at
+    import with session sandboxes (#160; HOME since 2.0 PR 3a, whose default key directory is under it),
+    before any test module loads `hv` or any module-scoped fixture writes a key: `hv` resolves every path from it when
     imported, and an in-process loader that did not set its own used to read the developer's exported
     hive (its genesis pin, keys and store). A loader that forgets now gets an empty sandbox, as in CI;
     one that means a particular hive says so (`_planes.load_hv(home)`).
@@ -53,12 +54,19 @@ HV = PROJECT / "hv"
 # sandbox and could never fail (Fable on #165).
 if not os.environ.get("PYTEST_XDIST_WORKER"):
     os.environ[_realhome.EXPORTED_HOME_VAR] = os.environ.get("HIVE_HOME", "")
+    os.environ[_realhome.REAL_HOME_VAR] = _realhome.real_home()
 # The real paths as this session started, captured at import: before any fixture redirects HOME.
 REAL = _realhome.session_paths()
 # #160: then a sandbox HIVE_HOME for the session, still at import, so a test module that loads `hv` at its
 # own import (and a helper that never sets HIVE_HOME) resolves into this, never the exported hive.
 SANDBOX_HIVE = Path(tempfile.mkdtemp(prefix="hive-test-sandbox-"))
 os.environ["HIVE_HOME"] = str(SANDBOX_HIVE)
+# HOME too (2.0 PR 3a; Fable on #166). `hv`'s default key directory is ~/.hive/keys/<id>, and a
+# module-scoped fixture or a module-level `hv` loader runs before `isolation` patches HOME, so a key written
+# then went into the developer's real ~/.hive/keys. Child interpreters keep the user's site-packages.
+SANDBOX_HOME = Path(tempfile.mkdtemp(prefix="hive-test-home-"))
+os.environ.setdefault("PYTHONUSERBASE", REAL["userbase"])
+os.environ["HOME"] = str(SANDBOX_HOME)
 SERVICE_STUBS = ("pgrep", "systemctl", "launchctl", "sv")
 _DAEMON_NOTES = []
 
@@ -77,12 +85,12 @@ def _service_stub_bin(tmp_path_factory):
 @pytest.fixture(scope="session", autouse=True)
 def _real_home_guard():
     """#109: the suite leaves the real account's Claude wiring and owner-key stash as it found them."""
-    before = _realhome.snapshot(REAL["claude"], REAL["stash"], REAL["hive"])
+    before = _realhome.snapshot(REAL["claude"], REAL["stash"], REAL["hive"], REAL["key_dir"], REAL["keys_root"])
     activity = _realhome.activity(REAL["hive"])
     decoy = _realhome.decoy_state(REAL["hive"])
     pid = _realhome.live_daemon_pid()
     yield
-    after = _realhome.snapshot(REAL["claude"], REAL["stash"], REAL["hive"])
+    after = _realhome.snapshot(REAL["claude"], REAL["stash"], REAL["hive"], REAL["key_dir"], REAL["keys_root"])
     new_pid = _realhome.live_daemon_pid()
     if pid and new_pid and pid != new_pid:
         _DAEMON_NOTES.append(f"the live hive-sync daemon restarted during the run (PID {pid} -> {new_pid}); "
@@ -121,6 +129,7 @@ def isolation(tmp_path_factory, monkeypatch, _service_stub_bin):
 
 def pytest_unconfigure(config):
     shutil.rmtree(SANDBOX_HIVE, ignore_errors=True)
+    shutil.rmtree(SANDBOX_HOME, ignore_errors=True)
 
 
 def pytest_terminal_summary(terminalreporter):

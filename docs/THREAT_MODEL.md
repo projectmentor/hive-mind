@@ -7,9 +7,14 @@ is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mec
 ## Trust assumptions (the security rests on these)
 
 1. **Local key files are 0600 and the host is not compromised.** Device and owner Ed25519 seeds
-   live in `HIVE_HOME/.device-key` and `.owner-key` as raw bytes at mode 0600. Anyone who can read
-   those files *is* that device/owner. `hv doctor` hard-fails on a group/other-readable key and
-   `--fix` re-tightens it (and now loudly reports if the chmod itself fails).
+   live in a key directory (0700) outside the working tree, as `device-key` and `owner-key` at mode
+   0600 (2.0; before it, `HIVE_HOME/.device-key` and `.owner-key`, which still work, with a warning).
+   Anyone who can read those files *is* that device/owner. `hv doctor` hard-fails on a
+   group/other-readable key or an open key directory, and `--fix` re-tightens it (and now loudly
+   reports if the chmod itself fails). Moving the seeds out of `HIVE_HOME` keeps them out of the
+   directory agent CLIs run in, index and pass to tools; it is not a boundary against code running as
+   the same user, which can still read a 0600 file. Sealing the owner key at rest (2.0 PR 3b) is what
+   narrows that.
 2. **The journal is an append-only, signed G-Set.** Every entry is signed by its device key and
    `node_id = "k1:"+sha256(pub)[:16]`, so an entry cannot be attributed to a device whose key you
    do not hold. Governance acts that bear authority (owner/admit/config) additionally carry an owner

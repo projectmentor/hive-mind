@@ -476,9 +476,10 @@ the same representative.
 ### Device identity
 
 A node is identified by an Ed25519 **device key**, not a hostname. `device_id`
-is `"k1:" + sha256(pubkey)[:16hex]`; the 32-byte seed lives at
-`HIVE_HOME/.device-key` (mode 0600, gitignored, excluded from the source
-manifest), and the fingerprint is cached at `.device-id` so resolving `NODE_ID`
+is `"k1:" + sha256(pubkey)[:16hex]`; the 32-byte seed lives in the key directory as
+`device-key` (mode 0600, directory 0700, outside the checkout since 2.0: `$HIVE_KEY_DIR`, else
+the path in `HIVE_HOME/.key-dir`, else `~/.hive/keys/<sha256(checkout path)[:16]>`; a legacy
+`HIVE_HOME/.device-key` still works), and the fingerprint is cached at `.device-id` so resolving `NODE_ID`
 stays a cheap file read. `NODE_ID` resolves to: `HIVE_NODE_ID` override → the
 device fingerprint if a key is present → the hostname (legacy, pre-migration).
 

@@ -12,6 +12,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import subprocess  # noqa: E402
 import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 
 def _run(home, *args, node_id=None, passphrase=None, now=None, check=True):
@@ -92,7 +93,7 @@ def test_export_import_round_trip_resumes_same_owner(tmp_path):
     keyfile = tmp_path / "owner.key"
     _run(home, "owner", "export", "--out", str(keyfile))
     assert keyfile.exists()
-    (home / ".owner-key").unlink()                          # lose the owner device's key
+    _keys.key_path(home, "owner-key").unlink()                          # lose the owner device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout
     _run(home, "owner", "import", str(keyfile))             # restore on (this stand-in for) a new device
     show = _run(home, "owner", "show").stdout
@@ -156,7 +157,7 @@ def test_hive_escrow_restore_round_trip(tmp_path):
     import merkle
     entries = merkle.read_all_entries(str(home / "journal"))
     assert any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
-    (home / ".owner-key").unlink()                                      # lose the device's key
+    _keys.key_path(home, "owner-key").unlink()                                      # lose the device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "recovered from the hive" in out
@@ -301,14 +302,14 @@ def test_revoke_escrow_tombstones_then_reescrow_restores(tmp_path):
     _run(home, "owner", "revoke-escrow", "all")
     _, gov = _gov(home)
     assert gov["escrows"] == []
-    (home / ".owner-key").unlink()
+    _keys.key_path(home, "owner-key").unlink()
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "No (live) owner-escrow" in out
     # Recover the key (from the per-home stash, see _run) and re-escrow with a fresh passphrase.
     stash = home / "stash" / ".owner-key"
-    (home / ".owner-key").write_text(stash.read_text())
+    _keys.key_path(home, "owner-key").write_text(stash.read_text())
     _run(home, "owner", "escrow", passphrase="brand-new-passphrase")
-    (home / ".owner-key").unlink()
+    _keys.key_path(home, "owner-key").unlink()
     out2 = _run(home, "owner", "restore", passphrase="brand-new-passphrase").stdout
     assert "recovered from the hive" in out2
 

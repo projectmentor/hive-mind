@@ -637,7 +637,8 @@ hv key show                 # alias of the above
 A fresh install mints a key automatically. `hv key init` refuses to run on a node
 that already has history under its hostname, because minting a key there would
 split its identity; use `hv migrate-device-identity` for an existing node instead.
-The private seed lives at `HIVE_HOME/.device-key` — keep it secret, never commit
+The private seed lives in the key directory outside the checkout, as `device-key`
+(`hv whoami` prints where; `$HIVE_KEY_DIR` overrides) — keep it secret, never commit
 or sync it. Share your `device_id` and public key with peers (they go in
 `.peers.json`).
 
@@ -1148,7 +1149,9 @@ Answers "who am I, and what can I do here?" — read-only, no side effects:
 hv whoami
 ```
 
-It prints this device's `device_id`, the `hive_id` and `owner`, your `principal`, and your **status**:
+It prints this device's `device_id`, the `hive_id` and `owner`, your `principal`, and your **status**.
+The two ids are labelled `(public id)`: they are fingerprints, safe to share. A `keys:` line says which
+directory holds the private keys, and never prints them (2.0). The id stays the second word of its line.
 
 - **OWNER** — you hold the owner key (admit devices, set config, forget facts).
 - **FERTILE** — admitted; your writes land in the shared journal and count toward confidence.

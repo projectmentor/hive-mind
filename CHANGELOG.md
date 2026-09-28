@@ -101,6 +101,20 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased — contract 1.28
 
+- **PR 4b: removals** (from this list's "2.0 removals and changes"). No journal read path changes.
+  - **The `sync_daemon.py` shim is gone.** `hive-mind update` repoints an `@reboot` cron fallback that still
+    names it, since nothing rewrote that line before.
+  - **`hv doctor migrate-identity`** (the one-time 1.3 re-keying, #130) and its `hv migrate-device-identity`
+    alias are gone. Both say to run it on a 1.x release first, and exit 2. **`utilities/migrate_journal.py`**
+    goes too, with `scripts/common/deploy_node.sh`, its only caller, which had been broken since the scripts
+    reorg.
+  - **Internal shims** `_is_salient` and `_wire_claude_hooks` are gone. The `trust_score` column is no longer
+    written; a new store no longer has it. The pre-1.12 direct-hook names are no longer patterns of their own.
+  - **A build missing its bundled crypto refuses to run** (`ed25519`, `x25519` or `chacha20poly1305`), at
+    import, so the CLI, the control plane and the sync daemon all stop; through 1.x only `hv doctor` failed.
+  - **`fleet-contract`** warns below the current MAJOR, and never below 1.19 (where `link` entries became
+    honoured).
+  - `smoke.sh`'s entity check expects a `link` entry, as written since 1.19. `crontab` is stubbed in tests.
 - **Contract 1.28: `hv owner init` leaves a new hive closed (#135 part 1).** Before a hive has an owner it
   has no key to sign a forget with, so an owner-source forget dated before the genesis owner has always been
   honoured unsigned — the grandfather, kept since 1.4 so that adopting governance never resurrected a

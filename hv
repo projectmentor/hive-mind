@@ -58,6 +58,16 @@ try:
     import chacha20poly1305 as _chacha   # bundled pure-Python RFC 8439 AEAD (owner-seal + capsules)
 except Exception:
     _chacha = None
+# 2.0 (#136): a build without its bundled crypto REFUSES to run. It could verify no signature, so it would
+# honour entries it cannot check; through 1.x only `hv doctor` failed on it. Every entry point imports this
+# module (the CLI, the control plane, the sync daemon), so the refusal is here, at import, not in main().
+_MISSING_CRYPTO = [n for n, m in (("ed25519", _ed25519), ("x25519", _x25519), ("chacha20poly1305", _chacha))
+                   if m is None]
+if _MISSING_CRYPTO:
+    sys.stderr.write(f"hv: this build is missing its bundled crypto ({', '.join(m + '.py' for m in _MISSING_CRYPTO)}, "
+                     f"beside hv), so it could verify no signature; refusing to run rather than honour entries it "
+                     f"cannot check. Restore the install: hive-mind update.\n")
+    raise SystemExit(1)
 
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
@@ -467,7 +477,6 @@ def init_db():
         source_agent TEXT NOT NULL,
         source_session TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        trust_score REAL DEFAULT 1.0,
         last_accessed TIMESTAMP,
         access_count INTEGER DEFAULT 0,
         confidence REAL DEFAULT 0.0
@@ -1204,8 +1213,8 @@ def persist_fact(conn, entry):
         return {"id": row["id"], "inserted": False}
     cur.execute("""
         INSERT INTO facts (content, tags, importance, source_agent, source_session,
-                           created_at, trust_score, access_count, confidence)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                           created_at, access_count, confidence)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         content,
         json.dumps(payload.get("tags", [])),
@@ -1213,7 +1222,6 @@ def persist_fact(conn, entry):
         payload.get("source", "manual"),
         payload.get("source_session"),
         payload.get("created_at", ts),
-        payload.get("trust_score", 1.0),   # legacy column, retained but unused for ranking
         payload.get("access_count", 0),
         0.0,                                # confidence placeholder — set by _recompute_confidence()
     ))
@@ -3174,8 +3182,6 @@ def _is_admissible(content):
     return True
 
 
-_is_salient = _is_admissible   # back-compat shim (the `_wire_claude_hooks` pattern, 1.13): the old
-                               # name read as the whole subsystem; it only ever meant "passed L2".
 
 
 # Structural markers of a TRANSIENT operational-status claim — a state that will change, so the
@@ -4392,14 +4398,23 @@ def _contract_tuple(v):
         return None
 
 
-def _fleet_contract(gov, probed, contracts, minimum=_LINK_WRITE_PATH_MIN):
+def _fleet_floor():
+    """The contract every admitted peer should advertise (2.0, #136): the current MAJOR, and never below
+    1.19, where `link` entries became honoured. Until the contract bump lands on 2.0 that is still 1.19; from
+    then on it is 2.0, so a 1.x peer is flagged once this node runs 2.0."""
+    major = _contract_tuple(CONTRACT_VERSION)
+    floor = f"{major[0]}.0" if major else _LINK_WRITE_PATH_MIN
+    return max(floor, _LINK_WRITE_PATH_MIN, key=lambda v: _contract_tuple(v) or (0,))
+
+
+def _fleet_contract(gov, probed, contracts, minimum=None):
     """1.19 PR2b: the version-skew gate for the `link` write path (design §2, §9). For every admitted
     device other than this one: `ok` — reachable and advertising a contract ≥ `minimum`; `behind` —
     reachable but older (or a build so old it advertises no version anywhere — it cannot honour a
     `link`, so it counts as behind); `unverified` — not reachable, so nothing can be said. The contract
     comes from `/hive/info.contract` (PR2b+) or `/api/verify.version` (any 1.14+ build). Pure over
-    (gov, probed, contracts) so it is testable without a network."""
-    need = _contract_tuple(minimum)
+    (gov, probed, contracts) so it is testable without a network. `minimum` defaults to `_fleet_floor()`."""
+    need = _contract_tuple(minimum or _fleet_floor())
     out = {"ok": [], "behind": [], "unverified": []}
     for d in sorted(gov.get("admitted") or set()):
         if d == NODE_ID or d in (gov.get("purged") or set()):
@@ -5880,12 +5895,12 @@ def _claude_dir():
 
 
 def _is_hive_hook_command(cmd):
-    """True if a settings.json hook command belongs to Hive Mind — the current dispatch shim OR a
-    legacy direct hook from before the shim. Lets the reconcile prune our OWN stale wiring without
-    ever touching a hook the user added."""
+    """True if a settings.json hook command belongs to Hive Mind: the dispatch shim, or anything under
+    `hive-mind/scripts` (an older shim variant). Lets the reconcile prune our OWN stale wiring without ever
+    touching a hook the user added. 2.0 (#136) dropped the pre-1.12 direct-hook names (`session_hook.sh`,
+    `nudge_hook.sh`) as their own patterns: an install that old upgrades through a 1.x release first."""
     c = cmd or ""
-    return ("hive_dispatch.sh" in c or "/session_hook.sh" in c
-            or "/nudge_hook.sh" in c or "hive-mind/scripts" in c)
+    return "hive_dispatch.sh" in c or "hive-mind/scripts" in c
 
 
 def _agent_hook_reconcile(cfg, hook_spec):
@@ -6002,12 +6017,6 @@ def _wire_agent(cell, write=False):
         path.write_text(json.dumps(cfg, indent=2) + "\n")
         result["wrote"] = True
     return result
-
-
-def _wire_claude_hooks(write=False):
-    """Back-compat shim → wire the built-in Claude agent cell. Keeps the `agent-hooks` doctor check,
-    `doctor --fix`, and `doctor wire-agent` working byte-for-byte after the `_wire_agent` refactor."""
-    return _wire_agent(_builtin_claude_cell(), write=write)
 
 
 def _builtin_cells():
@@ -7063,10 +7072,11 @@ def _doctor_status():
                 if fc["unverified"]:
                     parts.append("unreachable, cannot verify: " + ", ".join(d[:11] + "…" for d in fc["unverified"]))
                 checks.append({"name": "fleet-contract", "status": "warn",
-                               "detail": f"{len(fc['behind'])} peer(s) below contract {_LINK_WRITE_PATH_MIN}, "
-                                         f"{len(fc['unverified'])} unverifiable — {'; '.join(parts)}. A peer on a "
-                                         f"pre-1.19 build lands but does not honour the `link` entries this node's "
-                                         f"verbs now write: upgrade it (`git pull`), or `hive-mind group purge` a dead device"})
+                               "detail": f"{len(fc['behind'])} peer(s) below contract {_fleet_floor()}, "
+                                         f"{len(fc['unverified'])} unverifiable — {'; '.join(parts)}. A peer below "
+                                         f"this node's MAJOR still converges, but runs another agent surface (and "
+                                         f"one before 1.19 does not honour `link` entries): upgrade it "
+                                         f"(`hive-mind update`), or `hive-mind group purge` a dead device"})
     except Exception:
         pass
 
@@ -7090,7 +7100,7 @@ def _doctor_status():
     #     against the canonical spec; `--fix` (and the 15-min timer) re-asserts. Silent where there is
     #     no Claude Code on the node — the integration is simply not applicable there.
     try:
-        w = _wire_claude_hooks(write=False)
+        w = _wire_agent(_builtin_claude_cell(), write=False)
         if w["applicable"]:
             if w["missing"] or w["stale"] or not w["skill_ok"]:
                 bits = []
@@ -7661,7 +7671,7 @@ def doctor_cmd(args):
         merkle_cmd(args)
         return
     if action == "wire-agent":
-        w = _wire_claude_hooks(write=True)
+        w = _wire_agent(_builtin_claude_cell(), write=True)
         if not w["applicable"]:
             print("Claude Code (~/.claude) not present on this node — nothing to wire.")
             return
@@ -7825,7 +7835,7 @@ def doctor_cmd(args):
         # re-asserted with no one re-running the installer — the self-heal promise, extended to the
         # one component that lives outside the daemon's control.
         try:
-            w = _wire_claude_hooks(write=not dry)   # dry-run → preview the diff without writing config
+            w = _wire_agent(_builtin_claude_cell(), write=not dry)   # dry-run → preview the diff without writing config
             if dry:
                 if w["applicable"] and (w["missing"] or w["stale"] or not w["skill_ok"]):
                     acts = []

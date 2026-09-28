@@ -1,6 +1,6 @@
 # `hv` architecture — why one big file, and how we'd split it
 
-`hv` is a single ~8,000-line executable Python script with 26 subcommands. New contributors
+`hv` is a single ~9,000-line executable Python script with 27 subcommands. New contributors
 reasonably ask: shouldn't this be a package? This note records the deliberate decision to **keep it
 monolithic for now**, the trade-offs, and the path we'd take if/when we split it.
 

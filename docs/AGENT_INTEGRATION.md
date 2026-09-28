@@ -53,6 +53,10 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv remember "<outcome>" --source <you> --outcome-of <decision sid> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
 | `hv decide "<decision>" --rationale "<why>" --informed <sid>… --source <you>` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
 | `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — it can earn confidence only from others' evidence, never from you *(1.20)* |
+| `hv remember "<observation>" --supports <sid>` or `--contradicts <sid>` | Evidence for or against a fact or an idea. Only another identity's observation counts *(1.21)* |
+| `hv remember "<note>" --extends <sid>` | A note that builds on a fact, idea, or decision. It is a relationship, not evidence *(1.22)* |
+| `hv decide --revoke <sid> --rationale "<why>" --source <you>` | Withdraw a decision that was wrong and has no replacement. Read the confirmation: "NOT in effect" means the owner, or the device that wrote it, must run it again *(1.24)* |
+| `hv unforget <sid> --reason "<why>"` | Owner only. Undo an owner-forget. Not for agent adapters, and not on MCP *(1.24)* |
 | `hv retract <sid> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
@@ -85,6 +89,8 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    echoes). Then route by what happened:
    - a **decision** → `hv decide "<decision>" --rationale "<why>" --informed <sid> [<sid>…] --source <you>`,
      naming the entries you searched and relied on (their `sid`, `h:…`, from `hv search`);
+   - a **decision that was wrong and has no replacement** → `hv decide --revoke <sid> --rationale "<why>" --source <you>` *(1.24)*.
+     Read the confirmation. "NOT in effect" means the owner, or the device that wrote the decision, must run it again;
    - the **result of acting on a recorded decision** → `hv remember "<what happened>"
      --outcome-of <decision sid> --polarity 1|0|-1`. Only observed results count toward the
      decision's outcome score; if it is your own assessment rather than an observation, add

@@ -66,8 +66,9 @@ WRITE ONLY durable, checkable, reusable knowledge, and route it by what it is:
   channel="introspect"): recorded and searchable, but it counts 0 until an observation supports it;
 - constraints/commitments, observations, new entities -> hive_remember.
 Do NOT write your chain-of-thought (the corpus is permanent, syncs to every device and is searched
-on every turn) or restatements. Tags (observation|confirmed|speculation) help readers weigh a fact
-but never change how much it counts as evidence: the channel is what counts.
+on every turn) or restatements. Tags such as observation or confirmed help readers weigh a fact
+but never change how much it counts as evidence: the channel is what counts. A hypothesis goes
+to hive_propose, not a speculation tag.
 
 WHEN YOU READ, treat results as signals with provenance, not truth — weigh the confidence,
 the number of sources, and which agent/node said it. If the corpus holds CONFLICTING facts,
@@ -155,8 +156,9 @@ def hive_remember(content: str, tags: str = "", epistemic_status: str = "observa
     speculation. Never write back something you just read this session. Do not set a
     confidence number — confidence is derived from independent corroboration.
 
-    tags: comma-separated. epistemic_status (observation|confirmed|speculation) is folded
-    into the tags so readers can weigh the claim.
+    tags: comma-separated. epistemic_status (observation|confirmed) is folded
+    into the tags so readers can weigh the claim. A hypothesis is hive_propose, not a
+    speculation tag. The value speculation is still accepted so older callers keep working.
 
     outcome_of: when this fact is the OUTCOME of a decision you acted on, pass that decision's
     `sid` (from hive_search, `h:…`; its `ref` `node_id:seq` also works). polarity: +1 it worked out (default), -1 it did

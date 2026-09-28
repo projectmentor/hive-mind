@@ -16,8 +16,10 @@ WRITES (on_memory_write + the hive_remember / hive_decide / hive_propose tools)
   - Source identity: hermes/<agent_identity>/<session_id[:8]> — granular enough
     for source-class weighting (primary 1.0 / subagent 0.5 / cron 0.3) and, with the
     entry's `channel` (sense/act/introspect), for telling observation from reasoning.
-  - Epistemic status tag: writer records speculation|observation|confirmed,
+  - Epistemic status tag: writer records observation|confirmed,
     NOT a self-declared trust number (confidence stays a derived projection).
+    A hypothesis is hive_propose, not a speculation tag. The speculation value is still
+    accepted so older callers keep working.
   - Novelty gate: suppress re-ingestion of content recalled from hive this
     session (anti-echo at the write boundary; part of salience L1, the agent-side rubric).
   - Skip: removes (append-only), non-primary contexts (cron/subagent noise).
@@ -503,8 +505,9 @@ class HiveMindMemoryProvider(MemoryProvider):
             "DO NOT save: intermediate reasoning, restatements of known facts, speculation.\n"
             "CONCLUSIONS/PLANS: only if worth finding later, and pass channel=\"introspect\" to hive_remember; "
             "they count 0 until an observation supports them.\n"
-            "TAGS: speculation|observation|confirmed help readers; "
-            "they never change how much a fact counts as evidence.\n"
+            "TAGS: observation or confirmed help readers; "
+            "they never change how much a fact counts as evidence. "
+            "A guess is hive_propose, not a speculation tag.\n"
         )
 
         if session_start_hint:
@@ -661,7 +664,9 @@ class HiveMindMemoryProvider(MemoryProvider):
                         "content": {**s, "description": "The fact, in one or two self-contained sentences."},
                         "tags": {**s, "description": "Comma-separated tags (e.g. the project)."},
                         "epistemic_status": {**s, "enum": ["observation", "confirmed", "speculation"], "default": "observation",
-                                             "description": "Folded into the tags so readers can weigh the claim."},
+                                             "description": "Folded into the tags so readers can weigh the claim. "
+                                                            "Use observation or confirmed. A hypothesis is hive_propose, "
+                                                            "not speculation (still accepted for older callers)."},
                         "outcome_of": {**s, "description": "The sid of a decision this fact is the OUTCOME of."},
                         "polarity": {"type": "integer", "enum": [-1, 0, 1], "default": 1,
                                      "description": "With outcome_of: 1 it worked out, -1 it did not, 0 neutral."},
@@ -837,7 +842,8 @@ class HiveMindMemoryProvider(MemoryProvider):
         - Skip non-primary contexts (cron/subagent noise)
         - Novelty gate: suppress re-ingestion of content recalled from hive this session
         - Source identity: hermes:<context>/<agent>/<session> for Phase B2/B3 weighting
-        - Epistemic status tag: speculation|observation (not a self-declared trust score)
+        - Epistemic status tag: observation|confirmed (not a self-declared trust score).
+          A hypothesis is hive_propose, not a speculation tag.
 
         SALIENCE LAYERS (hv core vocabulary; see the L2 header above `_is_admissible` in `hv`):
         - L1  agent rubric — THIS adapter's job: `_salience_gate()` below (stub, passes all) +

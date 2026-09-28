@@ -9,7 +9,7 @@ agent on every machine can use it too. Local-first, no cloud, no central server.
 
 Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
 Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/) ·
-Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Current agent contract: **1.20** (`hv version`)
+Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Best practices: [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md) · Current agent contract: **1.25** (`hv version`)
 
 <p align="center">
   <a href="https://hivemind.projectmentor.org/dev/#dashboard">
@@ -61,6 +61,31 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
 - **Auditable** — every fact records who wrote it and when; nothing is silently overwritten.
 - **Works with your agents today** — Claude Code, Hermes, Claude Desktop (via MCP), and any
   agent that can run a shell command.
+
+---
+
+## Best practices
+
+Several AI helpers can share one project.
+Give each helper one job, or the same helper will grade their own homework.
+
+You are the owner.
+You say what you want, and you say yes or no on big changes.
+The planner writes the plan before anyone builds.
+The builder builds only after that plan is agreed.
+The checker reads the plan and the finished work, and does not build.
+On this project those helpers are Fable, Opus, and Grok.
+You can use other names.
+Keep the split.
+
+You do not need to code, and you do not need to learn GitHub.
+GitHub is the website that stores the project and the notes.
+A terminal is a window for typed commands.
+Ask the builder to install HiveMind and to tell you if the health check passed.
+
+The full setup, the words to paste into each chat, and the order of work are in
+[`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md).
+That page is written in plain words.
 
 ---
 
@@ -147,9 +172,12 @@ wsl --shutdown
 ./hv decide "Ship on Friday" --informed h:3f9a1c0b2d   # name the facts the decision relied on
 ./hv remember "The Friday release went out clean" --outcome-of h:7c01d2e9aa --polarity 1
 ./hv propose "Slow builds correlate with the new cache"   # a hypothesis, not a fact
+./hv remember "The cache cut build time" --supports h:3f9a1c0b2d
+./hv decide --revoke h:7c01d2e9aa --rationale "The Friday ship slipped"
+./hv unforget h:9a2b3c4d5e --reason "That forget was a mistake"   # owner only
 ./hv stats
 ./hv dash            # open the read-only web dashboard (facts, decisions, peers) in your browser
-./hv doctor          # health check: integrity, crypto, sync, authorization, trust drift, agent hooks (--fix self-heals)
+./hv doctor          # health check: integrity, crypto, sync, authorization, trust drift, agent hooks, sync-bind, daemon-code, peer-address, forget-authz (--fix self-heals)
 ./hv sync now        # manual sync to all peers
 ```
 
@@ -217,7 +245,8 @@ Deeper reading: [`docs/INTERNALS.md`](docs/INTERNALS.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md) (the original
 sync design), [`docs/HV_ARCHITECTURE.md`](docs/HV_ARCHITECTURE.md), the
 [continual-learning design](docs/design/hivemind_continual_learning_design.md) behind contract
-1.19–1.20, and for security [`SECURITY.md`](SECURITY.md),
+1.19–1.20, how several helpers share one project in
+[`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md), and for security [`SECURITY.md`](SECURITY.md),
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what HiveMind defends against, and what it
 assumes — and [`docs/ADVISORIES.md`](docs/ADVISORIES.md).
 

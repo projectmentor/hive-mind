@@ -98,6 +98,20 @@ introduced (a contract) or tagged (a patch).
   - **No `$HERMES_AGENT` source fallback** (#119). A write's source is `--source`, else `manual`. The
     Hermes adapter now passes `--source` on `decide`, as it already did on `remember` and `propose`;
     without it every Hermes decision would have read as `manual`, which means a person.
+- **The core vocabulary is registered** (#136, #150). `vocabulary.py` lists every bare name core writes or
+  reads, in ten categories: entry types, link kinds, governance actions, `set-config` keys, channels,
+  behaviour tags, announce kinds, source apps, source context classes and envelope fields. Each name has a
+  status (`written`, `legacy`, `read`, or `reserved` for four envelope fields held for the module API), the
+  contract version that introduced it, and one line of meaning.
+  - [`docs/NAMESPACES.md`](docs/NAMESPACES.md) is generated from it by `scripts/common/gen_namespaces.py`, and
+    states the rule: core reserves every bare name, and a module's names take a prefix, `x-<module>:<name>`
+    (the form is pending), which the 2.1 module API enforces. A test fails when the page and the generator
+    differ.
+  - `tests/test_vocabulary.py` holds the registry to the code both ways, by AST at enumerated writer and
+    reader sites. A name written or read there that is not registered fails, and so does a registered name
+    that nothing writes or reads. Each category has a mutant in the suite.
+  - No behaviour change. `hv`'s `_CHANNELS` and `_LINK_EVIDENCE_KINDS` now come from the registry, with the
+    same values. No journal or wire change.
 
 ## Unreleased — contract 1.28
 

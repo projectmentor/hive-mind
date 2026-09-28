@@ -46,6 +46,7 @@ import merkle  # noqa: E402
 # produces no `owner_sig` by any route. Reading the owner seed and owner signing live on the control plane
 # (`hivemind_ctl.py`, `hivemind_owner.py`); two static tests keep both facts true.
 import commandmap  # noqa: E402  (a table only: what moved to `hive-mind`, and the pointer text)
+import vocabulary  # noqa: E402  (a table only: the names core reserves; docs/NAMESPACES.md is generated from it)
 try:
     import ed25519 as _ed25519  # bundled pure-Python signature verifier
 except Exception:
@@ -835,7 +836,7 @@ def append_journal(entry_type, payload, timestamp=None):
     entry = {
         "node_id": NODE_ID,
         "seq": seq,
-        "type": entry_type,          # fact | decision | entity | entity_fact
+        "type": entry_type,          # one of vocabulary.ENTRY_TYPES (tests/test_vocabulary.py checks every call)
         "timestamp": timestamp,
         "payload": payload,
         "prev_hash": prev_hash,
@@ -1295,7 +1296,7 @@ def _identity_weight(node_id, source):
     return (node_id, app, instance), SRC_CLASS_WEIGHT.get(ctx, 1.0)
 
 
-_CHANNELS = ("sense", "act", "introspect")
+_CHANNELS = vocabulary.CHANNEL_NAMES      # ("sense", "act", "introspect"): the registry holds the one list
 
 
 def _channel(payload):
@@ -2079,7 +2080,8 @@ def _content_evidence(entries, gov=None):
 
 # 1.19: the link kinds the projection KNOWS. `kind` is a free string on the wire; anything else lands
 # in the journal and projects to nothing (the `announce` rule), so nodes never diverge over vocabulary.
-_LINK_EVIDENCE_KINDS = {"supports": "pos", "contradicts": "neg", "resolves": "neg"}
+# {"supports": "pos", "contradicts": "neg", "resolves": "neg"}, derived from the registry's `evidence` field.
+_LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),

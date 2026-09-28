@@ -45,8 +45,8 @@ See [`docs/ADVISORIES.md`](docs/ADVISORIES.md) for every published advisory and 
   `hive_id` and owner id out of band when a new device joins (see the bootstrap limitation in the
   threat model).
 - **Back up the owner key**: an off-device export, an in-hive escrow with a strong passphrase, or
-  both (`hv owner export`, `hv owner escrow`).
-- **Admit only devices you control** (`hv group admit`); `revoke` or `purge` a lost device, then
+  both (`hive-mind owner export`, `hive-mind owner escrow`).
+- **Admit only devices you control** (`hive-mind group admit`); `revoke` or `purge` a lost device, then
   `hv capsule rotate` **and** rotate the upstream secret, since removed devices keep old ciphertext.
 - **Keep key files private:** the device and owner keys live in a key directory outside the checkout
   (`hv whoami` prints where). `hv doctor` fails if either key is readable by anyone but you, or the key

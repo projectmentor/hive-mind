@@ -146,7 +146,7 @@ app), so the installer can't auto-discover hives on the tailnet. Instead, on a d
 already in the hive run `hive-mind invite` — it prints one line (that device's Tailscale
 address). Paste it when the phone's `hive-mind install` asks for a hive address. You only need
 one node to join; everything else syncs from there. Then admit the phone from the owner:
-`hv group admit <phone-device-id> --principal <you>`.
+`hive-mind group admit <phone-device-id> --principal <you>`.
 
 </details>
 
@@ -174,7 +174,7 @@ wsl --shutdown
 ./hv propose "Slow builds correlate with the new cache"   # a hypothesis, not a fact
 ./hv remember "The cache cut build time" --supports h:3f9a1c0b2d
 ./hv decide --revoke h:7c01d2e9aa --rationale "The Friday ship slipped"
-./hv unforget h:9a2b3c4d5e --reason "That forget was a mistake"   # owner only
+hive-mind unforget h:9a2b3c4d5e --reason "That forget was a mistake" # owner only
 ./hv stats
 ./hv dash            # open the read-only web dashboard (facts, decisions, peers) in your browser
 ./hv doctor          # health check: integrity, crypto, sync, authorization, trust drift, agent hooks, sync-bind, daemon-code, peer-address, forget-authz (--fix self-heals)
@@ -229,11 +229,11 @@ Most of the time your agents call `hv` for you. Full reference:
   admitted devices, tunable parameters) lives in owner-signed journal entries, so every device
   computes the same confidence. The owner runs the membership lifecycle with `hv group`
   (admit, revoke, deny, change, purge, list). The owner key is recoverable, not a dead end:
-  back it up off-device or escrow it in the hive (`hv owner export`/`escrow`), and hand it off
-  to a new key by nomination or transfer (`hv owner nominate`/`claim`/`transfer`). If it is lost
+  back it up off-device or escrow it in the hive (`hive-mind owner export`/`escrow`), and hand it off
+  to a new key by nomination or transfer (`hive-mind owner nominate`/`claim`/`transfer`). If it is lost
   outright with no backup, admitted devices can elect a successor by quorum once the owner goes
-  dark (`hv config quorum set`, then `hv owner propose-election`/`vote`); a live owner is never
-  unseated, since any owner act (including `hv owner heartbeat`) resets the dead-man timer. See
+  dark (`hive-mind config set`, then `hv owner propose-election`/`vote`); a live owner is never
+  unseated, since any owner act (including `hive-mind owner heartbeat`) resets the dead-man timer. See
   `hv owner` and `docs/INTERNALS.md`.
 - **Links and learning** — relationships between entries (a decision that replaces another, a
   correction, what a decision relied on, an outcome) are signed `link` entries. A link from a
@@ -276,7 +276,7 @@ brain (`hv`), one spec, no hand-maintained per-agent adapters.
 
 Run the installer on each machine. On Linux, macOS, and WSL it finds your hive on the tailnet;
 otherwise paste the line printed by `hive-mind invite` on a device already in the hive. The owner
-then admits the new device (`hv group admit`). Each WSL instance is its own machine on the
+then admits the new device (`hive-mind group admit`). Each WSL instance is its own machine on the
 tailnet, with its own Tailscale IP (not the Windows host's).
 
 ```bash

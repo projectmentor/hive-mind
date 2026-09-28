@@ -98,7 +98,9 @@ cannot be searched), `present` and `held`.
 
 ## How S2 is enforced
 
-The split is checkable rather than promised. The tests, each shown failing on mutants in the suite:
+The split is checkable rather than promised. The import-graph, owner-signature, seed-reader and adapter
+checks each have tests in the suite that build a mutant and show the check failing on it. The mutants for the
+other checks were run by hand when each landed, and are recorded on its pull request.
 
 - **Import graph** (`tests/test_s2_split.py`): `hv`'s transitive imports never reach `ownerkey` or the
   control plane, whether directly, transitively or by a dynamic import. An `hv` process never has the

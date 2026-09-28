@@ -26,6 +26,9 @@ PC="${HIVE_SMOKE_PORT_C:-$(smoke_free_port)}"
 DA=""; DB=""
 cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B" "$LOGS"; }
 trap cleanup EXIT
+# Its own HOME and identity stash, under LOGS, so a run by hand writes nothing into the caller's account (#170).
+. "$PROJECT/scripts/common/_smoke_isolate.sh"
+smoke_isolate "$LOGS"
 
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B_=$'\033[1m'; N=$'\033[0m'; else G=""; R=""; B_=""; N=""; fi
 pass=0; fail=0

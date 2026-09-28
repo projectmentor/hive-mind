@@ -66,14 +66,15 @@ service_install() {
 # cron_repoint_legacy_daemon — 2.0 removes the `sync_daemon.py` shim (#136). The @reboot cron line (the
 # installer's last-resort fallback) is written only at install, and `update` never rewrites it, so a
 # cron-only node installed before the rename still starts the daemon through the shim. Point that line at
-# `hive_sync_daemon.py`; `/sync_daemon.py` cannot match `/hive_sync_daemon.py`. Prints what it did; a node
-# without crontab, or with nothing to repoint, is a no-op. Returns 0.
+# `hive_sync_daemon.py`. Only a line that also carries `HIVE_HOME=` is ours (the installer's line always
+# does), so another program's `sync_daemon.py` job is never touched (Fable on #172); `/sync_daemon.py` cannot
+# match `/hive_sync_daemon.py`. Prints what it did; no crontab, or nothing to repoint, is a no-op. Returns 0.
 cron_repoint_legacy_daemon() {
   command -v crontab >/dev/null 2>&1 || return 0
   local cur
   cur="$(crontab -l 2>/dev/null)" || return 0
-  printf '%s\n' "$cur" | grep -q '/sync_daemon\.py' || return 0
-  printf '%s\n' "$cur" | sed 's#/sync_daemon\.py#/hive_sync_daemon.py#g' | crontab - \
+  printf '%s\n' "$cur" | grep -q 'HIVE_HOME=.*/sync_daemon\.py' || return 0
+  printf '%s\n' "$cur" | sed '/HIVE_HOME=/s#/sync_daemon\.py#/hive_sync_daemon.py#g' | crontab - \
     && echo "repointed the @reboot cron entry at hive_sync_daemon.py (the sync_daemon.py shim is gone in 2.0)"
   return 0
 }

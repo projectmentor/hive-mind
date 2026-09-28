@@ -41,7 +41,8 @@ def _repoint(bin_dir):
 def test_an_old_cron_line_is_repointed_and_the_rest_kept(tmp_path):
     old = ("MAILTO=\"\"\n"
            "@reboot HIVE_HOME=/h /usr/bin/python3 /h/sync_daemon.py >> /tmp/hive-sync.log 2>&1\n"
-           "0 3 * * * /usr/local/bin/backup.sh\n")
+           "0 3 * * * /usr/local/bin/backup.sh\n"
+           "0 4 * * * /opt/other/sync_daemon.py --unrelated\n")         # not ours: no HIVE_HOME= (#172)
     state, bin_dir = _fake_crontab(tmp_path, old)
     r = _repoint(bin_dir)
     assert r.returncode == 0 and "repointed the @reboot cron entry" in r.stdout
@@ -51,6 +52,7 @@ def test_an_old_cron_line_is_repointed_and_the_rest_kept(tmp_path):
 @pytest.mark.parametrize("content", [
     "@reboot HIVE_HOME=/h /usr/bin/python3 /h/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1\n",   # current
     "0 3 * * * /usr/local/bin/backup.sh\n",                                                           # unrelated
+    "0 3 * * * /opt/other/sync_daemon.py --unrelated\n",             # another program's sync_daemon.py (#172)
     None,                                                                                              # no crontab
 ])
 def test_nothing_else_is_touched(tmp_path, content):

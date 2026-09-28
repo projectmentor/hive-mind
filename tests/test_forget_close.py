@@ -191,9 +191,10 @@ def test_fix_closes_at_once_when_nothing_depends(tmp_path):
     assert _forget_authz(tmp_path)["status"] == "ok"
 
 
-@pytest.mark.parametrize("how", ["closed stdin", "y piped, no terminal", "N at a terminal"])
+@pytest.mark.parametrize("how", ["closed stdin", "y piped, no terminal", "N at a terminal", "Enter at a terminal"])
 def test_fix_writes_nothing_without_a_yes_at_a_terminal(tmp_path, how):
-    """Fable's ask 8: no terminal is a no, even with `y` on a pipe; N is a no. Nothing is re-signed or set."""
+    """Fable's ask 8: no terminal is a no, even with `y` on a pipe; N is a no; and the default is N, so Enter
+    alone is a no too (Fable's mutant 11 on #180 found that case unguarded). Nothing is re-signed or set."""
     run = _cli(tmp_path)
     base = _legacy_hive(tmp_path, run)
     sid = _backdate_forget(tmp_path, run, "the backup runs at 02:00")
@@ -202,8 +203,10 @@ def test_fix_writes_nothing_without_a_yes_at_a_terminal(tmp_path, how):
         out = _ctl(tmp_path, "doctor", "--fix").stdout
     elif how == "y piped, no terminal":
         out = _ctl(tmp_path, "doctor", "--fix", input="y\n").stdout
-    else:
+    elif how == "N at a terminal":
         _rc, out = _ctl_at_a_terminal(tmp_path, "n", "doctor", "--fix")
+    else:
+        _rc, out = _ctl_at_a_terminal(tmp_path, "", "doctor", "--fix")
     assert sid in out and "the backup runs at 02:00" in out and "Nothing was written" in out, out
     assert len(_policy_acts(tmp_path)) == base and (len(_retracts(tmp_path)), _confidences(tmp_path)) == before
 

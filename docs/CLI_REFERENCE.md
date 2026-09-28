@@ -19,7 +19,7 @@ memory.
 | `hv dash` | Open the read-only web dashboard (served by the sync daemon) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `migrate-identity`, `rebuild` (`wire-agent` is a deprecated alias of `hv wire claude`) |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `rebuild` (`wire-agent` is a deprecated alias of `hv wire claude`) |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv wire` | Self-wire a tool/agent from a cell or comb; `--list`/`--show`/`--add` manage cell definitions |
@@ -367,25 +367,12 @@ hv doctor merkle
 
 ---
 
-### `hv doctor migrate-identity` — Move an existing node to a device key
+### Moving a hostname-era node to a device key (removed in 2.0)
 
-A one-time, coordinated step that re-stamps an existing journal from hostname
-`node_id`s to cryptographic `device_id`s.
-
-```
-hv doctor migrate-identity --map map.json --dry-run   # preview
-hv doctor migrate-identity --map map.json             # apply
-```
-
-`map.json` is `{"hostname": "k1:device_id", ...}` covering every device, identical
-on each. Because the re-stamp is deterministic, running it on every peer with the
-same map produces byte-identical journals, so your devices stay in sync with no
-re-transfer. The runbook, per node: `hv config identity init --force` to mint the key,
-share the resulting `device_id`, build the shared map, stop the sync daemons, run this
-on each device, confirm `hv doctor merkle` roots match, then restart. Your old journal is
-backed up to `journal.bak.device-id.<timestamp>/`.
-
-> `hv migrate-device-identity` is kept as a silent alias.
+`hv doctor migrate-identity`, the one-time step that re-stamped a journal from hostname `node_id`s to
+device ids (1.3, #130), was removed in 2.0. A node whose journal is still under its hostname runs it on a
+1.x release (1.28 is the last), then upgrades. In 2.0, `hv doctor migrate-identity` and
+`hv migrate-device-identity` say so and exit 2.
 
 ---
 
@@ -636,7 +623,7 @@ hv key show                 # alias of the above
 
 A fresh install mints a key automatically. `hv key init` refuses to run on a node
 that already has history under its hostname, because minting a key there would
-split its identity; use `hv migrate-device-identity` for an existing node instead.
+split its identity; such a node re-stamps its journal on a 1.x release first (see above).
 The private seed lives in the key directory outside the checkout, as `device-key`
 (`hv whoami` prints where; `$HIVE_KEY_DIR` overrides) — keep it secret, never commit
 or sync it. Share your `device_id` and public key with peers (they go in

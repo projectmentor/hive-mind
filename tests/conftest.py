@@ -15,7 +15,7 @@ Every test now runs with:
     imported, and an in-process loader that did not set its own used to read the developer's exported
     hive (its genesis pin, keys and store). A loader that forgets now gets an empty sandbox, as in CI;
     one that means a particular hive says so (`_planes.load_hv(home)`).
-  * stub `pgrep`, `systemctl`, `launchctl` and `sv` first on PATH. `hv doctor --fix` finds
+  * stub `pgrep`, `systemctl`, `launchctl`, `sv` and `crontab` first on PATH. `hv doctor --fix` finds
     "orphan" daemons with pgrep and restarts the managed hive-sync unit from two branches
     (orphans, and a sync-bind warning against the live daemon on 127.0.0.1:9876); the stubs log
     their argv to $HIVE_TEST_SERVICE_LOG, print nothing and exit 1, which is what a CI runner with
@@ -67,7 +67,7 @@ os.environ["HIVE_HOME"] = str(SANDBOX_HIVE)
 SANDBOX_HOME = Path(tempfile.mkdtemp(prefix="hive-test-home-"))
 os.environ.setdefault("PYTHONUSERBASE", REAL["userbase"])
 os.environ["HOME"] = str(SANDBOX_HOME)
-SERVICE_STUBS = ("pgrep", "systemctl", "launchctl", "sv")
+SERVICE_STUBS = ("pgrep", "systemctl", "launchctl", "sv", "crontab")   # crontab: the installer's cron fallback
 _DAEMON_NOTES = []
 
 

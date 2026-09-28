@@ -185,8 +185,8 @@ _COPY = '\n\ndef _canonical(obj):\n    return json.dumps(obj, sort_keys=True, se
 
 MUTANTS = {
     "a second _canonical in ownerkey.py": ("ownerkey.py", lambda s: s + _COPY, "ownerkey.py: _canonical"),
-    "the copy migrate_journal.py used to carry": (
-        "utilities/migrate_journal.py", lambda s: s + _COPY, "utilities/migrate_journal.py: _canonical"),
+    "a copy in the sync daemon": (      # was migrate_journal.py's; that file is gone in 2.0 (#136)
+        "hive_sync_daemon.py", lambda s: s + _COPY, "hive_sync_daemon.py: _canonical"),
     "a renamed copy in sync_common.py": (
         "sync_common.py",
         lambda s: s + '\n\ndef stable_bytes(o):\n    return json.dumps(o, separators=(",", ":"), sort_keys=True).encode()\n',

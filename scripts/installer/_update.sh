@@ -129,6 +129,10 @@ if command -v service_install >/dev/null 2>&1; then
   service_install "$HIVE_DIR" "$SERVICE"
   ok "Units refreshed (hive-sync + hive-doctor self-heal)"
 fi
+if command -v cron_repoint_legacy_daemon >/dev/null 2>&1; then
+  _repointed="$(cron_repoint_legacy_daemon)"
+  [ -n "$_repointed" ] && ok "$_repointed"
+fi
 
 info "Restarting sync daemon..."
 if command -v service_restart >/dev/null 2>&1; then

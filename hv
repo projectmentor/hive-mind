@@ -5617,14 +5617,19 @@ def verify_cmd(args):
         print(line)
 
 
+# 2.0 (#136) removed `hv doctor migrate-identity`, the one-time 1.3 re-keying of a hostname journal (#130).
+_MIGRATION_GONE = ("A node whose journal is still under its hostname re-stamps it with `hv doctor migrate-identity` "
+                   "on a 1.x release (1.28 is the last), then upgrades to 2.0.")
+
+
 def _identity_show():
     """Show this device's device_id, pubkey + label (or its legacy hostname identity)."""
     seed = _device_seed()
     if seed is None:
         print("No device key — this device uses its legacy hostname identity.")
         print(f"  node_id: {NODE_ID}")
-        print("  `hv config identity init` mints one on a fresh install; migrate an existing")
-        print("  device with `hv migrate-device-identity`.")
+        print("  `hv config identity init` mints one on a fresh install. A device with history under")
+        print(f"  its hostname re-stamps it first, on a 1.x release: {_MIGRATION_GONE}")
         return
     pub = _ed25519.pub_from_seed(seed)
     print(f"device_id: {_device_id_for_pub(pub)}")
@@ -5648,7 +5653,7 @@ def _identity_init(force):
                 if e.get("node_id") == socket.gethostname()]
         if mine:
             print(f"This device already has {len(mine)} entries under its hostname.")
-            print("Use `hv migrate-device-identity` to re-stamp them (not `hv config identity init`).")
+            print(f"Re-stamp them first, on a 1.x release (not `hv config identity init`): {_MIGRATION_GONE}")
             print("Pass --force only if the journal is disposable.")
             return
     seed = os.urandom(32)
@@ -5673,7 +5678,7 @@ def _key_announce():
         print(f"Device key created. device_id: {NODE_ID}")
     if _ed25519 is None or _device_seed() is None:
         print("No device key — this device uses its legacy hostname identity, so there is no key")
-        print("to announce. Mint one with `hv key init` (or migrate: `hv migrate-device-identity`).")
+        print("to announce. Mint one with `hv key init` (a device with hostname history: see `hv doctor`).")
         return
     if not _announce_needed(merkle.read_all_entries(JOURNAL_DIR)):
         print(f"This device's key is already harvestable (a signed entry by {NODE_ID} exists) — "
@@ -5733,127 +5738,6 @@ def key_cmd(args):
         _key_announce()
     else:
         _identity_show()
-
-
-def migrate_device_identity_cmd(args):
-    """Re-stamp the journal from hostname node_ids to cryptographic device_ids. A one-time,
-    coordinated, DETERMINISTIC transform: every node runs it with the SAME {hostname: device_id}
-    map, so byte-for-byte identical re-stamped journals result and the peers stay converged
-    (equal Merkle roots) with no content re-sync. Historical entries are re-stamped and their
-    per-node hash chains recomputed; they stay UNSIGNED (they predate the keys, grandfathered on
-    ingest). New writes after this are signed because the node now has a device key."""
-    try:
-        mapping = json.loads(Path(args.map).read_text())
-    except Exception as e:
-        print(f"Could not read --map {args.map}: {e}")
-        return
-    if not isinstance(mapping, dict) or not all(isinstance(v, str) for v in mapping.values()):
-        print('Map must be a JSON object of {"hostname": "k1:device_id", ...} for every device.')
-        return
-
-    host = socket.gethostname()
-    local_did = None
-    if host in mapping:
-        # This device is being re-stamped: it must already hold the key whose fingerprint the map
-        # assigns it, so its future (signed) writes line up with its re-stamped history.
-        seed = _device_seed()
-        if seed is None:
-            print("This device has no device key. Run `hv key init --force` first, then put its")
-            print("device_id (from `hv key show`) in the map under this device's hostname.")
-            return
-        local_did = _device_id_for_pub(_ed25519.pub_from_seed(seed))
-        if mapping[host] != local_did:
-            print(f"Map mismatch: this device ({host}) holds device_id {local_did},")
-            print(f"  but the map says {mapping[host]!r}. Every device must share one identical map.")
-            return
-    else:
-        print(f"Note: this host ({host}) is not in the map; re-stamping the mapped devices only.")
-        print("  Mint a key here with `hv key init` if this device should also sign its writes.")
-
-    entries = merkle.read_all_entries(JOURNAL_DIR)
-    if not entries:
-        print("Empty journal — nothing to migrate (new writes will be signed).")
-        return
-    present = {e.get("node_id") for e in entries}
-    if not (present & set(mapping.keys())):
-        print("Journal already uses device_ids — nothing to migrate.")
-        return
-
-    def remap(nid):
-        return mapping.get(nid, nid)
-
-    migrated = []
-    for e in entries:
-        e = dict(e)
-        e["node_id"] = remap(e.get("node_id"))
-        p = dict(e.get("payload", {}))
-        # Every journal-identity reference a payload can carry: the legacy trio, the 1.11 `resolves_ref`
-        # and `retracts_ref`, and (1.19) a `link`'s `from_ref`/`to_ref` plus a decision's `informed_by`
-        # list — found by PR2b, whose `entity link` now writes a `link` instead of an `entity_fact`.
-        for refk in ("entity_ref", "fact_ref", "supersedes_ref", "resolves_ref", "retracts_ref", "from_ref", "to_ref"):
-            r = p.get(refk)
-            if isinstance(r, list) and len(r) == 2:
-                p[refk] = [remap(r[0]), r[1]]
-        if isinstance(p.get("informed_by"), list):
-            p["informed_by"] = [[remap(r[0]), r[1]] if isinstance(r, list) and len(r) == 2 else r
-                                for r in p["informed_by"]]
-        e["payload"] = p
-        e.pop("sig", None)            # node_id changed; historical entries become unsigned
-        e.pop("pub", None)
-        migrated.append(e)
-
-    # Recompute each device's prev_hash chain from genesis (utilities/migrate_journal pattern).
-    by_node = {}
-    for e in migrated:
-        by_node.setdefault(e["node_id"], []).append(e)
-    for ents in by_node.values():
-        ents.sort(key=lambda x: x["seq"])
-        prev = "sha256:genesis"
-        for e in ents:
-            e["prev_hash"] = prev
-            prev = compute_hash(e)
-
-    migrated.sort(key=lambda e: (e["node_id"], e["seq"]))
-    if args.dry_run:
-        remapped = sum(1 for e in entries if e.get("node_id") in mapping)
-        print(f"DRY RUN: would re-stamp {remapped}/{len(entries)} entries via {len(mapping)} mapping(s).")
-        for src, did in sorted(mapping.items()):
-            n = sum(1 for e in entries if e.get("node_id") == src)
-            print(f"  {src} -> {did}   ({n} entries)")
-        root_after = merkle.merkle_root(merkle.chunk_hashes(
-            sorted(migrated, key=lambda e: (e["node_id"], e["seq"]))))
-        print(f"  resulting Merkle root: {root_after}")
-        return
-
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    backup = JOURNAL_DIR.parent / f"journal.bak.device-id.{stamp}"
-    JOURNAL_DIR.rename(backup)
-    JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-    by_date = {}
-    for e in migrated:
-        by_date.setdefault(e["timestamp"][:10], []).append(e)
-    for date, ents in by_date.items():
-        with open(JOURNAL_DIR / f"{date}.jsonl", "w") as f:
-            for e in ents:
-                f.write(json.dumps(e) + "\n")
-    rebuild_db()
-
-    # Rekey local-only telemetry shards (this host -> its device_id); never synced.
-    try:
-        if local_did and TELEMETRY_DB.exists():
-            tconn = sqlite3.connect(TELEMETRY_DB)
-            tconn.execute("UPDATE telemetry_sessions SET node_id=? WHERE node_id=?", (local_did, host))
-            tconn.commit()
-            tconn.close()
-    except Exception:
-        pass
-
-    root = merkle.merkle_root(merkle.chunk_hashes(merkle.read_all_entries(JOURNAL_DIR)))
-    print(f"Migrated {len(migrated)} entries to device identity. Backup: {backup}")
-    if local_did:
-        print(f"  this device is now {local_did} (was {host}).")
-    print(f"  Merkle root: {root}")
-    print("  Run the SAME map on every peer; then `hv merkle` should match and `hv sync now` = in sync.")
 
 
 def _is_daemon_cmdline(toks):
@@ -7767,8 +7651,7 @@ def doctor_cmd(args):
     the skill symlink (the 15-min `hive-doctor.timer` runs `--fix`, so a node that drifted self-heals
     unattended). Exits non-zero if any check FAILED; warnings keep a zero exit (so cron/monitors alert
     only on real breakage). Subcommands fold in the rarely-used device maintenance ops: `hv doctor
-    merkle` (sync diagnostic), `hv doctor migrate-identity` (re-stamp the journal to device_ids),
-    `hv doctor rebuild` (reconstruct store.db from the journal) and `hv doctor wire-agent`
+    merkle` (sync diagnostic), `hv doctor rebuild` (reconstruct store.db from the journal) and `hv doctor wire-agent`
     ((re)wire the Claude Code integration)."""
     action = getattr(args, "doctor_action", None)
     if action == "rebuild":
@@ -7776,9 +7659,6 @@ def doctor_cmd(args):
         return
     if action == "merkle":
         merkle_cmd(args)
-        return
-    if action == "migrate-identity":
-        migrate_device_identity_cmd(args)
         return
     if action == "wire-agent":
         w = _wire_claude_hooks(write=True)
@@ -8918,7 +8798,7 @@ def build_parser():
             "  hive-mind retract <fact-id> --owner                               # owner forget (decisive, -1.0)\n"
             "  hv stats | sync now|daemon\n"
             "  hv doctor [--format json] [--fix]                          # health check (+ self-heal)\n"
-            "  hv doctor merkle | migrate-identity --map m.json | rebuild | wire-agent   # sync diag / re-stamp / rebuild db / wire Claude hooks\n"
+            "  hv doctor merkle | rebuild | wire-agent   # sync diag / rebuild db / wire Claude hooks\n"
             "\nconfidence: derived in [-CAP,+CAP] from distinct corroborators minus retractors;\n"
             "decays with age ($HIVE_NOW injectable); owner-forget = -1.0."
         ),
@@ -9042,7 +8922,7 @@ def build_parser():
     dash_parser.add_argument("--print", dest="print_only", action="store_true",
                              help="Print the dashboard URL only; do not open a browser")
 
-    doctor_parser = subparsers.add_parser("doctor", help="Health checks + device maintenance (rebuild, merkle, migrate-identity)")
+    doctor_parser = subparsers.add_parser("doctor", help="Health checks + device maintenance (rebuild, merkle)")
     doctor_parser.add_argument("--format", choices=["text", "json"], default="text")
     doctor_parser.add_argument("--fix", action="store_true",
                                help="Take safe remedial action: kill orphan sync daemons + restart the managed unit, and re-assert the Claude Code hooks/skill")
@@ -9050,10 +8930,6 @@ def build_parser():
                                help="With --fix: PREVIEW the remedial actions (kill/restart/rewire) without making any change")
     doctor_sub = doctor_parser.add_subparsers(dest="doctor_action")
     doctor_sub.add_parser("merkle", help="Show the Merkle index over the journal (sync diagnostic)")
-    doctor_mig = doctor_sub.add_parser("migrate-identity",
-                                       help="One-time, coordinated: re-stamp the journal from hostnames to device_ids")
-    doctor_mig.add_argument("--map", required=True, help='JSON file: {"hostname": "k1:device_id", ...} (identical on every device)')
-    doctor_mig.add_argument("--dry-run", action="store_true", help="Show what would change without writing")
     doctor_sub.add_parser("rebuild", help="Rebuild store.db from the journal (was `hv rebuild`)")
     doctor_sub.add_parser("wire-agent",
                           help="[deprecated alias of `hv wire claude`] (re)wire the Claude Code hooks + skill")
@@ -9242,16 +9118,20 @@ _STORE_COMMANDS = {"remember", "search", "decide", "propose", "retract", "entity
 
 def main():
     parser = build_parser()
-    # Back-compat: the old top-level `hv merkle` and `hv migrate-device-identity` now live under
+    # Back-compat: the old top-level `hv merkle` now lives under
     # `hv doctor` (denser surface). Rewrite their argv to the canonical subcommand so the old
     # invocations keep working without cluttering the top-level help.
     argv = sys.argv[1:]
     if argv[:1] == ["merkle"]:
         argv = ["doctor", "merkle"] + argv[1:]
-    elif argv[:1] == ["migrate-device-identity"]:
-        argv = ["doctor", "migrate-identity"] + argv[1:]
     elif argv[:1] == ["rebuild"]:                       # folded into `hv doctor rebuild`
         argv = ["doctor", "rebuild"] + argv[1:]
+    # 2.0 (#136): the June-era hostname-to-device-key migration is gone. Say what to do instead of letting
+    # argparse report an unknown command, and act on nothing (exit 2, like the moved commands).
+    if argv[:2] == ["doctor", "migrate-identity"] or argv[:1] == ["migrate-device-identity"]:
+        print(f"hv: `{' '.join(argv[:2] if argv[:1] == ['doctor'] else argv[:1])}` was removed in 2.0. "
+              f"{_MIGRATION_GONE}", file=sys.stderr)
+        sys.exit(2)
     # 2.0 S2/S6 (public #136): a command that moved to the control plane is pointed at BEFORE parsing, so
     # it acts on nothing whatever its arguments, and exits 2 so no script mistakes it for success.
     moved = _moved_key(argv)

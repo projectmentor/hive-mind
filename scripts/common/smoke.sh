@@ -106,7 +106,7 @@ print(",".join(sorted(types)))
 PY
 )"
 assert_contains "entity add writes a journal entry"  "$TYPES" "entity"
-assert_contains "entity link writes a journal entry" "$TYPES" "entity_fact"
+assert_contains "entity link writes a journal entry" "$TYPES" "link"   # a `link` entry since 1.19 (was entity_fact)
 
 # ── journal format + hash chain ─────────────────────────────────────────────
 sect "journal format + hash chain"

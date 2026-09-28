@@ -18,7 +18,7 @@ scripts/
 | Script | Lang | Linux | WSL2 | macOS | Termux (Android) | Windows | iOS |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|
 | `common/*.py` (gen_verify, sign_release, gen_keypair, infer-phrases) | Python | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `common/hive_dispatch.sh`, `*_hook.sh`, `smoke.sh`, `sync_smoke.sh`, `sync_auth_smoke.sh`, `deploy_node.sh` | bash | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `common/hive_dispatch.sh`, `*_hook.sh`, `smoke.sh`, `sync_smoke.sh`, `sync_auth_smoke.sh` | bash | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `installer/` (install/update/uninstall, `_service.sh` router, `dispatcher.sh`) | bash | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `platform/linux/_units.sh` | bash | ✅ | ✅ | — | — | — | — |
 | `platform/macos/_launchd.sh` | bash | — | — | ✅ | — | — | — |

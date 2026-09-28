@@ -29,6 +29,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import sqlite3
 import subprocess
 import sys
@@ -61,15 +62,98 @@ except Exception:
 HIVE_HOME = Path(os.environ.get("HIVE_HOME", Path.home() / "projects" / "hive-mind"))
 DB_PATH = HIVE_HOME / "store.db"
 JOURNAL_DIR = HIVE_HOME / "journal"
+# Private keys live OUTSIDE the working tree (2.0 PR 3a, private #27). HIVE_HOME is the git checkout,
+# the directory every agent CLI runs in and some index; keyperm's 0600 does not stop a tool running as
+# the same user from reading a seed that sits in it. So the seeds live in a KEY DIRECTORY (0700):
+# $HIVE_KEY_DIR if set, else the path recorded in $HIVE_HOME/.key-dir, else a default derived from this
+# checkout's path. The pointer is written when a key is first written there, so renaming the checkout
+# keeps its keys, and the default needs no hive_id (a device key exists before any hive does). Importing
+# hv never creates the directory. Keys still at the legacy root paths keep working, with a keyperm
+# advisory; `hv doctor --fix` relocates the device key and `hive-mind doctor --fix` the owner key.
+KEY_DIR_POINTER = HIVE_HOME / ".key-dir"
+
+
+def _default_key_dir():
+    return (Path.home() / ".hive" / "keys"
+            / hashlib.sha256(str(HIVE_HOME.resolve()).encode()).hexdigest()[:16])
+
+
+def _resolve_key_dir():
+    env = os.environ.get("HIVE_KEY_DIR")
+    if env:
+        return Path(env).expanduser()
+    try:
+        if KEY_DIR_POINTER.exists():
+            recorded = KEY_DIR_POINTER.read_text().strip()
+            if recorded:
+                return Path(recorded)
+    except OSError:
+        pass
+    return _default_key_dir()
+
+
+def _effective_key_path(name, legacy):
+    """The key dir's `name`, unless only the legacy file in the working tree exists (then that one)."""
+    new = KEY_DIR / name
+    try:
+        if not new.exists() and legacy.exists():
+            return legacy
+    except OSError:
+        pass
+    return new
+
+
+KEY_DIR = _resolve_key_dir()
+LEGACY_DEVICE_KEY_PATH = HIVE_HOME / ".device-key"
+LEGACY_OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
+LEGACY_OWNER_PUB_PATH = HIVE_HOME / ".owner-pub"
+
+
+def _ensure_key_dir():
+    """Create the key directory (0700, and ~/.hive and ~/.hive/keys when this creates them) and record it
+    in $HIVE_HOME/.key-dir. Called before any key is written; never at import. Returns the directory."""
+    d = KEY_DIR
+    for p in reversed([d, *d.parents]):
+        if p.exists():
+            continue
+        p.mkdir(exist_ok=True)
+        try:
+            if p == d or p.name in (".hive", "keys"):
+                os.chmod(p, 0o700)
+        except OSError:
+            pass
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    try:
+        if not KEY_DIR_POINTER.exists() or KEY_DIR_POINTER.read_text().strip() != str(d):
+            HIVE_HOME.mkdir(parents=True, exist_ok=True)
+            KEY_DIR_POINTER.write_text(str(d) + "\n")
+    except OSError:
+        pass
+    return d
+
+
+def _write_private(path, text):
+    """Write a private file (0600) into the key directory, creating it first."""
+    _ensure_key_dir()
+    path.write_text(text)
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
+
 # Device identity (Phase D-identity). A node is identified by an Ed25519 DEVICE KEY, not a
 # self-declared hostname. device_id = "k1:" + first 16 hex of sha256(pubkey); the 32-byte seed
-# lives at HIVE_HOME/.device-key (0600, never synced, never in the source manifest), and the
-# derived fingerprint is cached at .device-id so resolving NODE_ID stays a cheap file read.
+# lives in the key directory as `device-key` (0600, never synced, never in the source manifest), and
+# the derived fingerprint (public) is cached at HIVE_HOME/.device-id so resolving NODE_ID stays cheap.
 # Journal entries are signed by the device key and verified on ingest, so a peer cannot forge
 # another node's identity to launder corroboration. A key is minted only by `hv key init` or the
 # migration — importing hv NEVER creates one, so a legacy hostname node keeps its identity until
 # it is deliberately migrated. HIVE_NODE_ID still overrides (tests / two instances on one box).
-DEVICE_KEY_PATH = HIVE_HOME / ".device-key"
+DEVICE_KEY_PATH = _effective_key_path("device-key", LEGACY_DEVICE_KEY_PATH)
 DEVICE_ID_PATH = HIVE_HOME / ".device-id"
 
 
@@ -166,10 +250,10 @@ NODE_LABEL = _human_label()
 # parameters. Those declarations are JOURNALED as owner-signed `governance` entries, so every node
 # derives the same admitted set / principal map / config and confidence stays identical across nodes
 # (the convergence invariant). Minted only by `hv owner init`; importing hv never creates it.
-OWNER_KEY_PATH = HIVE_HOME / ".owner-key"
+OWNER_KEY_PATH = _effective_key_path("owner-key", LEGACY_OWNER_KEY_PATH)
 # The owner key's PUBLIC half, written by the control plane whenever it reads or writes the key (2.0 PR 2b).
 # `hv` reads this, never the seed, to tell whether this device holds the established owner's key.
-OWNER_PUB_PATH = HIVE_HOME / ".owner-pub"
+OWNER_PUB_PATH = _effective_key_path("owner-pub", LEGACY_OWNER_PUB_PATH)
 # Genesis pin (hive-mind-private #14). Genesis used to be "the earliest valid self-signed `owner`
 # act wins", and an entry's timestamp is written by whoever made the entry — so a rival `owner` act
 # carrying an EARLIER timestamp TOOK the hive, before or after genesis, and silenced the real owner's
@@ -180,6 +264,9 @@ OWNER_PUB_PATH = HIVE_HOME / ".owner-pub"
 # never in the signed source manifest. A node with no pin keeps the legacy rule so a mixed fleet still
 # converges, and `hv doctor genesis` fails until the operator pins.
 GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"
+
+
+_OWNER_KEY_SIZES = {44, 45}         # base64 of a 32-byte seed, with or without the trailing newline
 
 
 class NotOnDataPlane(Exception):
@@ -209,11 +296,17 @@ def _owner_key_state(gov=None):
     key. A stale or forged sidecar misleads a display, never authority: authority is a signature `hv`
     cannot produce."""
     try:
-        OWNER_KEY_PATH.stat()
+        st = OWNER_KEY_PATH.stat()
     except FileNotFoundError:
         return "absent"
     except OSError:
         return "unknown"
+    # A plaintext seed is base64 of 32 bytes: 44 characters, 45 with the newline every writer adds.
+    # Anything else in the key's place (a directory, an empty or truncated file) is not a key `hv` can
+    # vouch for, whatever the sidecar says. Garbage of the right length still passes: that is the
+    # irreducible cost of never reading the file (#159 review).
+    if not stat.S_ISREG(st.st_mode) or st.st_size not in _OWNER_KEY_SIZES:
+        return "present"
     try:
         owner_id = (gov or {}).get("owner_id")
         if not owner_id or not OWNER_PUB_PATH.exists():
@@ -4911,7 +5004,7 @@ def whoami_cmd(args):
     """Show THIS device's identity and membership standing in the hive (read-only; no side effects)."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
-    print(f"device:    {NODE_ID}  ({NODE_LABEL})")
+    print(f"device:    {NODE_ID}  ({NODE_LABEL}; public id)")
     _addr = _self_address()
     if _addr:
         print(f"address:   {_addr}   (share via `hive-mind invite`)")
@@ -4921,7 +5014,8 @@ def whoami_cmd(args):
         return
     status, principal = _self_membership(gov)
     print(f"hive:      {gov['hive_id']}")
-    print(f"owner:     {gov['owner_id']}")
+    print(f"owner:     {gov['owner_id']}  (public id)")
+    print(f"keys:      private, in {KEY_DIR} (never printed)")
     desc = {
         "owner":   "OWNER — you hold the owner key (governance: admit / config / forget)",
         "fertile": "FERTILE — admitted; your writes land in the shared journal and count",
@@ -5316,8 +5410,12 @@ _VERIFY_EXCLUDE_DIRS = {".git", "node_modules", "__pycache__", ".pytest_cache", 
 # verify.json.sig signs it, and hivemind.pub is the anchor (its integrity comes from the published
 # copy at the canonical site, not from being self-listed). Listing any of them would be circular.
 _VERIFY_EXCLUDE_NAMES = {"verify.json", "verify.json.sig", "hivemind.pub", "nudge.env",
-                         ".peers.json", ".peer_candidates.json", ".device-key", ".device-id", ".owner-key",
+                         ".peers.json", ".peer_candidates.json", ".device-key", ".device-id", ".owner-key", ".owner-pub", ".key-dir",
                          ".genesis-pin"}
+# The ONE extensionless file the manifest covers (5848726950). Any other tracked file with no suffix is
+# skipped, and a test fails when one appears, so adding a second entry point is a deliberate decision
+# rather than a file that ships unsigned.
+_VERIFY_EXTENSIONLESS = {"hv"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg",
                 ".html", ".css", ".js", ".svg"}   # .html/.css/.js/.svg: the dashboard SPA + assets the
                                                   # daemon serves are signed too (tamper-evident over HTTP)
@@ -5360,7 +5458,7 @@ def _source_manifest(root):
             continue
         if p.name in _VERIFY_EXCLUDE_NAMES or p.name.startswith("store.db") or ".bak" in p.name:
             continue
-        if p.name != "hv" and p.suffix.lower() not in _VERIFY_EXTS:
+        if p.name not in _VERIFY_EXTENSIONLESS and p.suffix.lower() not in _VERIFY_EXTS:
             continue
         try:
             files[str(rel)] = hashlib.sha256(p.read_bytes()).hexdigest()
@@ -5530,14 +5628,10 @@ def _identity_init(force):
             return
     seed = os.urandom(32)
     HIVE_HOME.mkdir(parents=True, exist_ok=True)
-    DEVICE_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+    _write_device_key(seed)
     pub = _ed25519.pub_from_seed(seed)
     did = _device_id_for_pub(pub)
     DEVICE_ID_PATH.write_text(did + "\n")
-    try:
-        os.chmod(DEVICE_KEY_PATH, 0o600)
-    except Exception:
-        pass
     print(f"Device key created. device_id: {did}")
     print(f"  pubkey: {base64.b64encode(pub).decode()}")
     print(f"  seed:   {DEVICE_KEY_PATH} (private — never commit or sync it)")
@@ -5565,6 +5659,21 @@ def _key_announce():
     print("  Owner: run `hv capsule rotate` afterwards to re-seal existing capsules to it.")
 
 
+def _write_device_key(seed):
+    """Write this device's seed into the key directory (0600), outside the working tree (2.0 PR 3a), and
+    drop a legacy copy at the root so there is never a second one. Returns the path."""
+    global DEVICE_KEY_PATH
+    path = KEY_DIR / "device-key"
+    _write_private(path, base64.b64encode(seed).decode() + "\n")
+    try:
+        if LEGACY_DEVICE_KEY_PATH.exists():
+            LEGACY_DEVICE_KEY_PATH.unlink()
+    except OSError:
+        pass
+    DEVICE_KEY_PATH = path
+    return path
+
+
 def _ensure_device_key():
     """Auto-mint a device key on first use if this is a FRESH node, so joining/capsules work without a
     manual `hv key init`. Returns True iff it just minted one (caller can notify). Safe by construction:
@@ -5582,14 +5691,10 @@ def _ensure_device_key():
         return False
     seed = os.urandom(32)
     HIVE_HOME.mkdir(parents=True, exist_ok=True)
-    DEVICE_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
+    _write_device_key(seed)
     pub = _ed25519.pub_from_seed(seed)
     did = _device_id_for_pub(pub)
     DEVICE_ID_PATH.write_text(did + "\n")
-    try:
-        os.chmod(DEVICE_KEY_PATH, 0o600)
-    except Exception:
-        pass
     NODE_ID = did                          # adopt the freshly minted identity for the rest of this run
     return True
 
@@ -6532,9 +6637,74 @@ def capsule_cmd(args):
 
 
 def _secret_key_files():
-    """The raw private-key files this device may hold (device + owner seeds). Stash copies live under
-    other candidate homes too, but these canonical paths are what governance/identity actually read."""
-    return [("device-key", DEVICE_KEY_PATH), ("owner-key", OWNER_KEY_PATH)]
+    """The raw private-key files this device may hold (device + owner seeds), in the key directory and at
+    the legacy root of the working tree (2.0 PR 3a). Stash copies live elsewhere; these are what identity
+    and governance read."""
+    out = []
+    for label, new, legacy in (("device-key", KEY_DIR / "device-key", LEGACY_DEVICE_KEY_PATH),
+                               ("owner-key", KEY_DIR / "owner-key", LEGACY_OWNER_KEY_PATH)):
+        out.append((label, new))
+        if legacy != new:
+            out.append((label, legacy))
+    return out
+
+
+def _legacy_key_files():
+    """Key files still in the working tree: [(label, legacy_path, key_dir_path)] (2.0 PR 3a)."""
+    out = []
+    for label, legacy, name in (("device-key", LEGACY_DEVICE_KEY_PATH, "device-key"),
+                                ("owner-key", LEGACY_OWNER_KEY_PATH, "owner-key"),
+                                ("owner-pub", LEGACY_OWNER_PUB_PATH, "owner-pub")):
+        try:
+            if legacy.exists():
+                out.append((label, legacy, KEY_DIR / name))
+        except OSError:
+            pass
+    return out
+
+
+def _relocate_legacy_keys(dry):
+    """Move this plane's key files out of the working tree into the key directory (0700; files 0600, the
+    public owner-pub 0644). Only the labels `_fixable_key_files` allows here: `hv` moves the device key,
+    `hive-mind` the owner key and its public half. Never overwrites a key already in the key directory:
+    a clash is reported and left for the operator, unless the two copies are identical (a move that was
+    interrupted after the copy), when the legacy one is dropped. Returns (moved, other_plane, problems).
+
+    Repoints the path global as each file moves: the rest of this run (the key announce below it in
+    `doctor --fix`) must read the key where it now is. A stale DEVICE_KEY_PATH would read as "no device
+    key", which `_ensure_device_key` answers by minting a NEW identity."""
+    global DEVICE_KEY_PATH, OWNER_KEY_PATH, OWNER_PUB_PATH
+    fixable = {lbl for lbl, _p in _fixable_key_files()}
+    mine = fixable | ({"owner-pub"} if "owner-key" in fixable else set())
+    moved, other_plane, problems = [], [], []
+    for label, legacy, target in _legacy_key_files():
+        if label not in mine:
+            other_plane.append(label)
+            continue
+        try:
+            if target.exists():
+                if target.read_bytes() != legacy.read_bytes():
+                    problems.append(f"{label} (both copies exist; not overwriting {target})")
+                    continue
+                if not dry:
+                    legacy.unlink()
+            elif not dry:
+                _ensure_key_dir()
+                shutil.copy2(legacy, target)
+                os.chmod(target, 0o644 if label == "owner-pub" else 0o600)
+                legacy.unlink()
+        except OSError as e:
+            problems.append(f"{label} ({e})")
+            continue
+        moved.append(label)
+        if not dry:
+            if label == "device-key":
+                DEVICE_KEY_PATH = target
+            elif label == "owner-key":
+                OWNER_KEY_PATH = target
+            else:
+                OWNER_PUB_PATH = target
+    return moved, other_plane, problems
 
 
 def _fixable_key_files():
@@ -6650,14 +6820,30 @@ def _doctor_status():
         checks.append({"name": "keyperm", "status": "ok", "detail": "n/a on Windows (no POSIX mode)"})
     else:
         leaky = _leaky_key_files()
-        if leaky:
+        dir_mode = None
+        try:
+            if KEY_DIR.exists():
+                dir_mode = KEY_DIR.stat().st_mode & 0o777
+        except OSError:
+            pass
+        in_tree = [lbl for lbl, _l, _t in _legacy_key_files() if lbl != "owner-pub"]
+        if leaky or (dir_mode is not None and dir_mode & 0o077):
+            parts = [f"{lbl} {oct(m)}" for lbl, _p, m in leaky]
+            if dir_mode is not None and dir_mode & 0o077:
+                parts.append(f"key directory {KEY_DIR} {oct(dir_mode)} (must be 0700)")
             checks.append({"name": "keyperm", "status": "fail",
-                           "detail": "private key group/other-accessible: "
-                                     + "; ".join(f"{lbl} {oct(m)}" for lbl, _p, m in leaky)
-                                     + " — run `hv doctor --fix` (or `chmod 600`)"})
+                           "detail": "private key group/other-accessible: " + "; ".join(parts)
+                                     + " — run `hv doctor --fix` for the device key, `hive-mind doctor --fix` "
+                                       "for the owner key (or `chmod 600` / `chmod 700`)"})
+        elif in_tree:
+            checks.append({"name": "keyperm", "status": "warn",
+                           "detail": f"{', '.join(in_tree)} still in the working tree ({HIVE_HOME}), which every "
+                                     "agent CLI runs in — relocate to the key directory: `hv doctor --fix` moves "
+                                     "the device key, `hive-mind doctor --fix` the owner key (private #27)"})
         else:
             checks.append({"name": "keyperm", "status": "ok",
-                           "detail": "device/owner key files are 0600 (or absent)"})
+                           "detail": f"key files are 0600 in {KEY_DIR} (0700), outside the working tree "
+                                     "(or absent)"})
 
     # 2. Journal — THIS node's hash chain is contiguous from genesis and each prev_hash links.
     #    A break means local corruption or tampering (foreign nodes may be partial, so only ours).
@@ -6747,6 +6933,7 @@ def _doctor_status():
                           "the owner device handles membership and config)")
             if notes:
                 detail += " (" + "; ".join(notes) + ")"
+            detail = f"{gov['owner_id']} (public id): {detail}"      # the id is public; the key never printed (#27)
             checks.append({"name": "owner", "status": status, "detail": detail})
     except Exception as e:
         checks.append({"name": "owner", "status": "warn", "detail": f"owner check error: {e}"})
@@ -7609,6 +7796,19 @@ def doctor_cmd(args):
                 if left:
                     print(f"\n--fix: {', '.join(left)} is STILL group/other-readable. It is operator state: "
                           "run `hive-mind doctor --fix` to re-tighten it (2.0).")
+        # Keys out of the working tree (2.0 PR 3a, private #27): this plane's keys move into the key dir.
+        try:
+            moved, other_plane, problems = _relocate_legacy_keys(dry)
+            if moved:
+                print(f"\n{'  would move' if dry else '--fix: moved'} {', '.join(moved)} out of the working tree "
+                      f"into {KEY_DIR} (0700).")
+            if other_plane:
+                print(f"\n--fix: {', '.join(other_plane)} {'is' if len(other_plane) == 1 else 'are'} still in the "
+                      "working tree. It is operator state: `hive-mind doctor --fix` moves it.")
+            if problems:
+                print(f"\n--fix: could NOT move: {'; '.join(problems)}")
+        except Exception as e:
+            print(f"\n--fix: key relocation error: {e}")
 
         # Self-announce this device's signing key: a device admitted directly by the owner that
         # never authored an entry has no harvestable pub (the device-keys advisory above), so it

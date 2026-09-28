@@ -139,6 +139,12 @@ rm -rf "$HOME/.claude/skills/hive-memory" 2>/dev/null || true
 rm -f /tmp/hive-sync.log 2>/dev/null || true
 rm -rf "$HOME/.hive-mind/logs" 2>/dev/null || true   # Android/Termux daemon logs
 
+# The key directory lives outside the checkout (2.0 PR 3a, private #27), so resolve it while hv is still
+# here to ask. Removed below with the rest of the Hive data unless the identity is kept.
+_KEY_DIR="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" dir || true)"
+_KEY_DEV="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" device || true)"
+_KEY_OWN="$(command -v _hive_key_path >/dev/null 2>&1 && _hive_key_path "$HIVE_DIR" owner || true)"
+
 # ── 4. Identity + Hive data ──────────────────────────────────────────────────
 # Preserve the device IDENTITY (to the stable stash) whenever the user asked to keep anything, so
 # a reinstall can resume the same device_id with no re-admit. --keep-hive ALSO snapshots the full
@@ -158,6 +164,8 @@ if [ -n "$KEEP_HIVE" ]; then
   for f in journal .device-key .device-id .owner-key .peers.json; do
     [ -e "$HIVE_DIR/$f" ] && cp -a "$HIVE_DIR/$f" "$KEEP_DIR/" 2>/dev/null || true
   done
+  [ -n "$_KEY_DEV" ] && [ -e "$_KEY_DEV" ] && cp -a "$_KEY_DEV" "$KEEP_DIR/.device-key" 2>/dev/null
+  [ -n "$_KEY_OWN" ] && [ -e "$_KEY_OWN" ] && cp -a "$_KEY_OWN" "$KEEP_DIR/.owner-key" 2>/dev/null
   echo ""
   ok "App removed. Full Hive backup (journal + keys) at:"
   echo "    $KEEP_DIR"
@@ -178,4 +186,10 @@ echo ""
 # off to a standalone rm so the deletion can't depend on bash still reading its own
 # (now-deleted) script file. cd to a safe place first so we're not inside the target.
 cd "$HOME"
+# The keys outside the tree go with the Hive data. Only the files hive-mind wrote, then the directory if
+# it is empty — never a recursive delete, since $HIVE_KEY_DIR may point anywhere the operator chose.
+if [ -n "$_KEY_DIR" ] && [ -d "$_KEY_DIR" ]; then
+  rm -f "$_KEY_DIR/device-key" "$_KEY_DIR/owner-key" "$_KEY_DIR/owner-pub" 2>/dev/null || true
+  rmdir "$_KEY_DIR" 2>/dev/null || true
+fi
 exec rm -rf "$HIVE_DIR"

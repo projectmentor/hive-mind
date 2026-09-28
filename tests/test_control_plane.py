@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT))
 
 import commandmap  # noqa: E402
 import hivemind_ctl  # noqa: E402
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 
 def _run_ctl(home, *argv):
@@ -132,7 +133,7 @@ def test_owner_init_through_the_control_plane_establishes_and_pins(tmp_path):
     assert r.returncode == 0, r.stderr
     assert "Owner established:" in r.stdout
     assert "pinned" in r.stdout                                  # 1.27's genesis pin still happens
-    assert (tmp_path / ".owner-key").exists()
+    assert _keys.key_path(tmp_path, "owner-key").exists()
     assert (tmp_path / ".genesis-pin").exists()
     # and the data plane reads it back: `owner show` is a read and stays on hv
     s = _run_hv(tmp_path, "owner", "show")
@@ -157,7 +158,7 @@ def test_hv_cannot_owner_sign_after_the_split(tmp_path):
     signer and never imported `ownerkey`."""
     r = _run_hv(tmp_path, "owner", "init")
     assert r.returncode == 2 and "Run: hive-mind owner init" in r.stderr
-    assert not (tmp_path / ".owner-key").exists()
+    assert not _keys.key_path(tmp_path, "owner-key").exists()
     import importlib.machinery
     import importlib.util
     loader = importlib.machinery.SourceFileLoader("hv_2b", str(PROJECT / "hv"))

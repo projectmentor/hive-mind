@@ -373,7 +373,7 @@ function hiveShell(peers,probing){
      <tbody>${peerRows(peers,probing)||'<tr><td colspan=6 class="empty">no peers</td></tr>'}</tbody></table></div>
    <div class="note">Click a node for its overview, corpus, stats &amp; telemetry · Stale device? Owner: <span class="mono">hive-mind group purge &lt;device_id&gt;</span></div>
    <div class="grid cards" style="margin-top:16px">
-     <div class="card"><div class="lbl">Owner</div><div class="stat" style="font-size:17px">${META.role==='OWNER'?esc(META.node):'(remote)'}</div><div class="sub mono">${esc(META.owner_id||'—')}</div></div>
+     <div class="card"><div class="lbl">Owner</div><div class="stat" style="font-size:17px">${META.role==='OWNER'?esc(META.node):'(remote)'}</div><div class="sub mono" title="public id — the owner key itself is never shown">${esc(META.owner_id||'—')}${META.owner_id?' <span class="muted">(public id)</span>':''}</div></div>
      <div class="card"><div class="lbl">Hive</div><div class="stat mono" style="font-size:14px;color:var(--ink)">${esc(META.hive||'—')}</div></div>
      <div class="card"><div class="lbl">Merkle root</div><div class="stat mono" style="font-size:13px;color:var(--accent)">${esc(META.merkle)}</div><div class="sub">${META.nodes} node(s) admitted</div></div>
    </div>`;

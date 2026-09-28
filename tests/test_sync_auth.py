@@ -26,6 +26,7 @@ sys.path.insert(0, str(PROJECT))
 HV = PROJECT / "hv"
 import ed25519  # noqa: E402
 import sync_common  # noqa: E402
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 CANARY = "SECRET-CANARY-XYZZY"
 
@@ -87,7 +88,7 @@ _WIRE_UNSUPPORTED = sys.platform == "darwin"
 def _sign(home, method, path, query, body=b"", seed=None):
     """Hive-Auth-* headers signed with `home`'s device key (or a supplied seed = a different device)."""
     if seed is None:
-        seed = base64.b64decode((Path(home) / ".device-key").read_text().strip())
+        seed = base64.b64decode(_keys.key_path(home, "device-key").read_text().strip())
     pub = ed25519.pub_from_seed(seed)
     ts = int(time.time())
     nonce = os.urandom(16).hex()

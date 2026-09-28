@@ -37,19 +37,43 @@ def _owner_seed():
 
 
 def _record_owner_pub(pub):
-    """Write the owner key's public half beside the key (0644), if it is missing or different. Public
-    material: `hv` reads it for its presence check. Best-effort; never raises."""
+    """Write the owner key's public half into the key directory (0644), if it is missing or different, and
+    drop a legacy copy in the working tree. Public material: `hv` reads it for its presence check.
+    Best-effort; never raises."""
+    global OWNER_PUB_PATH
     try:
         b64 = base64.b64encode(pub).decode()
-        cur = OWNER_PUB_PATH.read_text().strip() if OWNER_PUB_PATH.exists() else None
+        target = KEY_DIR / "owner-pub"
+        cur = target.read_text().strip() if target.exists() else None
         if cur != b64:
-            OWNER_PUB_PATH.write_text(b64 + "\n")
+            _ensure_key_dir()
+            target.write_text(b64 + "\n")
             try:
-                os.chmod(OWNER_PUB_PATH, 0o644)
+                os.chmod(target, 0o644)
             except Exception:
                 pass
+        if LEGACY_OWNER_PUB_PATH.exists():
+            LEGACY_OWNER_PUB_PATH.unlink()
+        OWNER_PUB_PATH = target
     except Exception:
         pass
+
+
+def _write_owner_key(seed):
+    """Write the owner seed into the key directory (0600), outside the working tree (2.0 PR 3a, private
+    #27), drop a legacy copy at the root so there is never a second one, and record its public half."""
+    global OWNER_KEY_PATH
+    path = KEY_DIR / "owner-key"
+    _write_private(path, base64.b64encode(seed).decode() + "\n")
+    try:
+        if LEGACY_OWNER_KEY_PATH.exists():
+            LEGACY_OWNER_KEY_PATH.unlink()
+    except OSError:
+        pass
+    OWNER_KEY_PATH = path
+    if _ed25519 is not None:
+        _record_owner_pub(_ed25519.pub_from_seed(seed))
+    return path
 
 
 def _read_passphrase(prompt, confirm=False):
@@ -344,11 +368,7 @@ def owner_cmd(args):
             return
         seed = os.urandom(32)
         HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
+        _write_owner_key(seed)                     # into the key directory, outside the tree (2.0 PR 3a)
         _stash_owner_key(seed)
         pub = _ed25519.pub_from_seed(seed)
         _record_owner_pub(pub)
@@ -482,11 +502,7 @@ def owner_cmd(args):
                   f"{gov['owner_id']}. Importing would create a disagreeing owner. Use --force to override.")
             return
         HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
+        _write_owner_key(seed)                     # into the key directory, outside the tree (2.0 PR 3a)
         _stash_owner_key(seed)
         print(f"Owner key installed ({imported}). This device can now sign governance.")
         return
@@ -556,11 +572,7 @@ def owner_cmd(args):
             print(f"Refusing: the escrowed key is owner {oid}, but the established owner is {gov['owner_id']}.")
             return
         HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
+        _write_owner_key(seed)                     # into the key directory, outside the tree (2.0 PR 3a)
         _stash_owner_key(seed)
         print(f"Owner key recovered from the hive ({oid}). This device can now sign governance.")
         return
@@ -606,11 +618,7 @@ def owner_cmd(args):
             return
         # Install the (possibly freshly minted) key locally so a later claim can reuse it.
         HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
+        _write_owner_key(seed)                     # into the key directory, outside the tree (2.0 PR 3a)
         _stash_owner_key(seed)
         if cp not in gov["nominations"]:
             print(f"Prospective owner key ready on this device: {oid}")
@@ -675,11 +683,7 @@ def owner_cmd(args):
             return
         seed = os.urandom(32)
         HIVE_HOME.mkdir(parents=True, exist_ok=True)
-        OWNER_KEY_PATH.write_text(base64.b64encode(seed).decode() + "\n")
-        try:
-            os.chmod(OWNER_KEY_PATH, 0o600)
-        except Exception:
-            pass
+        _write_owner_key(seed)                     # into the key directory, outside the tree (2.0 PR 3a)
         pub = _ed25519.pub_from_seed(seed)
         oid = _owner_id_for_pub(pub)
         # The genesis owner declaration also mints the hive_id: a public, owner-attested identifier

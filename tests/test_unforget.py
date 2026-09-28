@@ -24,6 +24,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import _loadhv, _owner_key, _device, _gov, _entry, _fact, _project, T0  # noqa: E402
 import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 FORGET_FLOOR = -1.0
 PRE = "2025-12-31T00:00:00Z"                     # before the genesis owner (T0)
@@ -300,7 +301,7 @@ def test_cli_refusals_write_nothing(tmp_path):
         assert r.returncode == code and msg in r.stderr, (args, r.stderr)
     run("retract", sid, "--owner", "--reason", "x")
     n = len(journal())
-    key = tmp_path / ".owner-key"
+    key = _keys.key_path(tmp_path, "owner-key")
     real = key.read_text()
     key.write_text(base64.b64encode(os.urandom(32)).decode() + "\n")            # someone else's owner key
     r = run("unforget", sid, "--reason", "r", check=False)

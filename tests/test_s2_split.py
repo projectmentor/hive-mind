@@ -32,6 +32,7 @@ sys.path.insert(0, str(PROJECT))
 
 import commandmap  # noqa: E402
 import hivemind_ctl  # noqa: E402
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 # Module names `hv` must never reach: the signer, and the control plane that imports it.
 FORBIDDEN = {"ownerkey", "hivemind_owner", "hivemind_ctl"}
@@ -399,7 +400,7 @@ def test_an_owner_policy_cell_publish_points(tmp_path):
 def test_doctor_fix_repairs_the_device_key_on_hv_and_the_owner_key_on_hive_mind(tmp_path):
     home = tmp_path / "h"
     assert _ctl(home, "owner", "init").returncode == 0
-    owner_key = home / ".owner-key"
+    owner_key = _keys.key_path(home, "owner-key")
     os.chmod(owner_key, 0o644)
     r = _hv(home, "doctor", "--fix")
     assert r.returncode != 2, "the 15-minute timer runs `hv doctor --fix`; it must not become a pointer"

@@ -87,20 +87,23 @@ def test_the_session_guard_fails_a_run_that_writes_into_the_exported_hive(tmp_pa
     assert "1 passed" in r.stdout, "the probe itself must succeed; only the guard may fail the run"
     out = r.stdout + r.stderr
     assert r.returncode != 0, out[-3000:]
-    assert "real hive .key-dir created" in out and "decoy hive .key-dir created" in out, out[-3000:]
+    assert "real hive .owner-key created" in out and "decoy hive .owner-key created" in out, out[-3000:]
 
 
 def test_the_guard_fails_on_a_write_into_the_exported_hive(tmp_path):
     """Fail-closed (h:157bd5e469): a key written into the exported hive, and any write into a decoy, are
     reported by the same comparison the session guard makes."""
-    claude, stash, hive = tmp_path / "c", tmp_path / "s", tmp_path / "hive"
-    for d in (claude, stash, hive / "journal"):
+    claude, stash, hive, kd = tmp_path / "c", tmp_path / "s", tmp_path / "hive", tmp_path / "keys"
+    for d in (claude, stash, hive / "journal", kd):
         d.mkdir(parents=True)
-    before = _realhome.snapshot(claude, stash, hive)
+    before = _realhome.snapshot(claude, stash, hive, kd)
     for name in _realhome.HIVE_KEY_FILES:
         (hive / name).write_text("x\n")
-    changes = _realhome.diff(before, _realhome.snapshot(claude, stash, hive))
-    assert sorted(changes) == sorted(f"real hive {n} created" for n in _realhome.HIVE_KEY_FILES)
+    for name in _realhome.KEY_DIR_FILES:                    # the key directory outside the tree (2.0 PR 3a)
+        (kd / name).write_text("x\n")
+    changes = _realhome.diff(before, _realhome.snapshot(claude, stash, hive, kd))
+    assert sorted(changes) == sorted([f"real hive {n} created" for n in _realhome.HIVE_KEY_FILES]
+                                     + [f"real key dir {n} created" for n in _realhome.KEY_DIR_FILES])
 
     # A live hive's journal moving is a note, not a failure: its daemon and other sessions write it.
     act = _realhome.activity(hive)

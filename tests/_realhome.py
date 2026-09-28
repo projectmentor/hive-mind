@@ -32,7 +32,23 @@ def session_paths():
     if exported is None:
         exported = os.environ.get("HIVE_HOME")
     hive = Path(exported or Path(__file__).resolve().parent.parent)
-    return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive}
+    return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive,
+            "key_dir": key_dir_of(hive, home)}
+
+
+def key_dir_of(hive, home):
+    """The exported hive's key directory (2.0 PR 3a), by `hv`'s rule but without importing `hv`:
+    $HIVE_KEY_DIR, else the path recorded in `<hive>/.key-dir`, else `<home>/.hive/keys/<16 hex>`."""
+    env = os.environ.get("HIVE_KEY_DIR")
+    if env:
+        return Path(env).expanduser()
+    try:
+        recorded = (Path(hive) / ".key-dir").read_text().strip()
+        if recorded:
+            return Path(recorded)
+    except OSError:
+        pass
+    return Path(home) / ".hive" / "keys" / hashlib.sha256(str(Path(hive).resolve()).encode()).hexdigest()[:16]
 
 
 def _file_state(p, ctime=False):
@@ -64,7 +80,7 @@ def _hive_hooks(settings):
                   if "hive_dispatch.sh" in h.get("command", ""))
 
 
-def snapshot(claude, stash, hive=None):
+def snapshot(claude, stash, hive=None, key_dir=None):
     """The state `hv doctor --fix` and `hv owner init` would change: the skill symlink's target, the
     Hive-owned hooks, the .bak.doctor that every real --fix write refreshes (hv `_wire_agent`), and
     the owner-key stash a reinstall restores from (hv `_stash_owner_key`)."""
@@ -82,12 +98,16 @@ def snapshot(claude, stash, hive=None):
         # The real hive's key material and identity (#160): operator state, which nothing a developer or
         # an agent does during a test run changes, so any change is the suite's.
         **{f"real hive {name}": (_file_state(Path(hive) / name) if hive else None) for name in HIVE_KEY_FILES},
+        # ...and its key directory outside the checkout (2.0 PR 3a), where the seeds live now.
+        **{f"real key dir {name}": (_file_state(Path(key_dir) / name) if key_dir else None)
+           for name in KEY_DIR_FILES},
     }
 
 
 # Key material and identity in the checkout: the device and owner seeds, the public owner half, the cached
 # device id, and the key-directory pointer.
 HIVE_KEY_FILES = (".device-key", ".owner-key", ".owner-pub", ".device-id", ".key-dir")
+KEY_DIR_FILES = ("device-key", "owner-key", "owner-key.sealed", "owner-pub")
 # A hive marked with this file is a DECOY that only the test suite may see (#160): the guard then holds the
 # whole tree to byte-identical, which it cannot do for a live hive whose daemon ingests from peers.
 DECOY_MARKER = ".hive-test-decoy"

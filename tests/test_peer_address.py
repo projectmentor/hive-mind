@@ -36,6 +36,7 @@ import ed25519  # noqa: E402
 import sync_common  # noqa: E402
 import hive_sync_daemon as d  # noqa: E402
 import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 OLD, NEW, OTHER = "100.64.0.2", "100.64.0.9", "100.64.0.7"
 
@@ -402,7 +403,7 @@ def test_b_moves_contacts_a_once_and_a_doctor_fix_repoints_it(tmp_path, monkeypa
     b.mkdir()
     _run(b, "key", "init")
     b_dev = (b / ".device-id").read_text().strip()
-    b_seed = base64.b64decode((b / ".device-key").read_text().strip())
+    b_seed = base64.b64decode(_keys.key_path(b, "device-key").read_text().strip())
     _run(a, "key", "init")
     _run(a, "owner", "init")
     _run(a, "group", "admit", b_dev, "--principal", "b")           # real governance: B is admitted on A

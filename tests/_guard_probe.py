@@ -11,4 +11,6 @@ def test_writes_into_the_exported_hive_on_purpose():
     # track of the exported hive cannot also make this write miss it.
     target = os.environ.get("HIVE_TEST_PROBE_TARGET")
     assert target, "run only by test_hive_home_sandbox.py, with HIVE_HOME exported to a decoy"
-    (Path(target) / ".key-dir").write_text("written on purpose by the guard probe\n")
+    # The legacy root owner key: absent from every decoy (since 2.0 PR 3a the keys live in the key
+    # directory, and `.key-dir` already exists there), so the guard must report it created.
+    (Path(target) / ".owner-key").write_text("written on purpose by the guard probe\n")

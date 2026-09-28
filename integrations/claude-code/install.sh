@@ -26,7 +26,7 @@ ls -ld "$CLAUDE_DIR/skills/hive-memory" "$CLAUDE_DIR/skills/wire-up"
 echo "== register telemetry + nudge/audit hooks (idempotent, additive) =="
 # Delegate to hv's canonical hook spec — the SINGLE source of truth shared with `hv doctor`
 # (the check + the 15-min `--fix` self-heal). Keeping the wiring in one place is why a node updated
-# from before a hook existed now self-heals instead of silently drifting. `_wire_claude_hooks` honors
+# from before a hook existed now self-heals instead of silently drifting. `hv wire claude` honors
 # CLAUDE_CONFIG_DIR, so point it at the dir we resolved above.
 CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" wire claude
 

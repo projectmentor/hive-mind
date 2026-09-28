@@ -384,3 +384,17 @@ def test_extends_unknown_target_writes_nothing(tmp_path):
     r = _as(tmp_path, "nodeB", "remember", "builds on a ghost", "--extends", "h:0000000000", check=False)
     assert r.returncode == 1 and "--extends" in r.stderr
     assert len(_journal(tmp_path)) == n
+
+
+def test_the_fleet_floor_is_the_current_major_and_never_below_1_19(tmp_path, monkeypatch):
+    """2.0 (#136): fleet-contract warns below the current MAJOR, not below a fixed 1.19. While the contract is
+    still 1.x the floor stays 1.19 (where `link` entries became honoured); at 2.0 it becomes 2.0."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    for contract, floor in (("1.28", "1.19"), ("1.5", "1.19"), ("2.0", "2.0"), ("2.3", "2.0"), ("3.1", "3.0")):
+        monkeypatch.setattr(hv, "CONTRACT_VERSION", contract)
+        assert hv._fleet_floor() == floor, contract
+    monkeypatch.setattr(hv, "CONTRACT_VERSION", "2.0")
+    gov = {"admitted": {"k1:aaaaaaaaaaaaaaaa", "k1:bbbbbbbbbbbbbbbb"}, "purged": set()}
+    probed = {"k1:aaaaaaaaaaaaaaaa": "x", "k1:bbbbbbbbbbbbbbbb": "y"}
+    fc = hv._fleet_contract(gov, probed, {"k1:aaaaaaaaaaaaaaaa": "1.28", "k1:bbbbbbbbbbbbbbbb": "2.0"})
+    assert [d for d, _ in fc["behind"]] == ["k1:aaaaaaaaaaaaaaaa"] and [d for d, _ in fc["ok"]] == ["k1:bbbbbbbbbbbbbbbb"]

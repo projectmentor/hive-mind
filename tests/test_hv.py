@@ -487,7 +487,7 @@ def test_reconcile_flags_legacy_direct_hooks_as_stale():
     }
 
 
-def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
+def test_wiring_the_claude_cell_migrates_legacy_and_preserves(tmp_path, monkeypatch):
     hv = _loadhv()
     base = hv._CLAUDE_HOOKS_BASE
     cdir = tmp_path / ".claude"; cdir.mkdir()
@@ -502,7 +502,7 @@ def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
         "UserPromptSubmit": [{"hooks": [own, {"type": "command", "command": f"{base}/nudge_hook.sh user-prompt"}]}],
     }}, indent=2))
 
-    res = hv._wire_claude_hooks(write=True)
+    res = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert res["applicable"] and res["wrote"]
     assert len(res["missing"]) == 4 and len(res["stale"]) == 4
 
@@ -520,14 +520,14 @@ def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
     assert (cdir / "skills" / "hive-memory").is_symlink()
 
     # Idempotent: a second pass changes nothing.
-    res2 = hv._wire_claude_hooks(write=True)
+    res2 = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert not res2["wrote"] and res2["missing"] == [] and res2["stale"] == []
 
 
-def test_wire_claude_hooks_not_applicable_without_claude(tmp_path, monkeypatch):
+def test_wiring_the_claude_cell_is_not_applicable_without_claude(tmp_path, monkeypatch):
     hv = _loadhv()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-here"))
-    res = hv._wire_claude_hooks(write=True)
+    res = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert res["applicable"] is False and res["wrote"] is False
 
 
@@ -558,9 +558,9 @@ def test_is_daemon_cmdline_excludes_shells():
     assert g(["hv", "sync", "now"]) is False
 
 
-def test_is_salient_shim_is_the_admission_gate():
-    """`_is_salient` is kept as a back-compat alias of `_is_admissible` (1.19 rename): same
-    object, same verdicts. Load the extensionless script the way test_doc_sync does."""
+def test_the_1x_shims_are_gone():
+    """2.0 (#136) removed the internal back-compat names: `_is_salient` (renamed `_is_admissible` in 1.19)
+    and `_wire_claude_hooks` (the built-in Claude cell through `_wire_agent`, 1.13)."""
     import importlib.util
     from importlib.machinery import SourceFileLoader
     from pathlib import Path as _P
@@ -568,8 +568,5 @@ def test_is_salient_shim_is_the_admission_gate():
     spec = importlib.util.spec_from_loader("hv_cli_gate", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
-    _planes.install_control_plane(mod)   # 2.0: the owner steps live on the control plane
-    assert mod._is_salient is mod._is_admissible
-    assert mod._is_admissible("The node-b deploy succeeded at commit abc123.")
-    assert not mod._is_admissible("hi there")
-    assert not mod._is_admissible("What now?")
+    assert not hasattr(mod, "_is_salient") and not hasattr(mod, "_wire_claude_hooks")
+    assert callable(mod._is_admissible) and callable(mod._wire_agent)

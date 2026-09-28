@@ -12,7 +12,6 @@ import importlib.machinery
 import importlib.util
 import os
 from pathlib import Path
-import _ids  # noqa: E402  (stable ids: 2.0 rejects local ids)
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -101,13 +100,13 @@ def test_init_guard_refuses_on_a_populated_hostname_journal(hive):
     # Writing under the hostname first, then `hv key init`, must refuse (migration is the path).
     hive.run("remember", "a pre-existing hostname-authored fact")
     out = hive.run("key", "init", check=False).stdout
-    assert "migrate-device-identity" in out
+    assert "1.x release" in out and "hv doctor migrate-identity" in out     # 2.0: the migration lives on 1.x
 
 
 # --- migration ---------------------------------------------------------------
 
-import json
-import shutil
+
+import pytest
 import subprocess
 import sys
 
@@ -130,44 +129,25 @@ def _root(home):
     return [l for l in out.splitlines() if l.strip().startswith("Root:")][0]
 
 
-def test_migration_is_deterministic_across_nodes(tmp_path):
-    # Build a converged 2-host journal with a cross-ref (entity link).
-    base = tmp_path / "base"
-    _run(base, "remember", "alpha fact", "--source", "claude-code", node_id="node-a")
-    _run(base, "entity", "add", "--name", "Thing", "--type", "concept", node_id="node-a")
-    _run(base, "entity", "link", "--name", "Thing", "--fact-id", _ids.sid(base, 1), node_id="node-a")
-    _run(base, "remember", "beta fact", "--source", "hermes", node_id="node-b")
-
-    mapping = {"node-a": "k1:aaaaaaaaaaaaaaaa", "node-b": "k1:bbbbbbbbbbbbbbbb"}
-    mapfile = tmp_path / "map.json"
-    mapfile.write_text(json.dumps(mapping))
-
-    # Two nodes apply the SAME map to copies of the same journal.
-    n1, n2 = tmp_path / "n1", tmp_path / "n2"
-    for n in (n1, n2):
-        n.mkdir()
-        shutil.copytree(base / "journal", n / "journal")
-        _run(n, "migrate-device-identity", "--map", str(mapfile))
-
-    assert _root(n1) == _root(n2)   # determinism -> peers stay converged
-
-    # hostnames gone, cross-ref remapped to the device_id
-    text = "".join((n1 / "journal" / f).read_text() for f in os.listdir(n1 / "journal"))
-    assert "node-a" not in text and "node-b" not in text
-    assert "k1:aaaaaaaaaaaaaaaa" in text
+@pytest.mark.parametrize("argv", [["doctor", "migrate-identity", "--map", "m.json"],
+                                  ["migrate-device-identity", "--map", "m.json", "--dry-run"]])
+def test_the_hostname_migration_is_gone_and_says_what_to_do(tmp_path, argv):
+    """2.0 (#136) removed the one-time 1.3 re-keying (#130). Both of its forms say to run it on a 1.x release
+    first, exit 2 and write nothing, instead of argparse's "invalid choice"."""
+    home = tmp_path
+    _run(home, "remember", "a hostname-era fact", node_id="node-a")
+    before = sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir())
+    r = subprocess.run([sys.executable, str(HV), *argv], env=dict(os.environ, HIVE_HOME=str(home)),
+                       capture_output=True, text=True)
+    assert r.returncode == 2 and "was removed in 2.0" in r.stderr and "1.x release" in r.stderr, r.stderr
+    assert sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir()) == before
 
 
 def test_doctor_subcommands_and_aliases(tmp_path):
-    """`hv merkle` and `hv migrate-device-identity` now live under `hv doctor`; the old
-    top-level forms keep working as silent argv aliases."""
+    """`hv merkle` lives under `hv doctor`; the old top-level form keeps working as a silent argv alias."""
     home = tmp_path
     _run(home, "remember", "a fact", node_id="node-a")
     canon = _run(home, "doctor", "merkle").stdout
     alias = _run(home, "merkle").stdout
     assert "Root:" in canon and canon == alias
-    mapping = {"node-a": "k1:aaaaaaaaaaaaaaaa"}
-    mapfile = tmp_path / "m.json"
-    mapfile.write_text(json.dumps(mapping))
-    # canonical and alias both reach the migrate handler (dry-run, nothing written)
-    assert _run(home, "doctor", "migrate-identity", "--map", str(mapfile), "--dry-run").stdout
-    assert _run(home, "migrate-device-identity", "--map", str(mapfile), "--dry-run").stdout
+

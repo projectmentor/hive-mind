@@ -701,6 +701,7 @@ INITD
 
 else
   CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1"
+  # Drops any earlier daemon line, the pre-rename `sync_daemon.py` one included, then adds the current one.
   ( crontab -l 2>/dev/null | grep -v "sync_daemon"; echo "$CRON_LINE" ) | crontab -
   ok "@reboot cron entry installed (fallback)"
 fi

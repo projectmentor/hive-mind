@@ -1,5 +1,5 @@
 """
-Hive Mind sync client (Phase 2, P2P_DESIGN.md §3 sync flow).
+Hive Mind sync client (Phase 2, docs/history/P2P_DESIGN.md §3 sync flow).
 
 Runs a bidirectional round with each configured peer:
   1. Compare global Merkle roots — if equal, done (0 bytes).

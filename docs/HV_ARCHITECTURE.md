@@ -1,56 +1,144 @@
-# `hv` architecture — why one big file, and how we'd split it
+# Architecture: two planes over one library
 
-`hv` is a single ~8,000-line executable Python script with 26 subcommands. New contributors
-reasonably ask: shouldn't this be a package? This note records the deliberate decision to **keep it
-monolithic for now**, the trade-offs, and the path we'd take if/when we split it.
+Since 2.0 (public #136), HiveMind has two commands over one library:
 
-## Why it is one file
+- **`hv`**, the agent **data plane**. Agents and adapters call it to remember, search, decide, sync and
+  check health. It cannot produce an owner signature by any route.
+- **`hive-mind`**, the owner/operator **control plane**. The owner key is loaded here and governance is
+  signed here. It is also the installer front door (`install`, `update`, `reset`, `status`, `invite`,
+  `uninstall`).
 
-- **It is a signed artifact.** `verify.json` pins the sha256 of every source file and `hv verify`
-  proves an install is official. One entrypoint file is the simplest thing to reason about as a
-  root-of-trust unit. (Crypto primitives are already separate modules — `ed25519.py`, `x25519.py`,
-  `chacha20poly1305.py`, `merkle.py` — and are pinned too; the manifest already spans multiple files,
-  so signing is not itself a reason to stay monolithic.)
-- **Trivial distribution.** Nodes update with `git pull` / `hive-mind update`; `hv` is symlinked onto
-  `PATH`. No packaging, no install step, no import-path setup, no virtualenv. It runs on the Python 3
-  stdlib alone.
-- **One dispatch surface.** `argparse` subparsers + a single dispatch chain at the bottom. Everything
-  a reader needs is `grep`-able in one place.
-- **Pervasive shared state.** A global SQLite connection (`get_conn()`), the journal/DB path
-  constants, and the `_governance_state()` projection are touched by almost every command. That
-  coupling makes a clean split non-trivial (see below), so the cost/benefit hasn't yet favored it.
+The split is by **authority**, not by module. `hv` is still one executable Python file (about 9,200
+lines) that holds every command's structure, every flag and the whole projection. What moved out is the
+ability to sign as the owner.
 
-## Cons of staying monolithic
+## Why split at all
 
-- Hard to navigate; commands that are conceptually unrelated live next to each other.
-- Harder to unit-test a single concern in isolation (tests drive the whole CLI via subprocess).
-- Merge-conflict prone when several changes land at once.
-- A new reader has to load the whole file to find a seam.
+An agent runs `hv` constantly, in a working tree other tools also read. Before 2.0, the same binary could
+mint, read and use the owner key, so any agent that could run `hv` could, in principle, act as the owner.
+Requirement S2 of #136 is that the agent's command cannot owner-sign at all. Using owner authority is now
+an explicit act: typing `hive-mind`.
 
-## If we split it (its own PR, not this one)
+## The files
 
-Extract the **lowest-coupling** concerns first, keeping `hv` as the entrypoint that imports them, and
-keep every extracted module inside the signed manifest. Rough order of safety:
+| File | Plane | What it holds |
+|---|---|---|
+| `hv` | both (library) | Every command's structure, the parser (`build_parser`), `dispatch`, the journal, the projection, doctor, sync client code. On the data plane, each owner step is a **placeholder** that refuses. |
+| `hivemind_ctl.py` | control | The `hive-mind` entry point. Loads `hv` as a library, installs the owner steps, routes only control-plane commands, and refuses the rest with the `hv` form to type. |
+| `hivemind_owner.py` | control | Every owner step: reading the seed, producing an `owner_sig`, writing owner-key material, and the commands that exist only to do those things (`owner init`, `group admit`, `config set`, `unforget`, …). |
+| `ownerkey.py` | control | The one module that reads the owner seed and produces a governance signature. It holds no path constants: every caller passes paths in. |
+| `commandmap.py` | both (table) | What moved (`MOVED`, `FLAG_CONDITIONAL`), what stays (`STAYS`), which 1.x aliases were removed (`RENAMED`), and the pointer text. No secrets, no imports. |
+| `vocabulary.py` | both (table) | The reserved core names; `docs/NAMESPACES.md` is generated from it. No imports. |
+| `hive_sync_daemon.py`, `sync_client.py`, `sync_common.py` | data | The sync daemon and client. They load `hv` as a library (`sync_common.load_hv`) and never load the control plane. |
+| `merkle.py`, `ed25519.py`, `x25519.py`, `chacha20poly1305.py` | both | Journal hashing and the one canonicaliser (`merkle._canonical`), plus the bundled pure-Python crypto. A build without them refuses to run. |
+| `scripts/installer/dispatcher.sh` | control | The `hive-mind` command on `PATH`. Installer verbs run their scripts; everything else `exec`s `hivemind_ctl.py`. It never reads the key or passes a seed. |
 
-1. **Confidence / corroboration scoring** (`_confidence_for`, `_identity_weight`,
-   `_content_confidence`, …) — ~200 lines, mostly pure functions over parsed entries.
-2. **Advisories** read/format — small and self-contained (see [ADVISORIES.md](ADVISORIES.md)).
-3. **Journal I/O** (`append_journal`, `append_foreign_entries`, `init_db`, `persist_fact`) — cohesive,
-   but this is where the global-connection coupling bites.
-4. **Governance & membership** (`owner`/`group`/`config` commands + `_governance_state`) — the largest
-   and most interdependent block; do it last.
+`hive-mind` is a `.sh` dispatcher plus a `.py` module rather than an extensionless binary on purpose: the
+signed source manifest covers tracked files by suffix and special-cases only the name `hv`, so an
+extensionless second entry point would have shipped **unsigned**, and it is the file on the owner-key path.
 
-**Blockers to resolve first:** the global `get_conn()` connection and the on-demand
-`_governance_state()` projection are implicit dependencies of most commands. Before any large split,
-thread the DB connection explicitly (or wrap it in a small context object) and make the governance
-projection an explicit input rather than a recomputed global. Until that refactor is done, splitting
-mostly moves the coupling around rather than removing it. The same recomputation was also the main
-performance cost until v1.20.1 ([#70](https://github.com/projectmentor/hive-mind/issues/70)) made signature checks fast and once per process; every
-projection still rescans the journal.
+## How the control plane gets its owner steps
 
-This note is about the internal layout of the core only. It is not a plugin or extension design:
-anything that extends HiveMind talks to the core from outside, never by importing its internals.
+`hivemind_ctl.install(lib)` runs `hivemind_owner.py` **into the library's own namespace**, in the
+`hive-mind` process only. Each definition there replaces the `hv` placeholder of the same name. So:
 
-**Bottom line:** the monolith is a conscious trade-off favoring a simple, signed, dependency-free
-distribution. Revisit when the navigation/testing cost clearly outweighs that simplicity — and when
-it does, start with the pure-function seams above, not the governance core.
+- a command's structure is written once, in `hv`, and its flags once, in `hv`'s parser (S1);
+- the owner step keeps the name, globals and signed bytes it always had;
+- on the data plane the placeholder raises `NotOnDataPlane`, and `hv` prints the `hive-mind` form to
+  run and exits **2**, having acted on nothing.
+
+`hv`'s `main` checks `commandmap` **before parsing**, so a moved or removed command acts on nothing
+whatever its arguments:
+
+- `MOVED` (for example `hv owner init`, `hv group admit`, `hv config set`, `hv unforget`): names the
+  `hive-mind` command, with this invocation's arguments carried over.
+- `RENAMED` (the 1.x aliases `hv rebuild`, `hv merkle`, `hv key`, `hv doctor wire-agent`): names the
+  `hv` command that replaced each.
+- `FLAG_CONDITIONAL`: `hv retract --owner` and `hv owner propose-election --mint` by their flag, and the
+  owner-policy capsule and cell writes from their handlers, once the hive's config is read.
+
+Exit 2, never 0, so no script mistakes a pointer for success. The pointers stay through 2.x and are
+removed at 3.0: a deliberate amendment to contract §7, whose working-shim promise would otherwise have
+kept an owner-signing path in `hv`.
+
+## What stays on `hv`, and why
+
+`commandmap.STAYS` records the commands that deliberately did not move, so a later tidy-up cannot take a
+capability with it:
+
+- **Reads**: `owner show`, `owner elections`, `group list`, `doctor`.
+- **Device-signed dead-man recovery**: `owner propose-election --pub` and `owner vote`. An admitted member
+  running only `hv` must be able to elect a new owner when the owner has gone dark. Moving these would make
+  recovery need the very binary the split keeps off agent nodes.
+- **`hv retract`** without `--owner`: peer negative evidence, not governance.
+- **Links**: `remember`, `decide` and `entity` run on both planes. Through `hv` their links are
+  device-signed; through `hive-mind`, with source `manual`, they are owner-signed (decision
+  `h:34cc1dbcd3`, #114).
+- **`hv doctor --fix`**, which the 15-minute timer runs, keeps every data-plane repair (daemon, bind,
+  device-key permissions, peer addresses, the Claude wiring). The repairs that touch operator state move
+  to `hive-mind doctor --fix`: the owner key's permissions and location, the genesis pin, and closing the
+  pre-genesis forget grandfather (4c).
+
+## Keys
+
+Private keys live outside the working tree (2.0 PR 3a, private #27), in a 0700 key directory:
+`$HIVE_KEY_DIR`, else the path recorded in `$HIVE_HOME/.key-dir`, else
+`~/.hive/keys/<sha256 of the checkout's path, 16 hex>`. It holds `device-key` (0600), the owner key and
+`owner-pub` (0644). Keys at the pre-2.0 root paths still load, with a `keyperm` warning, and each plane's
+`doctor --fix` moves its own.
+
+The owner key is **sealed at rest** (2.0 PR 3b) as `owner-key.sealed`: scrypt, then ChaCha20-Poly1305.
+`hive-mind` unlocks it at most once per command, from the terminal or `$HIVE_OWNER_KEY_PASSPHRASE`, which
+is deliberately separate from `$HIVE_OWNER_PASSPHRASE` (export and escrow). The device key is not sealed:
+every entry is device-signed unattended.
+
+`hv` never opens either form of the owner key. Whether this device holds it is answered from file metadata
+and the public `owner-pub` sidecar alone, with four honest answers: `absent`, `unknown` (the key directory
+cannot be searched), `present` and `held`.
+
+## How S2 is enforced
+
+The split is checkable rather than promised. The tests, each shown failing on mutants in the suite:
+
+- **Import graph** (`tests/test_s2_split.py`): `hv`'s transitive imports never reach `ownerkey` or the
+  control plane, whether directly, transitively or by a dynamic import. An `hv` process never has the
+  signer loaded; a `hive-mind` process does.
+- **No owner signature within `hv`'s reach**: a static check that no `owner_sig` is produced anywhere `hv`
+  can reach, including by an inline signer that imports nothing.
+- **The two planes agree** (`tests/test_control_plane.py`): every `MOVED` target is a real control-plane
+  command, every `STAYS` entry is a real `hv` command and is refused on the control plane, and the
+  dead-man verbs never move. `tests/test_removed_aliases.py` does the same for `RENAMED`.
+- **Every placeholder is replaced** on the control plane, and no adapter (MCP, Hermes) reaches the control
+  plane or an owner signature.
+- **One seed reader** (`tests/test_ownerkey_boundary.py`): `ownerkey` never imports `hv`, owns no hive
+  location, never touches `sys.path`, and is the only place the seed is read; `merkle._canonical` is the
+  only canonicaliser.
+
+## What the split did not change
+
+- **No journal or wire change** (S7). Every signature has the same bytes, and a mixed 1.x/2.0 fleet
+  converges. `_verify_governance` stays on the data plane, because every node projects governance,
+  including agent nodes that can never sign.
+- **Extensions talk to the core from outside.** This is the internal layout of the core, not a plugin
+  design: a module never imports the core's internals.
+
+## Still one file
+
+`hv` stays monolithic for the reasons it always did: it is a signed artifact that runs on the Python 3
+standard library alone, is updated by `git pull`, and has one dispatch surface. The split removed the
+largest reason to break it up, owner authority, by moving that out. The seams that remain, in order of
+safety, if the navigation cost ever outweighs that simplicity:
+
+1. **Confidence and corroboration scoring**: mostly pure functions over parsed entries.
+2. **Advisories**: small and self-contained (see [ADVISORIES.md](ADVISORIES.md)).
+3. **Journal I/O** (`append_journal`, `append_foreign_entries`, `init_db`): cohesive, but this is where the
+   shared SQLite connection (`get_conn()`) couples most commands.
+4. **The governance projection** (`_governance_state`): the most interdependent block, last.
+
+Before any of those, thread the database connection and the governance projection through explicitly
+rather than as implicit globals; until then a split mostly moves the coupling around.
+
+The original peer-to-peer sync design, from June 2026, is kept as history in
+[history/P2P_DESIGN.md](history/P2P_DESIGN.md). Where it and the code disagree, the code, this page,
+[SYNC_API.md](SYNC_API.md), [INTERNALS.md](INTERNALS.md) and [THREAT_MODEL.md](THREAT_MODEL.md) are
+authoritative.

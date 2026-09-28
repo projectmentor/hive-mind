@@ -1,5 +1,5 @@
 """
-Hive Mind sync daemon (Phase 2, P2P_DESIGN.md §5).
+Hive Mind sync daemon (Phase 2, docs/history/P2P_DESIGN.md §5).
 
 A tiny stdlib HTTP service (no FastAPI dependency) exposing the 4 sync
 endpoints over the Tailnet. Separate process from the Laravel dashboard

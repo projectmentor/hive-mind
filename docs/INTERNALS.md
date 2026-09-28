@@ -5,7 +5,8 @@ architecture, the confidence model, sync protocol, and data formats.
 
 For user-facing CLI docs see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 For the sync HTTP API see [SYNC_API.md](SYNC_API.md).
-For the full architectural design see [P2P_DESIGN.md](P2P_DESIGN.md).
+For the architecture, the two planes `hv` and `hive-mind`, see [HV_ARCHITECTURE.md](HV_ARCHITECTURE.md).
+The original peer-to-peer sync design is kept as history in [history/P2P_DESIGN.md](history/P2P_DESIGN.md).
 
 ---
 

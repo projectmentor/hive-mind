@@ -6,10 +6,11 @@ makes S2 checkable instead of promised: everything that reads the owner seed, ba
 an owner signature lives here, so the split's static import-graph test has a single module name to
 assert is absent from `hv`'s transitive imports.
 
-**This change moves code, not commands.** `hv` still imports this module and still owner-signs exactly
-as before, because the five signing call sites have not moved yet — they move in the split, where the
-import-graph test becomes true. Nothing here changes the journal, the wire, or the bytes of any
-signature: the moved bodies are the previous ones verbatim.
+**Only the control plane loads it.** PR 1 (#152) moved the code here unchanged; the split (PR 2b, #159)
+moved every caller onto the control plane (`hivemind_owner.py`), so `hv` no longer imports this module and
+`tests/test_s2_split.py` asserts that `hv`'s import graph never reaches it. Nothing here changed the
+journal, the wire, or the bytes of any signature: the moved bodies are the previous ones verbatim. See
+docs/HV_ARCHITECTURE.md.
 
 Two deliberate properties, both there to keep the boundary honest:
 

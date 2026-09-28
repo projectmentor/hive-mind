@@ -149,6 +149,11 @@ introduced (a contract) or tagged (a patch).
   - **`hive-mind update` ends with ACTION REQUIRED** on an owned open hive, after the restart, the rebuild
     and the re-wire: the dependent facts and the one command. It exits non-zero, and prints the note on every
     update until the hive is closed. A closed or unowned hive ends as before.
+- **4d (docs): the architecture page describes the two planes.** `docs/HV_ARCHITECTURE.md` is rewritten for
+  the split. It covers what each file holds and on which plane, how `hive-mind` installs its owner steps
+  into the library, the pointer tables, what stays on `hv` and why, where the keys live, and the tests that
+  hold S2. `docs/P2P_DESIGN.md` moves to `docs/history/`, and `INTERNALS.md` no longer calls it the full
+  design. `ownerkey.py`'s docstring no longer says `hv` imports it.
 
 ## Unreleased — contract 1.28
 

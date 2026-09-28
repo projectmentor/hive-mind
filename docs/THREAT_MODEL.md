@@ -1,8 +1,9 @@
 # HiveMind threat model
 
 This is the authoritative statement of what HiveMind defends against, what it assumes, and what
-is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mechanics) and
-`P2P_DESIGN.md` (sync). When a security-relevant change lands, update this file.
+is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mechanics),
+`SYNC_API.md` (sync) and `HV_ARCHITECTURE.md` (the two planes). When a security-relevant change lands,
+update this file.
 
 ## Trust assumptions (the security rests on these)
 

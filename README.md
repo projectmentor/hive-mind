@@ -214,8 +214,9 @@ Most of the time your agents call `hv` for you. Full reference:
   links. See `docs/INTERNALS.md`.
 
 Deeper reading: [`docs/INTERNALS.md`](docs/INTERNALS.md),
-[`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/P2P_DESIGN.md`](docs/P2P_DESIGN.md) (the original
-sync design), [`docs/HV_ARCHITECTURE.md`](docs/HV_ARCHITECTURE.md), the
+[`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/HV_ARCHITECTURE.md`](docs/HV_ARCHITECTURE.md) (the two
+planes, `hv` and `hive-mind`), [`docs/history/P2P_DESIGN.md`](docs/history/P2P_DESIGN.md) (the original
+sync design, kept as history), the
 [continual-learning design](docs/design/hivemind_continual_learning_design.md) behind contract
 1.19–1.20, and for security [`SECURITY.md`](SECURITY.md),
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what HiveMind defends against, and what it

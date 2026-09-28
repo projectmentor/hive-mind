@@ -4,7 +4,7 @@ hv - Hive Mind CLI
 
 Institutional memory for multiple AI agents.
 
-Architecture (see docs/P2P_DESIGN.md):
+Architecture (see docs/HV_ARCHITECTURE.md; the original sync design is docs/history/P2P_DESIGN.md):
   The journal (journal/*.jsonl) is the SOURCE OF TRUTH. Every local write goes
   through append_journal(); foreign entries arrive via append_foreign_entries().
   SQLite (store.db) is a DERIVED index/cache rebuilt from the journal by

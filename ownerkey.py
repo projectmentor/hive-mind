@@ -80,6 +80,70 @@ def stash(seed, stash_dir):
         return None
 
 
+def load_sealed(path, passphrase, unseal):
+    """The 32-byte owner seed in the sealed key at `path` (2.0 PR 3b, private #27), opened with
+    `passphrase`. `unseal(envelope, passphrase)` is the AEAD opener, passed in so the cipher has one home
+    (`hv._owner_unseal`, the same envelope `owner escrow` writes).
+
+    Unlike `load_seed` this raises, because its callers must tell the operator which it was: ValueError for
+    a wrong passphrase or a damaged file, OSError when the file cannot be read."""
+    import json
+    env = json.loads(Path(path).read_text())
+    seed = unseal(env, passphrase)
+    if len(seed) != 32:
+        raise ValueError("the sealed owner key does not hold a 32-byte seed")
+    return seed
+
+
+def _write_0600(path, text):
+    """Write `text` to `path` at mode 0600 from its creation, atomically: a temp file in the same
+    directory, then a rename, so a crash never leaves a half-written or briefly world-readable key."""
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def write_sealed(path, envelope):
+    """Write a sealed owner key (the JSON envelope `hv._owner_seal` returns) to `path` at 0600."""
+    import json
+    return _write_0600(path, json.dumps(envelope, indent=2) + "\n")
+
+
+def stash_sealed(sealed_path, stash_dir):
+    """Back up the SEALED owner key into `stash_dir` as `.owner-key.sealed` (0600, directory 0700), and
+    drop a plaintext `.owner-key` there: it is either this key unsealed or an older key the previous
+    `stash` would have overwritten, so keeping it would leave the seed readable in the one copy meant to
+    outlive an uninstall. Returns the path written, or None. Best-effort, like `stash`."""
+    try:
+        d = Path(stash_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(d, 0o700)
+        except Exception:
+            pass
+        f = _write_0600(d / ".owner-key.sealed", Path(sealed_path).read_text())
+        try:
+            (d / ".owner-key").unlink()
+        except FileNotFoundError:
+            pass
+        return str(f)
+    except Exception:
+        return None
+
+
 def sign_governance(payload, owner_seed, owner_pub):
     """Attach `owner_pub`, then `owner_sig` — the owner's signature over the payload without `owner_sig`.
 
@@ -93,11 +157,14 @@ def sign_governance(payload, owner_seed, owner_pub):
     return payload
 
 
-def read_passphrase(prompt, confirm=False):
-    """Read a passphrase from $HIVE_OWNER_PASSPHRASE if set (automation and tests; empty means cancel),
-    else prompt on the tty. Returns the passphrase, or None to CANCEL — a blank line, Ctrl-C, Ctrl-D or
-    a confirmation mismatch all bail out, so the operator can change their mind at the prompt."""
-    env = os.environ.get("HIVE_OWNER_PASSPHRASE")
+def read_passphrase(prompt, confirm=False, env_var="HIVE_OWNER_PASSPHRASE"):
+    """Read a passphrase from `env_var` if set (automation and tests; empty means cancel), else prompt on
+    the tty. Returns the passphrase, or None to CANCEL — a blank line, Ctrl-C, Ctrl-D or a confirmation
+    mismatch all bail out, so the operator can change their mind at the prompt.
+
+    Two secrets use this, each with its own variable: `HIVE_OWNER_PASSPHRASE` encrypts an export or an
+    escrow, and `HIVE_OWNER_KEY_PASSPHRASE` unlocks the owner key sealed at rest (2.0 PR 3b)."""
+    env = os.environ.get(env_var)
     if env is not None:
         return env or None           # set => use it; empty => cancel
     import getpass

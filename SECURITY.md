@@ -52,6 +52,9 @@ See [`docs/ADVISORIES.md`](docs/ADVISORIES.md) for every published advisory and 
   (`hv whoami` prints where). `hv doctor` fails if either key is readable by anyone but you, or the key
   directory is not 0700. `hv doctor --fix` re-tightens the device key and `hive-mind doctor --fix` the
   owner key, and each moves its key out of the checkout if it is still there.
+- **Seal the owner key:** a new owner key is sealed under a passphrase (2.0). If `hv doctor` reports
+  `owner-seal` failing, run `hive-mind owner seal`. Never leave `HIVE_OWNER_KEY_PASSPHRASE` set in an
+  agent's environment: anything that can read it can sign governance.
 - **Switch sync to `enforce`** (`hv sync auth enforce`) once every peer reports protocol version 2,
   and don't set `HIVE_BIND=0.0.0.0`.
 - **Restrict who can connect** with Tailscale ACLs; HiveMind's signed reads decide who can *read*.

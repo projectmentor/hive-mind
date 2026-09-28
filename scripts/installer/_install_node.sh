@@ -560,8 +560,26 @@ print(f'{host} {port} {fp}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and
     # never 0.0.0.0. Set HIVE_BIND or a .peers.json 'bind' to override.
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
     # Owner acts run on the control plane since 2.0 (public #136); `hv` cannot owner-sign.
-    python3 ./hivemind_ctl.py owner init >/dev/null && ok "New hive created — you are the queen bee!"
-    python3 ./hivemind_ctl.py group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
+    # The owner key is sealed at rest (2.0 PR 3b, private #27). Ask for its passphrase once, here, and
+    # hand it to the two commands below: otherwise it is three prompts (new, confirm, then unlock for
+    # the admit). It lives only in this shell and in those two processes' environments.
+    _okp="${HIVE_OWNER_KEY_PASSPHRASE:-}"
+    if [ -z "$_okp" ] && { : </dev/tty; } 2>/dev/null; then
+      while :; do
+        ask "Passphrase for your owner key (hive-mind asks for it whenever you owner-sign): "
+        IFS= read -rs _okp </dev/tty; echo
+        ask "Again: "
+        IFS= read -rs _okp2 </dev/tty; echo
+        [ -n "$_okp" ] && [ "$_okp" = "$_okp2" ] && break
+        warn "Empty, or the two did not match. Try again."
+      done
+      unset _okp2
+    fi
+    [ -n "$_okp" ] || die "The owner key needs a passphrase. For an unattended install, set HIVE_OWNER_KEY_PASSPHRASE."
+    HIVE_OWNER_KEY_PASSPHRASE="$_okp" python3 ./hivemind_ctl.py owner init >/dev/null && ok "New hive created — you are the queen bee!"
+    HIVE_OWNER_KEY_PASSPHRASE="$_okp" python3 ./hivemind_ctl.py group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
+    unset _okp
+    ok "Your owner key is sealed. Keep the passphrase safe: without it this copy of the key is lost (escrow one: hive-mind owner escrow)."
     ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
     # Surface the invite right where a hive is born, so the owner knows exactly what to
     # paste on their other devices to add them — no "how do I get the address?" round-trip.

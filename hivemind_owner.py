@@ -23,16 +23,72 @@ import ownerkey        # the one place the seed is read and an owner signature i
 
 # ---- owner-key material: seed, passphrase, stash, signature ------------------------------------------
 
-def _owner_seed():
-    """The 32-byte owner seed if this device holds the owner key, else None. Read-only; never creates.
+class OwnerKeyLocked(Exception):
+    """The owner key is sealed and was not unlocked: the passphrase was cancelled or wrong, or none was
+    given for a new key (2.0 PR 3b). `hivemind_ctl.main` prints it and exits 1. It is raised before
+    anything is signed or written, so the journal and the key files are as they were."""
 
-    Control plane only (2.0 S2). Also records the key's PUBLIC half in `OWNER_PUB_PATH`, so `hv` can say
-    whether this device holds the established owner's key without ever opening the seed file — the
-    sidecar is public material, and a missing or stale one only costs `hv` its certainty, never authority,
-    since authority is a signature that `hv` cannot produce."""
-    seed = ownerkey.load_seed(OWNER_KEY_PATH)
-    if seed is not None and _ed25519 is not None:
-        _record_owner_pub(_ed25519.pub_from_seed(seed))
+
+# The owner seed once unlocked, for the rest of THIS process: one `hive-mind` command asks for the
+# passphrase at most once, however many signatures it makes (unlock per command, h:af5ecf48c5). Never
+# written anywhere; it ends with the process.
+_UNLOCKED_SEED = None
+_KEY_PASSPHRASE_ENV = "HIVE_OWNER_KEY_PASSPHRASE"
+
+
+def _key_passphrase(prompt, confirm=False):
+    """The at-rest passphrase: $HIVE_OWNER_KEY_PASSPHRASE if set (automation and tests; empty = cancel),
+    else the tty. Distinct from $HIVE_OWNER_PASSPHRASE, which encrypts an export or an escrow."""
+    return ownerkey.read_passphrase(prompt, confirm, env_var=_KEY_PASSPHRASE_ENV)
+
+
+def _is_file(p):
+    try:
+        return p.is_file()
+    except OSError:
+        return False
+
+
+def _owner_key_exists():
+    """Whether this device keeps an owner key in either form, from the file names alone."""
+    return _is_file(OWNER_SEALED_PATH) or _is_file(OWNER_KEY_PATH)
+
+
+def _owner_seed():
+    """The 32-byte owner seed if this device holds the owner key, else None. Never creates.
+
+    Control plane only (2.0 S2). A sealed key (2.0 PR 3b) is unlocked with the at-rest passphrase, once
+    per process: three tries at a tty, one when the passphrase comes from the environment. A cancel or a
+    wrong passphrase raises `OwnerKeyLocked` rather than returning None, since "this device does not hold
+    the owner key" would then be false. A plaintext key still loads; doctor fails until it is sealed.
+
+    Also records the key's PUBLIC half in `OWNER_PUB_PATH`, so `hv` can say whether this device holds the
+    established owner's key without ever opening the key file — the sidecar is public material, and a
+    missing or stale one only costs `hv` its certainty, never authority, since authority is a signature
+    that `hv` cannot produce."""
+    global _UNLOCKED_SEED
+    if _UNLOCKED_SEED is not None:
+        return _UNLOCKED_SEED
+    if _is_file(OWNER_SEALED_PATH):
+        tries = 1 if os.environ.get(_KEY_PASSPHRASE_ENV) is not None else 3
+        seed = None
+        for attempt in range(1, tries + 1):
+            pw = _key_passphrase("Owner key passphrase (blank line / Ctrl-C to cancel): ")
+            if pw is None:
+                raise OwnerKeyLocked("Cancelled: the owner key stays sealed, and nothing was signed.")
+            try:
+                seed = ownerkey.load_sealed(OWNER_SEALED_PATH, pw, _owner_unseal)
+                break
+            except (ValueError, KeyError) as e:
+                if attempt == tries:
+                    raise OwnerKeyLocked(f"Could not unlock the owner key ({e}). Nothing was signed.")
+                print("Wrong passphrase, try again.", file=sys.stderr)
+    else:
+        seed = ownerkey.load_seed(OWNER_KEY_PATH)
+    if seed is not None:
+        _UNLOCKED_SEED = seed
+        if _ed25519 is not None:
+            _record_owner_pub(_ed25519.pub_from_seed(seed))
     return seed
 
 
@@ -59,21 +115,40 @@ def _record_owner_pub(pub):
         pass
 
 
-def _write_owner_key(seed):
-    """Write the owner seed into the key directory (0600), outside the working tree (2.0 PR 3a, private
-    #27), drop a legacy copy at the root so there is never a second one, and record its public half."""
-    global OWNER_KEY_PATH
-    path = KEY_DIR / "owner-key"
-    _write_private(path, base64.b64encode(seed).decode() + "\n")
-    try:
-        if LEGACY_OWNER_KEY_PATH.exists():
-            LEGACY_OWNER_KEY_PATH.unlink()
-    except OSError:
-        pass
-    OWNER_KEY_PATH = path
+def _write_owner_key(seed, passphrase=None):
+    """Write the owner seed SEALED into the key directory (0600, outside the working tree: 2.0 PR 3a and
+    3b, private #27), then drop every plaintext copy on this device (the key directory's and the legacy
+    root's), so there is never a readable second one, and record its public half.
+
+    Asks for a new at-rest passphrase, with confirmation, unless one is given. A cancel raises
+    `OwnerKeyLocked` before anything is written, and every caller writes the key before it signs, so a
+    cancelled `owner init` leaves no key and no journal entry. The new seed counts as unlocked for the
+    rest of this command."""
+    global OWNER_KEY_PATH, _UNLOCKED_SEED
+    if passphrase is None:
+        passphrase = _key_passphrase("New passphrase for the owner key (asked once per `hive-mind` "
+                                     "command; blank line / Ctrl-C to cancel): ", confirm=True)
+    if passphrase is None:
+        raise OwnerKeyLocked("Cancelled: no owner key was written.")
+    _ensure_key_dir()
+    ownerkey.write_sealed(OWNER_SEALED_PATH, _owner_seal(seed, passphrase))
+    # Open what was written before any plaintext copy goes: a seal that does not round-trip must never
+    # cost the operator the only readable copy of the key.
+    if ownerkey.load_sealed(OWNER_SEALED_PATH, passphrase, _owner_unseal) != seed:
+        raise OwnerKeyLocked(f"The sealed key at {OWNER_SEALED_PATH} did not open to the same seed; "
+                             "no plaintext copy was removed.")
+    for plain in (KEY_DIR / "owner-key", LEGACY_OWNER_KEY_PATH):
+        try:
+            plain.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+    OWNER_KEY_PATH = KEY_DIR / "owner-key"
+    _UNLOCKED_SEED = seed
     if _ed25519 is not None:
         _record_owner_pub(_ed25519.pub_from_seed(seed))
-    return path
+    return OWNER_SEALED_PATH
 
 
 def _read_passphrase(prompt, confirm=False):
@@ -83,15 +158,21 @@ def _read_passphrase(prompt, confirm=False):
 
 
 def _stash_owner_key(seed):
-    """Best-effort backup of the owner seed to the stable identity stash (survives uninstall; the same
+    """Best-effort backup of the owner key to the stable identity stash (survives uninstall; the same
     location as the installer's keep_identity_save). Returns the path written, or None.
 
-    `$HIVE_IDENTITY_STASH` is resolved HERE so that variable keeps exactly one reader; `ownerkey.stash`
-    takes the directory as an argument."""
+    Since 2.0 PR 3b the stash holds the SEALED key, copied from `OWNER_SEALED_PATH`, and a plaintext
+    `.owner-key` there is removed (`ownerkey.stash_sealed`). Only a device still on a plaintext key (not
+    yet `owner seal`ed) stashes the plaintext form, as before.
+
+    `$HIVE_IDENTITY_STASH` is resolved HERE so that variable keeps exactly one reader; `ownerkey` takes
+    the directory as an argument."""
     if _ed25519 is not None:
         _record_owner_pub(_ed25519.pub_from_seed(seed))     # every key write ends here; hv reads the pub
-    return ownerkey.stash(seed, os.environ.get(
-        "HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity"))
+    stash_dir = os.environ.get("HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity")
+    if _is_file(OWNER_SEALED_PATH):
+        return ownerkey.stash_sealed(OWNER_SEALED_PATH, stash_dir)
+    return ownerkey.stash(seed, stash_dir)
 
 def _sign_governance_payload(payload, owner_seed, owner_pub):
     """Attach `owner_pub` then `owner_sig` (the owner's signature over the payload sans owner_sig).
@@ -107,6 +188,36 @@ def _sign_governance_payload(payload, owner_seed, owner_pub):
 # ---- the owner steps of data-plane commands -------------------------------------------------------------
 
 # `_data_plane_link_payload` is `hv`'s own builder (device-signed links only), saved by `install`.
+
+
+# The link flags of the verbs whose links this plane owner-signs (decision h:34cc1dbcd3); `entity` links
+# with `entity link`.
+_LINK_FLAGS = {"remember": ("resolves", "outcome_of", "supports", "contradicts", "extends"),
+               "decide": ("supersedes", "revoke", "informed")}
+
+
+def _will_owner_sign_links(args):
+    """Whether this `hive-mind remember|decide|entity` will owner-sign a link: at least one link to write,
+    and the write's source resolves to `manual`, exactly as `hv` resolves it."""
+    cmd = getattr(args, "command", None)
+    if cmd == "entity":
+        wants = getattr(args, "action", None) == "link"
+    else:
+        wants = any(getattr(args, f, None) for f in _LINK_FLAGS.get(cmd, ()))
+    source = getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual")
+    return bool(wants) and source == "manual"
+
+
+def _unlock_before_writing(args):
+    """Unlock the sealed owner key BEFORE a link verb writes anything (Fable on #167). `remember`, `decide`
+    and `entity link` append their fact or decision first and build the link payloads after, and it is
+    `_link_payload` that owner-signs on this plane. So a locked key used to raise only once the primary
+    entry was journaled: written, device-signed, without the link it asked for. Called by
+    `hivemind_ctl.main` ahead of dispatch: a cancel or a wrong passphrase raises `OwnerKeyLocked` with the
+    journal untouched, and a success leaves the seed unlocked for the links. A no-op when no owner key is
+    on this device, or when no owner-signed link is coming."""
+    if _will_owner_sign_links(args) and _owner_key_exists():
+        _owner_seed()
 
 
 def _link_payload(kind, from_ref, to_ref, source, data=None, channel=None):
@@ -344,7 +455,7 @@ def _close_grandfather_at_genesis(owner_seed, owner_pub):
 
 # The `owner` actions this plane implements. Every other action is `hv`'s and runs there unchanged.
 _OWNER_ACTIONS_HERE = {"pin", "export", "import", "standby", "escrow", "restore", "nominate", "unnominate",
-                       "claim", "transfer", "revoke-escrow", "heartbeat", "init", "mint"}
+                       "claim", "transfer", "revoke-escrow", "heartbeat", "init", "mint", "seal"}
 
 
 def owner_cmd(args):
@@ -362,8 +473,8 @@ def owner_cmd(args):
         if _ed25519 is None:
             print("ed25519 unavailable; cannot mint an owner key.")
             return
-        if OWNER_KEY_PATH.exists() and not getattr(args, "force", False):
-            print(f"An owner key already exists at {OWNER_KEY_PATH}. Use --force to replace it "
+        if _owner_key_exists() and not getattr(args, "force", False):
+            print(f"An owner key already exists in {KEY_DIR}. Use --force to replace it "
                   "(if it is the live owner key, replacing it loses the owner).")
             return
         seed = os.urandom(32)
@@ -376,6 +487,46 @@ def owner_cmd(args):
         print(f"Minted a prospective owner key on this device ({_owner_id_for_pub(pub)}).")
         print(f"  pub: {new_pub}")
         print(f"  Propose it for election with:  hv owner propose-election --pub {new_pub}")
+        return
+    if action == "seal":
+        # 2.0 PR 3b (private #27): convert a plaintext owner key to the sealed form, in place. The owner
+        # id, the journal and every peer are unchanged; only how this device stores the seed changes.
+        plain = [q for q in (KEY_DIR / "owner-key", LEGACY_OWNER_KEY_PATH) if _is_file(q)]
+        if not plain:
+            if _is_file(OWNER_SEALED_PATH):
+                print(f"The owner key is already sealed ({OWNER_SEALED_PATH}).")
+            else:
+                print("No owner key on this device, so there is nothing to seal.")
+            return
+        seeds = {ownerkey.load_seed(q) for q in plain} - {None}
+        if not seeds:
+            print(f"{', '.join(map(str, plain))}: not a valid owner key, so there is nothing to seal. "
+                  "Nothing was changed.")
+            return
+        if len(seeds) > 1:
+            print(f"Two different plaintext owner keys are on this device ({', '.join(map(str, plain))}). "
+                  "Keep the one whose id `hv owner show` names, move the other away, then re-run. "
+                  "Nothing was changed.")
+            return
+        seed = seeds.pop()
+        oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
+        if _is_file(OWNER_SEALED_PATH):
+            # Sealed and plaintext side by side: drop the plaintext only if it is the same key.
+            if _owner_seed() != seed:
+                print(f"A sealed owner key already exists at {OWNER_SEALED_PATH}, and it is a DIFFERENT key "
+                      f"from the plaintext {oid}. Nothing was changed; decide which to keep.")
+                return
+            for q in plain:
+                q.unlink()
+            print(f"Removed the plaintext copy of owner key {oid}; the sealed one stays at {OWNER_SEALED_PATH}.")
+        else:
+            _write_owner_key(seed)                 # asks for a new passphrase; verifies; then drops plaintext
+            print(f"Sealed owner key {oid} at {OWNER_SEALED_PATH} (0600). The plaintext copy is gone.")
+        stashed = _stash_owner_key(seed)
+        if stashed:
+            print(f"  backup: {stashed} (the stash holds the sealed form now)")
+        print("  `hive-mind` asks for this passphrase once per command that owner-signs. Losing it loses")
+        print("  this copy of the key: keep an escrow or an export (`hive-mind owner escrow`).")
         return
     if action == "pin":
         pin = _load_genesis_pin()
@@ -674,8 +825,8 @@ def owner_cmd(args):
         if _ed25519 is None:
             print("ed25519 unavailable; cannot create an owner key.")
             return
-        if OWNER_KEY_PATH.exists() and not args.force:
-            print(f"Owner key already exists at {OWNER_KEY_PATH}. Use --force to replace it.")
+        if _owner_key_exists() and not args.force:
+            print(f"Owner key already exists in {KEY_DIR}. Use --force to replace it.")
             return
         if gov["owner_id"] and not args.force:
             print(f"An owner is already established ({gov['owner_id']}). Use --force to override "
@@ -706,7 +857,8 @@ def owner_cmd(args):
             print("  FORKED: this device re-pinned its genesis. Peers that keep the old pin keep the")
             print("    OLD owner, and the old declaration stays in the journal — it is never removed.")
             print("    Every other device must re-join against this genesis to follow this owner.")
-        print(f"  key: {OWNER_KEY_PATH} (private — never commit or sync it)")
+        print(f"  key: {OWNER_SEALED_PATH} (sealed at rest; `hive-mind` asks for its passphrase once per "
+              "command. Never commit or sync it)")
         if stashed:
             print(f"  backup: {stashed} (auto-stash; `hive-mind owner export` for a portable copy)")
         # #135 part (1), 1.28: leave this hive closed. Re-issue every forget kept in effect only by the

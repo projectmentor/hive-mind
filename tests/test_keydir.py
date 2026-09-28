@@ -60,6 +60,14 @@ def _in_tree(home):
     return sorted(p.name for p in Path(home).iterdir() if p.name in (".device-key", ".owner-key", ".owner-pub"))
 
 
+def _owner_seed_b64(home):
+    """The owner seed of `home`, as base64, from an unencrypted `owner export` (the key is sealed at rest
+    since 2.0 PR 3b, so there is no plaintext file to read)."""
+    out = Path(home).parent / f"{Path(home).name}-export.json"
+    assert _ctl(home, "owner", "export", "--out", str(out)).returncode == 0
+    return json.loads(out.read_text())["seed"]
+
+
 def _check(home, name, *argv, script=_hv):
     r = script(home, "doctor", "--format", "json", *argv)
     return next(c for c in json.loads(r.stdout)["checks"] if c["name"] == name)
@@ -74,11 +82,11 @@ def test_new_keys_land_outside_the_working_tree(tmp_path):
     assert _in_tree(home) == [], "a seed was written into the working tree"
     kd = _key_dir(home)
     assert not str(kd).startswith(str(home)), "the key directory must be outside the checkout"
-    assert (kd / "device-key").exists() and (kd / "owner-key").exists() and (kd / "owner-pub").exists()
+    assert (kd / "device-key").exists() and (kd / "owner-key.sealed").exists() and (kd / "owner-pub").exists()
     if POSIX:
         assert stat.S_IMODE(kd.stat().st_mode) == 0o700
         assert stat.S_IMODE((kd / "device-key").stat().st_mode) == 0o600
-        assert stat.S_IMODE((kd / "owner-key").stat().st_mode) == 0o600
+        assert stat.S_IMODE((kd / "owner-key.sealed").stat().st_mode) == 0o600
     assert "this device holds the owner key" in _hv(home, "owner", "show").stdout
 
 
@@ -103,15 +111,16 @@ def test_a_renamed_checkout_keeps_its_keys(tmp_path, monkeypatch):
 # ── legacy root keys: still work, advised, relocated by the right plane ──────────────────────────────
 
 def _legacy_node(tmp_path):
-    """A node from before PR 3a: device and owner keys at the root of the checkout."""
+    """A node from before PR 3a: device and owner keys at the root of the checkout, both plaintext."""
     src = tmp_path / "fresh"
     assert _hv(src, "key", "init").returncode == 0 and _ctl(src, "owner", "init").returncode == 0
     kd = _key_dir(src)
     shutil.copy2(kd / "device-key", tmp_path / "device-seed")
     shutil.copy2(kd / "device-key", src / ".device-key")
-    shutil.copy2(kd / "owner-key", src / ".owner-key")
+    (src / ".owner-key").write_text(_owner_seed_b64(src) + "\n")
+    os.chmod(src / ".owner-key", 0o600)
     shutil.copy2(kd / "owner-pub", src / ".owner-pub")
-    for f in ("device-key", "owner-key", "owner-pub"):
+    for f in ("device-key", "owner-key.sealed", "owner-pub"):
         (kd / f).unlink()
     (src / ".key-dir").unlink()
     kd.rmdir()
@@ -186,15 +195,21 @@ def test_an_open_key_directory_is_a_hard_failure(tmp_path):
 
 # ── presence: honest without reading the seed (the #159 review) ──────────────────────────────────────
 
-def test_presence_answers_held_only_for_a_plausible_key_file(tmp_path, monkeypatch):
+@pytest.mark.parametrize("form", ["sealed", "plaintext"])
+def test_presence_answers_held_only_for_a_plausible_key_file(tmp_path, monkeypatch, form):
     home = tmp_path / "h"
     assert _ctl(home, "owner", "init").returncode == 0
+    if form == "plaintext":                               # a node not yet `owner seal`ed
+        seed = _owner_seed_b64(home)
+        (_key_dir(home) / "owner-key.sealed").unlink()
+        (_key_dir(home) / "owner-key").write_text(seed + "\n")
     m = _lib(home, monkeypatch)
     gov = m._governance_state(m.merkle.read_all_entries(m.JOURNAL_DIR))
-    key = m.OWNER_KEY_PATH
+    key = m.OWNER_SEALED_PATH if form == "sealed" else m.OWNER_KEY_PATH
     real = key.read_bytes()
     assert m._owner_key_state(gov) == "held"
-    for fake, why in ((b"", "empty"), (b"x" * 10, "truncated"), (b"y" * 200, "too long")):
+    too_long = b"y" * (5000 if form == "sealed" else 200)
+    for fake, why in ((b"", "empty"), (b"x" * 10, "truncated"), (too_long, "too long")):
         key.write_bytes(fake)
         assert m._owner_key_state(gov) == "present", f"a {why} file in the key's place is not a key"
     key.unlink()
@@ -205,19 +220,22 @@ def test_presence_answers_held_only_for_a_plausible_key_file(tmp_path, monkeypat
     assert m._owner_key_state(gov) == "held"
 
 
-def test_presence_rejects_a_non_regular_file_of_a_key_s_size(tmp_path, monkeypatch):
-    """A FIFO, device or directory whose size happens to be 44 is still not a key: the size alone is not
-    the test, the file type is too."""
+@pytest.mark.parametrize("which, size", [("OWNER_SEALED_PATH", 240), ("OWNER_KEY_PATH", 44)])
+def test_presence_rejects_a_non_regular_file_of_a_key_s_size(tmp_path, monkeypatch, which, size):
+    """A FIFO, device or directory whose size happens to be a key's is still not a key: the size alone is
+    not the test, the file type is too. For each form, with the other form absent."""
     home = tmp_path / "h"
     assert _ctl(home, "owner", "init").returncode == 0
     m = _lib(home, monkeypatch)
     gov = m._governance_state(m.merkle.read_all_entries(m.JOURNAL_DIR))
+    if which == "OWNER_KEY_PATH":
+        m.OWNER_SEALED_PATH.unlink()
 
     class NotAFile:
         def stat(self):
-            return os.stat_result((stat.S_IFIFO | 0o600, 0, 0, 1, 0, 0, 44, 0, 0, 0))
+            return os.stat_result((stat.S_IFIFO | 0o600, 0, 0, 1, 0, 0, size, 0, 0, 0))
 
-    monkeypatch.setattr(m, "OWNER_KEY_PATH", NotAFile())
+    monkeypatch.setattr(m, which, NotAFile())
     assert m._owner_key_state(gov) == "present"
 
 
@@ -244,7 +262,7 @@ def test_whoami_and_doctor_label_ids_public_and_never_print_a_key(tmp_path):
     assert "public id" in out.splitlines()[0]
     assert any(l.startswith("owner:") and "(public id)" in l for l in out.splitlines())
     assert any(l.startswith("keys:") and "never printed" in l for l in out.splitlines())
-    seed = (_key_dir(home) / "owner-key").read_text().strip()
+    seed = _owner_seed_b64(home)
     assert seed not in out and seed not in _hv(home, "doctor").stdout
     assert "(public id)" in _check(home, "owner")["detail"]
     # a parser that reads the id as the second word still gets the id

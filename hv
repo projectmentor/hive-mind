@@ -254,6 +254,12 @@ OWNER_KEY_PATH = _effective_key_path("owner-key", LEGACY_OWNER_KEY_PATH)
 # The owner key's PUBLIC half, written by the control plane whenever it reads or writes the key (2.0 PR 2b).
 # `hv` reads this, never the seed, to tell whether this device holds the established owner's key.
 OWNER_PUB_PATH = _effective_key_path("owner-pub", LEGACY_OWNER_PUB_PATH)
+# The owner key SEALED at rest (2.0 PR 3b, private #27): the passphrase envelope `owner escrow` already
+# writes (scrypt, then ChaCha20-Poly1305), in the key directory only. Every new owner key is written sealed
+# and the control plane unlocks it once per `hive-mind` command. A plaintext OWNER_KEY_PATH still works,
+# and doctor fails until `hive-mind owner seal` converts it. The distinct name is what lets `hv` tell the
+# two forms apart from `stat` alone, without opening either.
+OWNER_SEALED_PATH = KEY_DIR / "owner-key.sealed"
 # Genesis pin (hive-mind-private #14). Genesis used to be "the earliest valid self-signed `owner`
 # act wins", and an entry's timestamp is written by whoever made the entry — so a rival `owner` act
 # carrying an EARLIER timestamp TOOK the hive, before or after genesis, and silenced the real owner's
@@ -267,6 +273,7 @@ GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"
 
 
 _OWNER_KEY_SIZES = {44, 45}         # base64 of a 32-byte seed, with or without the trailing newline
+_OWNER_SEALED_SIZES = range(128, 4097)   # the sealed envelope: about 240 bytes of JSON
 
 
 class NotOnDataPlane(Exception):
@@ -285,9 +292,9 @@ def _owner_key_state(gov=None):
     """Whether THIS device holds the owner key, answered WITHOUT reading the seed (2.0 S2): one of
     'absent', 'unknown', 'present' or 'held'.
 
-    - 'absent': no key file.
-    - 'unknown': the key's location cannot be examined (permission denied; the sealed key of PR 3). A
-      two-state check would report "not held" here as a fact, which is a lie.
+    - 'absent': no key file, sealed or plaintext.
+    - 'unknown': the key's location cannot be examined (permission denied, e.g. a key directory the
+      agent user cannot search). A two-state check would report "not held" here as a fact, which is a lie.
     - 'present': a key file exists but its public half is not recorded (`OWNER_PUB_PATH`), or `gov` has
       no owner to compare with, so `hv` cannot say whose key it is.
     - 'held': a key file exists and its recorded public half is the established owner's.
@@ -295,17 +302,23 @@ def _owner_key_state(gov=None):
     The comparison reads only the public sidecar, which the control plane writes whenever it touches the
     key. A stale or forged sidecar misleads a display, never authority: authority is a signature `hv`
     cannot produce."""
-    try:
-        st = OWNER_KEY_PATH.stat()
-    except FileNotFoundError:
+    st = sizes = None
+    for path, sizes in ((OWNER_SEALED_PATH, _OWNER_SEALED_SIZES), (OWNER_KEY_PATH, _OWNER_KEY_SIZES)):
+        try:
+            st = path.stat()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return "unknown"
+        break
+    if st is None:
         return "absent"
-    except OSError:
-        return "unknown"
-    # A plaintext seed is base64 of 32 bytes: 44 characters, 45 with the newline every writer adds.
-    # Anything else in the key's place (a directory, an empty or truncated file) is not a key `hv` can
-    # vouch for, whatever the sidecar says. Garbage of the right length still passes: that is the
-    # irreducible cost of never reading the file (#159 review).
-    if not stat.S_ISREG(st.st_mode) or st.st_size not in _OWNER_KEY_SIZES:
+    # A plaintext seed is base64 of 32 bytes: 44 characters, 45 with the newline every writer adds; a
+    # sealed one is a JSON envelope of a few hundred bytes (2.0 PR 3b). Anything else in the key's place
+    # (a directory, an empty or truncated file) is not a key `hv` can vouch for, whatever the sidecar says.
+    # Garbage of the right length still passes: that is the irreducible cost of never reading the file
+    # (#159 review).
+    if not stat.S_ISREG(st.st_mode) or st.st_size not in sizes:
         return "present"
     try:
         owner_id = (gov or {}).get("owner_id")
@@ -315,6 +328,20 @@ def _owner_key_state(gov=None):
         return "held" if len(pub) == 32 and _owner_id_for_pub(pub) == owner_id else "present"
     except Exception:
         return "present"
+
+
+def _owner_key_form():
+    """Which form of the owner key this device keeps, from the file names alone (2.0 PR 3b): 'plaintext',
+    'sealed' or None. A sealed key with a plaintext one beside it is 'plaintext', since the seed is then
+    readable either way. Never opens a key file."""
+    def _is_file(p):
+        try:
+            return p.is_file()
+        except OSError:
+            return False
+    if _is_file(OWNER_KEY_PATH) or _is_file(LEGACY_OWNER_KEY_PATH) or _is_file(KEY_DIR / "owner-key"):
+        return "plaintext"
+    return "sealed" if _is_file(OWNER_SEALED_PATH) else None
 
 
 def _owner_id_for_pub(pub):
@@ -6646,6 +6673,7 @@ def _secret_key_files():
         out.append((label, new))
         if legacy != new:
             out.append((label, legacy))
+    out.append(("owner-key", OWNER_SEALED_PATH))     # sealed (2.0 PR 3b): ciphertext, but still 0600
     return out
 
 
@@ -6937,6 +6965,23 @@ def _doctor_status():
             checks.append({"name": "owner", "status": status, "detail": detail})
     except Exception as e:
         checks.append({"name": "owner", "status": "warn", "detail": f"owner check error: {e}"})
+
+    # 3b'. The owner key at rest (2.0 PR 3b, private #27). A plaintext owner seed is readable by every
+    #      process running as this user, the agents included, and whoever reads it can sign governance.
+    #      fail = a plaintext owner key on this device; ok = sealed, or no owner key here. From file names
+    #      only: this never opens either form.
+    form = _owner_key_form()
+    if form == "plaintext":
+        checks.append({"name": "owner-seal", "status": "fail",
+                       "detail": "the owner key is stored unsealed, so any process running as this user can "
+                                 "read the seed and sign governance. Run `hive-mind owner seal` (it asks for "
+                                 "a passphrase; `hive-mind` then asks for it once per command)"})
+    elif form == "sealed":
+        checks.append({"name": "owner-seal", "status": "ok",
+                       "detail": f"owner key sealed at rest ({OWNER_SEALED_PATH.name}); unlocked once per "
+                                 "`hive-mind` command"})
+    else:
+        checks.append({"name": "owner-seal", "status": "ok", "detail": "no owner key on this device"})
 
     # 3c. Genesis — is the declaration that established this hive pinned, and is it the only one?
     #     ok   = pinned, and exactly one self-signed `owner` declaration in the journal.
@@ -9090,6 +9135,7 @@ def build_parser():
     owner_mint = owner_sub.add_parser("mint", help="[hive-mind] Mint a prospective owner key on this device, "
                                                   "to propose with `hv owner propose-election --pub`")
     owner_mint.add_argument("--force", action="store_true", help="Replace an owner key already on this device")
+    owner_sub.add_parser("seal", help="[hive-mind] Seal a plaintext owner key at rest under a passphrase (2.0)")
     owner_propose = owner_sub.add_parser("propose-election", help="Propose electing a new owner (admitted devices; needs quorum + a dark owner)")
     owner_propose.add_argument("--mint", action="store_true", help="[moved] minting is `hive-mind owner mint` (2.0)")
     owner_propose.add_argument("--pub", help="Propose this base64 owner pubkey (mint one with `hive-mind owner mint`)")

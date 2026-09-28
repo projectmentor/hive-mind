@@ -93,7 +93,7 @@ def test_export_import_round_trip_resumes_same_owner(tmp_path):
     keyfile = tmp_path / "owner.key"
     _run(home, "owner", "export", "--out", str(keyfile))
     assert keyfile.exists()
-    _keys.key_path(home, "owner-key").unlink()                          # lose the owner device's key
+    _keys.key_path(home, "owner-key.sealed").unlink()                          # lose the owner device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout
     _run(home, "owner", "import", str(keyfile))             # restore on (this stand-in for) a new device
     show = _run(home, "owner", "show").stdout
@@ -157,7 +157,7 @@ def test_hive_escrow_restore_round_trip(tmp_path):
     import merkle
     entries = merkle.read_all_entries(str(home / "journal"))
     assert any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
-    _keys.key_path(home, "owner-key").unlink()                                      # lose the device's key
+    _keys.key_path(home, "owner-key.sealed").unlink()                                      # lose the device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "recovered from the hive" in out
@@ -302,14 +302,14 @@ def test_revoke_escrow_tombstones_then_reescrow_restores(tmp_path):
     _run(home, "owner", "revoke-escrow", "all")
     _, gov = _gov(home)
     assert gov["escrows"] == []
-    _keys.key_path(home, "owner-key").unlink()
+    _keys.key_path(home, "owner-key.sealed").unlink()
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "No (live) owner-escrow" in out
     # Recover the key (from the per-home stash, see _run) and re-escrow with a fresh passphrase.
-    stash = home / "stash" / ".owner-key"
-    _keys.key_path(home, "owner-key").write_text(stash.read_text())
+    stash = home / "stash" / ".owner-key.sealed"                    # the stash holds the sealed form (3b)
+    _keys.key_path(home, "owner-key.sealed").write_text(stash.read_text())
     _run(home, "owner", "escrow", passphrase="brand-new-passphrase")
-    _keys.key_path(home, "owner-key").unlink()
+    _keys.key_path(home, "owner-key.sealed").unlink()
     out2 = _run(home, "owner", "restore", passphrase="brand-new-passphrase").stdout
     assert "recovered from the hive" in out2
 

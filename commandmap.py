@@ -42,6 +42,7 @@ MOVED = {
     ("owner", "pin"):               ("owner pin",               "operator state: the genesis pin"),
     ("owner", "mint"):              ("owner mint",              "mints owner-key material; propose it "
                                                                 "with `hv owner propose-election --pub`"),
+    ("owner", "seal"):              ("owner seal",              "reads the owner key and writes it sealed"),
 
     # Membership. `hv admit` was already an alias; it resolves to the group form on the control plane.
     ("admit",):                     ("group admit",             "owner-signed"),

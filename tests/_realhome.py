@@ -91,7 +91,8 @@ def _hive_hooks(settings):
 def snapshot(claude, stash, hive=None, key_dir=None, keys_root=None):
     """The state `hv doctor --fix` and `hv owner init` would change: the skill symlink's target, the
     Hive-owned hooks, the .bak.doctor that every real --fix write refreshes (hv `_wire_agent`), and
-    the owner-key stash a reinstall restores from (hv `_stash_owner_key`)."""
+    the owner-key stash a reinstall restores from (`_stash_owner_key`), in both forms: plaintext, and
+    sealed since 2.0 PR 3b."""
     skill = Path(claude) / "skills" / "hive-memory"
     if skill.is_symlink():
         skill_state = ("symlink", os.readlink(skill))
@@ -102,6 +103,7 @@ def snapshot(claude, stash, hive=None, key_dir=None, keys_root=None):
         "hive hooks in settings.json": _hive_hooks(Path(claude) / "settings.json"),
         "settings.json.bak.doctor": _file_state(Path(claude) / "settings.json.bak.doctor", ctime=True),
         "owner-key stash": _file_state(Path(stash) / ".owner-key"),
+        "sealed owner-key stash": _file_state(Path(stash) / ".owner-key.sealed"),
         "genesis pin": _file_state(Path(hive) / ".genesis-pin") if hive else None,
         # The real hive's key material and identity (#160): operator state, which nothing a developer or
         # an agent does during a test run changes, so any change is the suite's.

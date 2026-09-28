@@ -15,9 +15,9 @@
 
 # Stable, survives uninstall; overridable for tests / non-standard installs.
 HIVE_IDENTITY_STASH="${HIVE_IDENTITY_STASH:-$HOME/.config/hive-mind/identity}"
-_HIVE_IDENTITY_FILES=(.device-key .device-id .owner-key)   # names INSIDE the stash (unchanged)
+_HIVE_IDENTITY_FILES=(.device-key .device-id .owner-key .owner-key.sealed)   # names INSIDE the stash
 
-# _hive_key_path <HIVE_DIR> <device|owner|pub|dir> — where hv keeps that key (2.0 PR 3a, private #27: the
+# _hive_key_path <HIVE_DIR> <device|owner|sealed|pub|dir> — where hv keeps that key (2.0 PR 3a, private #27: the
 # seeds live in a key directory outside the working tree). The resolution rule lives in ONE place, hv;
 # this asks it rather than keeping a second copy that could drift. Prints nothing when hv cannot be
 # loaded (no checkout yet), and callers then fall back to the legacy root, which hv still reads and
@@ -32,7 +32,8 @@ home, which = sys.argv[1], sys.argv[2]
 loader = importlib.machinery.SourceFileLoader("hv_keypath", home + "/hv")
 m = importlib.util.module_from_spec(importlib.util.spec_from_loader("hv_keypath", loader))
 loader.exec_module(m)
-print({"device": m.DEVICE_KEY_PATH, "owner": m.OWNER_KEY_PATH, "pub": m.OWNER_PUB_PATH, "dir": m.KEY_DIR}[which])
+print({"device": m.DEVICE_KEY_PATH, "owner": m.OWNER_KEY_PATH, "sealed": m.OWNER_SEALED_PATH,
+       "pub": m.OWNER_PUB_PATH, "dir": m.KEY_DIR}[which])
 PY
   return 0
 }
@@ -40,16 +41,23 @@ PY
 # keep_identity_save <HIVE_DIR> — copy this device's identity keys into the stash (0600).
 # Returns 0 if a device key was saved, 1 if there was nothing to save.
 keep_identity_save() {
-  local src="$1" dk ok f
+  local src="$1" dk ok sk f
   [ -n "$src" ] || return 1
   dk="$(_hive_key_path "$src" device)"; [ -n "$dk" ] || dk="$src/.device-key"
   ok="$(_hive_key_path "$src" owner)"; [ -n "$ok" ] || ok="$src/.owner-key"
+  sk="$(_hive_key_path "$src" sealed)"
   [ -e "$dk" ] || return 1
   mkdir -p "$HIVE_IDENTITY_STASH" || return 1
   chmod 700 "$HIVE_IDENTITY_STASH" 2>/dev/null || true
   cp -a "$dk" "$HIVE_IDENTITY_STASH/.device-key" 2>/dev/null || return 1
   [ -e "$src/.device-id" ] && cp -a "$src/.device-id" "$HIVE_IDENTITY_STASH/.device-id" 2>/dev/null
-  [ -e "$ok" ] && cp -a "$ok" "$HIVE_IDENTITY_STASH/.owner-key" 2>/dev/null
+  # The owner key's sealed form when there is one (2.0 PR 3b), and then no plaintext copy in the stash:
+  # the stash outlives an uninstall, so it is the last place a readable seed should linger.
+  if [ -n "$sk" ] && [ -e "$sk" ]; then
+    cp -a "$sk" "$HIVE_IDENTITY_STASH/.owner-key.sealed" 2>/dev/null && rm -f "$HIVE_IDENTITY_STASH/.owner-key"
+  elif [ -e "$ok" ]; then
+    cp -a "$ok" "$HIVE_IDENTITY_STASH/.owner-key" 2>/dev/null
+  fi
   for f in "${_HIVE_IDENTITY_FILES[@]}"; do
     [ -e "$HIVE_IDENTITY_STASH/$f" ] && chmod 600 "$HIVE_IDENTITY_STASH/$f" 2>/dev/null
   done
@@ -81,8 +89,12 @@ keep_identity_restore() {
     # The keys go into the key directory, outside the working tree, and the checkout records where.
     mkdir -p "$kd" && chmod 700 "$kd" 2>/dev/null
     [ -e "$HIVE_IDENTITY_STASH/.device-key" ] && cp -a "$HIVE_IDENTITY_STASH/.device-key" "$kd/device-key" 2>/dev/null
-    [ -e "$HIVE_IDENTITY_STASH/.owner-key" ] && cp -a "$HIVE_IDENTITY_STASH/.owner-key" "$kd/owner-key" 2>/dev/null
-    for f in device-key owner-key; do [ -e "$kd/$f" ] && chmod 600 "$kd/$f" 2>/dev/null; done
+    if [ -e "$HIVE_IDENTITY_STASH/.owner-key.sealed" ]; then
+      cp -a "$HIVE_IDENTITY_STASH/.owner-key.sealed" "$kd/owner-key.sealed" 2>/dev/null
+    elif [ -e "$HIVE_IDENTITY_STASH/.owner-key" ]; then
+      cp -a "$HIVE_IDENTITY_STASH/.owner-key" "$kd/owner-key" 2>/dev/null
+    fi
+    for f in device-key owner-key owner-key.sealed; do [ -e "$kd/$f" ] && chmod 600 "$kd/$f" 2>/dev/null; done
     printf '%s\n' "$kd" > "$dst/.key-dir"
     [ -e "$HIVE_IDENTITY_STASH/.device-id" ] && cp -a "$HIVE_IDENTITY_STASH/.device-id" "$dst/.device-id" 2>/dev/null
     [ -e "$kd/device-key" ]

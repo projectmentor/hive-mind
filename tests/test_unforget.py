@@ -301,8 +301,10 @@ def test_cli_refusals_write_nothing(tmp_path):
         assert r.returncode == code and msg in r.stderr, (args, r.stderr)
     run("retract", sid, "--owner", "--reason", "x")
     n = len(journal())
+    sealed = _keys.key_path(tmp_path, "owner-key.sealed")
+    aside = sealed.with_name("aside")
+    sealed.rename(aside)                                                         # take the real key away
     key = _keys.key_path(tmp_path, "owner-key")
-    real = key.read_text()
     key.write_text(base64.b64encode(os.urandom(32)).decode() + "\n")            # someone else's owner key
     r = run("unforget", sid, "--reason", "r", check=False)
     assert r.returncode == 1 and "not the hive's current owner" in r.stderr
@@ -310,4 +312,4 @@ def test_cli_refusals_write_nothing(tmp_path):
     r = run("unforget", sid, "--reason", "r", check=False)
     assert r.returncode == 1 and "needs the owner key" in r.stderr
     assert len(journal()) == n
-    key.write_text(real)
+    aside.rename(sealed)

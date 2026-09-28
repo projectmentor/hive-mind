@@ -106,6 +106,20 @@ def _real_home_guard():
                          + "; ".join(changes))
 
 
+OWNER_KEY_PASSPHRASE = "test-owner-key-passphrase"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _sealed_owner_key_passphrase():
+    """The owner key is sealed at rest (2.0 PR 3b), so every `hive-mind` command that owner-signs unlocks
+    it. One passphrase for the whole session, from the environment, set before any module-scoped fixture
+    runs `owner init`. `isolation` re-sets it per test, so a test that removes it cannot leak."""
+    mp = pytest.MonkeyPatch()
+    mp.setenv("HIVE_OWNER_KEY_PASSPHRASE", OWNER_KEY_PASSPHRASE)
+    yield OWNER_KEY_PASSPHRASE
+    mp.undo()
+
+
 @pytest.fixture(autouse=True)
 def isolation(tmp_path_factory, monkeypatch, _service_stub_bin):
     """#109: every test runs against a throwaway HOME, Claude config dir and owner-key stash, with
@@ -120,6 +134,7 @@ def isolation(tmp_path_factory, monkeypatch, _service_stub_bin):
     monkeypatch.setenv("HIVE_IDENTITY_STASH", str(ns.stash))
     monkeypatch.setenv("HIVE_TEST_SERVICE_LOG", str(ns.service_log))
     monkeypatch.setenv("HIVE_HOME", str(root / "hive"))       # #160: never the exported hive
+    monkeypatch.setenv("HIVE_OWNER_KEY_PASSPHRASE", OWNER_KEY_PASSPHRASE)     # the sealed owner key (PR 3b)
     monkeypatch.setenv("PATH", f"{_service_stub_bin}{os.pathsep}{os.environ['PATH']}")
     # A throwaway HOME hides the user's site-packages from child interpreters; keep them visible.
     if "PYTHONUSERBASE" not in os.environ:

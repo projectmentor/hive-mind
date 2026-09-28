@@ -287,3 +287,15 @@ def test_daemon_singleton_guard(hive):
             first.wait(timeout=5)
         except subprocess.TimeoutExpired:
             first.kill()
+
+
+def test_smoke_ports_come_from_below_the_ephemeral_range():
+    """#173: `bind(0)`-then-close let two concurrent smoke runs be handed the same port. The picker draws from
+    20000-32767, below the kernel's ephemeral range, so no `bind(0)` anywhere can be given its port, and each
+    draw is bindable when made."""
+    lib = PROJECT / "scripts" / "common" / "_smoke_daemon.sh"
+    r = subprocess.run(["bash", "-c", f'. "{lib}"; for i in $(seq 1 40); do smoke_free_port; done'],
+                       capture_output=True, text=True, timeout=120)
+    ports = [int(x) for x in r.stdout.split()]
+    assert len(ports) == 40 and all(20000 <= p <= 32767 for p in ports), ports
+    assert len(set(ports)) >= 30, "draws should be spread, not the kernel's next ephemeral port"

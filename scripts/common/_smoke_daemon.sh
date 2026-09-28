@@ -15,9 +15,28 @@
 #     run instead of hanging it (the orphaned curl on #159's cancelled macOS job).
 
 # smoke_free_port [host] — print a TCP port on <host> (default 127.0.0.1) that nothing is listening on now.
+# Drawn at random from 20000-32767, BELOW the kernel's ephemeral range (Linux from 32768, macOS from 49152).
+# Asking the kernel (`bind(0)`, then close) raced: two smoke runs started together could each be handed the
+# same just-closed port before either daemon bound it (#173, the residual Fable recorded on #163). Nothing
+# else on the machine is handed a port from this range either, and a clash is retried with another draw.
 smoke_free_port() {
-  python3 -c 'import socket, sys; s = socket.socket(); s.bind((sys.argv[1], 0)); print(s.getsockname()[1]); s.close()' \
-    "${1:-127.0.0.1}"
+  python3 - "${1:-127.0.0.1}" <<'PY'
+import random, socket, sys
+rng = random.SystemRandom()
+for _ in range(200):
+    port = rng.randint(20000, 32767)
+    s = socket.socket()
+    try:
+        s.bind((sys.argv[1], port))
+    except OSError:
+        continue
+    finally:
+        s.close()
+    print(port)
+    break
+else:
+    sys.exit("smoke_free_port: no free port in 20000-32767")
+PY
 }
 
 # smoke_wait_daemon <name> <pid> <host> <port> <hive_home> <log>

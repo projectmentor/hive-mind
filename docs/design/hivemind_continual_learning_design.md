@@ -541,7 +541,7 @@ def _utility(entry_ref, informed_links, decision_outcome, now):
                        for l in informed_links))
 ```
 
-Knobs (`hv config confidence set …`, namespace exists since 1.5; journaled as governance so every
+Knobs (`hive-mind config set …` since 2.0; the governed-config namespace exists since 1.5; journaled as governance so every
 node projects identically): `importance_self_cap` 0.3, `w_links` 0.6, `w_volatile` 0.1.
 
 `facts.importance` / `ideas.importance` / `facts.utility` are written **only** by the rebuild

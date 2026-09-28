@@ -50,11 +50,11 @@ extensionless second entry point would have shipped **unsigned**, and it is the 
 `hv`'s `main` checks `commandmap` **before parsing**, so a moved or removed command acts on nothing
 whatever its arguments:
 
-- `MOVED` (for example `hv owner init`, `hv group admit`, `hv config set`, `hv unforget`): names the
+- `MOVED` (for example `owner init`, `group admit`, `config set` and `unforget`): names the
   `hive-mind` command, with this invocation's arguments carried over.
 - `RENAMED` (the 1.x aliases `hv rebuild`, `hv merkle`, `hv key`, `hv doctor wire-agent`): names the
   `hv` command that replaced each.
-- `FLAG_CONDITIONAL`: `hv retract --owner` and `hv owner propose-election --mint` by their flag, and the
+- `FLAG_CONDITIONAL`: `retract --owner` and `owner propose-election --mint` by their flag, and the
   owner-policy capsule and cell writes from their handlers, once the hive's config is read.
 
 Exit 2, never 0, so no script mistakes a pointer for success. The pointers stay through 2.x and are

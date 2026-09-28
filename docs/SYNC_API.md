@@ -213,7 +213,7 @@ journal entries.
 | Field | Description |
 |---|---|
 | `node_id` | This device's id (`k1:…`, the fingerprint of its Ed25519 device key) |
-| `hive_id` | The hive's id: `h1:` + 8 random bytes, minted by `hv owner init` and carried in the signed genesis. Empty before an owner exists. Nodes refuse to merge journals across different hive ids. |
+| `hive_id` | The hive's id: `h1:` + 8 random bytes, minted by `hive-mind owner init` and carried in the signed genesis. Empty before an owner exists. Nodes refuse to merge journals across different hive ids. |
 | `owner_id` | The current owner's fingerprint (`o1:` + first 16 hex of `sha256(owner pubkey)`), from governance |
 | `label` | This node's display label (`HIVE_NODE_LABEL`, default the hostname) |
 | `node_count` | Number of admitted devices (the count of distinct authoring devices if nothing is admitted yet) |
@@ -419,7 +419,7 @@ Written by the installer; per node and git-ignored.
 | `sync_auth` | `permissive` | Optional sync auth mode (`hv sync auth` sets it) |
 | `sync_auth_outbound` | `permissive` | Optional outbound mode: what a peer's hello must prove before this node pushes to it (`hv sync auth --outbound` sets it; see *Responder signatures*) |
 
-Admitting a device with `hv group admit` also adds a peer entry from the address in its join request.
+Admitting a device with `hive-mind group admit` also adds a peer entry from the address in its join request.
 To add a device, run `hive-mind invite` on a device already in the hive and paste the line into
 `hive-mind install` on the new one.
 

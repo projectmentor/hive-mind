@@ -277,7 +277,7 @@ def hive_retract(fact_id: str, reason: str = "") -> str:
 
     Use when you find a fact is wrong or stale and want to down-weight it without destroying it.
     This is deliberate, reversible negative evidence — NOT a deletion. The decisive owner-forget
-    (`hv retract --owner`) is intentionally NOT exposed here; it stays a CLI/owner action.
+    (`hive-mind retract --owner`) is intentionally NOT exposed here; it stays a CLI/owner action.
 
     To REPLACE a fact with a correction, don't use this tool: call
     hive_remember("<correction>", resolves="<sid>"), which writes the correction and soft-retracts

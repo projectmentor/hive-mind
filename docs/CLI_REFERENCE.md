@@ -15,25 +15,25 @@ memory.
 | Command | What it does |
 |---|---|
 | `hv audit` | Surface redundant, obsolete, stale or missing facts (used by agent hooks) |
-| `hv config` | Device identity (`identity`) + owner-signed confidence (`confidence`) / quorum (`quorum`) params |
+| `hv config` | Device identity (`identity`); governed parameters are set with `hive-mind config set` (owner) |
 | `hv dash` | Open the read-only web dashboard (served by the sync daemon) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
 | `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `rebuild` |
 | `hv entity` | Track named things (people, projects, concepts) |
-| `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
+| `hv group` | The membership roster (`list`); the lifecycle (admit/revoke/deny/change/purge) is `hive-mind group …` (owner) |
 | `hv wire` | Self-wire a tool/agent from a cell or comb; `--list`/`--show`/`--add` manage cell definitions |
 | `hv capsule` | Seal a secret to the authorized device set: `put`/`get`/`ls`/`rm`/`rotate` |
 | `hv join` | Request admission to a hive you've synced |
 | `hv nudge` | Emit a save/audit hint or the session-start digest (used by agent hooks) |
-| `hv owner` | Show or create the governance owner identity |
+| `hv owner` | Show the owner (`show`, `elections`) and run the device-signed election (`propose-election --pub`, `vote`); the owner's own acts are `hive-mind owner …` |
 | `hv peers` | Hive members, reachability, staleness, trust drift |
 | `hv propose` | Record an idea (a hypothesis) |
 | `hv remember` | Store a fact |
 | `hv retract` | Correct a fact you got wrong |
 | `hv search` | Search facts, decisions and ideas |
 | `hv stats` | See a summary of your memory |
-| `hv unforget` | Owner only: reverse an owner forget (`hv retract --owner`) |
+| `hive-mind unforget` | Owner only: reverse an owner forget (`hive-mind retract --owner`) |
 | `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode, `auth --outbound` what a peer must prove before this node pushes to it |
 | `hv telemetry` | Local-only session observability (never synced) |
 | `hv verify` | Check that this install is the official, signed release |
@@ -55,7 +55,7 @@ cd ~/projects/hive-mind
 
 ---
 
-### `hv config` — Device identity + confidence/quorum parameters
+### `hv config` and `hive-mind config set` — Device identity + governed parameters
 
 `hv config identity` manages **this device's** Ed25519 key (`hv key` until 2.0):
 
@@ -65,24 +65,24 @@ hv config identity show                # this device's device_id + pubkey
 hv config identity init [--force]      # mint a device key (fresh install)
 ```
 
-`hv config confidence set` tunes the owner-signed, journaled knobs (identical on every
-device, which is what keeps confidence converging):
+`hive-mind config set` tunes the owner-signed, journaled knobs (identical on every
+device, which is what keeps confidence converging). It runs on the owner machine:
 
 ```
-hv config confidence set same_device_lambda 0.5          # weight of EACH extra agent on one device (default 0.5)
-hv config confidence set cap_self 0.70                   # ceiling when all corroboration is one principal (default 0.70)
-hv config confidence set introspect_support_weight 0.0   # weight of an `introspect`-channel fact assertion (1.21) or
+hive-mind config set same_device_lambda 0.5              # weight of EACH extra agent on one device (default 0.5)
+hive-mind config set cap_self 0.70                       # ceiling when all corroboration is one principal (default 0.70)
+hive-mind config set introspect_support_weight 0.0       # weight of an `introspect`-channel fact assertion (1.21) or
                                                          # supports/contradicts/resolves link (1.19), default 0
-hv config confidence set trust_long_days 180             # 1.19: trust-velocity long window (days)
-hv config confidence set trust_short_days 14             # 1.19: trust-velocity short window (days)
-hv config confidence set trust_drift_threshold -0.3      # 1.19: `doctor trust-drift` warns when short − long falls below this
+hive-mind config set trust_long_days 180                 # 1.19: trust-velocity long window (days)
+hive-mind config set trust_short_days 14                 # 1.19: trust-velocity short window (days)
+hive-mind config set trust_drift_threshold -0.3          # 1.19: `doctor trust-drift` warns when short − long falls below this
 # 1.19 PR6 — salience (importance / utility) and per-class half-lives, all governed the same way:
-hv config confidence set importance_self_cap 0.3         # the most a writer's own `--importance` can claim (default 0.3)
-hv config confidence set w_links 0.6                     # weight of other-identity link in-degree in importance (default 0.6)
-hv config confidence set w_volatile 0.1                  # extra importance of a `volatile` fact while fresh (default 0.1)
-hv config confidence set halflife_fact 180               # confidence/importance/utility half-life of a fact, days (default 180)
-hv config confidence set halflife_idea 90                # … of an idea (default 90)
-hv config confidence set halflife_volatile 14            # … of a `volatile`-tagged fact (default 14)
+hive-mind config set importance_self_cap 0.3             # the most a writer's own `--importance` can claim (default 0.3)
+hive-mind config set w_links 0.6                         # weight of other-identity link in-degree in importance (default 0.6)
+hive-mind config set w_volatile 0.1                      # extra importance of a `volatile` fact while fresh (default 0.1)
+hive-mind config set halflife_fact 180                   # confidence/importance/utility half-life of a fact, days (default 180)
+hive-mind config set halflife_idea 90                    # … of an idea (default 90)
+hive-mind config set halflife_volatile 14                # … of a `volatile`-tagged fact (default 14)
 ```
 
 > **Importance is learned (1.19 PR6).** `--importance` is a *hint*: the projection starts a fact at
@@ -100,24 +100,24 @@ hv config confidence set halflife_volatile 14            # … of a `volatile`-t
 > `hv doctor` reports downgraded `supersedes`/`resolves` links under `link-authz`, and peers that
 > cannot yet honour links under `fleet-contract`. See `docs/INTERNALS.md` → *Links*.
 
-`hv config quorum set` tunes the owner-signed quorum-election knobs (the dead-owner recovery
-path; see `hv owner`). All default to elections **off**:
+The quorum-election knobs (the dead-owner recovery path; see the owner section) are set the same way. All default to elections **off**:
 
 ```
-hv config quorum set quorum_m 2          # admitted devices that must agree to elect (0 = OFF, default)
-hv config quorum set quorum_by device    # count quorum by `device` or by `principal` (default device)
-hv config quorum set dead_man_days 30    # owner silence required before an election can install (default 30)
+hive-mind config set quorum_m 2             # admitted devices that must agree to elect (0 = OFF, default)
+hive-mind config set quorum_by device       # count quorum by `device` or by `principal` (default device)
+hive-mind config set dead_man_days 30       # owner silence required before an election can install (default 30)
 ```
 
-> `hv config set <key> <value>` is kept as a silent alias for `hv config confidence set …`.
+> *(2.0)* One command sets every governed key. The three older `set` forms under `hv config`
+> (`confidence set`, `quorum set` and plain `set`) name `hive-mind config set` and exit 2, acting on nothing.
 
 `capsule_putters` and `cell_writers` are the two write policies: who may publish capsules, and who
 may publish cells and combs. Each is `owner` (the default) or `fertile` (any admitted device). Set
 them like any other governed key:
 
 ```
-hv config set capsule_putters fertile    # any admitted device may seal and rotate capsules
-hv config set cell_writers owner         # only the owner may publish cells/combs (default)
+hive-mind config set capsule_putters fertile   # any admitted device may seal and rotate capsules
+hive-mind config set cell_writers owner        # only the owner may publish cells/combs (default)
 ```
 
 *(1.25, #122)* `forget_writers` decides which owner forgets count. `legacy` (the default) also honours an
@@ -308,7 +308,7 @@ names `hive-mind doctor --fix`, which closes it; once closed the check reports i
 and *(1.19 PR2b)* **fleet-contract** (an admitted peer advertises an agent contract below 1.19, or
 is unreachable so it cannot be verified — such a peer lands but does not honour the `link` entries
 that `--supersedes`, `--resolves` and `entity link` now write; upgrade it with `git pull`, or
-`hv group purge` a dead device; `--fix` never touches this).
+`hive-mind group purge` a dead device; `--fix` never touches this).
 
 ```
 hv doctor
@@ -546,24 +546,24 @@ changes nothing — not admission, not purge, not link authority.
 hv peers
 ```
 
-### `hv group` — Membership lifecycle (owner-only)
+### `hv group` and `hive-mind group` — Membership lifecycle
 
 By default any device can corroborate. Once you have an owner, only **admitted**
 devices count toward confidence — so someone can't mint a pile of keys and fake a
-crowd (a Sybil attack). `hv group` is the owner's roster + lifecycle:
+crowd (a Sybil attack). `hv group` shows the roster; the lifecycle is the owner's, on `hive-mind group`:
 
 ```
 hv group                                       # roster (admitted/pending/denied/purged)
 hv group list                                  # same as above
-hv group admit                                 # list devices awaiting admission
-hv group admit k1:597b3e0f5fb92d37 --principal david
-hv group revoke k1:…                           # un-admit (reversible) → device goes STERILE
-hv group deny k1:…                             # reject a pending join-request (admit overrides)
-hv group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
-hv group purge k1:…                            # tombstone: permanent; its entries stop counting
+hive-mind group admit                                 # list devices awaiting admission
+hive-mind group admit k1:597b3e0f5fb92d37 --principal david
+hive-mind group revoke k1:…                           # un-admit (reversible) → device goes STERILE
+hive-mind group deny k1:…                             # reject a pending join-request (admit overrides)
+hive-mind group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
+hive-mind group purge k1:…                            # tombstone: permanent; its entries stop counting
 ```
 
-With no device_id, `hv group admit` lists the pending join-requests. (Those also surface
+With no device_id, `hive-mind group admit` lists the pending join-requests. (Those also surface
 in your session-start digest, so your agent can prompt you.) `--principal` tags who
 owns the device; when every device behind a fact belongs to the same principal, its
 confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
@@ -586,7 +586,9 @@ with its identity-derived one — that carried key is ignored, never trusted, an
 surfaced as a tamper signal. The same two conditions appear in `hv doctor` as the `device-keys`
 check.
 
-> `hv admit …` is kept as a silent alias for `hv group admit …`.
+> *(2.0)* The lifecycle moved to the control plane. Run on `hv`, `group admit`, `revoke`, `deny`, `change`
+> and `purge`, and the older top-level `admit`, name the `hive-mind group` form and exit 2. `hv group` and
+> `hv group list` stay.
 
 ---
 
@@ -644,7 +646,7 @@ any device of an owned hive that needs it.
 
 ---
 
-### `hv owner` — Governance owner identity
+### `hv owner` and `hive-mind owner` — Governance owner identity
 
 Confidence weighs *who* corroborates a fact. A few of those rules need a shared,
 trusted source: which devices count, who owns each one, and a couple of tunable
@@ -652,28 +654,38 @@ numbers. That trust is rooted in an **owner key** — a separate Ed25519 key (ap
 from your device keys) that signs governance decisions into the journal, so every
 node agrees on them.
 
+**Two planes (2.0).** The reads and the device-signed election verbs stay on `hv`, because an admitted member
+running only `hv` must be able to propose and vote when the owner has gone dark:
+
 ```
-hv owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
-hv owner elections                             # list open owner-election proposals and their tallies
-hv owner escrow                                # store the key (passphrase-encrypted) IN the hive
-hv owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
-hv owner heartbeat                             # refresh owner liveness (resets the dead-man timer)
-hv owner import FILE [--force]                 # restore it from a file on another device
-hv owner init                                 # mint the owner key and claim ownership (once)
-hv owner nominate <successor_pub>             # nominate a NEW owner key as successor
-hv owner pin [--set | --fingerprint FP] [--force]  # show, or pin, the genesis this node accepts
-hv owner propose-election [--mint | --pub B64] # (admitted device) propose electing a new owner
-hv owner restore                               # recover the key from the hive's escrow
-hive-mind owner seal                           # seal a plaintext owner key at rest under a passphrase (2.0)
-hv owner revoke-escrow <node_id:seq|all>     # tombstone an escrowed key so `restore` skips it
-hv owner show                                 # the established owner + admitted devices + config
-hv owner standby <device_id> [--off]          # declare an advisory standby key holder
-hv owner transfer <new_owner_pub>            # immediate handoff to a key the target already holds
-hv owner unnominate <successor_pub>           # withdraw a pending nomination
-hv owner vote <proposal_id>                    # (admitted device) vote for an open election proposal
+hv owner elections                                   # list open owner-election proposals and their tallies
+hv owner propose-election --pub B64                  # (admitted device) propose electing a new owner key
+hv owner show                                        # the established owner + admitted devices + config
+hv owner vote <proposal_id>                          # (admitted device) vote for an open election proposal
 ```
 
-You run `hv owner init` once, on whichever machine you want to hold the owner key.
+Everything that owner-signs, or reads or writes the owner key, runs on the owner's control plane. Run on `hv`,
+each of these names the `hive-mind` form and exits 2, acting on nothing:
+
+```
+hive-mind owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
+hive-mind owner escrow                               # store the key (passphrase-encrypted) IN the hive
+hive-mind owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
+hive-mind owner heartbeat                            # refresh owner liveness (resets the dead-man timer)
+hive-mind owner import FILE [--force]                # restore it from a file on another device
+hive-mind owner init                                 # mint the owner key and claim ownership (once)
+hive-mind owner mint [--force]                       # mint owner-key material to propose in an election
+hive-mind owner nominate <successor_pub>             # nominate a NEW owner key as successor
+hive-mind owner pin [--set | --fingerprint FP] [--force]  # show, or pin, the genesis this node accepts
+hive-mind owner restore                              # recover the key from the hive's escrow
+hive-mind owner revoke <node_id:seq|all>             # tombstone an escrowed key so `restore` skips it
+hive-mind owner seal                                 # seal a plaintext owner key at rest under a passphrase
+hive-mind owner standby <device_id> [--off]          # declare an advisory standby key holder
+hive-mind owner transfer <new_owner_pub>             # immediate handoff to a key the target already holds
+hive-mind owner unnominate <successor_pub>           # withdraw a pending nomination
+```
+
+You run `hive-mind owner init` once, on whichever machine you want to hold the owner key.
 It mints a **`hive_id`** (a public identifier that keeps your hive separate from
 any other hive on the same tailnet) and writes an owner declaration into the
 journal that the other nodes pick up on sync. Until you do this, the governance
@@ -689,13 +701,13 @@ self-signed declaration wins", and an entry's timestamp is written by whoever ma
 entry.
 
 A **joining** device pins from the invite instead, before it has pulled anything:
-`hv owner pin --fingerprint h1:…/o1:…/0a1b2c3d` (the installer does this for you when the
+`hive-mind owner pin --fingerprint h1:…/o1:…/0a1b2c3d` (the installer does this for you when the
 pasted invite carries a fingerprint). Only a hash *prefix* travels in an invite, which is
 enough — a squatter can copy a `hive_id` and an `owner_id`, but not the genesis entry's
 hash. The pin then names the exact entry as soon as the declaration itself syncs.
 
-`hv owner init` pins the declaration it writes, so a new hive is pinned from the start.
-An existing hive pins on the operator's word: `hv owner pin --set` takes the journal's
+`hive-mind owner init` pins the declaration it writes, so a new hive is pinned from the start.
+An existing hive pins on the operator's word: `hive-mind owner pin --set` takes the journal's
 single self-signed declaration. If the journal holds **two**, it refuses and lists them —
 there is deliberately no timestamp tie-break, because the timestamp is the part an
 attacker controls. Resolve it by re-joining from the device you trust, comparing the
@@ -707,7 +719,7 @@ unpinned node, a pin whose declaration has not synced yet, and any journal holdi
 than one declaration.
 
 A node with no pin keeps the older behaviour, so a fleet mid-upgrade keeps syncing. **The Merkle consequence, plainly.** A rival that a peer already stored is never removed — the journal is append-only. So a node that refused it and a node that holds it differ in their Merkle root from then on, and that difference does not heal. What converges is the *projection*: once every node pins the same genesis, they all agree on the owner. A node that has not pinned keeps the old rule and can project a **different owner** than a pinned peer — visibly, not silently, and `hv doctor genesis` names it.
-`hv owner init --force` re-pins **this** node and is a deliberate fork: peers that keep
+`hive-mind owner init --force` re-pins **this** node and is a deliberate fork: peers that keep
 the old pin keep the old owner, and the old declaration stays in the journal, because
 nothing is ever removed from it.
 
@@ -720,15 +732,15 @@ change), and `hv doctor` fails until you do. `hv` never opens the key in either 
 
 **The owner key is a single point of failure — back it up.** `hive-mind owner init`
 auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key.sealed` (survives uninstall; sealed since 2.0),
-and `hv owner export` writes a portable copy you can store off-device (use
+and `hive-mind owner export` writes a portable copy you can store off-device (use
 `--passphrase` to encrypt it; an exported key is total hive authority, so treat it
-like an SSH private key). If the owner device dies, `hv owner import` installs the
+like an SSH private key). If the owner device dies, `hive-mind owner import` installs the
 key on a new device and governance resumes under the **same** owner identity — no
 journal change. `import` refuses a key that doesn't match the journal's established
 owner unless you pass `--force`.
 
-`hv owner escrow` stores the owner key **inside the hive itself**, passphrase-encrypted,
-so it syncs to every node and any synced device can recover it with `hv owner restore`
+`hive-mind owner escrow` stores the owner key **inside the hive itself**, passphrase-encrypted,
+so it syncs to every node and any synced device can recover it with `hive-mind owner restore`
 (no file to move). Two cautions, because the journal is shared and append-only: the
 encrypted blob is readable by **every** device that syncs the hive (including read-only
 members) and **can't be un-published**, so the passphrase is effectively your hive master
@@ -736,25 +748,25 @@ key — make it strong (a 12-char minimum is enforced). Escrow and the off-devic
 different threats: escrow handles "I lost a device," the file handles "I don't fully trust
 the shared store." Use the one that fits, or both.
 
-`hv owner standby <device_id>` records an advisory note that a device is sanctioned
+`hive-mind owner standby <device_id>` records an advisory note that a device is sanctioned
 to also hold the owner key and act while the primary owner is offline (it must
 actually hold a copy via export/import — the key is the authority; the declaration
 is for visibility in `hv owner show`/`hv whoami`).
 
 **Changing who the owner is — succession.** Backup/restore recovers the *same* owner
 identity. To hand off to a *new* key (a fresh device, or to rotate away from a leaked
-one), use succession. On the successor device, `hv owner claim --mint` mints a fresh
+one), use succession. On the successor device, `hive-mind owner claim --mint` mints a fresh
 owner key and prints its public key. Give that pubkey to the current owner, who runs
-`hv owner nominate <pub>`; once that syncs, the successor re-runs `hv owner claim` to
+`hive-mind owner nominate <pub>`; once that syncs, the successor re-runs `hive-mind owner claim` to
 take ownership. From then on the old owner key can no longer sign governance — its
-post-handoff acts are simply ignored by every node. `hv owner transfer <pub>` is the
+post-handoff acts are simply ignored by every node. `hive-mind owner transfer <pub>` is the
 immediate variant (no claim round-trip), but the target device must *already hold* that
 key or governance becomes unsignable, so prefer nominate+claim. A live owner can never
 be unseated: only the current owner's own nominate/transfer, or a nominee's claim against
 an open nomination, advances ownership.
 
-`hv owner revoke-escrow <node_id:seq|all>` logically tombstones an escrowed key so
-`hv owner restore` skips it (`node_id:seq` from `hv owner show` / the doctor owner check,
+`hive-mind owner revoke <node_id:seq|all>` logically tombstones an escrowed key so
+`hive-mind owner restore` skips it (`node_id:seq` from `hv owner show` / the doctor owner check,
 or `all`). The ciphertext stays in the append-only journal forever — a tombstone is not
 deletion — so if an escrow *passphrase* leaked, the real fix is to **rotate the owner key**
 via succession/transfer, which makes the old escrow blob unlock a key that is no longer
@@ -764,15 +776,15 @@ the owner.
 both need someone to act *before* the owner is lost. If the owner device dies with no escrow,
 no exported file, and no nominated successor, the admitted devices can still elect a new owner —
 but only by agreement, and only once the old owner has genuinely gone dark. The owner first
-turns this on (it is off by default): `hv config quorum set quorum_m <N>` sets how many admitted
-devices must agree, and `hv config quorum set dead_man_days <D>` sets how long the owner must be
+turns this on (it is off by default): `hive-mind config set quorum_m <N>` sets how many admitted
+devices must agree, and `hive-mind config set dead_man_days <D>` sets how long the owner must be
 silent first (default 30). Then, if the owner goes dark, any admitted device runs
-`hv owner propose-election --mint` (mint a fresh owner key here) or `--pub <base64>` (propose a
-key held elsewhere); the others run `hv owner vote <proposal_id>`. Once `quorum_m` devices have
+`hv owner propose-election --pub <base64>` with a key it holds: `hive-mind owner mint` mints a fresh one
+and prints it, or name a key held elsewhere. The others run `hv owner vote <proposal_id>`. Once `quorum_m` devices have
 endorsed one proposal **and** no owner-signed act has appeared for `dead_man_days`, that proposal
 installs its key as the new owner on every node. `hv owner elections` lists open proposals and
 their tallies. The dead-man switch is what keeps this safe: **a live owner can never be unseated**,
-because any owner-signed act — including an explicit `hv owner heartbeat` — refreshes the owner's
+because any owner-signed act — including an explicit `hive-mind owner heartbeat` — refreshes the owner's
 last-activity and re-shuts the window. Votes and proposals are device-signed by admitted members,
 so an outsider cannot stuff the ballot. `quorum_m=0` (the default) disables elections entirely.
 
@@ -802,7 +814,7 @@ hv remember <content> [--tags TAGS] [--source SOURCE] [--importance N] [--gate] 
 | `--outcome-of DECISION` | *(1.19)* This fact is the **outcome** of a decision. `DECISION` is the decision's `sid` (`h:…`, preferred) or `ref` (`node_id:seq`), both shown by `hv search`, or a local decision id (`17` / `d17`, *deprecated*), resolved and kind-checked **before** anything is written — a bad reference aborts with no fact and no link. Emits the fact plus an `outcome-of` link carrying the polarity. Outcomes feed the decision's `outcome_score` (a *vindication* axis — decisions have no confidence, by design) and the utility of the facts that informed it. |
 | `--polarity` | With `--outcome-of`: `1` it worked out (default), `-1` it did not, `0` observed and neutral. Deliberately ternary: magnitude comes from how many independent identities report an outcome, not from one agent's claimed intensity. |
 | `--channel` | Which experience signal this write is: `sense` (an observation of the world — the default when absent), `act` (an action taken), `introspect` (the agent's own reasoning or plan). An `introspect` outcome is recorded but **never counted** toward `outcome_score`. An `introspect` fact, and an `introspect` `supports`/`contradicts` link, weigh `introspect_support_weight` (default 0) toward confidence *(facts since 1.21)*: the fact is recorded and searchable but corroborates nothing until an observation backs it. A channel outside these three (possible only in a raw journal entry) counts as `introspect`. |
-| `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It journals one `resolves` **link** *(1.19 PR2b — no separate `retract` entry any more)* from the new fact to the resolved fact's journal identity (stable across rebuilds and nodes); the projection folds it as negative evidence that **soft-retracts** the old fact (so it stops surfacing as canonical) and, when the link is hard, records the chain on the new row — keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hv retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
+| `--resolves FACT` | Mark this write as the correction of an earlier fact, named by its **`sid`** (`h:…`, preferred), its `ref` (`node_id:seq`) or a bare local id (*deprecated*). It journals one `resolves` **link** *(1.19 PR2b — no separate `retract` entry any more)* from the new fact to the resolved fact's journal identity (stable across rebuilds and nodes); the projection folds it as negative evidence that **soft-retracts** the old fact (so it stops surfacing as canonical) and, when the link is hard, records the chain on the new row — keeping the corpus from asserting the old and corrected claim at once. Reversible; a decisive forget is still `hive-mind retract <sid> --owner`. A reference that names something that is not a fact aborts; one that resolves to nothing is a warning (the fact is still written, without a link). The audit's **CONTRAVENED** check separately flags a correction that names a fact in *prose* (`resolves h:3f9a1c0b2d`, `supersedes #N`) but never reconciled it — a prose `h:…` is matched **exactly**, while a prose `#N` is a **local id** that drifts across rebuilds and nodes, so that target is best-effort. |
 | `--supports REF` | *(1.21)* This observation **supports** a fact or an idea, named by its `sid` (`h:…`, preferred), its `ref`, or a deprecated local id (`118` fact, `i5` idea). Writes the fact plus one `supports` link, resolved and kind-checked **before** anything is written (a decision aborts with a pointer to `--outcome-of`). The target is re-scored immediately. It counts as this identity's evidence on the write's `--channel` (`introspect` weighs `introspect_support_weight`, default 0). An idea's author can't support their own idea. |
 | `--contradicts REF` | *(1.21)* The same, as negative evidence: one `contradicts` link. An idea's author may contradict their own idea, which is how to withdraw it. |
 | `--extends REF` | *(1.22)* This entry **builds on** (extends, comments on) a fact, an idea or a decision (same forms as `--supports`; `d17` for a decision). Writes the fact plus one `extends` link, resolved and kind-checked **before** anything is written. A relationship, not evidence: it never moves the target's confidence, on any channel. `hv search` shows `extends h:…` on the row. The confirmation line reads `↗ extends <kind> <sid>`. |
@@ -865,7 +877,8 @@ retracted and won't show up in normal search results. Think of it as
 "this was wrong" rather than "this never happened."
 
 ```
-hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
+hv retract <fact> [--reason TEXT] [--source SOURCE]            # peer negative evidence
+hive-mind retract <fact> --owner [--reason TEXT] [--source SOURCE]  # owner forget (2.0: on hive-mind)
 ```
 
 **Arguments:**
@@ -875,7 +888,7 @@ hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
 | `fact` | The fact to retract, named by its **`sid`** (`h:3f9a1c0b2d`, shown by `hv search` — the same on every node, never changes) or its `ref` (`node_id:seq`). A bare local id (`4`) is still accepted but **deprecated**: it is this node's rowid, reassigned on every rebuild (after every write and every sync), so an id read from `hv search` can name a *different* fact by the time you retract it. It prints a warning; it stops being accepted at the next MAJOR contract bump. The target is kind-checked — a decision id is an error, never a silent re-target. Required. |
 | `--reason` | Why you're retracting it. Saved for reference. |
 | `--source` | Who is doing the retracting. Defaults to `manual`. |
-| `--owner` | Mark this as an authoritative retraction. Use when the fact is definitively wrong, not just uncertain. Immediately drives confidence to the floor. Once you have an owner (see `hv owner`), this requires the **owner key** and is cryptographically signed, so a forget can't be forged; run it on the owner machine. |
+| `--owner` | Mark this as an authoritative retraction. Use when the fact is definitively wrong, not just uncertain. Immediately drives confidence to the floor. Once you have an owner (see the owner section), this requires the **owner key** and is cryptographically signed, so a forget can't be forged. In 2.0 it runs as `hive-mind retract … --owner` on the owner machine; run on `hv`, `retract --owner` names that form and exits 2. |
 
 **Examples:**
 ```bash
@@ -891,10 +904,10 @@ hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
     --source "hermes:primary/claude-sonnet/abc12345"
 
 # Owner retraction — authoritative, immediately floors confidence
-./hv retract h:9be4410f37 --reason "Definitively wrong" --owner
+hive-mind retract h:9be4410f37 --reason "Definitively wrong" --owner
 
-# All options together (a raw journal ref works too)
-./hv retract k1:597b3e0f5fb92d37:15 \
+# All options together, on the owner machine (a raw journal ref works too)
+hive-mind retract k1:597b3e0f5fb92d37:15 \
     --reason "Superseded by Tailscale-in-WSL architecture" \
     --source "claude-code" \
     --owner
@@ -902,15 +915,15 @@ hv retract <fact> [--reason TEXT] [--source SOURCE] [--owner]
 
 ---
 
-### `hv unforget` — Reverse an owner forget *(1.24, #46)*
+### `hive-mind unforget` — Reverse an owner forget *(1.24, #46)*
 
-An owner forget (`hv retract --owner`) floors a fact on every node. `hv unforget`
+An owner forget (`hive-mind retract --owner`) floors a fact on every node. `hive-mind unforget`
 reverses it: the fact comes back, and its confidence re-derives from the evidence
 that still stands. **Owner only**: it needs the current owner's key, so run it on
 the owner machine. It is not exposed over MCP.
 
 ```
-hv unforget <fact> --reason TEXT
+hive-mind unforget <fact> --reason TEXT
 ```
 
 | Argument | What it does |
@@ -925,7 +938,7 @@ forgotten. A node older than 1.24 skips the unforget and keeps the fact forgotte
 until it upgrades.
 
 ```bash
-./hv unforget h:9be4410f37 --reason "Forgotten by mistake on 2026-08-18; the fact was right"
+hive-mind unforget h:9be4410f37 --reason "Forgotten by mistake on 2026-08-18; the fact was right"
 ```
 
 ---
@@ -1100,7 +1113,7 @@ hv sync daemon
 
 - `self` — this device's id.
 - `peers[].url` — a peer's address. `hive-mind invite`, run on that peer, prints the address to use;
-  admitting a device with `hv group admit` also adds it from its join request.
+  admitting a device with `hive-mind group admit` also adds it from its join request.
 - `peers[].id` — a label for logs. Optional.
 - `port` — the port to listen on (default 9876).
 - Optional: `bind` (override the listen address — by default the daemon binds this device's Tailscale
@@ -1155,7 +1168,7 @@ directory holds the private keys, and never prints them (2.0). The id stays the 
 - **OWNER** — you hold the owner key (admit devices, set config, forget facts).
 - **FERTILE** — admitted; your writes land in the shared journal and count toward confidence.
 - **STERILE** — read-only; you read the whole hive, but your content won't land until the owner admits you (`hv join` to request it).
-- **UNAFFILIATED** — no hive yet (`hv owner init` to start one, or sync one and `hv join`).
+- **UNAFFILIATED** — no hive yet (`hive-mind owner init` to start one, or sync one and `hv join`).
 
 If you're sterile, your session-start digest says so too, so your agent isn't left guessing.
 

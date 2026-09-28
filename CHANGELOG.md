@@ -161,6 +161,14 @@ introduced (a contract) or tagged (a patch).
   values of a peer sighting. Both are generated from `vocabulary.py` and kept apart from the journal tables,
   and `tests/test_vocabulary.py` holds them to the path literals in the code, both ways. The ref-bearing
   payload fields stay deferred to the 2.1 module API. No behaviour change.
+- **The docs name each moved command on the plane it runs on** (decision `h:02010d37e3`). Every reference that told a
+  reader to run a command that moved in 2b as `hv …` now says `hive-mind …`. The files are `CLI_REFERENCE.md`,
+  `AGENT_INTEGRATION.md`'s command table, `INTERNALS.md`, `SYNC_API.md`, `THREAT_MODEL.md`, the continual-learning
+  design and the MCP adapter's `retract` docstring. `CLI_REFERENCE.md`'s owner, group and config sections say which
+  verbs stay on `hv` and which moved. `tests/test_docs_name_moved_commands.py` fails when a document names a
+  `commandmap.MOVED` command, or `retract --owner` or `owner propose-election --mint`, on `hv`. It excludes §7's
+  per-version history, the CHANGELOG, `docs/history/`, and `README.md` and `SECURITY.md`, which #141 reconciles
+  (6 and 2 references).
 
 ## Unreleased — contract 1.28
 

@@ -14,8 +14,8 @@ module had written would be read with the new meaning, on every node, from then 
 ## The rule
 
 - **Core reserves every bare name on this page**, in its category.
-- **A module's names take a prefix: `x-<module>:<name>`.** The form is pending David's word on #136;
-  `x-<module>.<name>` is the other recorded form. No core name starts with `x-`.
+- **A module's names take a prefix: `x-<module>:<name>`**, for example `x-hwatch:heartbeat` (decision
+  `h:af137f9421`). No core name starts with `x-`.
 - **The 2.1 module API enforces the prefix.** 2.0 reserves the names and documents them.
 - **Envelope fields are the entry's structure**, not vocabulary a module picks. A module never writes its
   own: the core builds the envelope around a module's payload.

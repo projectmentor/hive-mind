@@ -222,8 +222,8 @@ def hive_decide(content: str = "", rationale: str = "", tags: str = "", informed
     informed_by: comma-separated references to the facts/decisions you retrieved and RELIED ON
     for this decision — pass the `sid` values from hive_search results (`h:…`; `ref` `node_id:seq`
     also works — both stable
-    across nodes and rebuilds). Bare local ids (`118`, `d17`) are accepted but drift; prefer
-    the `sid`. An unresolvable reference aborts the whole write. This is what lets the hive learn
+    across nodes and rebuilds). A local id (`118`, `d17`) is refused (2.0): it names a different
+    row after every rebuild. An unresolvable reference aborts the whole write. This is what lets the hive learn
     which knowledge turns out to matter once the decision's outcomes are recorded.
     """
     args = ["decide"] + ([content] if content.strip() else []) + ["--source", "claude-ai"]
@@ -271,9 +271,9 @@ def hive_retract(fact_id: str, reason: str = "") -> str:
     """Record SOFT negative evidence against a fact (a reversible soft-forget), source=claude-ai.
 
     fact_id: the fact's `sid` from hive_search (`h:…`, stable on every node) — or its `ref`
-    (`node_id:seq`). A bare numeric id is still accepted but DEPRECATED: it is this node's rowid,
-    reassigned on every rebuild (after every write and every sync), so it can silently name a
-    different fact by the time you use it. The target is kind-checked (a decision aborts).
+    (`node_id:seq`). A bare numeric id is refused (2.0): it is this node's rowid, reassigned on
+    every rebuild (after every write and every sync), so it could silently name a different fact by
+    the time you used it. The target is kind-checked (a decision aborts).
 
     Use when you find a fact is wrong or stale and want to down-weight it without destroying it.
     This is deliberate, reversible negative evidence — NOT a deletion. The decisive owner-forget
@@ -292,7 +292,7 @@ def hive_retract(fact_id: str, reason: str = "") -> str:
 
 @mcp.tool()
 def hive_entity(action: str, name: str = "", type: str = "", attr: str = "",
-                fact_id: str | int | None = None, confidence: float | None = None) -> str:
+                fact_id: str | None = None, confidence: float | None = None) -> str:
     """Manage entities (people, projects, concepts) and link facts to them.
 
     action:
@@ -300,7 +300,7 @@ def hive_entity(action: str, name: str = "", type: str = "", attr: str = "",
     - "show"  — show one entity and its linked facts (pass name).
     - "add"   — create/upsert an entity (pass name, optional type, optional attr as a JSON string).
     - "link"  — attach a fact to an entity (pass name + fact_id — the fact's `sid` from hive_search,
-      `h:…`, or its `ref`; a bare numeric rowid is deprecated — optional confidence).
+      `h:…`, or its `ref`; a bare numeric rowid is refused since 2.0 — optional confidence).
 
     Entities are the corpus's nouns; linking facts to them makes recall by subject reliable.
     """

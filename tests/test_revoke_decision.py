@@ -146,9 +146,11 @@ def test_hermes_decide_passes_revoke_and_refuses_two_relationships(monkeypatch):
     p.initialize("abcdef1234567890", agent_context="primary", agent_identity="coder")
     out = json.loads(p.handle_tool_call("hive_decide", {"revoke": "h:0123456789", "rationale": "wrong"}))
     assert out["ok"] is True
-    assert calls[-1] == ("decide", "--rationale", "wrong", "--revoke", "h:0123456789")
+    src = calls[-1][-1]                                   # 2.0: decide names its source with --source (#119)
+    assert calls[-1] == ("decide", "--rationale", "wrong", "--revoke", "h:0123456789", "--source", src)
+    assert src.startswith("hermes:")
     p.handle_tool_call("hive_decide", {"content": "B", "rationale": "r", "supersedes": "h:0123456789"})
-    assert calls[-1] == ("decide", "B", "--rationale", "r", "--supersedes", "h:0123456789")
+    assert calls[-1] == ("decide", "B", "--rationale", "r", "--supersedes", "h:0123456789", "--source", src)
     n = len(calls)
     out = json.loads(p.handle_tool_call("hive_decide", {"content": "x", "supersedes": "h:0123456789",
                                                         "revoke": "h:9876543210"}))

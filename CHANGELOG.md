@@ -84,6 +84,20 @@ introduced (a contract) or tagged (a patch).
   - The identity stash, the keep-hive backup, restore and uninstall carry `.owner-key.sealed`. A stash
     holding the sealed form drops its plaintext copy.
   - The installer asks for the new passphrase once, at bootstrap, for `owner init` and the self-admit.
+- **PR 4a: the agent surface.** The adapter-visible breaks contract §7 promised for the next MAJOR.
+  - **Local ids are refused** (#59, #64). A bare or kind-prefixed rowid (`118`, `d17`, `i5`) on any flag that
+    takes a reference (`remember --resolves/--outcome-of/--supports/--contradicts/--extends`,
+    `decide --supersedes/--revoke/--informed`, `retract`, `entity link --fact-id`, `hive-mind unforget`,
+    `hive-mind retract --owner`, and the MCP and Hermes inputs behind them) exits 1 with
+    `'118' is a local id, which 2.0 no longer accepts: … Pass the sid (h:…) or ref (node_id:seq) that
+    hv search shows.`, having written nothing. `--resolves` aborts too, where an unresolvable target
+    is still only a warning. MCP `hive_entity`'s `fact_id` is a `str`. Journal reads are unchanged: the
+    legacy resolvers still read every historical entry.
+  - **`tags` is a JSON list** in `hv search --format json` (#77), as it already was on every `/api/*` row.
+    `tag_list` stays, the same list. The Hermes prefetch joins it.
+  - **No `$HERMES_AGENT` source fallback** (#119). A write's source is `--source`, else `manual`. The
+    Hermes adapter now passes `--source` on `decide`, as it already did on `remember` and `propose`;
+    without it every Hermes decision would have read as `manual`, which means a person.
 
 ## Unreleased — contract 1.28
 

@@ -115,8 +115,9 @@ def test_write_tools_build_the_same_argv_as_the_cli(monkeypatch):
                                          "channel": "introspect"})
     assert calls[-1][0][-6:] == ("--outcome-of", "h:aaaaaaaaaa", "--polarity", "-1", "--channel", "introspect")
     p.handle_tool_call("hive_decide", {"content": "cache it", "rationale": "r", "informed_by": "h:1111111111, h:2222222222"})
-    assert calls[-1][0] == ("decide", "cache it", "--rationale", "r", "--informed", "h:1111111111", "h:2222222222")
-    assert calls[-1][1] == {"HERMES_AGENT": src}                  # decide has no --source: it reads the env
+    assert calls[-1][0] == ("decide", "cache it", "--rationale", "r", "--informed", "h:1111111111", "h:2222222222",
+                            "--source", src)                   # 2.0: --source, since hv reads no $HERMES_AGENT
+    assert calls[-1][1] is None
     p.handle_tool_call("hive_propose", {"content": "maybe the cache", "tags": "proj"})
     assert calls[-1][0] == ("propose", "maybe the cache", "--source", src, "--tags", "proj")
 
@@ -222,3 +223,21 @@ def test_tools_on_an_uninitialized_provider_return_an_error_envelope():
     p = hermes_plugin.HiveMindMemoryProvider()
     out = json.loads(p.handle_tool_call("hive_remember", {"content": "x"}))
     assert out == {"ok": False, "output": "the hive-mind provider is not initialized"}
+
+
+def test_hv_reads_no_hermes_agent_fallback(tmp_path):
+    """2.0 (#119): a write's source comes from --source, never from $HERMES_AGENT, so no write can arrive
+    labelled with an identity it did not pass. Without --source it is `manual`, on every verb that had the
+    fallback (remember, decide, propose, retract, entity link); the adapter passes --source itself."""
+    import sqlite3
+    import subprocess
+    hv = Path(__file__).resolve().parent.parent / "hv"
+    env = dict(os.environ, HIVE_HOME=str(tmp_path), HERMES_AGENT="hermes:primary/coder/abcdef12")
+    for argv in (["remember", "a hermes-free fact"], ["decide", "a hermes-free decision", "--rationale", "r"],
+                 ["propose", "a hermes-free idea"]):
+        r = subprocess.run([sys.executable, str(hv), *argv], env=env, capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    conn = sqlite3.connect(tmp_path / "store.db")
+    sources = {t: conn.execute(f"SELECT source_agent FROM {t}").fetchone()[0] for t in ("facts", "decisions", "ideas")}
+    conn.close()
+    assert sources == {"facts": "manual", "decisions": "manual", "ideas": "manual"}, sources

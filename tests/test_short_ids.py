@@ -21,7 +21,6 @@ sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import (_loadhv, _owned_hive, _fact, _decision, _project, _device)  # noqa: E402
 
-WARN = "bare local ids drift across rebuilds"
 
 
 def _json(hive, *args):
@@ -113,7 +112,7 @@ def test_sid_agrees_across_nodes_with_divergent_rowids(tmp_path, monkeypatch):
 
 # ── acceptance: every verb, three forms, byte-identical entries; one deprecation warning ──────────
 
-def test_every_accepting_verb_takes_sid_ref_and_bare_id_identically(hive):
+def test_every_accepting_verb_takes_sid_and_ref_identically_and_refuses_a_local_id(hive):
     facts, dec = _seed(hive)
     f1 = facts["the deploy succeeded at commit abc123"]
     f2 = facts["the deploy took eleven minutes"]
@@ -125,33 +124,39 @@ def test_every_accepting_verb_takes_sid_ref_and_bare_id_identically(hive):
         # drop what legitimately differs per run: source, and the writer's OWN identity (from_ref)
         return r, [(e["type"], {k: v for k, v in e["payload"].items() if k not in ("source", "from_ref")}) for e in new]
 
-    # --informed: sid / ref / bare — same informed_by + same link targets
+    def refused(*argv):
+        """2.0 (#59/#64): a local id aborts with the exact message and journals nothing."""
+        before = len(hive.entries())
+        r = hive.run(*argv, check=False)
+        assert r.returncode == 1 and "is a local id, which 2.0 no longer accepts" in r.stderr, (argv, r.stderr)
+        assert len(hive.entries()) == before, argv
+
+    # --informed: sid and ref give the same informed_by and the same link targets
     outs = [payloads_after(lambda t=t: hive.run("decide", "ship", "--rationale", "r", "--informed", t))
-            for t in (f1["sid"], f1["ref"], str(f1["id"]))]
-    assert outs[0][1] == outs[1][1] == outs[2][1]
-    assert WARN not in outs[0][0].stderr and WARN not in outs[1][0].stderr and outs[2][0].stderr.count(WARN) == 1
+            for t in (f1["sid"], f1["ref"])]
+    assert outs[0][1] == outs[1][1]
+    refused("decide", "ship", "--rationale", "r", "--informed", str(f1["id"]))
     # --outcome-of
     outs = [payloads_after(lambda t=t: hive.run("remember", f"it worked {i}", "--outcome-of", t, "--source", "alice"))
-            for i, t in enumerate((dec["sid"], dec["ref"], f"d{dec['id']}"))]
+            for i, t in enumerate((dec["sid"], dec["ref"]))]
     strip = lambda pl: [(t, {k: v for k, v in p.items() if k != "content"}) for t, p in pl]
-    assert strip(outs[0][1]) == strip(outs[1][1]) == strip(outs[2][1])
-    assert outs[2][0].stderr.count(WARN) == 1 and WARN not in outs[0][0].stderr
+    assert strip(outs[0][1]) == strip(outs[1][1])
+    refused("remember", "it worked 2", "--outcome-of", f"d{dec['id']}", "--source", "alice")
     # --supersedes
     outs = [payloads_after(lambda t=t: hive.run("decide", "v2", "--rationale", "r", "--supersedes", t))
-            for t in (dec["sid"], dec["ref"], str(dec["id"]))]
-    assert outs[0][1] == outs[1][1] == outs[2][1]
+            for t in (dec["sid"], dec["ref"])]
+    assert outs[0][1] == outs[1][1]
     sup = [pl for t, pl in outs[0][1] if t == "link" and pl["kind"] == "supersedes"]      # 1.19 PR2b: a link, not a field
     assert len(sup) == 1 and sup[0]["to_ref"] == [dec["ref"].rpartition(":")[0], int(dec["ref"].rpartition(":")[2])]
+    refused("decide", "v3", "--rationale", "r", "--supersedes", str(dec["id"]))
     # entity link --fact-id
     hive.run("entity", "add", "--name", "Deploys", "--type", "project")
     outs = [payloads_after(lambda t=t: hive.run("entity", "link", "--name", "Deploys", "--fact-id", t))
-            for t in (f2["sid"], f2["ref"], str(f2["id"]))]
-    assert outs[0][1] == outs[1][1] == outs[2][1]
+            for t in (f2["sid"], f2["ref"])]
+    assert outs[0][1] == outs[1][1]
     assert outs[0][1][0][0] == "link" and outs[0][1][0][1]["kind"] == "entity"          # 1.19 PR2b: an `entity` link
     assert f"Linked fact {f2['sid']}" in outs[0][0].stdout
-    # two bare ids in ONE command → the warning prints exactly once
-    r = hive.run("decide", "twice", "--rationale", "r", "--informed", str(f1["id"]), str(f2["id"]))
-    assert r.stderr.count(WARN) == 1
+    refused("entity", "link", "--name", "Deploys", "--fact-id", str(f2["id"]))
 
 
 def test_resolves_accepts_sid_and_kind_mismatch_aborts(hive):
@@ -172,7 +177,7 @@ def test_resolves_accepts_sid_and_kind_mismatch_aborts(hive):
 
 # ── retract (closes #58): the right fact after renumbering; kind-checked ──────────────────────────
 
-def test_retract_by_sid_survives_renumbering_and_bare_id_is_kind_checked(hive):
+def test_retract_by_sid_survives_renumbering_and_a_local_id_is_refused(hive):
     hive.run("remember", "zeta claim", "--source", "alice")            # rowid 1 on this node, for now
     zeta = [r for r in _json(hive, "zeta") if r["kind"] == "fact"][0]
     hive.run("decide", "a decision", "--rationale", "r")
@@ -187,20 +192,27 @@ def test_retract_by_sid_survives_renumbering_and_bare_id_is_kind_checked(hive):
     new_id = hive.query("SELECT id FROM facts WHERE content='zeta claim'")[0]["id"]
     assert new_id != zeta["id"]                                          # renumbered: the #58 hazard
     assert hive.query("SELECT content FROM facts WHERE id = ?", (zeta["id"],))[0]["content"] != "zeta claim"
-    # by sid → the RIGHT fact; by the stale bare id → a DIFFERENT fact (that is the hazard, now warned)
+    # by sid → the RIGHT fact. The stale local id would now name a DIFFERENT fact: the hazard that made
+    # 2.0 refuse local ids outright (#59).
     r = hive.run("retract", zeta["sid"], "--source", "bob")
     assert f"Fact {zeta['sid']} (#{new_id}) retracted" in r.stdout
     assert hive.query("SELECT confidence FROM facts WHERE content='zeta claim'")[0]["confidence"] <= 0
-    # kind check: a decision id given to retract aborts, nothing journaled
+    # a local id, bare or kind-prefixed, aborts with nothing journaled
     before = len(hive.entries())
-    r = hive.run("retract", "d1", check=False)
+    for local in (str(zeta["id"]), "d1"):
+        r = hive.run("retract", local, check=False)
+        assert r.returncode == 1 and "is a local id, which 2.0 no longer accepts" in r.stderr, local
+    assert len(hive.entries()) == before
+    # kind check, on a sid: a decision given to retract aborts, nothing journaled
+    dsid = [r for r in _json(hive, "a decision") if r["kind"] == "decision"][0]["sid"]
+    r = hive.run("retract", dsid, check=False)
     assert r.returncode != 0 and "is a decision, not a fact" in r.stderr and len(hive.entries()) == before
     r = hive.run("retract", "h:0000000000", check=False)
     assert r.returncode != 0 and "does not resolve" in r.stderr
     # MCP forwards the sid string unchanged (source-level; the live tool needs the `mcp` package)
     src = (PROJECT / "integrations" / "mcp" / "hive_mcp.py").read_text()
     assert "def hive_retract(fact_id: str" in src and '["retract", str(fact_id).strip()' in src
-    assert "fact_id: str | int | None = None" in src
+    assert "fact_id: str | None = None" in src                          # 2.0: no int, so no local id
 
 
 # ── audit: CONTRAVENED parses h: exactly; sids on every audit line ────────────────────────────────

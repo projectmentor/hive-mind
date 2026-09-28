@@ -69,7 +69,7 @@ def test_search_hides_raw_ideas_under_all_and_lists_them_under_kind_idea(hive):
     assert [r["kind"] for r in _json(hive, "macos", "--kind", "fact")] == ["fact"]
     assert _json(hive, "macos", "--kind", "decision") == []
     # the i<N> prefix resolves through the kind-checked ref parser (PR3)
-    r = hive.run("decide", "investigate disk io", "--informed", "i1")
+    r = hive.run("decide", "investigate disk io", "--informed", hive.sid(1, "idea"))
     assert "informed by 1 ref(s)" in r.stdout
     assert hive.run("decide", "nope", "--informed", "i9", check=False).returncode != 0
 

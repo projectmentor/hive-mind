@@ -69,7 +69,14 @@ fi
 # ── decide + supersede ──────────────────────────────────────────────────────
 sect "decide + supersede"
 "$HV" decide "Use Sonnet for coding" --rationale cost >/dev/null
-"$HV" decide "Use Opus only for architecture" --rationale quality --supersedes 1 >/dev/null
+# 2.0 refuses local ids (#59): pass the first decision's sid.
+FIRST_DEC="$(py <<'PY'
+import os,sqlite3
+c=sqlite3.connect(os.path.join(os.environ["HIVE_HOME"],"store.db"))
+print(c.execute("SELECT sid FROM journal_index WHERE kind='decision' ORDER BY node_id, seq LIMIT 1").fetchone()[0])
+PY
+)"
+"$HV" decide "Use Opus only for architecture" --rationale quality --supersedes "$FIRST_DEC" >/dev/null
 ACTIVE="$(py <<'PY'
 import os,sqlite3
 c=sqlite3.connect(os.path.join(os.environ["HIVE_HOME"],"store.db"))
@@ -81,7 +88,13 @@ assert_eq "superseded decision is no longer active" "$ACTIVE" "1"
 # ── entity add + link are journaled ─────────────────────────────────────────
 sect "entity add + link (journal-first)"
 "$HV" entity add --name Sam --type person --attr '{"role":"engineer"}' >/dev/null
-"$HV" entity link --name Sam --fact-id 1 --confidence 0.9 >/dev/null
+FIRST_FACT="$(py <<'PY'
+import os,sqlite3
+c=sqlite3.connect(os.path.join(os.environ["HIVE_HOME"],"store.db"))
+print(c.execute("SELECT sid FROM journal_index WHERE kind='fact' ORDER BY node_id, seq LIMIT 1").fetchone()[0])
+PY
+)"
+"$HV" entity link --name Sam --fact-id "$FIRST_FACT" --confidence 0.9 >/dev/null
 TYPES="$(py <<'PY'
 import os,json,glob
 types=set()

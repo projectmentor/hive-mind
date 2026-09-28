@@ -416,12 +416,12 @@ def test_verbs_emit_one_link_each_and_no_legacy_field(hive):
     entry — never both (no dual-emit). The legacy resolvers stay for entries already in journals."""
     hive.run("remember", "the daemon listens on port 9876 today", "--source", "alice")
     fid = hive.query("SELECT id FROM facts")[0]["id"]
-    hive.run("remember", "the daemon listens on port 9877 today", "--source", "alice", "--resolves", str(fid))
+    hive.run("remember", "the daemon listens on port 9877 today", "--source", "alice", "--resolves", hive.sid(fid))
     hive.run("decide", "ship on friday", "--rationale", "r")
     did = hive.query("SELECT id FROM decisions")[0]["id"]
-    hive.run("decide", "ship on monday instead", "--rationale", "r", "--supersedes", str(did))
+    hive.run("decide", "ship on monday instead", "--rationale", "r", "--supersedes", hive.sid(did, "decision"))
     hive.run("entity", "add", "--name", "Daemon", "--type", "project")
-    hive.run("entity", "link", "--name", "Daemon", "--fact-id", str(fid), "--confidence", "0.9")
+    hive.run("entity", "link", "--name", "Daemon", "--fact-id", hive.sid(fid), "--confidence", "0.9")
     es = hive.entries()
     types = [e["type"] for e in es]
     assert types.count("link") == 3 and "retract" not in types and "entity_fact" not in types

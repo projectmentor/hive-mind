@@ -297,7 +297,8 @@ def _format_facts_with_provenance(facts: list[dict], self_session_id: str) -> st
         content = f.get("content", "")
         trust = f.get("confidence", f.get("trust_score", 0.0))  # Phase A: confidence is primary
         source = f.get("source_agent", "unknown")
-        tags = f.get("tags", "")
+        tags = f.get("tags") or []
+        tags = ",".join(tags) if isinstance(tags, list) else tags   # a list since 2.0 (#77); a string before
 
         # Anti-self-amplification: flag if authored in current session
         self_flag = ""
@@ -778,10 +779,11 @@ class HiveMindMemoryProvider(MemoryProvider):
             argv += ["--informed", *refs]
         if rels:
             argv += [f"--{rels[0]}", str(args[rels[0]]).strip()]
-        # `hv decide` gained --source in 1.23 (#114); the adapter still names itself through HERMES_AGENT,
-        # which every contract honours, so it also works against a pre-1.23 hv (the env EXTENDS
-        # os.environ, see _hv).
-        return argv, {"HERMES_AGENT": self._source_id}
+        # 2.0 (#119): `hv` no longer reads $HERMES_AGENT, so the adapter names itself with --source, as it
+        # always has on remember and propose. Without this every Hermes decision would read as `manual`,
+        # which means a person.
+        argv += ["--source", self._source_id]
+        return argv, None
 
     def _argv_propose(self, args: Dict[str, Any]):
         return ["propose", str(args["content"]), "--source", self._source_id] + self._tags(args), None

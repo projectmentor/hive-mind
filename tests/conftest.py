@@ -170,6 +170,13 @@ class Hive:
             raise AssertionError(f"`hv {' '.join(args)}` failed ({r.returncode}):\n{r.stderr}")
         return r
 
+    def sid(self, local_id, kind="fact"):
+        """The stable sid of this hive's row `local_id` of `kind`: what a test passes now that the CLI
+        rejects local ids (2.0, #59/#64). A corroborated fact maps several entries to one row; its sid is
+        the first entry's by (node_id, seq), the same rule `hv` uses to name it."""
+        import _ids
+        return _ids.sid(self.home, local_id, kind)
+
     def entries(self):
         out = []
         for f in sorted(self.journal.glob("*.jsonl")):

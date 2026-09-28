@@ -198,14 +198,13 @@ _LINK_FLAGS = {"remember": ("resolves", "outcome_of", "supports", "contradicts",
 
 def _will_owner_sign_links(args):
     """Whether this `hive-mind remember|decide|entity` will owner-sign a link: at least one link to write,
-    and the write's source resolves to `manual`, exactly as `hv` resolves it."""
+    and the write's source is `manual`, by `hv`'s own `_write_source`."""
     cmd = getattr(args, "command", None)
     if cmd == "entity":
         wants = getattr(args, "action", None) == "link"
     else:
         wants = any(getattr(args, f, None) for f in _LINK_FLAGS.get(cmd, ()))
-    source = getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual")
-    return bool(wants) and source == "manual"
+    return bool(wants) and _write_source(args) == "manual"
 
 
 def _unlock_before_writing(args):

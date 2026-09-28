@@ -3024,26 +3024,26 @@ def _index_lookup(conn, kind, local_id):
     return [r["node_id"], r["seq"]] if r else None
 
 
-# 1.19 PR3: identity references at the CLI/MCP boundary. The STABLE form is the journal identity
-# written `node_id:seq` (e.g. `k1:597b3e0f5fb92d37:401`) — it never changes across rebuilds or nodes
-# and is what `hv search --format json` returns as `ref`. Bare local ids (`118`, `d17`, `i5`) are a
-# human convenience only: they are SQLite rowids reassigned on every rebuild (after every write and
-# sync), so an id read before a sync can point at a different row by the time it is used. Bare ids
-# are therefore resolved at write time AND kind-checked against the prefix, and any failure aborts
-# BEFORE anything is journaled.
-_ID_KIND_PREFIX = {"": "fact", "d": "decision", "i": "idea"}
+# 1.19 PR3: identity references at the CLI/MCP boundary. The STABLE forms are the short id `h:` + 10 hex
+# and the journal identity written `node_id:seq` (e.g. `k1:597b3e0f5fb92d37:401`): neither changes across
+# rebuilds or nodes, and `hv search --format json` returns both (`sid`, `ref`). Bare local ids (`118`,
+# `d17`, `i5`) are SQLite rowids reassigned on every rebuild (after every write and sync), so an id read
+# before a sync could name a different row by the time it was used. 1.x accepted them with a warning; 2.0
+# REJECTS them (#59, #64; promised in contract §7), and every caller aborts before anything is journaled.
+# Journal READS are unaffected: entries written with the older identity forms still resolve, through the
+# legacy resolvers.
 _SID_RE = re.compile(r"^h:[0-9a-f]{10}$")
-_BARE_ID_WARNING = ("bare local ids drift across rebuilds; use h:… (shown in hv search) — bare integers are "
-                    "deprecated and stop being accepted at the next MAJOR contract bump")
-_bare_id_warned = False
+_LOCAL_ID_RE = re.compile(r"^[di]?\d+$")
 
 
-def _warn_bare_id():
-    """One stderr line per process the first time a bare local id is used as an identity argument."""
-    global _bare_id_warned
-    if not _bare_id_warned:
-        _bare_id_warned = True
-        print(f"  ⚠ {_BARE_ID_WARNING}", file=sys.stderr)
+class KindMismatch(ValueError):
+    """A reference that resolves, but to the wrong kind (a decision where a fact is required)."""
+
+
+class LocalIdRejected(ValueError):
+    """A bare or kind-prefixed local id (`118`, `d17`, `i5`), which 2.0 no longer accepts (#59, #64). A
+    ValueError, so every caller's existing `<option>: <message>`, exit 1 path reports it; `--resolves`,
+    which downgrades an unresolvable target to a warning, aborts on this one instead."""
 
 
 def _ref_str(ref):
@@ -3051,12 +3051,18 @@ def _ref_str(ref):
     return f"{ref[0]}:{ref[1]}" if ref else None
 
 
+def _write_source(args):
+    """A write's source: `--source`, else `manual` (a person). 2.0 dropped the $HERMES_AGENT fallback (#119),
+    so no write can arrive labelled with an identity it did not pass. One definition, because the control
+    plane decides from it whether a link will be owner-signed (only `manual` is)."""
+    return getattr(args, "source", None) or "manual"
+
+
 def _parse_ref_arg(conn, token, default_kind="fact"):
     """Resolve one CLI/MCP identity token to (kind, [node_id, seq]) or raise ValueError.
     Accepts the short id `h:` + 10 hex (1.19 PR3b; exact lookup on journal_index.sid — the preferred
-    form), `node_id:seq` (stable; must exist in journal_index), or a deprecated bare local id with an
-    optional kind prefix: `118` (fact), `d17` (decision), `i5` (idea). A bare id must resolve to a row
-    of the prefixed kind — a mismatch is an error, not a silent re-target."""
+    form) or `node_id:seq` (stable; must exist in journal_index). A local id (`118`, `d17`, `i5`) raises
+    `LocalIdRejected` (2.0, #59/#64)."""
     t = str(token).strip()
     if not t:
         raise ValueError("empty reference")
@@ -3076,16 +3082,11 @@ def _parse_ref_arg(conn, token, default_kind="fact"):
         if row is None:
             raise ValueError(f"{t!r} does not resolve to any fact/decision/idea in this node's index")
         return row[0], [node_id, int(seq)]
-    prefix, digits = ("", t) if t.isdigit() else (t[:1], t[1:])
-    if prefix not in _ID_KIND_PREFIX or not digits.isdigit():
-        raise ValueError(f"{t!r}: expected `node_id:seq`, a fact id, `d<N>` (decision) or `i<N>` (idea)")
-    kind = _ID_KIND_PREFIX[prefix]
-    ref = _index_lookup(conn, kind, int(digits))
-    if ref is None:
-        raise ValueError(f"{t!r} does not resolve to a {kind} on this node (local ids shift on rebuild — "
-                         f"prefer the `sid`/`ref` shown by `hv search`)")
-    _warn_bare_id()
-    return kind, ref
+    if _LOCAL_ID_RE.match(t):
+        raise LocalIdRejected(f"{t!r} is a local id, which 2.0 no longer accepts: local ids change on every "
+                              f"rebuild (#59). Pass the sid (`h:…`) or ref (`node_id:seq`) that `hv search` "
+                              f"shows.")
+    raise ValueError(f"{t!r}: expected a sid (`h:` + 10 hex, as `hv search` shows) or `node_id:seq`")
 
 
 def _id_label(token):
@@ -3096,15 +3097,11 @@ def _id_label(token):
 
 def _resolve_id_arg(conn, token, kind, what):
     """Resolve a CLI identity token that MUST be of `kind` (fact|decision|idea) to [node_id, seq].
-    Accepts `h:<sid>`, `node_id:seq`, or a bare/prefixed local id (bare digits are read as `kind`).
-    Raises ValueError with a message naming the option (`what`) on any failure — callers abort
-    before writing anything."""
-    t = str(token).strip()
-    if t.isdigit():
-        t = {"fact": "", "decision": "d", "idea": "i"}[kind] + t
-    k, ref = _parse_ref_arg(conn, t, default_kind=kind)
+    Accepts `h:<sid>` or `node_id:seq`; a local id raises `LocalIdRejected` (2.0). Raises ValueError on
+    any failure — callers abort before writing anything."""
+    k, ref = _parse_ref_arg(conn, str(token).strip(), default_kind=kind)
     if k != kind:
-        raise ValueError(f"{token!r} is a {k}, not a {kind}")
+        raise KindMismatch(f"{token!r} is a {k}, not a {kind}")
     return ref
 
 
@@ -3245,20 +3242,21 @@ def remember(args):
     elif detected and not already and opted_out:
         tags.append("durable")   # record the opt-out so audit-time detection honors it
 
-    source = args.source or os.environ.get("HERMES_AGENT", "manual")
+    source = _write_source(args)
 
     # --resolves: resolve the target fact's journal identity + content up front (like
     # `decide --supersedes`). A missing target is a warning, not an error — never lose content.
     resolves_ref = resolved_content = None
     if getattr(args, "resolves", None):
-        # 1.19 PR3b: `h:` short id / `node_id:seq` / bare local id (deprecated), kind-checked. A WRONG-kind
-        # reference aborts (it names something that is not a fact); an unresolvable one stays a warning.
+        # 1.19 PR3b: `h:` short id / `node_id:seq`, kind-checked. A WRONG-kind reference aborts (it names
+        # something that is not a fact), and so does a local id (2.0, #59): downgrading that to "write
+        # without the link" would drop the link the caller asked for. An unresolvable one stays a warning.
         conn0 = get_conn()
         try:
             resolves_ref = _resolve_id_arg(conn0, args.resolves, "fact", "--resolves")
         except ValueError as e:
             conn0.close()
-            if " is a " in str(e):
+            if isinstance(e, (LocalIdRejected, KindMismatch)):
                 print(str(e), file=sys.stderr)
                 sys.exit(1)
             print(f"  ⚠ no fact {_id_label(args.resolves)} to resolve — writing the fact without a resolve link")
@@ -3460,8 +3458,8 @@ def retract(args):
     (governance — to the forget floor, regardless of corroboration). Never a self-set number.
     The journal keeps the fact + the retract (auditable; reversible by re-corroboration)."""
     # 1.19 PR3b (closes hive #58): the target is named by its `h:` short id or `node_id:seq` ref — both
-    # stable across the rebuild that follows every write and sync — or a bare local id (deprecated,
-    # warned). Kind-checked: a decision id is an error, never a silent re-target.
+    # stable across the rebuild that follows every write and sync (2.0 refuses local ids, #59).
+    # Kind-checked: a decision is an error, never a silent re-target.
     conn = get_conn()
     try:
         ref = _resolve_id_arg(conn, args.fact_id, "fact", "retract")
@@ -3482,7 +3480,7 @@ def retract(args):
         if rentry is None:
             return
     else:
-        source = args.source or os.environ.get("HERMES_AGENT", "manual")
+        source = _write_source(args)
         rentry = append_journal("retract", {"retracts_ref": ref, "reason": args.reason or "", "source": source})
 
     try:
@@ -3636,8 +3634,8 @@ def search(args):
     if args.format == "json":
         # Stays a flat list (back-compat) with a new `kind` discriminator; decisions carry no
         # confidence, so a min_confidence>0 consumer naturally drops them.
-        # `tags` is the stored JSON-encoded string (back-compat); `tag_list` (1.21, #77) is the same
-        # tags as a list. At 2.0 `tags` becomes the list (a breaking change, so it waits for the MAJOR).
+        # `tags` is a list (2.0, #77), like every /api/* row already; it was the stored JSON-encoded string
+        # through 1.x. `tag_list` (1.21) stays as the same list, since contract §7 told adapters to read it.
         def _tag_list(r):
             try:
                 t = json.loads(r["tags"]) if r["tags"] else []
@@ -3645,7 +3643,7 @@ def search(args):
                 return []
             return [str(x) for x in t] if isinstance(t, list) else []
         out = [{**dict(r), "kind": "fact", "effective_confidence": eff, "ref": frefs.get(r["id"]),
-                "tag_list": _tag_list(r),
+                "tags": _tag_list(r), "tag_list": _tag_list(r),
                 "sid": fsids.get(r["id"]),
                 "effective_importance": sal(r, _fact_class(r["tags"]))[0],
                 "effective_utility": sal(r, _fact_class(r["tags"]))[1]} for eff, r in scored]
@@ -3654,11 +3652,11 @@ def search(args):
         # consumers still drop decisions. `last_outcome_at` NULL = no outcome yet.
         out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
                  "ref": drefs.get(r["id"]), "sid": dsids.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
-                 "tag_list": _tag_list(r),
+                 "tags": _tag_list(r), "tag_list": _tag_list(r),
                  "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact)
                                              if r["last_outcome_at"] else None)} for r in dec_rows]
         out += [{**dict(r), "kind": "idea", "effective_confidence": eff, "ref": irefs.get(r["id"]),
-                 "sid": isids.get(r["id"]), "tag_list": _tag_list(r),
+                 "sid": isids.get(r["id"]), "tags": _tag_list(r), "tag_list": _tag_list(r),
                  "effective_importance": sal(r, "idea")[0], "effective_utility": sal(r, "idea")[1]}
                 for eff, r in iscored]
         print(json.dumps(out, indent=2))
@@ -3711,7 +3709,7 @@ def propose(args):
     restating it never counts. Channel defaults to `introspect` (a hypothesis is internal state)."""
     tags = [t.strip() for t in args.tags.split(",")] if getattr(args, "tags", None) else []
     tags = [t for t in tags if t]
-    source = getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual")
+    source = _write_source(args)
     payload = {"content": args.content, "tags": tags, "source": source,
                "channel": getattr(args, "channel", None) or "introspect"}
     entry = append_journal("idea", payload)
@@ -3745,7 +3743,7 @@ def decide(args):
     if revoke and not (args.rationale or "").strip():
         print("--revoke: --rationale is required: say why the decision is withdrawn", file=sys.stderr)
         sys.exit(1)
-    # Resolve --supersedes / --revoke (a sid, ref or local id) to a journal-identity reference so the
+    # Resolve --supersedes / --revoke (a sid or ref; 2.0 refuses local ids) to a journal-identity reference so the
     # supersedes link survives rebuilds and cross-node merges. Kind-checked: a fact target aborts.
     supersedes_ref = None
     revoked_line = ""
@@ -3765,7 +3763,7 @@ def decide(args):
         revoked_line = next(iter(((row["content"] if row else "") or "").strip().splitlines()), "")[:120]
     # Resolve EVERY --informed reference before anything is journaled: an unresolvable or wrong-kind id
     # aborts the whole write (no partial decision, no dangling links). Stable `node_id:seq` refs are
-    # the primary form; bare ids are a kind-checked convenience (see _parse_ref_arg).
+    # the primary form; 2.0 refuses local ids (see _parse_ref_arg).
     for tok in (getattr(args, "informed", None) or []):
         try:
             informed.append(_parse_ref_arg(conn0, tok))
@@ -3788,7 +3786,7 @@ def decide(args):
         tags.append("revocation")              # matches the revocations already in the corpus
     # #114 (D-6): an agent names itself with --source, so its decision is not attributed to a person and
     # its links are not owner-signed. Same fallback as `remember` (an omitted --source is `manual`: #119).
-    source = getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual")
+    source = _write_source(args)
     payload = {
         "content": args.content or (f"Revoke {revoked_sid}: {revoked_line}" if revoked_line else f"Revoke {revoked_sid}"),
         "rationale": args.rationale,
@@ -4554,7 +4552,7 @@ def entity(args):
         # entity_facts row regardless of authority) instead of the legacy `entity_fact` entry.
         entry = append_journal("link", _link_payload(
             "entity", entity_ref, fact_ref,
-            getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual"),   # #114 (D-6)
+            _write_source(args),   # #114 (D-6)
             data={"confidence": args.confidence if args.confidence is not None else 1.0}))
         try:
             all_entries = merkle.read_all_entries(JOURNAL_DIR)
@@ -8941,15 +8939,15 @@ def build_parser():
     rel = remember_parser.add_mutually_exclusive_group()
     rel.add_argument("--resolves", metavar="FACT",
                                  help="A prior fact this write resolves/closes (soft-retracts it): its short id "
-                                      "`h:…` (preferred), `node_id:seq`, or a deprecated local id")
+                                      "`h:…` (preferred) or `node_id:seq` (2.0 refuses local ids)")
     rel.add_argument("--outcome-of", metavar="DECISION",
                                  help="This fact is an OUTCOME of a decision: its short id `h:…` (preferred) or stable "
-                                      "ref `node_id:seq`, both shown by `hv search`, or a deprecated local id (`17` / `d17`); "
+                                      "ref `node_id:seq`, both shown by `hv search` (2.0 refuses local ids); "
                                       "resolved and kind-checked before anything is written. Emits an `outcome-of` link "
                                       "that feeds the decision's outcome_score (vindication, not confidence)")
     rel.add_argument("--supports", metavar="REF",
-                     help="This observation SUPPORTS a fact or an idea: its short id `h:…` (preferred), `node_id:seq`, "
-                          "or a deprecated local id (`118` fact, `i5` idea). Writes the fact plus one `supports` link, "
+                     help="This observation SUPPORTS a fact or an idea: its short id `h:…` (preferred) or `node_id:seq` "
+                          "(2.0 refuses local ids). Writes the fact plus one `supports` link, "
                           "resolved and kind-checked before anything is written. It counts as this identity's positive "
                           "evidence on the write's --channel (introspect weighs introspect_support_weight, default 0); "
                           "an idea's author cannot support their own idea")
@@ -8959,7 +8957,7 @@ def build_parser():
                           "contradict their own idea (the way to withdraw it)")
     rel.add_argument("--extends", metavar="REF",
                      help="This entry BUILDS ON (extends, comments on) a fact, an idea or a decision (same forms as "
-                          "--supports; `d17` for a decision). Writes the fact plus one `extends` link: a relationship, "
+                          "--supports). Writes the fact plus one `extends` link: a relationship, "
                           "not evidence — it never moves the target's confidence on any channel")
     remember_parser.add_argument("--polarity", type=int, choices=[-1, 0, 1], default=1,
                                  help="With --outcome-of: +1 worked out (default), -1 did not, 0 observed and neutral. "
@@ -8997,28 +8995,27 @@ def build_parser():
                                     "<the target's first line>`)")
     decide_parser.add_argument("--rationale", help="Why this decision")
     decide_parser.add_argument("--source", help="Source agent (e.g. claude-code), as on `remember`. Omitted: "
-                                               "$HERMES_AGENT, else `manual`, the only source whose links are "
+                                               "`manual`, the only source whose links are "
                                                "owner-signed on the owner device (#114)")
     decide_parser.add_argument("--tags", help="Comma-separated tags (e.g. project scope), like `remember`")
     dec_rel = decide_parser.add_mutually_exclusive_group()   # one relationship to a prior decision per write
     dec_rel.add_argument("--supersedes", metavar="DECISION",
-                         help="The decision this replaces: its `h:` short id or `ref` (preferred) or a local id")
+                         help="The decision this replaces: its `h:` short id or `ref` (2.0 refuses local ids)")
     dec_rel.add_argument("--revoke", metavar="DECISION",
                          help="Withdraw a decision that was wrong, with no replacement (#45): writes a decision "
                               "tagged `revocation` that supersedes it. Needs --rationale")
     decide_parser.add_argument("--informed", nargs="+", metavar="REF",
                                help="What this decision relied on: short ids `h:…` (preferred) or stable refs "
-                                    "`node_id:seq`, both shown by `hv search`, or deprecated local ids — bare N "
-                                    "(fact), dN (decision), iN (idea) — resolved and kind-checked before anything "
-                                    "is written")
+                                    "`node_id:seq`, both shown by `hv search` (2.0 refuses local ids), resolved "
+                                    "before anything is written")
 
     unforget_parser = subparsers.add_parser("unforget", help="Owner only: reverse an owner-forget (`retract --owner`)")
-    unforget_parser.add_argument("fact_id", help="The forgotten fact: its `h:` short id or `ref` (preferred) or a local id")
+    unforget_parser.add_argument("fact_id", help="The forgotten fact: its `h:` short id or `ref` (2.0 refuses local ids)")
     unforget_parser.add_argument("--reason", required=True, help="Why the forget is reversed (journaled)")
 
     retract_parser = subparsers.add_parser("retract", help="Record negative evidence against a fact (soft-forget)")
     retract_parser.add_argument("fact_id", metavar="FACT",
-                                help="The fact to retract: its `h:` short id or `ref` (preferred) or a bare local id (deprecated)")
+                                help="The fact to retract: its `h:` short id or `ref` (2.0 refuses local ids)")
     retract_parser.add_argument("--reason", help="Why")
     retract_parser.add_argument("--source", help="Retractor identity (default: env/manual)")
     retract_parser.add_argument("--owner", action="store_true",
@@ -9029,10 +9026,10 @@ def build_parser():
     entity_parser.add_argument("--name", help="Entity name")
     entity_parser.add_argument("--type", help="Entity type (person, project, concept)")
     entity_parser.add_argument("--attr", help="JSON attributes")
-    entity_parser.add_argument("--fact-id", metavar="FACT", help="Fact to link: `h:` short id, `ref`, or a local id")
+    entity_parser.add_argument("--fact-id", metavar="FACT", help="Fact to link: its `h:` short id or `ref` (2.0 refuses local ids)")
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
-    entity_parser.add_argument("--source", help="Source agent for `link` (e.g. claude-code). Omitted: $HERMES_AGENT, "
-                                               "else `manual`, the only source that is owner-signed on the owner "
+    entity_parser.add_argument("--source", help="Source agent for `link` (e.g. claude-code). Omitted: "
+                                               "`manual`, the only source that is owner-signed on the owner "
                                                "device (#114)")
 
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")

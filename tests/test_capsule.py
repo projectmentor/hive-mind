@@ -91,7 +91,7 @@ def test_cli_put_get_rotate_roundtrip(tmp_path):
                            input=stdin, capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
         return r
-    run("key", "init")
+    run("config", "identity", "init")
     run("capsule", "put", "MYTOK", "--stdin", stdin="hunter2")
     assert run("capsule", "get", "MYTOK", "--raw").stdout == "hunter2"
     run("capsule", "rotate", "MYTOK")

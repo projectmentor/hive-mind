@@ -112,9 +112,6 @@ introduced (a contract) or tagged (a patch).
     that nothing writes or reads. Each category has a mutant in the suite.
   - No behaviour change. `hv`'s `_CHANNELS` and `_LINK_EVIDENCE_KINDS` now come from the registry, with the
     same values. No journal or wire change.
-
-## Unreleased — contract 1.28
-
 - **PR 4b: removals** (from this list's "2.0 removals and changes"). No journal read path changes.
   - **The `sync_daemon.py` shim is gone.** `hive-mind update` repoints an `@reboot` cron fallback that still
     names it, since nothing rewrote that line before.
@@ -129,6 +126,15 @@ introduced (a contract) or tagged (a patch).
   - **`fleet-contract`** warns below the current MAJOR, and never below 1.19 (where `link` entries became
     honoured).
   - `smoke.sh`'s entity check expects a `link` entry, as written since 1.19. `crontab` is stubbed in tests.
+  - **The 1.x aliases point, exit 2, and act on nothing** (decision `h:af137f9421`). `hv rebuild`, `hv merkle`,
+    `hv key` and `hv doctor wire-agent` each print the `hv` command that replaced them, this invocation's
+    arguments included (`hv doctor rebuild`, `hv doctor merkle`, `hv config identity …`, `hv wire claude`), and
+    exit 2, the same shape as a moved command. They are kept through 2.x and deleted at 3.0. Their table is
+    `commandmap.RENAMED`, beside `MOVED`. `hive-mind` suggests the new name too. The installer, the smokes and CI
+    call the new names; a test fails if shipped shell or a workflow calls an old one.
+
+## Unreleased — contract 1.28
+
 - **Contract 1.28: `hv owner init` leaves a new hive closed (#135 part 1).** Before a hive has an owner it
   has no key to sign a forget with, so an owner-source forget dated before the genesis owner has always been
   honoured unsigned — the grandfather, kept since 1.4 so that adopting governance never resurrected a

@@ -19,13 +19,12 @@ memory.
 | `hv dash` | Open the read-only web dashboard (served by the sync daemon) |
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
-| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `rebuild` (`wire-agent` is a deprecated alias of `hv wire claude`) |
+| `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `rebuild` |
 | `hv entity` | Track named things (people, projects, concepts) |
 | `hv group` | Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list |
 | `hv wire` | Self-wire a tool/agent from a cell or comb; `--list`/`--show`/`--add` manage cell definitions |
 | `hv capsule` | Seal a secret to the authorized device set: `put`/`get`/`ls`/`rm`/`rotate` |
 | `hv join` | Request admission to a hive you've synced |
-| `hv key` | Alias of `hv config identity` |
 | `hv nudge` | Emit a save/audit hint or the session-start digest (used by agent hooks) |
 | `hv owner` | Show or create the governance owner identity |
 | `hv peers` | Hive members, reachability, staleness, trust drift |
@@ -58,8 +57,7 @@ cd ~/projects/hive-mind
 
 ### `hv config` — Device identity + confidence/quorum parameters
 
-`hv config identity` manages **this device's** Ed25519 key (the same as the legacy
-`hv key`, kept as an alias):
+`hv config identity` manages **this device's** Ed25519 key (`hv key` until 2.0):
 
 ```
 hv config identity announce            # publish this device's key as a signed journal entry
@@ -316,7 +314,7 @@ left running outside systemd (for example, the unit died but an old process stil
 holds the port and serves stale code, so the port answers while nothing is
 actually managed). `hv doctor --fix` kills those orphans and restarts the managed
 unit. It also **announces this device's signing key** (one `announce` journal entry,
-see `hv key announce`) when the device has never authored a signed entry — so a
+see `hv config identity announce`) when the device has never authored a signed entry — so a
 directly-admitted device becomes capsule-addressable without anyone touching it.
 It also **re-asserts the agent integration**: Claude Code is wired with a single
 stable *dispatch shim* (`hive_dispatch.sh <event>`, one per lifecycle event) rather
@@ -363,7 +361,7 @@ diverge.
 hv doctor merkle
 ```
 
-> `hv merkle` is kept as a silent alias.
+> `hv merkle`, the 1.x alias, was removed in 2.0: it names this command and exits 2.
 
 ---
 
@@ -388,15 +386,15 @@ unexpectedly.
 hv doctor rebuild
 ```
 
-(`hv rebuild` still works as a deprecated alias, kept for the installer/update
-scripts; new use should prefer `hv doctor rebuild`.)
+(`hv rebuild`, the 1.x alias, was removed in 2.0: it names this command and exits 2,
+having rebuilt nothing.)
 
 ---
 
-### `hv doctor wire-agent` — deprecated alias of `hv wire claude`
+### `hv wire claude` — Wire Claude Code
 
-*Deprecated since contract 1.13: use `hv wire claude`, which does exactly the same thing. The
-alias still works.*
+*`hv doctor wire-agent`, deprecated since contract 1.13, was removed in 2.0: it writes nothing, names
+`hv wire claude` and exits 2.*
 
 Wires the Claude Code dispatch shim and the `hive-memory` skill into `~/.claude`,
 migrating any older inline hooks to the shim as it goes. It's idempotent — your own
@@ -407,7 +405,7 @@ keeps it in place. Reach for it only to wire a node immediately rather than wait
 for the next self-heal tick.
 
 ```
-hv doctor wire-agent
+hv wire claude
 ```
 
 Honors `CLAUDE_CONFIG_DIR` (same as Claude Code). On a node with no Claude Code it's
@@ -438,8 +436,8 @@ hv wire <name> --env-file <path>     # tool credentials source (default ~/.claud
 ```
 
 For `kind:tool` cells, required credentials are read from an opened **capsule** when one exists,
-falling back to the `--env-file` dotenv for smooth migration. `hv wire <claude-agent-cell>` replaces
-the deprecated `hv doctor wire-agent` (still available as a hidden alias, byte-identical output).
+falling back to the `--env-file` dotenv for smooth migration. `hv wire <claude-agent-cell>` replaced
+`hv doctor wire-agent`, which 2.0 removed.
 
 ---
 
@@ -600,28 +598,26 @@ pass it along.
 
 On a brand-new device that has no key yet, `hv join` **mints the device key for you**
 first (you need one to be admitted and to open capsules), so there's no separate
-`hv key init` step. Running `hv join` again while a request is already pending is a
+`hv config identity init` step. Running `hv join` again while a request is already pending is a
 no-op — it won't pile up duplicate requests.
 
 ---
 
-### `hv key` — This device's device identity _(alias of `hv config identity`)_
+### `hv config identity` — This device's device identity
 
 Each device is identified by an Ed25519 **device key**, not its hostname. The key
 proves which device wrote an entry, so a peer cannot impersonate your device to
 inflate confidence. Your `node_id` is the key's fingerprint, like
-`k1:2a2110f3d8963a9e`. The canonical form lives under `hv config identity`; `hv key`
-is kept as a silent alias.
+`k1:2a2110f3d8963a9e`. Through 1.x `hv key` was a silent alias of `hv config identity`;
+2.0 removed it, so `hv key …` names the `hv config identity …` form and exits 2.
 
 ```
 hv config identity announce # publish this device's key as a signed journal entry
 hv config identity show     # show this device's device_id and public key
 hv config identity init     # mint a device key (fresh install only)
-hv key announce             # alias of the above
-hv key show                 # alias of the above
 ```
 
-A fresh install mints a key automatically. `hv key init` refuses to run on a node
+A fresh install mints a key automatically. `hv config identity init` refuses to run on a node
 that already has history under its hostname, because minting a key there would
 split its identity; such a node re-stamps its journal on a 1.x release first (see above).
 The private seed lives in the key directory outside the checkout, as `device-key`
@@ -629,7 +625,7 @@ The private seed lives in the key directory outside the checkout, as `device-key
 or sync it. Share your `device_id` and public key with peers (they go in
 `.peers.json`).
 
-`hv key announce` publishes the key as a signed journal entry (an authority-less
+`hv config identity announce` publishes the key as a signed journal entry (an authority-less
 `announce` act, kind `key`). Capsules can only be sealed to a device whose public
 key peers can *harvest from an entry that device signed* — a payload-carried key is
 never trusted. A device that ever wrote anything (even its `hv join` request) is
@@ -1276,7 +1272,7 @@ On the next `hive-mind install`, if a preserved identity is found it offers to *
 | Variable | Default | Description |
 |---|---|---|
 | `HIVE_HOME` | The folder containing `hv` | Where your data lives. Override to point `hv` at a different location. |
-| `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this device's identity. Normally a node identifies by its Ed25519 device key (see `hv key`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
+| `HIVE_NODE_ID` | The device-key fingerprint, else the hostname | Overrides this device's identity. Normally a node identifies by its Ed25519 device key (see `hv config identity`); set this only to force an identity, e.g. to run two separate hive instances on one machine. |
 | `HIVE_NODE_LABEL` | Your machine's hostname | A human-friendly display label shown next to the `device_id` in `hv stats` and sync logs. Cosmetic; does not affect identity. |
 | `HIVE_NOW` | System clock | For testing only — pins the clock to a fixed time so results are predictable. |
 | `HIVE_BIND` | automatic | Overrides the sync daemon's listen address (default: this device's Tailscale IP, else `127.0.0.1`). `0.0.0.0` listens on all interfaces and is warned about. |

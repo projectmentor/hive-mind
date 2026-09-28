@@ -77,7 +77,7 @@ def _check(home, name, *argv, script=_hv):
 
 def test_new_keys_land_outside_the_working_tree(tmp_path):
     home = tmp_path / "h"
-    assert _hv(home, "key", "init").returncode == 0
+    assert _hv(home, "config", "identity", "init").returncode == 0
     assert _ctl(home, "owner", "init").returncode == 0
     assert _in_tree(home) == [], "a seed was written into the working tree"
     kd = _key_dir(home)
@@ -92,13 +92,13 @@ def test_new_keys_land_outside_the_working_tree(tmp_path):
 
 def test_hive_key_dir_is_honoured(tmp_path):
     home, kd = tmp_path / "h", tmp_path / "chosen-keys"
-    assert _hv(home, "key", "init", HIVE_KEY_DIR=str(kd)).returncode == 0
+    assert _hv(home, "config", "identity", "init", HIVE_KEY_DIR=str(kd)).returncode == 0
     assert (kd / "device-key").exists() and _in_tree(home) == []
 
 
 def test_a_renamed_checkout_keeps_its_keys(tmp_path, monkeypatch):
     home = tmp_path / "h"
-    assert _hv(home, "key", "init").returncode == 0
+    assert _hv(home, "config", "identity", "init").returncode == 0
     kd = _key_dir(home)
     seed = _lib(home, monkeypatch, "hv_before_move")._device_seed()
     moved = tmp_path / "renamed"
@@ -113,7 +113,7 @@ def test_a_renamed_checkout_keeps_its_keys(tmp_path, monkeypatch):
 def _legacy_node(tmp_path):
     """A node from before PR 3a: device and owner keys at the root of the checkout, both plaintext."""
     src = tmp_path / "fresh"
-    assert _hv(src, "key", "init").returncode == 0 and _ctl(src, "owner", "init").returncode == 0
+    assert _hv(src, "config", "identity", "init").returncode == 0 and _ctl(src, "owner", "init").returncode == 0
     kd = _key_dir(src)
     shutil.copy2(kd / "device-key", tmp_path / "device-seed")
     shutil.copy2(kd / "device-key", src / ".device-key")
@@ -176,7 +176,7 @@ def test_an_interrupted_move_finishes_instead_of_reporting_a_clash(tmp_path):
 
 def test_relocation_never_overwrites_a_key_already_in_the_key_dir(tmp_path):
     home = tmp_path / "h"
-    assert _hv(home, "key", "init").returncode == 0
+    assert _hv(home, "config", "identity", "init").returncode == 0
     (home / ".device-key").write_text(base64.b64encode(os.urandom(32)).decode() + "\n")
     os.chmod(home / ".device-key", 0o600)
     r = _hv(home, "doctor", "--fix")
@@ -187,7 +187,7 @@ def test_relocation_never_overwrites_a_key_already_in_the_key_dir(tmp_path):
 @pytest.mark.skipif(not POSIX, reason="POSIX modes")
 def test_an_open_key_directory_is_a_hard_failure(tmp_path):
     home = tmp_path / "h"
-    assert _hv(home, "key", "init").returncode == 0
+    assert _hv(home, "config", "identity", "init").returncode == 0
     os.chmod(_key_dir(home), 0o755)
     c = _check(home, "keyperm")
     assert c["status"] == "fail" and "must be 0700" in c["detail"]
@@ -257,7 +257,7 @@ def test_an_unsearchable_key_directory_is_unknown_not_absent(tmp_path, monkeypat
 
 def test_whoami_and_doctor_label_ids_public_and_never_print_a_key(tmp_path):
     home = tmp_path / "h"
-    assert _hv(home, "key", "init").returncode == 0 and _ctl(home, "owner", "init").returncode == 0
+    assert _hv(home, "config", "identity", "init").returncode == 0 and _ctl(home, "owner", "init").returncode == 0
     out = _hv(home, "whoami").stdout
     assert "public id" in out.splitlines()[0]
     assert any(l.startswith("owner:") and "(public id)" in l for l in out.splitlines())
@@ -319,7 +319,7 @@ def test_identity_is_saved_from_and_restored_into_the_key_directory(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     (src / "hv").symlink_to(PROJECT / "hv")          # the primitive asks hv where the keys are
-    assert _hv(src, "key", "init").returncode == 0
+    assert _hv(src, "config", "identity", "init").returncode == 0
     device_id = (src / ".device-id").read_text().strip()
     stash = tmp_path / "stash"
     dst = tmp_path / "dst"

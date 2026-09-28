@@ -74,7 +74,7 @@ def _sync(src, dst):
         byday[ts[:10]].append(line)
     for day, lines in byday.items():
         (dst_j / f"{day}.jsonl").write_text("\n".join(lines) + "\n")
-    _run(dst, "rebuild")
+    _run(dst, "doctor", "rebuild")
 
 
 def _claim_mint_pub(home, node_id):
@@ -325,7 +325,7 @@ def test_phase2_backcompat_plain_hive_unchanged(tmp_path):
 
 # ── Phase 3: quorum election + dead-man switch ────────────────────────────────────────────────────
 # Elections are DEVICE-signed (authority = hive membership, not the owner key), so these tests mint a
-# REAL device key per home (`hv key init`) instead of overriding HIVE_NODE_ID — an unsigned election
+# REAL device key per home (`hv config identity init`) instead of overriding HIVE_NODE_ID — an unsigned election
 # entry is dropped by `_governance_state`. The dead-man clock is driven by $HIVE_NOW (the `now=` arg):
 # governance entries are dated by it, and a proposal carries that instant as its `basis_ts`.
 
@@ -354,7 +354,7 @@ def _setup_quorum_hive(tmp_path, quorum_m=2, dead_man_days=30, admit_day="2026-0
     `admit_day` (the admits/config), so an election basis_ts more than dead_man_days later is 'dark'."""
     a, b, c = tmp_path / "A", tmp_path / "B", tmp_path / "C"
     for h in (a, b, c):
-        _run(h, "key", "init")
+        _run(h, "config", "identity", "init")
     db, dc = _device_id(b), _device_id(c)
     now = f"{admit_day}T00:00:00.000+00:00"
     _run(a, "owner", "init", now=now)
@@ -405,7 +405,7 @@ def test_below_quorum_and_non_admitted_do_not_elect(tmp_path):
     _, gov0 = _gov(a)
     owner0 = gov0["owner_id"]
     d = tmp_path / "D"
-    _run(d, "key", "init")                                   # D is never admitted
+    _run(d, "config", "identity", "init")                                   # D is never admitted
     _merge_into(b, a)
     basis = "2026-08-15T00:00:00.000+00:00"
     _propose_minted(b, now=basis)
@@ -460,8 +460,8 @@ def test_elected_owner_governs_after_election(tmp_path):
 
 def test_quorum_off_is_backcompat(tmp_path):
     a, b = tmp_path / "A", tmp_path / "B"
-    _run(a, "key", "init")
-    _run(b, "key", "init")
+    _run(a, "config", "identity", "init")
+    _run(b, "config", "identity", "init")
     db = _device_id(b)
     _run(a, "owner", "init")
     _run(a, "group", "admit", db, "--principal", "bob")

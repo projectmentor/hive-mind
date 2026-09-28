@@ -38,8 +38,8 @@ hv wire <name> --env-file PATH # read tool credentials from a dotenv file (defau
    `hv wire --add it.json`. Built-in cells (like the `claude` agent) resolve before journaled ones.
 
 ## Notes
-- `kind:agent` cells reconcile foreign config (Claude Code hooks today); `hv wire claude` is the
-  modern form of the old `hv doctor wire-agent` (kept as a deprecated alias).
+- `kind:agent` cells reconcile foreign config (Claude Code hooks today); `hv wire claude` replaced
+  the old `hv doctor wire-agent`, which 2.0 removed.
 - If a tool's `requires` credential is missing, `hv wire` tells you exactly which one and where to
   put it — surface that to the user rather than guessing.
 - Real cells come from the hive (`hv wire --list`): they can carry private infrastructure details,

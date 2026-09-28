@@ -1,7 +1,7 @@
 """Device-identity tests: per-node Ed25519 keys, signed entries, verify-on-ingest.
 
 Each test drives the real `hv` CLI against an isolated temp HIVE_HOME (the `hive`
-fixture). A node with no .device-key keeps its legacy hostname identity; `hv key init`
+fixture). A node with no .device-key keeps its legacy hostname identity; `hv config identity init`
 mints a key and flips the node to device-identity mode (signed writes under the
 device_id fingerprint).
 """
@@ -33,13 +33,13 @@ def test_no_key_is_legacy_hostname_identity(hive):
 
 
 def test_key_init_and_show(hive):
-    out = hive.run("key", "init").stdout
+    out = hive.run("config", "identity", "init").stdout
     assert "device_id: k1:" in out
-    assert "device_id: k1:" in hive.run("key", "show").stdout
+    assert "device_id: k1:" in hive.run("config", "identity", "show").stdout
 
 
 def test_writes_are_signed_under_device_id(hive):
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("remember", "a fact written after minting a device key")
     e = hive.entries()[0]
     assert e["node_id"].startswith("k1:")
@@ -50,7 +50,7 @@ def test_writes_are_signed_under_device_id(hive):
 
 
 def test_genuine_verifies_tamper_and_forge_fail(hive):
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("remember", "verify this signed fact")
     hv = _loadhv()
     e = hive.entries()[0]
@@ -74,7 +74,7 @@ def test_genuine_verifies_tamper_and_forge_fail(hive):
 
 def test_ingest_rejects_a_forged_entry(hive):
     # A genuine signed entry from a *foreign* device is accepted; a tampered copy is rejected.
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("remember", "seed so the node has its own chain")
     hv = _loadhv()
 
@@ -97,9 +97,9 @@ def test_ingest_rejects_a_forged_entry(hive):
 
 
 def test_init_guard_refuses_on_a_populated_hostname_journal(hive):
-    # Writing under the hostname first, then `hv key init`, must refuse (migration is the path).
+    # Writing under the hostname first, then `hv config identity init`, must refuse (migration is the path).
     hive.run("remember", "a pre-existing hostname-authored fact")
-    out = hive.run("key", "init", check=False).stdout
+    out = hive.run("config", "identity", "init", check=False).stdout
     assert "1.x release" in out and "hv doctor migrate-identity" in out     # 2.0: the migration lives on 1.x
 
 
@@ -113,12 +113,13 @@ import sys
 HV = PROJECT / "hv"
 
 
-def _run(home, *args, node_id=None):
+def _run(home, *args, node_id=None, check=True):
     env = dict(os.environ, HIVE_HOME=str(home))
     if node_id:
         env["HIVE_NODE_ID"] = node_id
     r = subprocess.run([sys.executable, str(HV), *args], env=env, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+    if check:
+        assert r.returncode == 0, r.stderr
     return r
 
 
@@ -143,11 +144,14 @@ def test_the_hostname_migration_is_gone_and_says_what_to_do(tmp_path, argv):
     assert sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir()) == before
 
 
-def test_doctor_subcommands_and_aliases(tmp_path):
-    """`hv merkle` lives under `hv doctor`; the old top-level form keeps working as a silent argv alias."""
+def test_doctor_subcommands_and_removed_alias(tmp_path):
+    """`hv merkle` lives under `hv doctor`. Through 1.x the old top-level form worked as a silent argv alias;
+    2.0 removes it (decision h:af137f9421): it prints nothing on stdout, names `hv doctor merkle` and exits 2."""
     home = tmp_path
     _run(home, "remember", "a fact", node_id="node-a")
     canon = _run(home, "doctor", "merkle").stdout
-    alias = _run(home, "merkle").stdout
-    assert "Root:" in canon and canon == alias
+    assert "Root:" in canon
+    alias = _run(home, "merkle", check=False)
+    assert alias.returncode == 2 and alias.stdout == "", alias.stdout
+    assert "Run: hv doctor merkle" in alias.stderr, alias.stderr
 

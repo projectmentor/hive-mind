@@ -193,7 +193,7 @@ Your adapter **must**:
 - **Use a stable, distinct `--source`.** So independent corroboration across agents works
   (e.g. `claude-code`, `claude-ai`, `hermes:...`). Two agents agreeing must look like two sources.
   `--source` is a human label that distinguishes apps/agents *on one device*; the device itself is
-  identified cryptographically (an Ed25519 key — see `hv key` and INTERNALS "Device identity"), and
+  identified cryptographically (an Ed25519 key — see `hv config identity` and INTERNALS "Device identity"), and
   entries are signed under it. You set the label; you do not get to assert which device you are.
 
 ---
@@ -244,7 +244,10 @@ The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
   3.0. **Adapters are unaffected**: no MCP or Hermes tool ever called an owner-only command, and every
   data-plane verb, flag and output keeps §7's promise. One visible change is not a pointer: a link written
   through `hv` as source `manual` on the owner device is now device-signed. The owner-signed form is the
-  same verb through `hive-mind` (decision `h:34cc1dbcd3`).
+  same verb through `hive-mind` (decision `h:34cc1dbcd3`). The four 1.x aliases promised for removal at
+  this major, `hv rebuild`, `hv merkle`, `hv key` and `hv doctor wire-agent`, point the same way, at the
+  `hv` command that replaced each (`hv doctor rebuild`, `hv doctor merkle`, `hv config identity`,
+  `hv wire claude`), and exit 2 (decision `h:af137f9421`). No adapter calls one.
 
 This is what makes future breaking changes safe: additive-within-major keeps old adapters running,
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly

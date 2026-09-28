@@ -105,7 +105,7 @@ def start_daemon(mode):
 def setup_victim():
     (pathlib.Path(HIVE_HOME)).mkdir(parents=True, exist_ok=True)
     (pathlib.Path(HIVE_HOME) / ".peers.json").write_text(json.dumps({"self": "victim", "port": PORT, "peers": []}))
-    hv("key", "init")
+    hv("config", "identity", "init")
     hv("owner", "init")
     dev = (pathlib.Path(HIVE_HOME) / ".device-id").read_text().strip()
     hv("group", "admit", dev, "--principal", "victim")

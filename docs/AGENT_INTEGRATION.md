@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.28`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 2.0`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -247,8 +247,10 @@ The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
   would keep an owner-signing path in `hv` and undo the split (S2). Instead, through the 2.x line, it
   prints the exact `hive-mind` command to run — this invocation's arguments included — and **exits 2**,
   acting on nothing. Exit 0 would let a script believe the old command worked. The pointers are removed at
-  3.0. **Adapters are unaffected**: no MCP or Hermes tool ever called an owner-only command, and every
-  data-plane verb, flag and output keeps §7's promise. One visible change is not a pointer: a link written
+  3.0. **No adapter calls an owner-only command**: no MCP or Hermes tool ever did. The adapter-visible
+  breaks this major does make are on the data plane, promised for it since 1.x, and listed in the `2.0`
+  entry below: local ids refused, `tags` a list, and no `$HERMES_AGENT` source fallback. One visible
+  change is not a pointer: a link written
   through `hv` as source `manual` on the owner device is now device-signed. The owner-signed form is the
   same verb through `hive-mind` (decision `h:34cc1dbcd3`). The four 1.x aliases promised for removal at
   this major, `hv rebuild`, `hv merkle`, `hv key` and `hv doctor wire-agent`, point the same way, at the
@@ -264,6 +266,23 @@ governance actions, config keys, channels and the rest) is listed in [`NAMESPACE
 generated from `vocabulary.py`, and a name anything else adds takes a prefix.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `2.0` — **the split: `hv` is the agent data plane, `hive-mind` the owner/operator control plane** (public
+  #136). **Re-integrate (§0).** Three adapter-visible breaks, each promised for this major: (1) a bare local
+  id (`118`, `d17`, `i5`) is refused on every flag and MCP or Hermes input that takes a reference; pass the
+  `h:` id or the `node_id:seq` ref that `hv search` shows (#59, #64), and MCP `hive_entity`'s `fact_id` is a
+  `str`; (2) `tags` in `hv search --format json` is a JSON list, and `tag_list` stays (#77); (3)
+  `$HERMES_AGENT` no longer supplies a source, so pass `--source` on every write, or it records `manual`,
+  which means a person (#119). Every other verb, flag and output an adapter calls is unchanged. **Pointers,
+  not shims:** each command that owner-signs moved to `hive-mind` and, run on `hv`, names the `hive-mind`
+  form and exits 2, as do the removed 1.x aliases `hv rebuild`, `hv merkle`, `hv key` and `hv doctor
+  wire-agent` (the amendment above), kept through 2.x; no adapter called any of them. **Removed:** the
+  `sync_daemon.py` shim, the June-era migrations, the internal shims and the pre-1.12 hook names.
+  **Operators:** private keys move out of the checkout into a 0700 key directory and the owner key is
+  sealed at rest (`hive-mind doctor --fix`, `hive-mind owner seal`); an owned hive whose `forget_writers`
+  is still open fails `forget-authz`, and `hive-mind update` ends with ACTION REQUIRED, until the owner runs
+  `hive-mind doctor --fix`; a build without its bundled crypto refuses to run. **Version skew:** no journal
+  or wire change (S7), so a mixed 1.x/2.0 fleet converges. On a 2.0 node, `fleet-contract` lists every 1.x
+  peer as behind, which is intended: upgrade it.
 - `1.28` — **a new hive starts closed** (#135 part 1). Nothing an adapter calls changes: no verb, flag or
   output format moves. `hv owner init` now re-issues every forget that was in effect only because it predates
   the genesis owner as an ordinary owner-signed `retract`, then sets `forget_writers=owner`, so a hive born

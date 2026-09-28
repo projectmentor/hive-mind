@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import (_loadhv, _owned_hive, _fact, _decision, _link, _project, _entry, _conf)  # noqa: E402
 import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _ids  # noqa: E402  (stable ids: 2.0 rejects local ids)
 
 
 def _owner_hive(tmp_path, owner_links=False):
@@ -54,9 +55,9 @@ def _owner_hive(tmp_path, owner_links=False):
 def test_owner_machine_owner_signs_manual_links_and_they_are_hard(tmp_path):
     run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: a person acting as owner, via hive-mind
     run("remember", "issue Z is open")
-    run("remember", "issue Z is fixed", "--resolves", "1")
+    run("remember", "issue Z is fixed", "--resolves", _ids.sid(tmp_path, 1))
     run("decide", "plan A", "--rationale", "r")
-    run("decide", "plan B replaces A", "--rationale", "r", "--supersedes", "1")
+    run("decide", "plan B replaces A", "--rationale", "r", "--supersedes", _ids.sid(tmp_path, 1, "decision"))
     links = [e for e in entries() if e["type"] == "link"]
     assert sorted(l["payload"]["kind"] for l in links) == ["resolves", "supersedes"]
     for l in links:

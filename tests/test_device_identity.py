@@ -12,6 +12,7 @@ import importlib.machinery
 import importlib.util
 import os
 from pathlib import Path
+import _ids  # noqa: E402  (stable ids: 2.0 rejects local ids)
 
 PROJECT = Path(__file__).resolve().parent.parent
 
@@ -134,7 +135,7 @@ def test_migration_is_deterministic_across_nodes(tmp_path):
     base = tmp_path / "base"
     _run(base, "remember", "alpha fact", "--source", "claude-code", node_id="node-a")
     _run(base, "entity", "add", "--name", "Thing", "--type", "concept", node_id="node-a")
-    _run(base, "entity", "link", "--name", "Thing", "--fact-id", "1", node_id="node-a")
+    _run(base, "entity", "link", "--name", "Thing", "--fact-id", _ids.sid(base, 1), node_id="node-a")
     _run(base, "remember", "beta fact", "--source", "hermes", node_id="node-b")
 
     mapping = {"node-a": "k1:aaaaaaaaaaaaaaaa", "node-b": "k1:bbbbbbbbbbbbbbbb"}

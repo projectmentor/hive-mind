@@ -43,12 +43,12 @@ def test_search_rows_carry_stable_ref(hive):
     assert dec["ref"] in hive.run("search", "base decision").stdout
 
 
-def test_informed_by_ref_and_bare_id_round_trip(hive):
+def test_informed_by_ref_and_sid_round_trip(hive):
     facts, dec = _seed(hive)
     f1 = facts["the deploy succeeded at commit abc123"]
     f2 = facts["the deploy took eleven minutes"]
     r = hive.run("decide", "ship it", "--rationale", "because", "--tags", "t",
-                 "--informed", f1["ref"], str(f2["id"]), f"d{dec['id']}", f1["ref"])   # dup is de-duplicated
+                 "--informed", f1["ref"], hive.sid(f2["id"]), hive.sid(dec["id"], "decision"), f1["ref"])   # dup is de-duplicated
     assert "informed by 3 ref(s)" in r.stdout
     # payload: informed_by is a list of [node_id, seq] refs, in order, de-duplicated
     d = [e for e in hive.entries() if e["type"] == "decision" and e["payload"]["content"] == "ship it"][0]
@@ -74,14 +74,13 @@ def test_informed_by_ref_and_bare_id_round_trip(hive):
 def test_bad_reference_aborts_with_nothing_journaled(hive):
     facts, dec = _seed(hive)
     before = len(hive.entries())
-    # unresolvable bare id
-    r = hive.run("decide", "nope", "--informed", "99", check=False)
+    # a local id, bare or kind-prefixed: rejected in 2.0 (#59), however it would have resolved
+    for local in ("99", str(max(f["id"] for f in facts.values())), f"d{dec['id']}"):
+        r = hive.run("decide", "nope", "--informed", local, check=False)
+        assert r.returncode != 0 and "is a local id, which 2.0 no longer accepts" in r.stderr, local
+    # an unresolvable sid (well-formed, unknown)
+    r = hive.run("decide", "nope", "--informed", "h:0000000000", check=False)
     assert r.returncode != 0 and "does not resolve" in r.stderr
-    # kind mismatch: a FACT id given with the decision prefix (pick an id that is NOT also a decision id)
-    fid = max(f["id"] for f in facts.values())
-    assert hive.query("SELECT count(*) c FROM decisions WHERE id = ?", (fid,))[0]["c"] == 0
-    r = hive.run("decide", "nope", "--informed", f"d{fid}", check=False)
-    assert r.returncode != 0 and "does not resolve to a decision" in r.stderr
     # malformed token
     r = hive.run("decide", "nope", "--informed", "x7", check=False)
     assert r.returncode != 0 and "expected" in r.stderr
@@ -109,7 +108,7 @@ def test_pre_1_19_decision_reads_back_empty_and_plain_decide_unchanged(hive):
 def test_informed_combines_with_supersedes_and_survives_rebuild(hive):
     facts, dec = _seed(hive)
     f1 = facts["the deploy succeeded at commit abc123"]
-    hive.run("decide", "v2 of base", "--rationale", "r", "--supersedes", str(dec["id"]), "--informed", f1["ref"])
+    hive.run("decide", "v2 of base", "--rationale", "r", "--supersedes", hive.sid(dec["id"], "decision"), "--informed", f1["ref"])
     hive.run("doctor", "rebuild")
     row = hive.query("SELECT superseded_by FROM decisions WHERE content='base decision about deploys'")[0]
     assert row["superseded_by"] is not None

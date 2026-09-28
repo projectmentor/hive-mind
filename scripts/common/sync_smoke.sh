@@ -63,9 +63,10 @@ env $EB "$HV" remember "shared truth" --source obs-b >/dev/null
 # Same structured agent, TWO sessions (D0): one identity → must stay 0.45 and converge.
 env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess1aaa >/dev/null
 env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess2bbb >/dev/null
-# Peer retract (Slice 2): negative evidence drives confidence below 0; must converge.
+# Peer retract (Slice 2): negative evidence drives confidence below 0; must converge. By sid: 2.0 refuses
+# local ids (#59), which also renumber on every rebuild.
 env $EA "$HV" remember "retractable claim" --source peerX >/dev/null
-RFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT id FROM facts WHERE content LIKE 'retractable%'\").fetchone()[0])")"
+RFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT j.sid FROM journal_index j JOIN facts f ON j.kind = 'fact' AND j.local_id = f.id WHERE f.content LIKE 'retractable%' ORDER BY j.node_id, j.seq\").fetchone()[0])")"
 # Two DISTINCT-device retractors (D0-v2: independence is per device) → net 1 - 2 = -1.
 env $EA HIVE_NODE_ID=nodeY "$HV" retract "$RFID" --source peerY >/dev/null
 env $EA HIVE_NODE_ID=nodeZ "$HV" retract "$RFID" --source peerZ >/dev/null
@@ -101,7 +102,7 @@ case "$OUT" in *"in sync"*) ok "second sync reports in-sync";; *) no "second syn
 
 printf '\n%s── cross-node link resolves on both nodes ──%s\n' "$B_" "$N"
 # On A: link B's entity 'Bravo' to A's 'alpha' fact, then sync back to B.
-AFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT id FROM facts WHERE content LIKE 'alpha%'\").fetchone()[0])")"
+AFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT j.sid FROM journal_index j JOIN facts f ON j.kind = 'fact' AND j.local_id = f.id WHERE f.content LIKE 'alpha%' ORDER BY j.node_id, j.seq\").fetchone()[0])")"
 env $EA "$HV" entity link --name Bravo --fact-id "$AFID" >/dev/null
 env $EA "$HV" sync now >/dev/null
 eq "A shows the link"  "$(count "$A" entity_facts)" "1"

@@ -316,14 +316,23 @@ def _link_setup(tmp_path):
     return home, sids["fact"], sids["decision"]
 
 
-_LINK_CASES = [
-    ("decide --supersedes", lambda f, d: ["decide", "ship on monday", "--rationale", "r", "--supersedes", d,
-                                          "--source", "manual"], "supersedes"),
-    ("remember --resolves", lambda f, d: ["remember", "the build is green", "--resolves", f,
-                                          "--source", "manual"], "resolves"),
-    ("entity link", lambda f, d: ["entity", "link", "--name", "Build", "--fact-id", f,
-                                  "--source", "manual"], "entity"),
+_LINK_CASES = [      # every link flag `_LINK_FLAGS` guards (Fable on #167), plus `entity link`
+    ("remember --resolves", lambda f, d: ["remember", "the build is green", "--resolves", f], "resolves"),
+    ("remember --outcome-of", lambda f, d: ["remember", "friday went fine", "--outcome-of", d], "outcome-of"),
+    ("remember --supports", lambda f, d: ["remember", "red again at noon", "--supports", f], "supports"),
+    ("remember --contradicts", lambda f, d: ["remember", "it was green all day", "--contradicts", f], "contradicts"),
+    ("remember --extends", lambda f, d: ["remember", "red since the merge", "--extends", f], "extends"),
+    ("decide --supersedes", lambda f, d: ["decide", "ship on monday", "--rationale", "r", "--supersedes", d],
+     "supersedes"),
+    ("decide --revoke", lambda f, d: ["decide", "--revoke", d, "--rationale", "friday was wrong"], "supersedes"),
+    ("decide --informed", lambda f, d: ["decide", "fix the build first", "--rationale", "r", "--informed", f],
+     "informed"),
+    ("entity link", lambda f, d: ["entity", "link", "--name", "Build", "--fact-id", f], "entity"),
 ]
+
+
+def _manual(argv):
+    return argv + ["--source", "manual"]
 
 
 @pytest.mark.parametrize("name, argv, kind", _LINK_CASES, ids=[c[0] for c in _LINK_CASES])
@@ -335,7 +344,7 @@ def test_a_locked_key_aborts_a_link_verb_before_anything_is_written(tmp_path, na
     if name == "entity link":
         assert _hv(home, "entity", "add", "--name", "Build", "--type", "concept").returncode == 0
     before = _journal(home)
-    r = _ctl(home, *argv(fact, dec), HIVE_OWNER_KEY_PASSPHRASE=passphrase)
+    r = _ctl(home, *_manual(argv(fact, dec)), HIVE_OWNER_KEY_PASSPHRASE=passphrase)
     assert r.returncode == 1 and says in r.stderr, (r.stdout, r.stderr)
     assert _journal(home) == before, "the fact or decision must not be written without its link"
 
@@ -345,8 +354,21 @@ def test_with_the_passphrase_the_link_verb_owner_signs_its_link(tmp_path, name, 
     home, fact, dec = _link_setup(tmp_path)
     if name == "entity link":
         assert _hv(home, "entity", "add", "--name", "Build", "--type", "concept").returncode == 0
-    r = _ctl(home, *argv(fact, dec))
+    r = _ctl(home, *_manual(argv(fact, dec)))
     assert r.returncode == 0, r.stdout + r.stderr
     links = [json.loads(line) for line in _journal(home).decode().splitlines() if line.strip()]
     links = [e for e in links if e.get("type") == "link" and e["payload"].get("kind") == kind]
     assert links and all("owner_sig" in e["payload"] for e in links), links
+
+
+def test_the_link_flag_list_matches_the_parser(tmp_path, monkeypatch):
+    """`_LINK_FLAGS` is the control plane's list of the options that write a link; it must name every
+    ref-taking option `hv`'s `remember` and `decide` define, so a link flag added to `hv` later cannot
+    miss the unlock-before-write (Fable on #167)."""
+    import argparse
+    m = _lib(tmp_path / "h", monkeypatch, "hv_flag_list")
+    sub = next(a for a in m.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
+    for cmd in ("remember", "decide"):
+        ref_opts = {a.dest for a in sub.choices[cmd]._actions
+                    if a.option_strings and a.metavar in ("FACT", "DECISION", "REF")}
+        assert set(m._LINK_FLAGS[cmd]) == ref_opts, (cmd, sorted(ref_opts))

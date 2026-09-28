@@ -169,6 +169,12 @@ introduced (a contract) or tagged (a patch).
   `commandmap.MOVED` command, or `retract --owner` or `owner propose-election --mint`, on `hv`. It excludes §7's
   per-version history, the CHANGELOG, `docs/history/`, and `README.md` and `SECURITY.md`, which #141 reconciles
   (6 and 2 references).
+- **The docs state what 2.0 does.** Pages written during 1.x described 4a's changes as future ones: bare local ids
+  "still accepted" and "removed at the next MAJOR", `tags` that "becomes the list", and a `$HERMES_AGENT` source
+  fallback. `CLI_REFERENCE.md`, `INTERNALS.md` (whose `_BARE_ID_WARNING` no longer exists), the `hive-memory`
+  skill and the MCP `hive_search` docstring now say a local id is refused, `tags` is a JSON list, and an omitted
+  source is `manual`. `tests/test_docs_state_2_0_behaviour.py` fails if one of those phrases comes back outside
+  the history, using the moved-command sweep's exclusions.
 
 ## Unreleased — contract 1.28
 

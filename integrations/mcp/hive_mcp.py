@@ -124,9 +124,8 @@ def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> l
     Every row carries two STABLE identities of that entry: `sid` (the short id, `h:` + 10 hex —
     the form to pass to other tools: hive_decide informed_by, hive_remember outcome_of, hive_retract,
     hive_entity fact_id) and `ref` (`node_id:seq`, the raw journal identity). Both are identical on
-    every node and never change. The numeric `id` is this node's rebuild-unstable rowid; it is
-    DEPRECATED as an input and stops being accepted at the next MAJOR contract bump — never carry it
-    across a sync or a session.
+    every node and never change. The numeric `id` is this node's rebuild-unstable rowid; 2.0 refuses
+    it as an input — never carry it across a sync or a session.
 
     min_confidence filters out facts below the given derived confidence (0.0 = everything).
     """

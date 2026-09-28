@@ -375,8 +375,8 @@ sid = "h:" + sha256(f"{node_id}:{seq}").hexdigest()[:10]        # _short_id
   while every entry's own `sid` still resolves to the row. `_index_lookup` orders the same way.
 - **Boundary only.** `_resolve_id_arg(conn, token, kind, what)` is the one path every accepting verb
   uses (`--informed` via `_parse_ref_arg`, `--outcome-of`, `--supersedes`, `--resolves`, `retract`,
-  `entity link`): `h:` / `node_id:seq` / bare local id, kind-checked, resolved **before** any write.
-  A bare integer prints `_BARE_ID_WARNING` once per process; it is removed at the next MAJOR.
+  `entity link`): `h:` / `node_id:seq`, kind-checked, resolved **before** any write. A bare local id
+  raises `LocalIdRejected` (2.0), and the command exits having written nothing.
 - **Audit.** `_REFERENCE_RE` parses a prose `h:…` beside `#N`; CONTRAVENED marks the former `exact`
   and the latter best-effort. `api_item(sid)` resolves a dashboard deep link (`/#h:…`) server-side.
 

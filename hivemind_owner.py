@@ -190,6 +190,36 @@ def _sign_governance_payload(payload, owner_seed, owner_pub):
 # `_data_plane_link_payload` is `hv`'s own builder (device-signed links only), saved by `install`.
 
 
+# The link flags of the verbs whose links this plane owner-signs (decision h:34cc1dbcd3); `entity` links
+# with `entity link`.
+_LINK_FLAGS = {"remember": ("resolves", "outcome_of", "supports", "contradicts", "extends"),
+               "decide": ("supersedes", "revoke", "informed")}
+
+
+def _will_owner_sign_links(args):
+    """Whether this `hive-mind remember|decide|entity` will owner-sign a link: at least one link to write,
+    and the write's source resolves to `manual`, exactly as `hv` resolves it."""
+    cmd = getattr(args, "command", None)
+    if cmd == "entity":
+        wants = getattr(args, "action", None) == "link"
+    else:
+        wants = any(getattr(args, f, None) for f in _LINK_FLAGS.get(cmd, ()))
+    source = getattr(args, "source", None) or os.environ.get("HERMES_AGENT", "manual")
+    return bool(wants) and source == "manual"
+
+
+def _unlock_before_writing(args):
+    """Unlock the sealed owner key BEFORE a link verb writes anything (Fable on #167). `remember`, `decide`
+    and `entity link` append their fact or decision first and build the link payloads after, and it is
+    `_link_payload` that owner-signs on this plane. So a locked key used to raise only once the primary
+    entry was journaled: written, device-signed, without the link it asked for. Called by
+    `hivemind_ctl.main` ahead of dispatch: a cancel or a wrong passphrase raises `OwnerKeyLocked` with the
+    journal untouched, and a success leaves the seed unlocked for the links. A no-op when no owner key is
+    on this device, or when no owner-signed link is coming."""
+    if _will_owner_sign_links(args) and _owner_key_exists():
+        _owner_seed()
+
+
 def _link_payload(kind, from_ref, to_ref, source, data=None, channel=None):
     """Every link a `hive-mind remember|decide|entity` writes (#114, 2.0 PR 2b, decision h:34cc1dbcd3).
     The payload is built by `hv`'s own builder and then owner-signed, exactly as before the split, when

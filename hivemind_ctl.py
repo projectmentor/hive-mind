@@ -125,6 +125,7 @@ def main(argv=None):
     parser = m.build_parser()                     # the library owns every flag definition
     args = parser.parse_args(_to_library_argv(argv))
     try:
+        m._unlock_before_writing(args)            # a link verb: a locked key aborts before any write (#167)
         return m.dispatch(args)
     except m.OwnerKeyLocked as e:                 # sealed and not unlocked: nothing signed or written
         print(f"hive-mind: {e}", file=sys.stderr)

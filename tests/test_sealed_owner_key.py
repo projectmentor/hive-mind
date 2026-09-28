@@ -299,3 +299,54 @@ def test_identity_stash_carries_the_sealed_key(tmp_path):
     assert (stash / ".owner-key.sealed").is_file() and not (stash / ".owner-key").exists()
     assert (_key_dir(dst) / "owner-key.sealed").read_bytes() == (_key_dir(src) / "owner-key.sealed").read_bytes()
     assert not (_key_dir(dst) / "owner-key").exists()
+
+
+# ── the link verbs: a locked key aborts before the fact or decision is written (Fable on #167) ─────────
+
+def _link_setup(tmp_path):
+    """An owner node with a fact and a decision to link to, and their sids."""
+    home = tmp_path / "h"
+    assert _ctl(home, "owner", "init").returncode == 0
+    assert _hv(home, "remember", "the build is red", "--source", "alice").returncode == 0
+    assert _hv(home, "decide", "ship on friday", "--rationale", "r").returncode == 0
+    import sqlite3
+    conn = sqlite3.connect(home / "store.db")
+    sids = dict(conn.execute("SELECT kind, sid FROM journal_index WHERE kind IN ('fact', 'decision')").fetchall())
+    conn.close()
+    return home, sids["fact"], sids["decision"]
+
+
+_LINK_CASES = [
+    ("decide --supersedes", lambda f, d: ["decide", "ship on monday", "--rationale", "r", "--supersedes", d,
+                                          "--source", "manual"], "supersedes"),
+    ("remember --resolves", lambda f, d: ["remember", "the build is green", "--resolves", f,
+                                          "--source", "manual"], "resolves"),
+    ("entity link", lambda f, d: ["entity", "link", "--name", "Build", "--fact-id", f,
+                                  "--source", "manual"], "entity"),
+]
+
+
+@pytest.mark.parametrize("name, argv, kind", _LINK_CASES, ids=[c[0] for c in _LINK_CASES])
+@pytest.mark.parametrize("passphrase, says", [("wrong", "Could not unlock"), ("", "Cancelled")],
+                         ids=["wrong", "cancelled"])
+def test_a_locked_key_aborts_a_link_verb_before_anything_is_written(tmp_path, name, argv, kind,
+                                                                     passphrase, says):
+    home, fact, dec = _link_setup(tmp_path)
+    if name == "entity link":
+        assert _hv(home, "entity", "add", "--name", "Build", "--type", "concept").returncode == 0
+    before = _journal(home)
+    r = _ctl(home, *argv(fact, dec), HIVE_OWNER_KEY_PASSPHRASE=passphrase)
+    assert r.returncode == 1 and says in r.stderr, (r.stdout, r.stderr)
+    assert _journal(home) == before, "the fact or decision must not be written without its link"
+
+
+@pytest.mark.parametrize("name, argv, kind", _LINK_CASES, ids=[c[0] for c in _LINK_CASES])
+def test_with_the_passphrase_the_link_verb_owner_signs_its_link(tmp_path, name, argv, kind):
+    home, fact, dec = _link_setup(tmp_path)
+    if name == "entity link":
+        assert _hv(home, "entity", "add", "--name", "Build", "--type", "concept").returncode == 0
+    r = _ctl(home, *argv(fact, dec))
+    assert r.returncode == 0, r.stdout + r.stderr
+    links = [json.loads(line) for line in _journal(home).decode().splitlines() if line.strip()]
+    links = [e for e in links if e.get("type") == "link" and e["payload"].get("kind") == kind]
+    assert links and all("owner_sig" in e["payload"] for e in links), links

@@ -51,20 +51,43 @@ def test_a_loader_for_a_hive_resolves_that_hive_whatever_hive_home_says(tmp_path
     assert os.environ["HIVE_HOME"] == str(other), "load_hv puts HIVE_HOME back"
 
 
-def test_a_test_that_used_to_read_the_exported_hive_passes_against_a_decoy(tmp_path):
+def _nested(decoy, mode, *tests, **extra):
+    """A fresh pytest session with HIVE_HOME exported to `decoy`, serial or under xdist. The outer session's
+    own markers (PYTEST_XDIST_WORKER, the exported-home record) are dropped, so the nested one starts as a
+    developer's run would."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("PYTEST_") and k != _realhome.EXPORTED_HOME_VAR}
+    env["HIVE_HOME"] = str(decoy)
+    env.update(extra)
+    flags = ["-p", "no:xdist"] if mode == "serial" else ["-n", "2"]
+    return subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *flags, *tests],
+                          cwd=PROJECT, env=env, capture_output=True, text=True, timeout=600)
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_a_test_that_used_to_read_the_exported_hive_passes_against_a_decoy(tmp_path, mode):
     """The issue's first observation, as a regression: with HIVE_HOME exported to a live-looking hive,
     `test_standby_declaration_visible` failed (its `_gov` read that hive's genesis pin). Run it, and the
     other `_gov` user, in a fresh session with HIVE_HOME exported to a decoy: both pass, and the inner
     session's guard (strict in decoy mode) and this test both find the decoy byte-identical."""
     decoy = _decoy(tmp_path)
     before = _realhome.decoy_state(decoy)
-    env = {k: v for k, v in os.environ.items() if not k.startswith("PYTEST_")}
-    env["HIVE_HOME"] = str(decoy)
-    r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
-                        "tests/test_succession.py::test_standby_declaration_visible", "tests/test_group.py"],
-                       cwd=PROJECT, env=env, capture_output=True, text=True, timeout=600)
+    r = _nested(decoy, mode, "tests/test_succession.py::test_standby_declaration_visible", "tests/test_group.py")
     assert r.returncode == 0, r.stdout[-3000:] + r.stderr[-2000:]
     assert _realhome.decoy_state(decoy) == before
+
+
+@pytest.mark.parametrize("mode", ["serial", "xdist"])
+def test_the_session_guard_fails_a_run_that_writes_into_the_exported_hive(tmp_path, mode):
+    """The guard itself, end to end, in both modes the suite runs in: a nested session whose one test
+    writes into the exported (decoy) hive must fail, and name the file. Under xdist this failed open
+    before the exported-home record (Fable on #165): every worker watched the controller's sandbox."""
+    decoy = _decoy(tmp_path)
+    r = _nested(decoy, mode, "tests/_guard_probe.py", HIVE_TEST_PROBE_TARGET=str(decoy))
+    assert "1 passed" in r.stdout, "the probe itself must succeed; only the guard may fail the run"
+    out = r.stdout + r.stderr
+    assert r.returncode != 0, out[-3000:]
+    assert "real hive .key-dir created" in out and "decoy hive .key-dir created" in out, out[-3000:]
 
 
 def test_the_guard_fails_on_a_write_into_the_exported_hive(tmp_path):

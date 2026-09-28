@@ -41,6 +41,8 @@ jobs:
         run: |
           decoy="$RUNNER_TEMP/decoy-hive"
           HIVE_HOME="$decoy" HIVE_IDENTITY_STASH="$RUNNER_TEMP/decoy-stash" python3 hv key init >/dev/null
+          # HIVE_OWNER_KEY_PASSPHRASE is the sealed owner key's unlock variable from 2.0 PR 3b (separate
+          # from HIVE_OWNER_PASSPHRASE, the export/escrow one); until 3b lands, owner init ignores it.
           HIVE_HOME="$decoy" HIVE_IDENTITY_STASH="$RUNNER_TEMP/decoy-stash" HIVE_OWNER_KEY_PASSPHRASE=ci \
             python3 hivemind_ctl.py owner init >/dev/null
           echo "the test suite must leave this hive byte-identical" > "$decoy/.hive-test-decoy"

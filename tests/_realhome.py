@@ -13,6 +13,9 @@ import subprocess
 from pathlib import Path
 
 
+EXPORTED_HOME_VAR = "HIVE_TEST_EXPORTED_HOME"
+
+
 def session_paths():
     """The real paths as this session STARTED: the HOME it was launched with (a developer may run
     under a deliberate HOME=/tmp/x), else the passwd entry; an exported CLAUDE_CONFIG_DIR or
@@ -22,9 +25,13 @@ def session_paths():
     claude = Path(os.environ.get("CLAUDE_CONFIG_DIR") or home / ".claude")
     stash = Path(os.environ.get("HIVE_IDENTITY_STASH") or home / ".config" / "hive-mind" / "identity")
     # The live hive's checkout, so the guard can see a .genesis-pin or a key written into it (#14, #160):
-    # the pin is per-node governance authority, in the same class as the owner key. This is the exported
-    # HIVE_HOME, read BEFORE conftest replaces it with a sandbox.
-    hive = Path(os.environ.get("HIVE_HOME") or Path(__file__).resolve().parent.parent)
+    # the pin is per-node governance authority, in the same class as the owner key. This is the EXPORTED
+    # HIVE_HOME, which conftest records in EXPORTED_HOME_VAR before it sandboxes HIVE_HOME; an xdist worker
+    # inherits the sandbox, so it must read the record, not HIVE_HOME.
+    exported = os.environ.get(EXPORTED_HOME_VAR)
+    if exported is None:
+        exported = os.environ.get("HIVE_HOME")
+    hive = Path(exported or Path(__file__).resolve().parent.parent)
     return {"home": home, "claude": claude, "stash": stash, "userbase": site.getuserbase(), "hive": hive}
 
 

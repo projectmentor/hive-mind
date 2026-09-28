@@ -47,6 +47,12 @@ import _realhome
 PROJECT = Path(__file__).resolve().parent.parent
 HV = PROJECT / "hv"
 
+# Under xdist the controller imports this file before it starts the workers, and each worker inherits its
+# environment, sandboxed HIVE_HOME included. So the controller (or a serial run) records the hive that was
+# exported, and a worker reads that instead: without it every worker's guard watched the controller's
+# sandbox and could never fail (Fable on #165).
+if not os.environ.get("PYTEST_XDIST_WORKER"):
+    os.environ[_realhome.EXPORTED_HOME_VAR] = os.environ.get("HIVE_HOME", "")
 # The real paths as this session started, captured at import: before any fixture redirects HOME.
 REAL = _realhome.session_paths()
 # #160: then a sandbox HIVE_HOME for the session, still at import, so a test module that loads `hv` at its

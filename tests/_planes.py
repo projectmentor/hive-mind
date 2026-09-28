@@ -33,3 +33,24 @@ def install_control_plane(mod):
     """Give an in-process `hv` module its owner steps, as `hive-mind` does (2.0 S2)."""
     import hivemind_ctl
     return hivemind_ctl.install(mod)
+
+
+def load_hv(home, name="hv_planes", control_plane=True):
+    """`hv` loaded in-process FOR `home` (#160): `hv` resolves every path (journal, store, genesis pin, keys)
+    from HIVE_HOME when it is imported, so a loader must say which hive it is about. HIVE_HOME is set to
+    `home` for the import only, then put back. With `control_plane`, the owner steps are installed too."""
+    import importlib.machinery
+    import importlib.util
+    import os
+    prev = os.environ.get("HIVE_HOME")
+    os.environ["HIVE_HOME"] = str(home)
+    try:
+        loader = importlib.machinery.SourceFileLoader(name, str(HV))
+        m = importlib.util.module_from_spec(importlib.util.spec_from_loader(name, loader))
+        loader.exec_module(m)
+    finally:
+        if prev is None:
+            os.environ.pop("HIVE_HOME", None)
+        else:
+            os.environ["HIVE_HOME"] = prev
+    return install_control_plane(m) if control_plane else m

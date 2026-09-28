@@ -16,6 +16,9 @@ module had written would be read with the new meaning, on every node, from then 
 - **Core reserves every bare name on this page**, in its category.
 - **A module's names take a prefix: `x-<module>:<name>`**, for example `x-hwatch:heartbeat` (decision
   `h:af137f9421`). No core name starts with `x-`.
+- **What a module may add** (decision `h:a1e3e7cd73`): a link kind or a config key, prefixed. Never an entry
+  type, a governance action or a channel: each needs a core projection, and channels are closed. Each table
+  below says which, under *Modules*.
 - **The 2.1 module API enforces the prefix.** 2.0 reserves the names and documents them.
 - **Envelope fields are the entry's structure**, not vocabulary a module picks. A module never writes its
   own: the core builds the envelope around a module's payload.
@@ -33,6 +36,8 @@ changelog and the contract history as a best effort, and never derived from git.
 ## Entry types
 
 The `type` of a journal entry.
+
+*Modules:* No. A new entry type needs a core projection.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -52,6 +57,8 @@ The `type` of a journal entry.
 
 The `kind` of a `link` entry. An unknown kind lands and projects to nothing.
 
+*Modules:* Yes, prefixed. It lands, and projects to nothing on a node without a resolver for it.
+
 | Name | Status | Since | Meaning |
 |---|---|---|---|
 | `contradicts` | written | 1.19 | Evidence against a fact or an idea. |
@@ -66,6 +73,8 @@ The `kind` of a `link` entry. An unknown kind lands and projects to nothing.
 ## Governance actions
 
 The `action` of a `governance` entry.
+
+*Modules:* No. An action needs the core governance projection.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -93,6 +102,8 @@ The `action` of a `governance` entry.
 
 The keys a `set-config` act may set. An older node ignores a key it does not know.
 
+*Modules:* Yes, prefixed. An older node ignores a key it does not know.
+
 | Name | Status | Since | Meaning |
 |---|---|---|---|
 | `cap_self` | written | 1.4 | The confidence ceiling when all corroboration traces to one principal. |
@@ -118,6 +129,8 @@ The keys a `set-config` act may set. An older node ignores a key it does not kno
 
 An entry's `channel`. Closed: a module never adds one, because an unrecognised channel counts as `introspect`.
 
+*Modules:* No. Closed: an unrecognised channel counts as `introspect`.
+
 | Name | Status | Since | Meaning |
 |---|---|---|---|
 | `act` | written | 1.19 | Something the writer did. Weighs like `sense`, except that a decision's outcome counts `sense` only. |
@@ -127,6 +140,8 @@ An entry's `channel`. Closed: a module never adds one, because an unrecognised c
 ## Behaviour tags
 
 Tags core writes or acts on. A name ending in `*` is a prefix.
+
+*Modules:* Only prefixed, like every module name.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -139,6 +154,8 @@ Tags core writes or acts on. A name ending in `*` is a prefix.
 
 The `kind` of a governance `announce`. An unknown kind is accepted and ignored.
 
+*Modules:* Only prefixed. A node accepts an unknown kind and ignores it.
+
 | Name | Status | Since | Meaning |
 |---|---|---|---|
 | `key` | written | 1.18 | Publishes the device's key, so capsules can be sealed to a device that has never written anything. |
@@ -146,6 +163,8 @@ The `kind` of a governance `announce`. An unknown kind is accepted and ignored.
 ## Source apps
 
 The `<app>` of a source, `<app>:<context_class>/<instance>/<session8>`.
+
+*Modules:* Only prefixed, like every module name.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -155,6 +174,8 @@ The `<app>` of a source, `<app>:<context_class>/<instance>/<session8>`.
 ## Source context classes
 
 The `<context_class>` of a source. An unrecognised class weighs 1.0.
+
+*Modules:* Only prefixed, like every module name. An unrecognised class weighs 1.0.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -166,6 +187,8 @@ The `<context_class>` of a source. An unrecognised class weighs 1.0.
 ## Envelope fields
 
 The fields an entry is made of. A module never writes its own: the core builds the envelope around a module's payload.
+
+*Modules:* No. The core builds the envelope around a module's payload.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -183,3 +206,41 @@ The fields an entry is made of. A module never writes its own: the core builds t
 | `timestamp` | written | 1.0 | When the entry was written (ISO 8601); it also names the journal's day file. |
 | `to` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an edge points to. A link carries `to_ref` today. |
 | `type` | written | 1.0 | The entry type (see Entry types). |
+
+## Local files
+
+Not journal vocabulary. These are the per-node files and directories core keeps under `$HIVE_HOME` (the
+checkout) and in the key directory (`$HIVE_KEY_DIR`, else the path in `$HIVE_HOME/.key-dir`, else
+`~/.hive/keys/<16 hex>`). None of them enters the journal or the wire. A module never claims one of these
+names. They are listed apart from the tables above so that a file name is never mistaken for vocabulary.
+Here `legacy` means core no longer writes the file at that path and still reads it.
+
+| Name | Where | Status | Since | Meaning |
+|---|---|---|---|---|
+| `.bus` | `$HIVE_HOME` | written | 1.10 | Directory for the local event log, `introspect.log`; never synced. |
+| `.device-id` | `$HIVE_HOME` | written | 1.3 | This device's id, `k1:` and 16 hex of its key's sha256. |
+| `.device-key` | `$HIVE_HOME` | legacy | 1.3 | The device key's pre-2.0 path in the checkout. It still loads, with a `keyperm` warning, and `hv doctor --fix` moves it. |
+| `.genesis-pin` | `$HIVE_HOME` | written | 1.27 | Which `owner` declaration established this hive (0600, never synced). |
+| `.key-dir` | `$HIVE_HOME` | written | 2.0 | The path of this checkout's key directory, so a renamed checkout keeps its keys. |
+| `.nudge_state` | `$HIVE_HOME` | written | 1.0 | When the save and audit nudges last fired. |
+| `.owner-key` | `$HIVE_HOME` | legacy | 1.4 | The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` moves it. |
+| `.owner-pub` | `$HIVE_HOME` | legacy | 2.0 | The owner key's public half at its first 2.0 path. `hive-mind doctor --fix` moves it. |
+| `.peer_candidates.json` | `$HIVE_HOME` | written | 1.21 | The addresses each admitted device verified itself from; local, never journaled (see `via` values). |
+| `.peers.json` | `$HIVE_HOME` | written | 1.0 | This node's sync settings and its peers' addresses. |
+| `.telemetry` | `$HIVE_HOME` | written | 1.1 | Directory for the local-only session telemetry store; never synced. |
+| `journal` | `$HIVE_HOME` | written | 1.0 | The journal's day files: the source of truth, and all that sync carries. |
+| `nudge.env` | `$HIVE_HOME` | read | 1.0 | Optional nudge settings (`KEY=value`), read here or at the repository root. |
+| `store.db` | `$HIVE_HOME` | written | 1.0 | The SQLite index derived from the journal; `hv doctor rebuild` recreates it. |
+| `device-key` | key directory | written | 2.0 | This device's Ed25519 seed (0600). Not sealed: every entry is device-signed unattended. |
+| `owner-key` | key directory | legacy | 2.0 | An unsealed owner seed. It still loads, `hv doctor` fails until `hive-mind owner seal` seals it, and that removes it. |
+| `owner-key.sealed` | key directory | written | 2.0 | The owner seed, sealed at rest: scrypt, then ChaCha20-Poly1305. |
+| `owner-pub` | key directory | written | 2.0 | The owner key's public half (0644), so `hv` can tell whose key is here without opening it. |
+
+### `via` values
+
+How a `.peer_candidates.json` sighting was verified. Local, never journaled. A sighting with no `via` came
+from a signed inbound request to the daemon.
+
+| Name | Status | Since | Meaning |
+|---|---|---|---|
+| `outbound` | written | 1.26 | The sync client saw the device answer a signed `/sync/hello` at this address (#107). |

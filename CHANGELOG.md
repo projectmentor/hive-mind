@@ -154,6 +154,13 @@ introduced (a contract) or tagged (a patch).
   into the library, the pointer tables, what stays on `hv` and why, where the keys live, and the tests that
   hold S2. `docs/P2P_DESIGN.md` moves to `docs/history/`, and `INTERNALS.md` no longer calls it the full
   design. `ownerkey.py`'s docstring no longer says `hv` imports it.
+- **#150 finished: what a module may add, and the local files** (decision `h:a1e3e7cd73`). `docs/NAMESPACES.md`
+  now says, for each category, whether a module may add names. A module may add a link kind or a config key,
+  prefixed. It may never add an entry type, a governance action or a channel. A new *Local files* table lists
+  the per-node names under `$HIVE_HOME` and in the key directory, and a `via` table lists the verification
+  values of a peer sighting. Both are generated from `vocabulary.py` and kept apart from the journal tables,
+  and `tests/test_vocabulary.py` holds them to the path literals in the code, both ways. The ref-bearing
+  payload fields stay deferred to the 2.1 module API. No behaviour change.
 
 ## Unreleased — contract 1.28
 

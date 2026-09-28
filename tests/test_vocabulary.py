@@ -818,3 +818,116 @@ def test_mutant_new_reader_function_is_caught():
     src = _sources()
     src["hv"] += '\n\ndef _new_projection(entries):\n    return [e for e in entries if e.get("type") == "fact"]\n'
     assert ("type", "hv", "_new_projection") in unclassified(src)
+
+
+# ── local files and `via` (#150 rule 4 and its local-file list, decision h:a1e3e7cd73) ─────────────────
+# Not journal vocabulary, so held to the code by a check of their own: every file literal joined onto a hive
+# or key-directory root, or passed to `_effective_key_path`, must be registered in `LOCAL_FILES`, and every
+# registered name must have such a site. The same both ways for `via`: the values written into a sighting
+# (`_record_peer_candidate(…, via=…)`) or compared when one is read.
+
+_PATH_ROOTS = {"HIVE_HOME", "KEY_DIR", "hv.HIVE_HOME", "hv.KEY_DIR", "hive_home()", "sync_common.hive_home()"}
+
+
+def _is_via(node):
+    """`x["via"]` or `x.get("via")`."""
+    if isinstance(node, ast.Subscript) and _is_str(node.slice) and node.slice.value == "via":
+        return True
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "get"
+            and node.args and _is_str(node.args[0]) and node.args[0].value == "via")
+
+
+def collect_local(sources):
+    files, via = {}, {}
+    for f, src in sources.items():
+        for unit, unode in _units(ast.parse(src)):
+            for n in ast.walk(unode):
+                site = f"{f}:{unit}:{getattr(n, 'lineno', 0)}"
+                if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) and _is_str(n.right)
+                        and ast.unparse(n.left) in _PATH_ROOTS):
+                    files.setdefault(n.right.value, []).append(site)
+                if isinstance(n, ast.Call) and ast.unparse(n.func).split(".")[-1] == "_effective_key_path" \
+                        and n.args and _is_str(n.args[0]):
+                    files.setdefault(n.args[0].value, []).append(site)
+                if isinstance(n, ast.Call) and ast.unparse(n.func).split(".")[-1] == "_record_peer_candidate":
+                    for kw in n.keywords:
+                        if kw.arg == "via" and _is_str(kw.value):
+                            via.setdefault(kw.value.value, []).append(site)
+                if isinstance(n, ast.Compare) and _is_via(n.left):
+                    for c in n.comparators:
+                        for v in _strs(c):
+                            via.setdefault(v, []).append(site)
+    return files, via
+
+
+def local_problems(sources, files_reg=None, via_reg=None):
+    files_reg = vocabulary.LOCAL_FILES if files_reg is None else files_reg
+    via_reg = vocabulary.VIA_VALUES if via_reg is None else via_reg
+    files, via = collect_local(sources)
+    out = [f"local file {n!r} at {s[0]} is not registered" for n, s in sorted(files.items()) if n not in files_reg]
+    out += [f"local file {n!r} is registered, but no path literal names it" for n in sorted(files_reg) if n not in files]
+    out += [f"via {v!r} at {s[0]} is not registered" for v, s in sorted(via.items()) if v not in via_reg]
+    out += [f"via {v!r} is registered, but no site writes or compares it" for v in sorted(via_reg) if v not in via]
+    return out
+
+
+def test_every_local_file_and_via_value_matches_the_code():
+    bad = local_problems(_sources())
+    assert not bad, "register it in vocabulary.py (then regenerate docs/NAMESPACES.md):\n  " + "\n  ".join(bad)
+
+
+def test_local_registry_shape():
+    for table, wheres in ((vocabulary.LOCAL_FILES, {"hive", "keys"}), (vocabulary.VIA_VALUES, {None})):
+        for name, rec in table.items():
+            assert rec["status"] in (vocabulary.WRITTEN, vocabulary.LEGACY, vocabulary.READ), name
+            assert re.fullmatch(r"\d+\.\d+", rec["since"]) and rec["meaning"].strip(), name
+            assert "|" not in rec["meaning"] and "\n" not in rec["meaning"], name
+            assert rec.get("where") in wheres, name
+    assert not set(vocabulary.LOCAL_FILES) & {n for *_, t in vocabulary.CATEGORIES for n in t}, \
+        "a local file name must not also be journal vocabulary (#146)"
+
+
+def test_every_category_says_what_a_module_may_add():
+    assert set(vocabulary.MODULE_RULES) == {key for key, *_ in vocabulary.CATEGORIES}
+    for key in ("entry_types", "governance_actions", "channels", "envelope_fields"):
+        assert vocabulary.MODULE_RULES[key].startswith("No."), key
+    for key in ("link_kinds", "config_keys"):
+        assert vocabulary.MODULE_RULES[key].startswith("Yes, prefixed."), key
+    doc = DOC.read_text()
+    assert "**What a module may add**" in doc
+    for rule in vocabulary.MODULE_RULES.values():
+        assert f"*Modules:* {rule}" in doc
+
+
+def test_the_document_lists_every_local_file_and_via_value():
+    doc = DOC.read_text()
+    local = doc[doc.index("## Local files"):]
+    for name in list(vocabulary.LOCAL_FILES) + list(vocabulary.VIA_VALUES):
+        assert f"| `{name}` |" in local, name
+
+
+def test_mutant_new_local_file_literal_is_caught():
+    src = _sources()
+    anchor = 'GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"'
+    assert src["hv"].count(anchor) == 1
+    src["hv"] = src["hv"].replace(anchor, anchor + '\nSCRATCH = HIVE_HOME / ".scratch"')
+    assert any("'.scratch'" in m and "not registered" in m for m in local_problems(src))
+
+
+def test_mutant_local_file_dropped_from_the_registry_is_caught():
+    reg = {k: v for k, v in vocabulary.LOCAL_FILES.items() if k != ".genesis-pin"}
+    assert any("'.genesis-pin'" in m and "not registered" in m for m in local_problems(_sources(), files_reg=reg))
+
+
+def test_mutant_new_via_value_is_caught():
+    src = _sources()
+    anchor = 'hv._record_peer_candidate(device, host, via="outbound")'
+    assert src["sync_client.py"].count(anchor) == 1
+    src["sync_client.py"] = src["sync_client.py"].replace(
+        anchor, anchor + '; hv._record_peer_candidate(device, host, via="inbound")')
+    assert any("'inbound'" in m and "not registered" in m for m in local_problems(src))
+
+
+def test_mutant_registered_via_value_with_no_site_is_caught():
+    reg = dict(vocabulary.VIA_VALUES, hint={"status": vocabulary.WRITTEN, "since": "1.26", "meaning": "m"})
+    assert any("'hint'" in m and "no site" in m for m in local_problems(_sources(), via_reg=reg))

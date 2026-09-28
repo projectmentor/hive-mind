@@ -227,8 +227,9 @@ Most of the time your agents call `hv` for you. Full reference:
   **devices** counts most, multiple agents on one device are discounted, only owner-**admitted**
   devices count, and agreement among one principal's own machines is capped. Governance (owner,
   admitted devices, tunable parameters) lives in owner-signed journal entries, so every device
-  computes the same confidence. The owner runs the membership lifecycle with `hv group`
-  (admit, revoke, deny, change, purge, list). The owner key is recoverable, not a dead end:
+  computes the same confidence. The owner runs the membership lifecycle with `hive-mind group`
+  (admit, revoke, deny, change, purge); `hv group list` shows the roster. The owner key is
+  recoverable, not a dead end:
   back it up off-device or escrow it in the hive (`hive-mind owner export`/`escrow`), and hand it off
   to a new key by nomination or transfer (`hive-mind owner nominate`/`claim`/`transfer`). If it is lost
   outright with no backup, admitted devices can elect a successor by quorum once the owner goes

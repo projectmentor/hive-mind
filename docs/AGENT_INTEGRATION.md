@@ -250,6 +250,10 @@ This is what makes future breaking changes safe: additive-within-major keeps old
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly
 when it must re-wire.
 
+**Reserved names.** Every bare name core writes or reads in the journal (entry types, link kinds,
+governance actions, config keys, channels and the rest) is listed in [`NAMESPACES.md`](NAMESPACES.md),
+generated from `vocabulary.py`, and a name anything else adds takes a prefix.
+
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `1.28` — **a new hive starts closed** (#135 part 1). Nothing an adapter calls changes: no verb, flag or
   output format moves. `hv owner init` now re-issues every forget that was in effect only because it predates

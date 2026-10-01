@@ -116,3 +116,30 @@ def test_mutant_a_bump_of_only_one_side_is_caught():
     assert _history_head("## 9.9\n\nx\n\n" + history) != hv.CONTRACT_VERSION
     # the version line bumped, the history not
     assert _history_head(history) != "9.9"
+
+
+# The five places the docs state the contract version in prose (#141, set to 2.0 by the bump on #136).
+_VERSION_STATEMENTS = [
+    ("README.md", "Current agent contract: **{v}**"),
+    ("CONTRIBUTING.md", "contract is {v}."),
+    ("docs/WORKING_TOGETHER.md", "Today that set is number {v}."),
+    ("docs/CLI_REFERENCE.md", "Official HiveMind v{v} from ProjectMentor"),
+    ("docs/CLI_REFERENCE.md", "hv contract-version {v}"),
+]
+
+
+def test_docs_that_state_the_contract_version_name_contract_version():
+    """Each prose statement of the contract version matches `CONTRACT_VERSION`; a bump that leaves one behind fails."""
+    hv = _load_hv()
+    for rel, template in _VERSION_STATEMENTS:
+        text = (PROJECT / rel).read_text()
+        assert template.format(v=hv.CONTRACT_VERSION) in text, (
+            f"{rel} does not say {template.format(v=hv.CONTRACT_VERSION)!r} (CONTRACT_VERSION={hv.CONTRACT_VERSION})"
+        )
+
+
+def test_mutant_a_stale_version_statement_is_caught():
+    hv = _load_hv()
+    rel, template = _VERSION_STATEMENTS[0]
+    stale = (PROJECT / rel).read_text().replace(template.format(v=hv.CONTRACT_VERSION), template.format(v="1.25"))
+    assert template.format(v=hv.CONTRACT_VERSION) not in stale

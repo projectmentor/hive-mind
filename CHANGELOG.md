@@ -10,7 +10,7 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## 2.0 — 2026-09-28 · `v2.0.0`
+## 2.0 — 2026-10-01 · `v2.0.0`
 
 **Upgrading from 1.x.** Run `hive-mind update` on each node. There is no journal or wire change, so a mixed
 1.x and 2.0 fleet converges while you do.
@@ -25,7 +25,6 @@ introduced (a contract) or tagged (a patch).
   `hive-mind doctor --fix` once. Nothing a hive forgot comes back.
 - **`fleet-contract` lists every 1.x peer as behind** on a 2.0 node. That is intended: upgrade it.
 - **A build without its bundled crypto refuses to run.**
-
 
 - **PR 2b, the split: `hv` cannot owner-sign.** `hv` is the agent data plane and `hive-mind` the
   owner/operator control plane. Every code path that reads the owner seed, writes owner-key material or

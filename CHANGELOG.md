@@ -10,7 +10,21 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — 2.0, in progress on `release/2.0` (public #136)
+## 2.0 — 2026-10-01 · `v2.0.0`
+
+**Upgrading from 1.x.** Run `hive-mind update` on each node. There is no journal or wire change, so a mixed
+1.x and 2.0 fleet converges while you do.
+- **Agents re-integrate** (the §0 check fires on the major): local ids are refused, `tags` is a JSON list,
+  and every write passes `--source`. `docs/AGENT_INTEGRATION.md` §7 has the details.
+- **Owner and operator commands run as `hive-mind`.** Run on `hv`, each names its `hive-mind` form and exits
+  2, acting on nothing. So do the removed aliases, which name their `hv` replacements.
+- **Keys leave the checkout.** `hv doctor --fix` moves the device key, and `hive-mind doctor --fix` the owner
+  key. A plaintext owner key still works; `hive-mind owner seal` seals it, and `hv doctor` fails until then.
+- **An owned hive whose `forget_writers` is still open fails `forget-authz`.** The 15-minute timer's
+  `hv doctor` alerts, and `hive-mind update` ends with ACTION REQUIRED, until the owner runs
+  `hive-mind doctor --fix` once. Nothing a hive forgot comes back.
+- **`fleet-contract` lists every 1.x peer as behind** on a 2.0 node. That is intended: upgrade it.
+- **A build without its bundled crypto refuses to run.**
 
 - **PR 2b, the split: `hv` cannot owner-sign.** `hv` is the agent data plane and `hive-mind` the
   owner/operator control plane. Every code path that reads the owner seed, writes owner-key material or
@@ -176,7 +190,7 @@ introduced (a contract) or tagged (a patch).
   source is `manual`. `tests/test_docs_state_2_0_behaviour.py` fails if one of those phrases comes back outside
   the history, using the moved-command sweep's exclusions.
 
-## Unreleased — contract 1.28
+## 1.28 — 2026-09-26 · `v1.28.0`
 
 - **Contract 1.28: `hv owner init` leaves a new hive closed (#135 part 1).** Before a hive has an owner it
   has no key to sign a forget with, so an owner-source forget dated before the genesis owner has always been

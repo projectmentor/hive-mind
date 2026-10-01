@@ -137,7 +137,7 @@ You do not have to approve every small fix.
 
 You do say yes before anyone builds a change to any of these:
 
-- The notebook's rule set. Today that set is number 1.25.
+- The notebook's rule set. Today that set is number 2.0.
 - How notes are signed.
 - How the computers share the notebook.
 - The written security promises.

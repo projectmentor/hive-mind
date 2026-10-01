@@ -94,3 +94,52 @@ def test_contract_version_matches_spec():
     assert re.search(rf"^- `{re.escape(hv.CONTRACT_VERSION)}`", spec, re.M), (
         f"No changelog entry for `{hv.CONTRACT_VERSION}` in AGENT_INTEGRATION.md §7."
     )
+
+
+def _history_head(text):
+    """The newest version in docs/CONTRACT_HISTORY.md: its first `## X.Y` heading."""
+    m = re.search(r"^## ([0-9]+\.[0-9]+)\s*$", text, re.M)
+    return m.group(1) if m else None
+
+
+def test_contract_version_matches_the_newest_history_entry():
+    """`CONTRACT_VERSION` and docs/CONTRACT_HISTORY.md move together: the history's newest entry is the version
+    `hv version` reports. A bump of one without the other fails here (2.0: Fable's ask on #136)."""
+    hv = _load_hv()
+    assert _history_head((DOCS / "CONTRACT_HISTORY.md").read_text()) == hv.CONTRACT_VERSION
+
+
+def test_mutant_a_bump_of_only_one_side_is_caught():
+    hv = _load_hv()
+    history = (DOCS / "CONTRACT_HISTORY.md").read_text()
+    # the history bumped, the version line not
+    assert _history_head("## 9.9\n\nx\n\n" + history) != hv.CONTRACT_VERSION
+    # the version line bumped, the history not
+    assert _history_head(history) != "9.9"
+
+
+# The five places the docs state the contract version in prose (#141, set to 2.0 by the bump on #136).
+_VERSION_STATEMENTS = [
+    ("README.md", "Current agent contract: **{v}**"),
+    ("CONTRIBUTING.md", "contract is {v}."),
+    ("docs/WORKING_TOGETHER.md", "Today that set is number {v}."),
+    ("docs/CLI_REFERENCE.md", "Official HiveMind v{v} from ProjectMentor"),
+    ("docs/CLI_REFERENCE.md", "hv contract-version {v}"),
+]
+
+
+def test_docs_that_state_the_contract_version_name_contract_version():
+    """Each prose statement of the contract version matches `CONTRACT_VERSION`; a bump that leaves one behind fails."""
+    hv = _load_hv()
+    for rel, template in _VERSION_STATEMENTS:
+        text = (PROJECT / rel).read_text()
+        assert template.format(v=hv.CONTRACT_VERSION) in text, (
+            f"{rel} does not say {template.format(v=hv.CONTRACT_VERSION)!r} (CONTRACT_VERSION={hv.CONTRACT_VERSION})"
+        )
+
+
+def test_mutant_a_stale_version_statement_is_caught():
+    hv = _load_hv()
+    rel, template = _VERSION_STATEMENTS[0]
+    stale = (PROJECT / rel).read_text().replace(template.format(v=hv.CONTRACT_VERSION), template.format(v="1.25"))
+    assert template.format(v=hv.CONTRACT_VERSION) not in stale

@@ -20,6 +20,7 @@ from test_docs_name_moved_commands import (EXCLUDED_DIRS, EXCLUDED_FILES, SECTIO
 
 STALE = [
     r"local ids? [^.|]{0,80}still accepted",
+    r"bare (local )?ids? [^.|]{0,80}still accepted",
     r"still accepted[^.|]{0,80}local id",
     r"(removed|dropped) at the next MAJOR",
     r"stops? being accepted at the next MAJOR",
@@ -55,6 +56,7 @@ def test_no_document_describes_2_0_behaviour_as_future():
 
 @pytest.mark.parametrize("text", [
     "A bare local id is still accepted but deprecated.",
+    "A bare id is still accepted, with a warning.",
     "it is removed at the next MAJOR.",
     "deprecated, warned, and dropped at the next MAJOR",
     "it stops being accepted at the next MAJOR contract bump",

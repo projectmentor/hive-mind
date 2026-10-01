@@ -220,10 +220,15 @@ def test_fleet_contract_lists_behind_and_unverified_peers_and_is_empty_when_all_
     fc = hv._fleet_contract(gov, probed, {a["id"]: "1.18"})
     assert [d for d, _c in fc["behind"]] == sorted([a["id"], b["id"]]) and fc["unverified"] == [c["id"]] and fc["ok"] == []
     assert dict(fc["behind"])[b["id"]].startswith("unknown")
-    # everyone current and reachable → nothing to report (1.20 ≥ 1.19; 1.19 exactly is enough)
+    # everyone current and reachable → nothing to report. "Current" is this node's own MAJOR: at 2.0 the floor is
+    # 2.0, so a 1.x peer is behind, which the 2.0 release notes call intended (Fable on #172).
     probed[c["id"]] = ("10.0.0.3:9876", "in sync", "c")
-    fc = hv._fleet_contract(gov, probed, {a["id"]: "1.20", b["id"]: "1.19", c["id"]: "2.0"})
+    major = hv.CONTRACT_VERSION.split(".")[0]
+    fc = hv._fleet_contract(gov, probed, {a["id"]: hv.CONTRACT_VERSION, b["id"]: f"{major}.0", c["id"]: f"{major}.9"})
     assert fc["behind"] == [] and fc["unverified"] == [] and len(fc["ok"]) == 3
+    if major == "2":
+        fc = hv._fleet_contract(gov, probed, {a["id"]: "1.28", b["id"]: "2.0", c["id"]: "2.0"})
+        assert [d for d, _c in fc["behind"]] == [a["id"]], "a 1.x peer is behind a 2.0 node"
     # a purged device is not part of the fleet
     gov2 = dict(gov); gov2["purged"] = {c["id"]}
     assert hv._fleet_contract(gov2, {}, {})["unverified"] == sorted([a["id"], b["id"]])
@@ -241,7 +246,7 @@ def test_fleet_contract_lists_behind_and_unverified_peers_and_is_empty_when_all_
             pass                                       # a failing verdict exits non-zero; the JSON is printed first
     checks = {c_["name"]: c_ for c_ in json.loads(buf.getvalue())["checks"]}
     assert checks["fleet-contract"]["status"] == "warn"
-    assert "1 peer(s) below contract 1.19" in checks["fleet-contract"]["detail"]
+    assert f"1 peer(s) below contract {hv._fleet_floor()}" in checks["fleet-contract"]["detail"]
     assert "2 unverifiable" in checks["fleet-contract"]["detail"]
     daemon = (PROJECT / "hive_sync_daemon.py").read_text()
     assert daemon.count('"contract": hv.CONTRACT_VERSION') == 2                   # advertised on /hive/info and /sync/hello

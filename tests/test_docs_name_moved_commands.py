@@ -10,7 +10,8 @@ What is deliberately NOT scanned is listed here, not inferred:
 - history: `CHANGELOG.md`, `docs/CONTRACT_HISTORY.md`, `docs/history/`, and the per-version entries of
   `docs/AGENT_INTEGRATION.md` §7 (from its **Changelog.** line to the next section). They record what each
   version shipped.
-- `README.md` and `SECURITY.md`: the #141 carve-out reconciles those (decision h:02010d37e3).
+`README.md` and `SECURITY.md` were excluded until #141 reconciled them with 2.0 (decision h:e22b61c097); they
+are scanned like every other page since.
 """
 
 import re
@@ -25,7 +26,7 @@ sys.path.insert(0, str(PROJECT))
 
 import commandmap  # noqa: E402
 
-EXCLUDED_FILES = {"CHANGELOG.md", "docs/CONTRACT_HISTORY.md", "README.md", "SECURITY.md"}
+EXCLUDED_FILES = {"CHANGELOG.md", "docs/CONTRACT_HISTORY.md"}
 EXCLUDED_DIRS = ("docs/history/",)
 SECTION7_FILE = "docs/AGENT_INTEGRATION.md"
 
@@ -133,5 +134,9 @@ def test_mutant_in_section7_history_is_not_flagged():
 
 
 def test_excluded_files_are_not_scanned():
-    assert not stale_references({"README.md": "`hv owner init`\n", "docs/history/P2P_DESIGN.md": "`hv admit`\n",
-                                 "CHANGELOG.md": "`hv unforget`\n"})
+    assert not stale_references({"docs/history/P2P_DESIGN.md": "`hv admit`\n", "CHANGELOG.md": "`hv unforget`\n"})
+
+
+def test_mutant_readme_and_security_are_scanned_since_141():
+    for path in ("README.md", "SECURITY.md"):
+        assert stale_references({path: "Run `hv owner init` once.\n"}), path

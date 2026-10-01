@@ -9,7 +9,7 @@ agent on every machine can use it too. Local-first, no cloud, no central server.
 
 Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
 Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/) ·
-Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Current agent contract: **1.20** (`hv version`)
+Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Best practices: [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md) · Current agent contract: **1.25** (`hv version`)
 
 <p align="center">
   <a href="https://hivemind.projectmentor.org/dev/#dashboard">
@@ -61,6 +61,31 @@ apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
 - **Auditable** — every fact records who wrote it and when; nothing is silently overwritten.
 - **Works with your agents today** — Claude Code, Hermes, Claude Desktop (via MCP), and any
   agent that can run a shell command.
+
+---
+
+## Best practices
+
+Several AI helpers can share one project.
+Give each helper one job, or the same helper will grade their own homework.
+
+You are the owner.
+You say what you want, and you say yes or no on big changes.
+The planner writes the plan before anyone builds.
+The builder builds only after that plan is agreed.
+The checker reads the plan and the finished work, and does not build.
+On this project those helpers are Fable, Opus, and Grok.
+You can use other names.
+Keep the split.
+
+You do not need to code, and you do not need to learn GitHub.
+GitHub is the website that stores the project and the notes.
+A terminal is a window for typed commands.
+Ask the builder to install HiveMind and to tell you if the health check passed.
+
+The full setup, the words to paste into each chat, and the order of work are in
+[`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md).
+That page is written in plain words.
 
 ---
 
@@ -121,7 +146,7 @@ app), so the installer can't auto-discover hives on the tailnet. Instead, on a d
 already in the hive run `hive-mind invite` — it prints one line (that device's Tailscale
 address). Paste it when the phone's `hive-mind install` asks for a hive address. You only need
 one node to join; everything else syncs from there. Then admit the phone from the owner:
-`hv group admit <phone-device-id> --principal <you>`.
+`hive-mind group admit <phone-device-id> --principal <you>`.
 
 </details>
 
@@ -147,9 +172,12 @@ wsl --shutdown
 ./hv decide "Ship on Friday" --informed h:3f9a1c0b2d   # name the facts the decision relied on
 ./hv remember "The Friday release went out clean" --outcome-of h:7c01d2e9aa --polarity 1
 ./hv propose "Slow builds correlate with the new cache"   # a hypothesis, not a fact
+./hv remember "The cache cut build time" --supports h:3f9a1c0b2d
+./hv decide --revoke h:7c01d2e9aa --rationale "The Friday ship slipped"
+hive-mind unforget h:9a2b3c4d5e --reason "That forget was a mistake" # owner only
 ./hv stats
 ./hv dash            # open the read-only web dashboard (facts, decisions, peers) in your browser
-./hv doctor          # health check: integrity, crypto, sync, authorization, trust drift, agent hooks (--fix self-heals)
+./hv doctor          # health check: integrity, crypto, sync, authorization, trust drift, agent hooks, sync-bind, daemon-code, peer-address, forget-authz (--fix self-heals)
 ./hv sync now        # manual sync to all peers
 ```
 
@@ -199,13 +227,14 @@ Most of the time your agents call `hv` for you. Full reference:
   **devices** counts most, multiple agents on one device are discounted, only owner-**admitted**
   devices count, and agreement among one principal's own machines is capped. Governance (owner,
   admitted devices, tunable parameters) lives in owner-signed journal entries, so every device
-  computes the same confidence. The owner runs the membership lifecycle with `hv group`
-  (admit, revoke, deny, change, purge, list). The owner key is recoverable, not a dead end:
-  back it up off-device or escrow it in the hive (`hv owner export`/`escrow`), and hand it off
-  to a new key by nomination or transfer (`hv owner nominate`/`claim`/`transfer`). If it is lost
+  computes the same confidence. The owner runs the membership lifecycle with `hive-mind group`
+  (admit, revoke, deny, change, purge); `hv group list` shows the roster. The owner key is
+  recoverable, not a dead end:
+  back it up off-device or escrow it in the hive (`hive-mind owner export`/`escrow`), and hand it off
+  to a new key by nomination or transfer (`hive-mind owner nominate`/`claim`/`transfer`). If it is lost
   outright with no backup, admitted devices can elect a successor by quorum once the owner goes
-  dark (`hv config quorum set`, then `hv owner propose-election`/`vote`); a live owner is never
-  unseated, since any owner act (including `hv owner heartbeat`) resets the dead-man timer. See
+  dark (`hive-mind config set`, then `hv owner propose-election`/`vote`); a live owner is never
+  unseated, since any owner act (including `hive-mind owner heartbeat`) resets the dead-man timer. See
   `hv owner` and `docs/INTERNALS.md`.
 - **Links and learning** — relationships between entries (a decision that replaces another, a
   correction, what a decision relied on, an outcome) are signed `link` entries. A link from a
@@ -218,7 +247,8 @@ Deeper reading: [`docs/INTERNALS.md`](docs/INTERNALS.md),
 planes, `hv` and `hive-mind`), [`docs/history/P2P_DESIGN.md`](docs/history/P2P_DESIGN.md) (the original
 sync design, kept as history), the
 [continual-learning design](docs/design/hivemind_continual_learning_design.md) behind contract
-1.19–1.20, and for security [`SECURITY.md`](SECURITY.md),
+1.19–1.20, how several helpers share one project in
+[`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md), and for security [`SECURITY.md`](SECURITY.md),
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what HiveMind defends against, and what it
 assumes — and [`docs/ADVISORIES.md`](docs/ADVISORIES.md).
 
@@ -247,7 +277,7 @@ brain (`hv`), one spec, no hand-maintained per-agent adapters.
 
 Run the installer on each machine. On Linux, macOS, and WSL it finds your hive on the tailnet;
 otherwise paste the line printed by `hive-mind invite` on a device already in the hive. The owner
-then admits the new device (`hv group admit`). Each WSL instance is its own machine on the
+then admits the new device (`hive-mind group admit`). Each WSL instance is its own machine on the
 tailnet, with its own Tailscale IP (not the Windows host's).
 
 ```bash

@@ -10,6 +10,15 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.0.1 — 2026-10-02 · `v2.0.1`
+
+No contract change.
+
+- **`hv verify` now exits non-zero when the install is not verified** (#190). `0` verified; `1` modified,
+  signature invalid, fork key or no manifest; `3` could not fully check (anchor unreachable, unsigned build).
+  Before, it exited 0 whatever it printed. `hv doctor` is unchanged and advisory. The printed lines are unchanged, and the MCP
+  `hive_verify` tool still returns the verdict text for every exit code.
+
 ## 2.0 — 2026-10-02 · `v2.0.0`
 
 **Upgrading from 1.x.** Run `hive-mind update` on each node. There is no journal or wire change, so a mixed

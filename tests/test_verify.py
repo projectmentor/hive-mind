@@ -72,12 +72,14 @@ def test_genuine_full_pass(install):
 def test_fork_with_its_own_key_is_caught(install):
     d, _ = install
     rc, out = _verify(d, f"file://{d}/other.pub")
+    assert rc == 1
     assert "does NOT match" in out and "fork or an impostor" in out
 
 
 def test_offline_anchor_degrades_gracefully(install):
     d, _ = install
     rc, out = _verify(d, "http://127.0.0.1:1/unreachable")
+    assert rc == 3   # cannot check, not modified: distinct from the failure code
     assert "✓ Official" in out and "integrity OK and the release signature is valid" in out
 
 
@@ -88,6 +90,7 @@ def test_tampered_signature_is_caught(install):
     raw[0] ^= 1
     p.write_text(base64.b64encode(bytes(raw)).decode() + "\n")
     rc, out = _verify(d, f"file://{d}/hivemind.pub")
+    assert rc == 1
     assert "SIGNATURE INVALID" in out
 
 
@@ -95,6 +98,7 @@ def test_modified_source_is_caught(install):
     d, _ = install
     (d / "merkle.py").write_text((d / "merkle.py").read_text() + "\n# tampered\n")
     rc, out = _verify(d, f"file://{d}/hivemind.pub")
+    assert rc == 1
     assert "MODIFIED locally" in out
 
 
@@ -102,6 +106,7 @@ def test_missing_signature_falls_back_to_integrity(install):
     d, _ = install
     (d / "verify.json.sig").unlink()
     rc, out = _verify(d, f"file://{d}/hivemind.pub")
+    assert rc == 3
     assert "Integrity OK" in out and "predates signed releases" in out
 
 
@@ -109,4 +114,46 @@ def test_never_raises_on_missing_manifest(install):
     d, _ = install
     (d / "verify.json").unlink()
     rc, out = _verify(d, f"file://{d}/hivemind.pub")
-    assert rc == 0 and "No manifest" in out
+    assert rc == 1 and "No manifest" in out   # fail closed: a missing manifest is not "fine"
+
+
+def test_exit_codes_are_distinct_and_unknown_levels_fail_closed():
+    loader = importlib.machinery.SourceFileLoader("hv_codes", str(PROJECT / "hv"))
+    hv = importlib.util.module_from_spec(importlib.util.spec_from_loader("hv_codes", loader))
+    loader.exec_module(hv)
+    assert hv._verify_exit_code("official") == 0
+    assert {hv._verify_exit_code(x) for x in ("modified", "sig_invalid", "fork", "no_manifest", "?")} == {1}
+    assert {hv._verify_exit_code(x) for x in ("offline_ok", "integrity_only")} == {3}
+
+
+def _mcp_hive_verify(install_dir, monkeypatch):
+    """Load the MCP server with the `mcp` package stubbed (CI has no such dependency), pointed at install_dir."""
+    import types
+    fastmcp = types.ModuleType("mcp.server.fastmcp")
+
+    class FastMCP:
+        def __init__(self, *a, **k):
+            pass
+
+        def tool(self, *a, **k):
+            return lambda f: f
+
+    fastmcp.FastMCP = FastMCP
+    for name in ("mcp", "mcp.server"):
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    monkeypatch.setitem(sys.modules, "mcp.server.fastmcp", fastmcp)
+    monkeypatch.setenv("HIVE_HOME", str(install_dir))
+    spec = importlib.util.spec_from_file_location("hive_mcp_t", PROJECT / "integrations" / "mcp" / "hive_mcp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.hive_verify
+
+
+def test_mcp_hive_verify_returns_the_verdict_for_every_exit_code(install, monkeypatch):
+    d, _ = install
+    monkeypatch.setenv("HIVE_PUBKEY_URL", "http://127.0.0.1:1/unreachable")
+    hive_verify = _mcp_hive_verify(d, monkeypatch)
+    assert "✓ Official" in hive_verify()   # offline, genuine: exit 3, text returned not raised
+    monkeypatch.setenv("HIVE_PUBKEY_URL", f"file://{d}/hivemind.pub")
+    (d / "merkle.py").write_text((d / "merkle.py").read_text() + "\n# tampered\n")
+    assert "MODIFIED locally" in hive_verify()   # exit 1, text returned not raised

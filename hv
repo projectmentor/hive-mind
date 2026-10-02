@@ -940,11 +940,17 @@ def feed_page(after=None, limit=200):
     authenticated. Returns {"entries", "cursor", "more"}."""
     after = dict(after or {})
     entries = merkle.read_all_entries(JOURNAL_DIR)   # verified lazily, per served entry: a cold process pays for the page, not the journal
-    ev = _content_evidence(entries, _governance_state(entries))
-    held = {}                                   # content -> [refs of held fact entries]
-    for e in entries:
+    ev = _content_evidence(entries, _governance_state(entries), links=False)   # links never change `forget` or `acts`
+    honoured = {}                               # (node_id, seq) of an honoured owner act -> its content
+    for c, cev in ev.items():
+        for key, ok in cev.get("acts", {}).items():
+            if ok:
+                honoured[key] = c
+    wanted = set(honoured.values())
+    held = {}                                   # content -> [refs of verified facts]; affects never names a withheld ref.
+    for e in entries:                           # Only contents under an honoured act are checked, so a caught-up poll verifies nothing.
         c = (e.get("payload") or {}).get("content")
-        if e.get("type") == "fact" and c is not None:
+        if e.get("type") == "fact" and c in wanted and _verify_entry(e):
             held.setdefault(c, []).append(_ref_str([e["node_id"], e["seq"]]))
     cursor = dict(after)
     out = []
@@ -967,11 +973,9 @@ def feed_page(after=None, limit=200):
         if e.get("type") == "fact" and p.get("content") is not None:
             item["forgotten"] = bool(ev.get(p["content"], {}).get("forget"))
         elif e.get("type") == "retract":
-            item["affects"] = []
-            for c, cev in ev.items():
-                if cev.get("acts", {}).get((node, seq)):      # honoured; only a held fact's content has acts
-                    item["affects"] = sorted(held.get(c, []))
-                    break
+            app, ctx, _inst, _sess = _parse_source(p.get("source", "manual"))
+            if app in OWNER_APPS or ctx == "owner":     # an owner act carries the list (maybe empty); a peer retract omits it
+                item["affects"] = sorted(held.get(honoured.get((node, seq)), []))
         out.append(item)
         cursor[node] = seq
     return {"entries": out, "cursor": _feed_cursor_str(cursor), "more": more}
@@ -2013,7 +2017,7 @@ def _probe_hive(ip, port, timeout=3):
     return info
 
 
-def _content_evidence(entries, gov=None):
+def _content_evidence(entries, gov=None, links=True):
     """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str,
     'evidence': [(ts, sign, identity), ...]}. `evidence` is the ORDERED sequence of every evidence
     event (sign +1/-1), sorted by timestamp — retained since 1.19 as the prerequisite for a future
@@ -2123,7 +2127,7 @@ def _content_evidence(entries, gov=None):
     # hard/evidence verdict does NOT change the weight — a hard `resolves` and a downgraded one are both
     # one identity's negative evidence; authority only decides provenance/commands (see resolve_link).
     known = {(e.get("node_id"), e.get("seq")) for e in entries}     # a dangling from_ref weighs nothing
-    for e in entries:
+    for e in entries if links else ():
         if e.get("type") != "link":
             continue
         if "sig" in e and not _verify_entry(e):

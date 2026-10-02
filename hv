@@ -5688,10 +5688,27 @@ def _resign_pending_hint(root):
             "is probably still pending on GitHub; run `hive-mind update` again in a few minutes)")
 
 
+# `hv verify` exit codes (#190). 1 is left to an uncaught crash.
+VERIFY_EXIT_VERIFIED = 0     # official: integrity, signature and key anchor all confirmed
+VERIFY_EXIT_FAILED = 2       # modified, signature invalid, fork key, or no manifest: do not trust this install
+VERIFY_EXIT_UNCHECKED = 3    # nothing wrong found, but a layer could not be checked (anchor unreachable, unsigned build)
+_VERIFY_EXIT = {"official": VERIFY_EXIT_VERIFIED, "signed": VERIFY_EXIT_VERIFIED,
+                "offline_ok": VERIFY_EXIT_UNCHECKED, "integrity_only": VERIFY_EXIT_UNCHECKED}
+
+
+def _verify_exit_code(level):
+    """The `hv verify` exit code for a `_verify_status` level. Unknown levels fail closed."""
+    return _VERIFY_EXIT.get(level, VERIFY_EXIT_FAILED)
+
+
 def verify_cmd(args):
-    """Integrity + authenticity check (prints the layered verdict; see _verify_status)."""
-    for line in _verify_status(Path(__file__).resolve().parent)["lines"]:
+    """Integrity + authenticity check (prints the layered verdict; see _verify_status). Exits 0 only
+    when verified; 2 when the install fails a check; 3 when it could not be fully checked. `hv doctor`
+    stays advisory: it calls `_verify_status` itself and never this."""
+    v = _verify_status(Path(__file__).resolve().parent)
+    for line in v["lines"]:
         print(line)
+    return _verify_exit_code(v["level"])
 
 
 # 2.0 (#136) removed `hv doctor migrate-identity`, the one-time 1.3 re-keying of a hostname journal (#130).
@@ -9257,7 +9274,7 @@ def _dispatch(args):
     elif args.command == "version":
         version_cmd(args)
     elif args.command == "verify":
-        verify_cmd(args)
+        return verify_cmd(args)
     elif args.command == "doctor":
         doctor_cmd(args)
     elif args.command == "wire":

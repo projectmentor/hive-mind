@@ -1192,7 +1192,18 @@ checks, strongest last:
    host. Catches a fork that ships its own key and a self-signed manifest.
 
 A healthy install prints `✓ Official HiveMind v2.0 from ProjectMentor — verified.` If you edited
-files yourself it says the install was modified locally. `hv doctor` runs the same check as
+files yourself it says the install was modified locally.
+
+**Exit codes** (a script or CI step can rely on them):
+
+| Code | Meaning |
+|---|---|
+| `0` | Verified: integrity, signature and key anchor all confirmed |
+| `2` | Failed: the install is modified, the signature is invalid, the signing key is not the published one (a fork), or there is no manifest. Do not trust it |
+| `3` | Could not fully check, nothing found wrong: the key anchor was unreachable (offline), or this build predates signed releases. A network outage does not look like tampering |
+
+A fresh checkout still waiting for its release re-sign exits `2`. `hv doctor` is the advisory view of
+that state and never reads these codes. `hv doctor` runs the same check as
 **authenticity**, and a peer's result is readable at `/api/verify`. Right after an update the signed
 manifest can lag for a few minutes (the release bot re-signs after each merge to `main`): `hive-mind
 update` waits for the re-sign and pulls it, and `hv doctor` marks a fresh, clean checkout advisory

@@ -14,13 +14,21 @@ set -uo pipefail
 
 PROJECT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HV="$PROJECT/hv"
+# 2.0 (public #136): owner acts run on the control plane, `hive-mind`; `hv` cannot owner-sign.
+HM="$PROJECT/hivemind_ctl.py"
 cd "$PROJECT"
+. "$PROJECT/scripts/common/_smoke_daemon.sh"
 
-A=$(mktemp -d); B=$(mktemp -d)
-PA=19876; PB=19877
+A=$(mktemp -d); B=$(mktemp -d); LOGS=$(mktemp -d)
+# Free ports per run, so two runs at once never share a daemon (#161). HIVE_SMOKE_PORT_* pins one.
+PA="${HIVE_SMOKE_PORT_A:-$(smoke_free_port)}"; PB="${HIVE_SMOKE_PORT_B:-$(smoke_free_port)}"
+PC="${HIVE_SMOKE_PORT_C:-$(smoke_free_port)}"
 DA=""; DB=""
-cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B"; }
+cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B" "$LOGS"; }
 trap cleanup EXIT
+# Its own HOME and identity stash, under LOGS, so a run by hand writes nothing into the caller's account (#170).
+. "$PROJECT/scripts/common/_smoke_isolate.sh"
+smoke_isolate "$LOGS"
 
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B_=$'\033[1m'; N=$'\033[0m'; else G=""; R=""; B_=""; N=""; fi
 pass=0; fail=0
@@ -28,7 +36,7 @@ ok() { pass=$((pass+1)); printf '  %s✓%s %s\n' "$G" "$N" "$1"; }
 no() { fail=$((fail+1)); printf '  %s✗ %s%s\n' "$R" "$1" "$N"; }
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 — got '$2' want '$3'"; fi; }
 
-root() { HIVE_HOME="$1" "$HV" merkle | awk '/^Root:/{print $2}'; }
+root() { HIVE_HOME="$1" "$HV" doctor merkle | awk '/^Root:/{print $2}'; }
 count() { HIVE_HOME="$1" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$1','store.db')).execute('SELECT count(*) FROM $2').fetchone()[0])"; }
 conf() { HIVE_HOME="$1" python3 -c "import sqlite3,os,sys;print(sqlite3.connect(os.path.join(sys.argv[1],'store.db')).execute('SELECT confidence FROM facts WHERE content=?',(sys.argv[2],)).fetchone()[0])" "$1" "$2"; }
 
@@ -58,20 +66,21 @@ env $EB "$HV" remember "shared truth" --source obs-b >/dev/null
 # Same structured agent, TWO sessions (D0): one identity → must stay 0.45 and converge.
 env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess1aaa >/dev/null
 env $EA "$HV" remember "agent self truth" --source hermes:primary/default/sess2bbb >/dev/null
-# Peer retract (Slice 2): negative evidence drives confidence below 0; must converge.
+# Peer retract (Slice 2): negative evidence drives confidence below 0; must converge. By sid: 2.0 refuses
+# local ids (#59), which also renumber on every rebuild.
 env $EA "$HV" remember "retractable claim" --source peerX >/dev/null
-RFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT id FROM facts WHERE content LIKE 'retractable%'\").fetchone()[0])")"
+RFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT j.sid FROM journal_index j JOIN facts f ON j.kind = 'fact' AND j.local_id = f.id WHERE f.content LIKE 'retractable%' ORDER BY j.node_id, j.seq\").fetchone()[0])")"
 # Two DISTINCT-device retractors (D0-v2: independence is per device) → net 1 - 2 = -1.
 env $EA HIVE_NODE_ID=nodeY "$HV" retract "$RFID" --source peerY >/dev/null
 env $EA HIVE_NODE_ID=nodeZ "$HV" retract "$RFID" --source peerZ >/dev/null
 
 # Start both daemons (serve-only).
-env $EA python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
-env $EB python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DB=$!
+env $EA python3 -c "import hive_sync_daemon as d; d.serve_forever()" >"$LOGS/A.log" 2>&1 & DA=$!
+env $EB python3 -c "import hive_sync_daemon as d; d.serve_forever()" >"$LOGS/B.log" 2>&1 & DB=$!
 
-# Wait for readiness via curl retry (no sleep).
-curl -sf --retry 50 --retry-connrefused --retry-delay 0 "http://127.0.0.1:$PA/sync/merkle-root" >/dev/null || { no "daemon A failed to start"; exit 1; }
-curl -sf --retry 50 --retry-connrefused --retry-delay 0 "http://127.0.0.1:$PB/sync/merkle-root" >/dev/null || { no "daemon B failed to start"; exit 1; }
+# Wait until each daemon serves its own hive: bounded, and never satisfied by another run's daemon.
+smoke_wait_daemon A "$DA" 127.0.0.1 "$PA" "$A" "$LOGS/A.log" || { no "daemon A failed to start"; exit 1; }
+smoke_wait_daemon B "$DB" 127.0.0.1 "$PB" "$B" "$LOGS/B.log" || { no "daemon B failed to start"; exit 1; }
 
 printf '\n%s── one-shot sync from A ──%s\n' "$B_" "$N"
 env $EA "$HV" sync now | sed 's/^/  /'
@@ -96,7 +105,7 @@ case "$OUT" in *"in sync"*) ok "second sync reports in-sync";; *) no "second syn
 
 printf '\n%s── cross-node link resolves on both nodes ──%s\n' "$B_" "$N"
 # On A: link B's entity 'Bravo' to A's 'alpha' fact, then sync back to B.
-AFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT id FROM facts WHERE content LIKE 'alpha%'\").fetchone()[0])")"
+AFID="$(HIVE_HOME="$A" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$A','store.db')).execute(\"SELECT j.sid FROM journal_index j JOIN facts f ON j.kind = 'fact' AND j.local_id = f.id WHERE f.content LIKE 'alpha%' ORDER BY j.node_id, j.seq\").fetchone()[0])")"
 env $EA "$HV" entity link --name Bravo --fact-id "$AFID" >/dev/null
 env $EA "$HV" sync now >/dev/null
 eq "A shows the link"  "$(count "$A" entity_facts)" "1"
@@ -111,9 +120,11 @@ printf '\n%s── governance converges across nodes (D0-v2) ──%s\n' "$B_" "
 # governance and compute the SAME governed confidence (nodeC excluded by the admission gate → 0.45).
 env $EA "$HV" remember "gov claim" --source agent >/dev/null
 env $EA HIVE_NODE_ID=nodeC "$HV" remember "gov claim" --source agent >/dev/null
-env $EA "$HV" owner init >/dev/null
-env $EA "$HV" admit nodeA --principal david >/dev/null
-env $EA "$HV" admit nodeB --principal david >/dev/null
+# The owner key is sealed at rest (2.0 PR 3b): each owner-signing command unlocks it from this.
+export HIVE_OWNER_KEY_PASSPHRASE="${HIVE_OWNER_KEY_PASSPHRASE:-smoke-pass}"
+env $EA python3 "$HM" owner init >/dev/null
+env $EA python3 "$HM" group admit nodeA --principal david >/dev/null
+env $EA python3 "$HM" group admit nodeB --principal david >/dev/null
 env $EA "$HV" sync now >/dev/null
 eq "governed conf converges (B has no owner key)" "$(conf "$A" "gov claim")" "$(conf "$B" "gov claim")"
 eq "admission gate applied (A)"  "$(conf "$A" "gov claim")" "0.45"
@@ -122,14 +133,14 @@ eq "admission gate applied (B)"  "$(conf "$B" "gov claim")" "0.45"
 printf '\n%s── two hives on one wire do NOT merge (onboarding) ──%s\n' "$B_" "$N"
 # C is its OWN hive (different hive_id). Pointed at A's daemon, it must refuse to merge either way.
 C=$(mktemp -d)
-env HIVE_HOME="$C" "$HV" owner init >/dev/null
+env HIVE_HOME="$C" python3 "$HM" owner init >/dev/null
 env HIVE_HOME="$C" "$HV" remember "only in hive C" --source agent >/dev/null
 A_BEFORE=$(count "$A" facts)
-printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":29876}' "$PA" > "$C/.peers.json"
+printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":%s}' "$PA" "$PC" > "$C/.peers.json"
 env HIVE_HOME="$C" "$HV" sync now 2>&1 | sed 's/^/  /'
 eq "C did not pull A's alpha fact"  "$(HIVE_HOME="$C" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$C','store.db')).execute(\"SELECT count(*) FROM facts WHERE content LIKE 'alpha%'\").fetchone()[0])")" "0"
 eq "A did not ingest C's fact"      "$(count "$A" facts)" "$A_BEFORE"
-CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
+CODE=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
 eq "cross-hive /sync/ingest rejected" "$CODE" "409"
 rm -rf "$C"
 

@@ -5,7 +5,8 @@ architecture, the confidence model, sync protocol, and data formats.
 
 For user-facing CLI docs see [CLI_REFERENCE.md](CLI_REFERENCE.md).
 For the sync HTTP API see [SYNC_API.md](SYNC_API.md).
-For the full architectural design see [P2P_DESIGN.md](P2P_DESIGN.md).
+For the architecture, the two planes `hv` and `hive-mind`, see [HV_ARCHITECTURE.md](HV_ARCHITECTURE.md).
+The original peer-to-peer sync design is kept as history in [history/P2P_DESIGN.md](history/P2P_DESIGN.md).
 
 ---
 
@@ -129,11 +130,11 @@ Confidence is a *governed* projection. Three rules refine the raw identity count
   `λ·(sum of its other identities)`; `λ = same_device_lambda` (default `0.5`).
   So two agents on one box net `1.5`, not `2`; on two boxes, `2`.
 - **Admission gate.** Cryptographic identity stops *impersonation*, not *Sybil*
-  (one actor minting many keys). Once an **owner** is established (`hv owner
-  init`), only **admitted** devices (`hv group admit`) count toward confidence;
+  (one actor minting many keys). Once an **owner** is established (`hive-mind owner
+  init`), only **admitted** devices (`hive-mind group admit`) count toward confidence;
   unadmitted writes are still stored and synced but contribute zero.
 - **CAP_self.** When every device behind a fact maps to one **principal**
-  (`hv group admit --principal`), confidence is clamped to `cap_self` (default
+  (`hive-mind group admit --principal`), confidence is clamped to `cap_self` (default
   `0.70`): your own machines agreeing isn't independent corroboration.
 
 Governance lives in owner-signed `governance` journal entries
@@ -153,7 +154,7 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 2. **Succession chain.** Walking forward, the *current* owner is carried along and
    advances when an act is authorized by the then-current owner:
    `nominate-successor` (owner-signed) opens a nomination over a successor pubkey;
-   the nominee's `claim-succession` (the CLI verb is `hv owner claim`; self-signed by the
+   the nominee's `claim-succession` (the CLI verb is `hive-mind owner claim`; self-signed by the
    NEW key, like genesis) takes
    effect only against an *open matching* nomination; `transfer` (owner-signed) is an
    immediate handoff. Every other act (admit/config/escrow/standby) is applied only
@@ -183,7 +184,7 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 **Escrow tombstones.** `owner-escrow` entries (the in-hive passphrase-encrypted key)
 are collected during the same walk; an owner-signed `revoke-escrow` (a specific
 `node_id:seq` ref, or `all`) marks earlier escrows revoked. `gov["escrows"]` is the
-live, revocation-filtered, sorted list `hv owner restore` draws from. The tombstone is
+live, revocation-filtered, sorted list `hive-mind owner restore` draws from. The tombstone is
 logical only — the ciphertext is permanent in the append-only journal, so a leaked
 escrow passphrase is truly remediated only by rotating the owner key via succession.
 
@@ -192,13 +193,13 @@ escrow passphrase is truly remediated only by rotating the owner key via success
 - Standard retraction (`hv retract`) → adds the retractor's identity weight as
   **negative evidence** (net = positive − negative), so a fact can become contested
   or go negative
-- Owner retraction (`hv retract --owner`) → drives confidence to the floor.
+- Owner retraction (`hive-mind retract --owner`) → drives confidence to the floor.
   Once an owner exists it must be **owner-signed** by the owner **as of its journal
   position** (`_owner_at`, so a previous owner's forget survives a handoff; 1.24);
   forgets positioned before the genesis owner are grandfathered while the governed
   `forget_writers` policy is `legacy` (the default); `forget_writers=owner` closes that (1.25,
   #122), and `_forgets_grandfathered` answers what the grandfather would honour either way.
-- Owner unforget (`hv unforget`, 1.24) → an owner-signed `retract` with
+- Owner unforget (`hive-mind unforget`, 1.24) → an owner-signed `retract` with
   `unretracts_ref`. Per fact text, the owner forgets and unforgets are sorted on
   `(timestamp, node_id, seq)` and the **latest honoured act wins**; an unforget is
   never grandfathered. Owner acts never move `last_evidence_at`, so an unforgotten
@@ -374,8 +375,8 @@ sid = "h:" + sha256(f"{node_id}:{seq}").hexdigest()[:10]        # _short_id
   while every entry's own `sid` still resolves to the row. `_index_lookup` orders the same way.
 - **Boundary only.** `_resolve_id_arg(conn, token, kind, what)` is the one path every accepting verb
   uses (`--informed` via `_parse_ref_arg`, `--outcome-of`, `--supersedes`, `--resolves`, `retract`,
-  `entity link`): `h:` / `node_id:seq` / bare local id, kind-checked, resolved **before** any write.
-  A bare integer prints `_BARE_ID_WARNING` once per process; it is removed at the next MAJOR.
+  `entity link`): `h:` / `node_id:seq`, kind-checked, resolved **before** any write. A bare local id
+  raises `LocalIdRejected` (2.0), and the command exits having written nothing.
 - **Audit.** `_REFERENCE_RE` parses a prose `h:…` beside `#N`; CONTRAVENED marks the former `exact`
   and the latter best-effort. `api_item(sid)` resolves a dashboard deep link (`/#h:…`) server-side.
 
@@ -397,7 +398,7 @@ two observations.
   or a device admitted under the same principal) weighs 0, so an idea earns confidence only from
   others. The author's `contradicts` still counts: it is the only way to withdraw an idea. Before an
   owner exists there is no principal map, so only the same device is excluded (an author's second
-  device still counts until `hv owner init`). `cap_self` still binds when every supporter shares one
+  device still counts until `hive-mind owner init`). `cap_self` still binds when every supporter shares one
   other principal.
 - **Grounding rule.** A link whose `channel` is `introspect` weighs `introspect_support_weight`
   (governed, default 0). `hv propose` stamps the idea itself `introspect` by default. So the only
@@ -476,23 +477,23 @@ the same representative.
 ### Device identity
 
 A node is identified by an Ed25519 **device key**, not a hostname. `device_id`
-is `"k1:" + sha256(pubkey)[:16hex]`; the 32-byte seed lives at
-`HIVE_HOME/.device-key` (mode 0600, gitignored, excluded from the source
-manifest), and the fingerprint is cached at `.device-id` so resolving `NODE_ID`
+is `"k1:" + sha256(pubkey)[:16hex]`; the 32-byte seed lives in the key directory as
+`device-key` (mode 0600, directory 0700, outside the checkout since 2.0: `$HIVE_KEY_DIR`, else
+the path in `HIVE_HOME/.key-dir`, else `~/.hive/keys/<sha256(checkout path)[:16]>`; a legacy
+`HIVE_HOME/.device-key` still works), and the fingerprint is cached at `.device-id` so resolving `NODE_ID`
 stays a cheap file read. `NODE_ID` resolves to: `HIVE_NODE_ID` override → the
 device fingerprint if a key is present → the hostname (legacy, pre-migration).
 
 A key is minted only by `hv config identity init` (fresh install) or the migration — importing
 `hv` never creates one, so a legacy hostname node keeps its identity until it is
-deliberately migrated. `hv doctor migrate-identity --map` (the canonical command; `hv
-migrate-device-identity` is kept as a silent alias) re-stamps an existing
-journal from hostnames to device_ids: a deterministic transform (same map on every
-node → byte-identical journals → peers stay converged). Two instances on one box
+deliberately migrated. The migration (`hv doctor migrate-identity --map`, a deterministic
+re-stamp from hostnames to device_ids: same map on every node, byte-identical journals, peers stay
+converged) runs on a 1.x release; 2.0 removed it (#136). Two instances on one box
 still need distinct `HIVE_NODE_ID` or distinct keys.
 
 ### Hives and onboarding
 
-A **hive** is the set of nodes sharing one queen bee's journal. `hv owner init`
+A **hive** is the set of nodes sharing one queen bee's journal. `hive-mind owner init`
 mints a `hive_id` (`"h1:" + 8 random bytes`, public, in the owner-signed genesis)
 that **scopes sync**: `/sync/hello` and `/sync/ingest` advertise/check it, and a
 node refuses to merge a journal from a different `hive_id`. Without that, two hives
@@ -504,7 +505,7 @@ and probes each device's `GET /hive/info` (metadata + the signed genesis, never 
 journal — so listing stays open even if reads are later gated). A new node either
 **bootstraps** (first node → `owner init`, becomes queen bee) or **joins** (`hv join`
 emits a self-signed `join-request`; the owner sees it in their session-start digest
-and runs `hv group admit`). Joining is non-blocking — the joiner syncs immediately; its
+and runs `hive-mind group admit`). Joining is non-blocking — the joiner syncs immediately; its
 writes are stored but count zero until admitted.
 
 A join-request has a quiet second job: being a *signed* entry, it carries the joiner's

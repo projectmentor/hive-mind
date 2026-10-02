@@ -10,7 +10,7 @@ carrying `pub`. These pin:
     is rejected; UNKNOWN announce kinds are accepted and ignored (future kinds ride through
     this contract's nodes with no version-skew rejection window);
   • harvest: the announce entry makes the device a capsule recipient (leaves `missing`);
-  • CLI: `hv key announce` emits exactly once (idempotent), and ANY prior signed write
+  • CLI: `hv config identity announce` emits exactly once (idempotent), and ANY prior signed write
     suppresses it (guard subsumption);
   • guard hardening: a planted pub on a spoofed UNSIGNED entry (grandfathered by _verify_entry)
     can never fingerprint-match, so it must NOT suppress the announcement;
@@ -33,10 +33,11 @@ sys.path.insert(0, str(PROJECT))
 import merkle   # noqa: E402
 import ed25519  # noqa: E402
 import x25519   # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _run(home, *args, check=True):
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args],
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args],
                        env=dict(os.environ, HIVE_HOME=str(home)), capture_output=True, text=True)
     if check:
         assert r.returncode == 0, r.stderr
@@ -49,6 +50,7 @@ def _loadhv(home, monkeypatch):
     spec = importlib.util.spec_from_loader("hvmod_ann", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 
@@ -150,20 +152,20 @@ def test_announce_makes_device_harvestable(tmp_path, monkeypatch):
 # ── CLI ───────────────────────────────────────────────────────────────────────────────────────
 
 def test_key_announce_emits_once(tmp_path):
-    r = _run(tmp_path, "key", "announce")                  # fresh home: auto-mints, then emits
+    r = _run(tmp_path, "config", "identity", "announce")                  # fresh home: auto-mints, then emits
     assert "Announced" in r.stdout
     did = (tmp_path / ".device-id").read_text().strip()
     assert len(_announces_by(tmp_path, did)) == 1
 
-    r = _run(tmp_path, "key", "announce")                  # second run: guard short-circuits
+    r = _run(tmp_path, "config", "identity", "announce")                  # second run: guard short-circuits
     assert "already harvestable" in r.stdout
     assert len(_announces_by(tmp_path, did)) == 1
 
 
 def test_any_signed_write_suppresses_announce(tmp_path):
-    _run(tmp_path, "key", "init")
+    _run(tmp_path, "config", "identity", "init")
     _run(tmp_path, "remember", "a plain signed write")     # signed → pub already harvestable
-    r = _run(tmp_path, "key", "announce")
+    r = _run(tmp_path, "config", "identity", "announce")
     assert "already harvestable" in r.stdout
     did = (tmp_path / ".device-id").read_text().strip()
     assert not _announces_by(tmp_path, did)
@@ -173,7 +175,7 @@ def test_planted_pub_does_not_suppress_announce(tmp_path):
     """_verify_entry grandfathers UNSIGNED entries, so a spoofed entry with node_id=victim and a
     planted pub can land in a journal — but it can never fingerprint-match, so the guard must
     still emit (otherwise an attacker could keep a device capsule-blind forever)."""
-    _run(tmp_path, "key", "init")
+    _run(tmp_path, "config", "identity", "init")
     did = (tmp_path / ".device-id").read_text().strip()
     jdir = tmp_path / "journal"
     jdir.mkdir(exist_ok=True)
@@ -182,7 +184,7 @@ def test_planted_pub_does_not_suppress_announce(tmp_path):
              "pub": base64.b64encode(os.urandom(32)).decode()}      # planted, unbound pub
     (jdir / "spoof.jsonl").write_text(json.dumps(spoof) + "\n")
 
-    r = _run(tmp_path, "key", "announce")
+    r = _run(tmp_path, "config", "identity", "announce")
     assert "Announced" in r.stdout
     assert len(_announces_by(tmp_path, did)) == 1
 
@@ -192,7 +194,7 @@ def test_planted_pub_does_not_suppress_announce(tmp_path):
 def _silent_member_home(home, owner_home):
     """A keyed device that synced an owned hive's journal but never authored anything — the
     direct-admit shape the self-heal exists for."""
-    _run(home, "key", "init")
+    _run(home, "config", "identity", "init")
     _no_peers(home)
     shutil.copytree(owner_home / "journal", home / "journal", dirs_exist_ok=True)
 
@@ -227,8 +229,8 @@ def test_doctor_fix_dry_run_previews_without_emitting(tmp_path):
 
 def test_doctor_fix_stays_quiet_without_an_owner(tmp_path):
     """A standalone / pre-owner node must not auto-append governance noise on the 15-min timer;
-    deliberate pre-owner use is `hv key announce`."""
-    _run(tmp_path, "key", "init")
+    deliberate pre-owner use is `hv config identity announce`."""
+    _run(tmp_path, "config", "identity", "init")
     _no_peers(tmp_path)
     did = (tmp_path / ".device-id").read_text().strip()
 

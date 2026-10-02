@@ -101,7 +101,7 @@ def test_an_evidence_revoke_is_recorded_but_not_in_effect(tmp_path):
 
 
 def test_on_the_owner_machine_a_person_revokes_with_owner_authority(tmp_path):
-    run, entries = _owner_hive(tmp_path)
+    run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: owner authority is `hive-mind decide`
     sid = _first_sid(run("decide", "plan A", "--rationale", "r").stdout)
     r = run("decide", "--revoke", sid, "--rationale", "wrong")
     assert r.stdout.startswith(f'Revoked decision {sid} ("plan A") (owner-signed: source manual)')
@@ -146,9 +146,11 @@ def test_hermes_decide_passes_revoke_and_refuses_two_relationships(monkeypatch):
     p.initialize("abcdef1234567890", agent_context="primary", agent_identity="coder")
     out = json.loads(p.handle_tool_call("hive_decide", {"revoke": "h:0123456789", "rationale": "wrong"}))
     assert out["ok"] is True
-    assert calls[-1] == ("decide", "--rationale", "wrong", "--revoke", "h:0123456789")
+    src = calls[-1][-1]                                   # 2.0: decide names its source with --source (#119)
+    assert calls[-1] == ("decide", "--rationale", "wrong", "--revoke", "h:0123456789", "--source", src)
+    assert src.startswith("hermes:")
     p.handle_tool_call("hive_decide", {"content": "B", "rationale": "r", "supersedes": "h:0123456789"})
-    assert calls[-1] == ("decide", "B", "--rationale", "r", "--supersedes", "h:0123456789")
+    assert calls[-1] == ("decide", "B", "--rationale", "r", "--supersedes", "h:0123456789", "--source", src)
     n = len(calls)
     out = json.loads(p.handle_tool_call("hive_decide", {"content": "x", "supersedes": "h:0123456789",
                                                         "revoke": "h:9876543210"}))

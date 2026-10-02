@@ -512,7 +512,7 @@ s=addr
 host,port=s,'9876'
 if ':' in s: host,port=s.rsplit(':',1)
 host=host.strip(); port=(port.strip() or '9876')
-# <hive_id>/<owner_id>/<hash8> — validated properly by `hv owner pin --fingerprint`; here we only
+# <hive_id>/<owner_id>/<hash8> — validated properly by `hive-mind owner pin --fingerprint`; here we only
 # pass through something that looks like it, so a stray path never becomes an argument.
 fp=path.strip().strip('/')
 if not re.match(r'^h[12]:[0-9a-f]+/o1:[0-9a-f]+/[0-9a-f]{8,}\$',fp): fp=''
@@ -559,8 +559,27 @@ print(f'{host} {port} {fp}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and
     # No 'bind' key (GHSA-242f): the daemon's resolve_bind() picks the tailnet IP (else loopback),
     # never 0.0.0.0. Set HIVE_BIND or a .peers.json 'bind' to override.
     python3 -c "import json,sys;json.dump({'self':sys.argv[1],'port':9876,'peers':[]},open(sys.argv[2],'w'),indent=2)" "$THIS_DEVICE" "$PEERS_FILE"
-    ./hv owner init >/dev/null && ok "New hive created — you are the queen bee!"
-    ./hv group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
+    # Owner acts run on the control plane since 2.0 (public #136); `hv` cannot owner-sign.
+    # The owner key is sealed at rest (2.0 PR 3b, private #27). Ask for its passphrase once, here, and
+    # hand it to the two commands below: otherwise it is three prompts (new, confirm, then unlock for
+    # the admit). It lives only in this shell and in those two processes' environments.
+    _okp="${HIVE_OWNER_KEY_PASSPHRASE:-}"
+    if [ -z "$_okp" ] && { : </dev/tty; } 2>/dev/null; then
+      while :; do
+        ask "Passphrase for your owner key (hive-mind asks for it whenever you owner-sign): "
+        IFS= read -rs _okp </dev/tty; echo
+        ask "Again: "
+        IFS= read -rs _okp2 </dev/tty; echo
+        [ -n "$_okp" ] && [ "$_okp" = "$_okp2" ] && break
+        warn "Empty, or the two did not match. Try again."
+      done
+      unset _okp2
+    fi
+    [ -n "$_okp" ] || die "The owner key needs a passphrase. For an unattended install, set HIVE_OWNER_KEY_PASSPHRASE."
+    HIVE_OWNER_KEY_PASSPHRASE="$_okp" python3 ./hivemind_ctl.py owner init >/dev/null && ok "New hive created — you are the queen bee!"
+    HIVE_OWNER_KEY_PASSPHRASE="$_okp" python3 ./hivemind_ctl.py group admit "$THIS_DEVICE" --principal "$PRINCIPAL" >/dev/null && ok "Admitted this device (principal: $PRINCIPAL)."
+    unset _okp
+    ok "Your owner key is sealed. Keep the passphrase safe: without it this copy of the key is lost (escrow one: hive-mind owner escrow)."
     ok "hive_id: $(./hv owner show 2>/dev/null | awk '/hive_id:/{print $2}')"
     # Surface the invite right where a hive is born, so the owner knows exactly what to
     # paste on their other devices to add them — no "how do I get the address?" round-trip.
@@ -577,7 +596,7 @@ print(f'{host} {port} {fp}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and
     # serves nothing of the journal to a remote caller and accepts no push, so an unpinned joiner
     # cannot be captured by a rival declaration and cannot relay one onward.
     if [ -n "${SEED_FP:-}" ]; then
-      if ./hv owner pin --fingerprint "$SEED_FP" >/dev/null 2>&1; then
+      if python3 ./hivemind_ctl.py owner pin --fingerprint "$SEED_FP" >/dev/null 2>&1; then
         ok "Pinned this hive's genesis from the invite ($SEED_FP)."
       else
         warn "Couldn't pin the invite's fingerprint — continuing; 'hv doctor genesis' will say why."
@@ -588,11 +607,11 @@ print(f'{host} {port} {fp}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and
     # No fingerprint in the invite (an older inviting device): pin what the pull brought, but only
     # when there is exactly one declaration to pin — `--set` refuses to guess between two.
     if [ -z "${SEED_FP:-}" ]; then
-      ./hv owner pin --set >/dev/null 2>&1 || true
+      python3 ./hivemind_ctl.py owner pin --set >/dev/null 2>&1 || true
     fi
-    if ! ./hv owner pin 2>/dev/null | grep -q "^genesis pinned:"; then
+    if ! python3 ./hivemind_ctl.py owner pin 2>/dev/null | grep -q "^genesis pinned:"; then
       warn "This device has NOT pinned a genesis yet."
-      warn "  It will refuse inbound sync until it does, and the periodic 'hv doctor --fix' pins it"
+      warn "  It will refuse inbound sync until it does, and 'hive-mind update' (or 'hive-mind doctor --fix') pins it"
       warn "  once the hive's declaration has synced. 'hv doctor genesis' shows the current state."
     fi
     ask "Your name (the principal you'd like to be admitted as): "
@@ -606,7 +625,7 @@ print(f'{host} {port} {fp}' if host and re.match(r'^[A-Za-z0-9._-]+\$',host) and
       ok "This device is already admitted (principal: $PRINCIPAL) — no owner action needed."
     else
       warn "You're syncing the hive but NOT yet admitted — your writes won't count until the owner admits you."
-      echo "  Ask the hive's owner to run:  hv group admit $THIS_DEVICE --principal $PRINCIPAL"
+      echo "  Ask the hive's owner to run:  hive-mind group admit $THIS_DEVICE --principal $PRINCIPAL"
     fi
   fi
 fi
@@ -620,8 +639,8 @@ cd "$HIVE_DIR"
 if [ -f store.db ]; then
   ok "store.db already exists"
 else
-  info "Running hv rebuild to initialise database..."
-  ./hv rebuild
+  info "Running hv doctor rebuild to initialise database..."
+  ./hv doctor rebuild
   ok "store.db created"
 fi
 ./hv stats
@@ -682,6 +701,7 @@ INITD
 
 else
   CRON_LINE="@reboot HIVE_HOME=$HIVE_DIR /usr/bin/python3 $HIVE_DIR/hive_sync_daemon.py >> /tmp/hive-sync.log 2>&1"
+  # Drops any earlier daemon line, the pre-rename `sync_daemon.py` one included, then adds the current one.
   ( crontab -l 2>/dev/null | grep -v "sync_daemon"; echo "$CRON_LINE" ) | crontab -
   ok "@reboot cron entry installed (fallback)"
 fi

@@ -1,6 +1,6 @@
 # Hive Mind P2P Redundancy & Performance Design Document
 
-**Status:** Historical design (written 2026-06-03). Sections 1–10 describe the peer-to-peer sync design
+**Status:** Historical design (written 2026-06-03), moved to `docs/history/` in 2.0 (#136). Sections 1–10 describe the peer-to-peer sync design
 that shipped, with changes. Where this document and the code disagree, the code is authoritative, as are
 `docs/SYNC_API.md` (the current HTTP API, including read authentication), `docs/INTERNALS.md` and
 `docs/THREAT_MODEL.md`. The current contract version is reported by `hv version`.  

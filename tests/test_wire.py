@@ -1,8 +1,8 @@
-"""Phase 0 — `hv wire`: the unified wiring verb that absorbs `hv doctor wire-agent`.
+"""Phase 0 — `hv wire`: the unified wiring verb that absorbed `hv doctor wire-agent`.
 
 `hv wire <name>` auto-dispatches by the resolved cell's `kind`:
-  • kind:agent → reconcile foreign config (the Claude hooks) — must be BYTE-IDENTICAL to the old
-    `hv doctor wire-agent` (golden parity), which stays as a hidden deprecated alias;
+  • kind:agent → reconcile foreign config (the Claude hooks). The old `hv doctor wire-agent` was a hidden
+    alias of `hv wire claude` through 1.x; 2.0 removes it, and it now writes nothing and names `hv wire claude`;
   • kind:tool  → Phase-1 executor (a stub here that resolves the cell).
 `--add`/`--list`/`--show` manage the cell registry (journaled cells + built-ins).
 Tests drive the real `hv` CLI against isolated temp homes.
@@ -28,16 +28,18 @@ def run(home, *args, claude_dir=None, check=True):
     return r
 
 
-def test_wire_claude_golden_parity_with_old_alias(tmp_path):
-    """`hv wire claude` and the deprecated `hv doctor wire-agent` produce the SAME settings.json."""
+def test_wire_claude_lands_and_the_old_alias_writes_nothing(tmp_path):
+    """`hv wire claude` writes the shim. The removed `hv doctor wire-agent` (decision h:af137f9421) leaves the
+    Claude config untouched, names `hv wire claude` and exits 2, however doctor's flags are placed."""
     c_new, c_old = tmp_path / "cnew", tmp_path / "cold"
     c_new.mkdir(parents=True); c_old.mkdir(parents=True)
     run(tmp_path / "h1", "wire", "claude", claude_dir=c_new)
-    run(tmp_path / "h2", "doctor", "wire-agent", claude_dir=c_old)
-    s_new = (c_new / "settings.json").read_text()
-    s_old = (c_old / "settings.json").read_text()
-    assert s_new == s_old
-    assert "hive_dispatch.sh session-start" in s_new   # the real shim landed
+    assert "hive_dispatch.sh session-start" in (c_new / "settings.json").read_text()   # the real shim landed
+    for argv in (["doctor", "wire-agent"], ["doctor", "--fix", "wire-agent"]):
+        r = run(tmp_path / "h2", *argv, claude_dir=c_old, check=False)
+        assert r.returncode == 2 and r.stdout == "", (argv, r.stdout)
+        assert "Run: hv wire claude" in r.stderr, r.stderr
+    assert list(c_old.iterdir()) == []
 
 
 def test_wire_claude_is_idempotent(tmp_path):

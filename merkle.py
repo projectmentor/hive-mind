@@ -1,7 +1,7 @@
 """
 Merkle index over the Hive Mind journal.
 
-Pure functions, no side effects. Used now for `hv merkle` (verification) and by
+Pure functions, no side effects. Used now for `hv doctor merkle` (verification) and by
 the Phase 2 sync daemon for bandwidth-efficient delta detection.
 
 The journal is a G-Set CRDT: a set of entries keyed by (node_id, seq). To make
@@ -24,7 +24,10 @@ CHUNK_SIZE = 100
 
 
 def _canonical(obj):
-    """Stable bytes for hashing — must match hv._canonical."""
+    """Stable bytes for hashing: THE definition (#153). Every entry hash and prev_hash chain, chunk hash
+    and root, device signature and owner signature covers these bytes. `hv._canonical` delegates here and
+    `ownerkey` calls it directly. Changing it changes every hash and signature on the fleet, so
+    tests/test_one_canonical.py pins the output for a fixed entry and fails on any second copy."""
     return json.dumps(obj, sort_keys=True, separators=(",", ":")).encode()
 
 

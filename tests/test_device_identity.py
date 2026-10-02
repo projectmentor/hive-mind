@@ -1,7 +1,7 @@
 """Device-identity tests: per-node Ed25519 keys, signed entries, verify-on-ingest.
 
 Each test drives the real `hv` CLI against an isolated temp HIVE_HOME (the `hive`
-fixture). A node with no .device-key keeps its legacy hostname identity; `hv key init`
+fixture). A node with no .device-key keeps its legacy hostname identity; `hv config identity init`
 mints a key and flips the node to device-identity mode (signed writes under the
 device_id fingerprint).
 """
@@ -33,13 +33,13 @@ def test_no_key_is_legacy_hostname_identity(hive):
 
 
 def test_key_init_and_show(hive):
-    out = hive.run("key", "init").stdout
+    out = hive.run("config", "identity", "init").stdout
     assert "device_id: k1:" in out
-    assert "device_id: k1:" in hive.run("key", "show").stdout
+    assert "device_id: k1:" in hive.run("config", "identity", "show").stdout
 
 
 def test_writes_are_signed_under_device_id(hive):
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("remember", "a fact written after minting a device key")
     e = hive.entries()[0]
     assert e["node_id"].startswith("k1:")
@@ -50,7 +50,7 @@ def test_writes_are_signed_under_device_id(hive):
 
 
 def test_genuine_verifies_tamper_and_forge_fail(hive):
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("remember", "verify this signed fact")
     hv = _loadhv()
     e = hive.entries()[0]
@@ -74,7 +74,7 @@ def test_genuine_verifies_tamper_and_forge_fail(hive):
 
 def test_ingest_rejects_a_forged_entry(hive):
     # A genuine signed entry from a *foreign* device is accepted; a tampered copy is rejected.
-    hive.run("key", "init")
+    hive.run("config", "identity", "init")
     hive.run("remember", "seed so the node has its own chain")
     hv = _loadhv()
 
@@ -97,28 +97,29 @@ def test_ingest_rejects_a_forged_entry(hive):
 
 
 def test_init_guard_refuses_on_a_populated_hostname_journal(hive):
-    # Writing under the hostname first, then `hv key init`, must refuse (migration is the path).
+    # Writing under the hostname first, then `hv config identity init`, must refuse (migration is the path).
     hive.run("remember", "a pre-existing hostname-authored fact")
-    out = hive.run("key", "init", check=False).stdout
-    assert "migrate-device-identity" in out
+    out = hive.run("config", "identity", "init", check=False).stdout
+    assert "1.x release" in out and "hv doctor migrate-identity" in out     # 2.0: the migration lives on 1.x
 
 
 # --- migration ---------------------------------------------------------------
 
-import json
-import shutil
+
+import pytest
 import subprocess
 import sys
 
 HV = PROJECT / "hv"
 
 
-def _run(home, *args, node_id=None):
+def _run(home, *args, node_id=None, check=True):
     env = dict(os.environ, HIVE_HOME=str(home))
     if node_id:
         env["HIVE_NODE_ID"] = node_id
     r = subprocess.run([sys.executable, str(HV), *args], env=env, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+    if check:
+        assert r.returncode == 0, r.stderr
     return r
 
 
@@ -129,44 +130,28 @@ def _root(home):
     return [l for l in out.splitlines() if l.strip().startswith("Root:")][0]
 
 
-def test_migration_is_deterministic_across_nodes(tmp_path):
-    # Build a converged 2-host journal with a cross-ref (entity link).
-    base = tmp_path / "base"
-    _run(base, "remember", "alpha fact", "--source", "claude-code", node_id="node-a")
-    _run(base, "entity", "add", "--name", "Thing", "--type", "concept", node_id="node-a")
-    _run(base, "entity", "link", "--name", "Thing", "--fact-id", "1", node_id="node-a")
-    _run(base, "remember", "beta fact", "--source", "hermes", node_id="node-b")
-
-    mapping = {"node-a": "k1:aaaaaaaaaaaaaaaa", "node-b": "k1:bbbbbbbbbbbbbbbb"}
-    mapfile = tmp_path / "map.json"
-    mapfile.write_text(json.dumps(mapping))
-
-    # Two nodes apply the SAME map to copies of the same journal.
-    n1, n2 = tmp_path / "n1", tmp_path / "n2"
-    for n in (n1, n2):
-        n.mkdir()
-        shutil.copytree(base / "journal", n / "journal")
-        _run(n, "migrate-device-identity", "--map", str(mapfile))
-
-    assert _root(n1) == _root(n2)   # determinism -> peers stay converged
-
-    # hostnames gone, cross-ref remapped to the device_id
-    text = "".join((n1 / "journal" / f).read_text() for f in os.listdir(n1 / "journal"))
-    assert "node-a" not in text and "node-b" not in text
-    assert "k1:aaaaaaaaaaaaaaaa" in text
+@pytest.mark.parametrize("argv", [["doctor", "migrate-identity", "--map", "m.json"],
+                                  ["migrate-device-identity", "--map", "m.json", "--dry-run"]])
+def test_the_hostname_migration_is_gone_and_says_what_to_do(tmp_path, argv):
+    """2.0 (#136) removed the one-time 1.3 re-keying (#130). Both of its forms say to run it on a 1.x release
+    first, exit 2 and write nothing, instead of argparse's "invalid choice"."""
+    home = tmp_path
+    _run(home, "remember", "a hostname-era fact", node_id="node-a")
+    before = sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir())
+    r = subprocess.run([sys.executable, str(HV), *argv], env=dict(os.environ, HIVE_HOME=str(home)),
+                       capture_output=True, text=True)
+    assert r.returncode == 2 and "was removed in 2.0" in r.stderr and "1.x release" in r.stderr, r.stderr
+    assert sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir()) == before
 
 
-def test_doctor_subcommands_and_aliases(tmp_path):
-    """`hv merkle` and `hv migrate-device-identity` now live under `hv doctor`; the old
-    top-level forms keep working as silent argv aliases."""
+def test_doctor_subcommands_and_removed_alias(tmp_path):
+    """`hv merkle` lives under `hv doctor`. Through 1.x the old top-level form worked as a silent argv alias;
+    2.0 removes it (decision h:af137f9421): it prints nothing on stdout, names `hv doctor merkle` and exits 2."""
     home = tmp_path
     _run(home, "remember", "a fact", node_id="node-a")
     canon = _run(home, "doctor", "merkle").stdout
-    alias = _run(home, "merkle").stdout
-    assert "Root:" in canon and canon == alias
-    mapping = {"node-a": "k1:aaaaaaaaaaaaaaaa"}
-    mapfile = tmp_path / "m.json"
-    mapfile.write_text(json.dumps(mapping))
-    # canonical and alias both reach the migrate handler (dry-run, nothing written)
-    assert _run(home, "doctor", "migrate-identity", "--map", str(mapfile), "--dry-run").stdout
-    assert _run(home, "migrate-device-identity", "--map", str(mapfile), "--dry-run").stdout
+    assert "Root:" in canon
+    alias = _run(home, "merkle", check=False)
+    assert alias.returncode == 2 and alias.stdout == "", alias.stdout
+    assert "Run: hv doctor merkle" in alias.stderr, alias.stderr
+

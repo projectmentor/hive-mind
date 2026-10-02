@@ -19,12 +19,13 @@ import pytest
 
 import _realhome
 from conftest import HV, PROJECT, REAL, SERVICE_STUBS
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shells and symlinks")
 
 
 def _hv(env, *args):
-    return subprocess.run([sys.executable, str(HV), *args], env=env, capture_output=True, text=True,
+    return subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True,
                           timeout=120)
 
 
@@ -45,7 +46,7 @@ def test_owner_init_writes_the_sandbox_stash_not_the_real_one(isolation, tmp_pat
     before = _realhome.snapshot(REAL["claude"], REAL["stash"])
     r = _hv(dict(os.environ, HIVE_HOME=str(tmp_path / "hive")), "owner", "init")
     assert r.returncode == 0, r.stderr
-    assert (isolation.stash / ".owner-key").is_file()            # the write happened, in the sandbox
+    assert (isolation.stash / ".owner-key.sealed").is_file()     # the write happened, in the sandbox (sealed, 3b)
     assert _realhome.diff(before, _realhome.snapshot(REAL["claude"], REAL["stash"])) == []
 
 
@@ -78,7 +79,7 @@ def test_the_guard_detects_writes_to_a_home_it_is_watching(isolation, tmp_path):
     assert _hv(env, "owner", "init").returncode == 0
     _hv(env, "doctor", "--fix")
     changes = _realhome.diff(before, _realhome.snapshot(claude, stash))
-    assert "owner-key stash created" in changes, changes
+    assert "sealed owner-key stash created" in changes, changes
     assert "skill link created" in changes, changes
     assert "hive hooks in settings.json created" in changes, changes
 

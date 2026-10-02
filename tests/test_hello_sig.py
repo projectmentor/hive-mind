@@ -47,6 +47,7 @@ import merkle  # noqa: E402
 import sync_common  # noqa: E402
 import hive_sync_daemon as d  # noqa: E402
 import sync_client as sc  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 URL = "http://100.64.0.2:9876"
 ADDR = "100.64.0.2:9876"
@@ -88,7 +89,7 @@ def _gov(admitted=(), purged=(), owner="o1:owner", hive="h1:aaaa"):
 
 
 def _keyed(home, seed=None):
-    """A HIVE_HOME holding a device key (what `hv key init` leaves, minus the CLI round trip)."""
+    """A HIVE_HOME holding a device key (what `hv config identity init` leaves, minus the CLI round trip)."""
     seed = seed or os.urandom(32)
     home.mkdir(parents=True, exist_ok=True)
     (home / ".device-key").write_text(base64.b64encode(seed).decode() + "\n")
@@ -104,6 +105,7 @@ def _hvmod(home, monkeypatch):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 
@@ -567,8 +569,8 @@ def _pair(tmp_path, monkeypatch):
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
-    _run(a, "key", "init")
-    _run(b, "key", "init")
+    _run(a, "config", "identity", "init")
+    _run(b, "config", "identity", "init")
     a_dev, b_dev = ((h / ".device-id").read_text().strip() for h in (a, b))
     _run(a, "owner", "init")
     _run(a, "group", "admit", a_dev, "--principal", "a")
@@ -678,9 +680,9 @@ def _stale_b(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
-    _run(b, "key", "init")
+    _run(b, "config", "identity", "init")
     b_dev = (b / ".device-id").read_text().strip()
-    _run(a, "key", "init")
+    _run(a, "config", "identity", "init")
     _run(a, "owner", "init")
     _run(a, "group", "admit", b_dev, "--principal", "b")
     stale = f"http://127.0.0.1:{_free_port()}"
@@ -720,7 +722,7 @@ def test_doctor_does_not_move_a_peer_the_answer_does_not_prove(tmp_path, monkeyp
     if case == "other-device":                                               # C, also admitted, answers at the hint
         who = tmp_path / "c"
         who.mkdir()
-        _run(who, "key", "init")
+        _run(who, "config", "identity", "init")
         _run(a, "group", "admit", (who / ".device-id").read_text().strip(), "--principal", "c")
     if case == "purged":
         _run(a, "group", "purge", b_dev)
@@ -867,7 +869,7 @@ def test_two_daemons_on_the_lan_converge_under_inbound_and_outbound_enforce(tmp_
     a.mkdir()
     b.mkdir()
     for h in (a, b):
-        _run(h, "key", "init")
+        _run(h, "config", "identity", "init")
     a_dev, b_dev = ((h / ".device-id").read_text().strip() for h in (a, b))
     _run(a, "owner", "init")
     _run(a, "group", "admit", a_dev, "--principal", "a")
@@ -924,5 +926,5 @@ def test_two_daemons_on_the_lan_converge_under_inbound_and_outbound_enforce(tmp_
                 p.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 p.kill()
-    roots = [_run(h, "merkle").stdout.split("Root:")[1].split()[0] for h in (a, b)]
+    roots = [_run(h, "doctor", "merkle").stdout.split("Root:")[1].split()[0] for h in (a, b)]
     assert roots[0] == roots[1]

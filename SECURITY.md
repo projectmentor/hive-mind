@@ -36,7 +36,7 @@ See [`docs/ADVISORIES.md`](docs/ADVISORIES.md) for every published advisory and 
 | **Relationships can't erase knowledge** | Links are evidence, not commands: only the owner (by signature) or an entry's author can supersede or resolve it | [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md); [`docs/INTERNALS.md`](docs/INTERNALS.md) → *Links* |
 | **Secrets** | Capsules: sealed to your authorized devices, never passed through chat or the command line; the limits of revocation | `hv capsule` in [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md); the capsule limitations in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) |
 | **Executable definitions** | Who may publish cells and combs (`cell_writers`) and capsules (`capsule_putters`) | `hv config` and `hv wire` in [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
-| **Health checks** | `hv doctor` security checks: `authenticity`, `crypto`, `crypto-modules`, `keyperm`, `device-keys`, `capsule-authz`, `cell-authz`, `link-authz`, `trust-drift`, `fleet-contract` | `hv doctor` in [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
+| **Health checks** | `hv doctor` security checks: `authenticity`, `crypto`, `crypto-modules`, `keyperm`, `device-keys`, `capsule-authz`, `cell-authz`, `link-authz`, `trust-drift`, `fleet-contract`, `forget-authz`, `daemon-code`, `peer-address`, `sync-bind` | `hv doctor` in [`docs/CLI_REFERENCE.md`](docs/CLI_REFERENCE.md) |
 | **Agent integrations** | What an adapter may and may not do (hint, never act; the owner decides what is forgotten) | [`docs/AGENT_INTEGRATION.md`](docs/AGENT_INTEGRATION.md) §4 |
 
 ## Hardening checklist for operators
@@ -45,11 +45,16 @@ See [`docs/ADVISORIES.md`](docs/ADVISORIES.md) for every published advisory and 
   `hive_id` and owner id out of band when a new device joins (see the bootstrap limitation in the
   threat model).
 - **Back up the owner key**: an off-device export, an in-hive escrow with a strong passphrase, or
-  both (`hv owner export`, `hv owner escrow`).
-- **Admit only devices you control** (`hv group admit`); `revoke` or `purge` a lost device, then
+  both (`hive-mind owner export`, `hive-mind owner escrow`).
+- **Admit only devices you control** (`hive-mind group admit`); `revoke` or `purge` a lost device, then
   `hv capsule rotate` **and** rotate the upstream secret, since removed devices keep old ciphertext.
-- **Keep key files private:** `hv doctor` fails if `.device-key` or `.owner-key` is readable by
-  anyone but you, and `hv doctor --fix` re-tightens them.
+- **Keep key files private:** the device and owner keys live in a key directory outside the checkout
+  (`hv whoami` prints where). `hv doctor` fails if either key is readable by anyone but you, or the key
+  directory is not 0700. `hv doctor --fix` re-tightens the device key and `hive-mind doctor --fix` the
+  owner key, and each moves its key out of the checkout if it is still there.
+- **Seal the owner key:** a new owner key is sealed under a passphrase (2.0). If `hv doctor` reports
+  `owner-seal` failing, run `hive-mind owner seal`. Never leave `HIVE_OWNER_KEY_PASSPHRASE` set in an
+  agent's environment: anything that can read it can sign governance.
 - **Switch sync to `enforce`** (`hv sync auth enforce`) once every peer reports protocol version 2,
   and don't set `HIVE_BIND=0.0.0.0`.
 - **Restrict who can connect** with Tailscale ACLs; HiveMind's signed reads decide who can *read*.

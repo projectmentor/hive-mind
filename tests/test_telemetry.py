@@ -123,5 +123,5 @@ def test_rebuild_does_not_wipe_telemetry(tmp_path):
     run_hv(tmp_path, "telemetry", "record", "--event", "start", "--agent", "claude-code",
            "--session", "sK", "--cwd", str(tmp_path))
     assert len(_tel_rows(tmp_path)) == 1
-    run_hv(tmp_path, "rebuild")   # rebuilds store.db from the journal
+    run_hv(tmp_path, "doctor", "rebuild")   # rebuilds store.db from the journal
     assert len(_tel_rows(tmp_path)) == 1, "rebuild must not touch the separate telemetry db"

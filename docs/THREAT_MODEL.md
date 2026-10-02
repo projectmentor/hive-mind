@@ -1,15 +1,26 @@
 # HiveMind threat model
 
 This is the authoritative statement of what HiveMind defends against, what it assumes, and what
-is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mechanics) and
-`P2P_DESIGN.md` (sync). When a security-relevant change lands, update this file.
+is explicitly out of scope. It is meant to be read alongside `INTERNALS.md` (mechanics),
+`SYNC_API.md` (sync) and `HV_ARCHITECTURE.md` (the two planes). When a security-relevant change lands,
+update this file.
 
 ## Trust assumptions (the security rests on these)
 
 1. **Local key files are 0600 and the host is not compromised.** Device and owner Ed25519 seeds
-   live in `HIVE_HOME/.device-key` and `.owner-key` as raw bytes at mode 0600. Anyone who can read
-   those files *is* that device/owner. `hv doctor` hard-fails on a group/other-readable key and
-   `--fix` re-tightens it (and now loudly reports if the chmod itself fails).
+   live in a key directory (0700) outside the working tree, as `device-key` and `owner-key` at mode
+   0600 (2.0; before it, `HIVE_HOME/.device-key` and `.owner-key`, which still work, with a warning).
+   Anyone who can read those files *is* that device/owner. `hv doctor` hard-fails on a
+   group/other-readable key or an open key directory, and `--fix` re-tightens it (and now loudly
+   reports if the chmod itself fails). Moving the seeds out of `HIVE_HOME` keeps them out of the
+   directory agent CLIs run in, index and pass to tools; it is not a boundary against code running as
+   the same user, which can still read a 0600 file. That is why the **owner** key is also sealed at rest
+   (2.0): `owner-key.sealed`, scrypt then ChaCha20-Poly1305 under a passphrase the operator types, and
+   unlocked once per `hive-mind` command. A process running as the same user can read the ciphertext but
+   cannot sign governance without the passphrase, unless it can also read the passphrase where it is
+   typed or supplied (a keylogger, a `HIVE_OWNER_KEY_PASSPHRASE` left in an agent's environment); that
+   stays out of scope. The device key is not sealed: every entry is device-signed, unattended, including
+   by the sync daemon, and a device key's authority is its admission, which the owner can revoke.
 2. **The journal is an append-only, signed G-Set.** Every entry is signed by its device key and
    `node_id = "k1:"+sha256(pub)[:16]`, so an entry cannot be attributed to a device whose key you
    do not hold. Governance acts that bear authority (owner/admit/config) additionally carry an owner
@@ -99,12 +110,16 @@ at once). Concretely:
   agent that omits `--source` writes as `manual` (#119). Grounding: a `supports`/`contradicts` link, or (since 1.21) a fact assertion, whose
   `channel` is `introspect` weighs `introspect_support_weight` (default 0), so no agent can talk a
   claim up or down by reasoning alone.
-- **Owner forgets are reversible, and only by the owner (contract 1.24, #46).** `hv retract --owner` floors a fact; `hv unforget` reverses it. Both are owner-signed `retract` entries (an unforget carries `unretracts_ref`), and the owner acts on one fact's text form a timeline sorted on `(timestamp, node_id, seq)` where the latest honoured act wins. An act is honoured only when signed by the owner AS OF its own journal position (`_owner_at`, the capsule/cell/link rule), so a previous owner's forget survives a transfer, succession or election (before 1.24 it resurrected), and a successor's signature from before their term does not count. An unsigned or forged unforget is ignored, and an unforget is never grandfathered. Owner acts are governance, not evidence: they do not move a fact's last-evidence time, so an unforgotten fact's confidence re-derives from its surviving evidence. A pre-1.24 node skips an unforget (it has no `retracts_ref`) and keeps the fact forgotten until it upgrades: projection skew, never divergence. **Residual (#122):** a forget positioned before the genesis owner is still grandfathered without a signature, and ingest does not check timestamps, so an admitted device can erase a fact with a backdated unsigned owner forget. After 1.24 the owner can undo it with `hv unforget`, and `hv doctor` (`forget-authz`) names every fact a grandfathered forget keeps
+- **Owner forgets are reversible, and only by the owner (contract 1.24, #46).** `hive-mind retract --owner` floors a fact; `hive-mind unforget` reverses it. Both are owner-signed `retract` entries (an unforget carries `unretracts_ref`), and the owner acts on one fact's text form a timeline sorted on `(timestamp, node_id, seq)` where the latest honoured act wins. An act is honoured only when signed by the owner AS OF its own journal position (`_owner_at`, the capsule/cell/link rule), so a previous owner's forget survives a transfer, succession or election (before 1.24 it resurrected), and a successor's signature from before their term does not count. An unsigned or forged unforget is ignored, and an unforget is never grandfathered. Owner acts are governance, not evidence: they do not move a fact's last-evidence time, so an unforgotten fact's confidence re-derives from its surviving evidence. A pre-1.24 node skips an unforget (it has no `retracts_ref`) and keeps the fact forgotten until it upgrades: projection skew, never divergence. **Residual (#122):** a forget positioned before the genesis owner is still grandfathered without a signature, and ingest does not check timestamps, so an admitted device can erase a fact with a backdated unsigned owner forget. After 1.24 the owner can undo it with `hive-mind unforget`, and `hv doctor` (`forget-authz`) names every fact a grandfathered forget keeps
   forgotten, and counts the ones whose target is not in the journal. **Closed by policy (contract 1.25,
-  #122):** `hv config set forget_writers owner` makes only forgets signed by the owner as of their position
+  #122):** `hive-mind config set forget_writers owner` makes only forgets signed by the owner as of their position
   count, so a backdated unsigned forget erases nothing, including one appended after the close. The policy
   is a set-config act honoured only from the owner at its position, and it stores no journal refs, so no
-  future re-keying can orphan it (#130). A legitimate legacy forget is kept by re-issuing it signed. Once set,
+  future re-keying can orphan it (#130). A legitimate legacy forget is kept by re-issuing it signed. *(2.0, 4c)* The default stays `legacy`, since a
+default flip would re-show every fact a grandfathered forget hides. Instead `hv doctor` fails `forget-authz` on
+any owned hive still open, and `hive-mind doctor --fix` closes it: it lists each dependent fact with its text,
+and on the owner's `y` re-signs those forgets and then sets the policy through the same guard. The list is
+shown because a planted forget would be re-signed too. Once set,
   the 1.19 property "a compromised admitted device can never erase, only weigh" holds for fact forgets
   too. Residual: a hive still on `legacy` (the default), and nodes before 1.25, which ignore the key and
   keep honouring the grandfather until they upgrade (projection skew).

@@ -35,6 +35,8 @@ os.environ["HIVE_HOME"] = tempfile.mkdtemp(prefix="hive-peeraddr-")   # always, 
 import ed25519  # noqa: E402
 import sync_common  # noqa: E402
 import hive_sync_daemon as d  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 OLD, NEW, OTHER = "100.64.0.2", "100.64.0.9", "100.64.0.7"
 
@@ -75,6 +77,7 @@ def _load_hv(home, monkeypatch):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     monkeypatch.setattr(d, "hv", m)
     monkeypatch.setattr(d, "_peer_seen", {})
     monkeypatch.delenv("HIVE_SYNC_AUTH", raising=False)
@@ -100,7 +103,7 @@ def _pin_hive(m, monkeypatch):
 def _run(home, *args):
     env = dict(os.environ, HIVE_HOME=str(home), HIVE_OWNER_PASSPHRASE="testpass",
                HIVE_IDENTITY_STASH=str(Path(home) / "stash"))      # `owner init` must not touch ~/.config
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r
 
@@ -398,10 +401,10 @@ def test_b_moves_contacts_a_once_and_a_doctor_fix_repoints_it(tmp_path, monkeypa
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
-    _run(b, "key", "init")
+    _run(b, "config", "identity", "init")
     b_dev = (b / ".device-id").read_text().strip()
-    b_seed = base64.b64decode((b / ".device-key").read_text().strip())
-    _run(a, "key", "init")
+    b_seed = base64.b64decode(_keys.key_path(b, "device-key").read_text().strip())
+    _run(a, "config", "identity", "init")
     _run(a, "owner", "init")
     _run(a, "group", "admit", b_dev, "--principal", "b")           # real governance: B is admitted on A
 

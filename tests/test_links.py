@@ -29,6 +29,7 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 T0 = "2026-01-01T00:00:00Z"
 
@@ -40,6 +41,7 @@ def _loadhv(home, monkeypatch):
     spec = importlib.util.spec_from_loader("hvmod_links", loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 
@@ -414,12 +416,12 @@ def test_verbs_emit_one_link_each_and_no_legacy_field(hive):
     entry — never both (no dual-emit). The legacy resolvers stay for entries already in journals."""
     hive.run("remember", "the daemon listens on port 9876 today", "--source", "alice")
     fid = hive.query("SELECT id FROM facts")[0]["id"]
-    hive.run("remember", "the daemon listens on port 9877 today", "--source", "alice", "--resolves", str(fid))
+    hive.run("remember", "the daemon listens on port 9877 today", "--source", "alice", "--resolves", hive.sid(fid))
     hive.run("decide", "ship on friday", "--rationale", "r")
     did = hive.query("SELECT id FROM decisions")[0]["id"]
-    hive.run("decide", "ship on monday instead", "--rationale", "r", "--supersedes", str(did))
+    hive.run("decide", "ship on monday instead", "--rationale", "r", "--supersedes", hive.sid(did, "decision"))
     hive.run("entity", "add", "--name", "Daemon", "--type", "project")
-    hive.run("entity", "link", "--name", "Daemon", "--fact-id", str(fid), "--confidence", "0.9")
+    hive.run("entity", "link", "--name", "Daemon", "--fact-id", hive.sid(fid), "--confidence", "0.9")
     es = hive.entries()
     types = [e["type"] for e in es]
     assert types.count("link") == 3 and "retract" not in types and "entity_fact" not in types
@@ -438,7 +440,7 @@ def test_verbs_emit_one_link_each_and_no_legacy_field(hive):
 def test_config_knob_bounds_via_cli(tmp_path):
     def run(*args, check=True):
         env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_IDENTITY_STASH=str(tmp_path / "stash"))
-        r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+        r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
         if check:
             assert r.returncode == 0, r.stderr
         return r

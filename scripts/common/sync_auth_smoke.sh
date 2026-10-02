@@ -33,32 +33,40 @@ if [ -z "$LAN" ]; then
   exit 0
 fi
 
-A=$(mktemp -d); B=$(mktemp -d)
-PA=19886; PB=19887
+. "$PROJECT/scripts/common/_smoke_daemon.sh"
+
+A=$(mktemp -d); B=$(mktemp -d); LOGS=$(mktemp -d)
+# Free ports per run, so two runs at once never share a daemon (#161). HIVE_SMOKE_PORT_* pins one.
+PA="${HIVE_SMOKE_PORT_A:-$(smoke_free_port "$LAN")}"; PB="${HIVE_SMOKE_PORT_B:-$(smoke_free_port "$LAN")}"
 DA=""; DB=""
-cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B"; }
+cleanup() { [ -n "$DA" ] && kill "$DA" 2>/dev/null; [ -n "$DB" ] && kill "$DB" 2>/dev/null; rm -rf "$A" "$B" "$LOGS"; }
 trap cleanup EXIT
+# Its own HOME and identity stash, under LOGS, so a run by hand writes nothing into the caller's account (#170).
+. "$PROJECT/scripts/common/_smoke_isolate.sh"
+smoke_isolate "$LOGS"
 
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B_=$'\033[1m'; N=$'\033[0m'; else G=""; R=""; B_=""; N=""; fi
 pass=0; fail=0
 ok() { pass=$((pass+1)); printf '  %s✓%s %s\n' "$G" "$N" "$1"; }
 no() { fail=$((fail+1)); printf '  %s✗ %s%s\n' "$R" "$1" "$N"; }
 eq() { if [ "$2" = "$3" ]; then ok "$1"; else no "$1 — got '$2' want '$3'"; fi; }
-root() { HIVE_HOME="$1" "$HV" merkle | awk '/^Root:/{print $2}'; }
+root() { HIVE_HOME="$1" "$HV" doctor merkle | awk '/^Root:/{print $2}'; }
 count() { HIVE_HOME="$1" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$1','store.db')).execute('SELECT count(*) FROM $2').fetchone()[0])"; }
 
 printf '%ssync-auth smoke (ENFORCE)%s  LAN=%s  A=:%s  B=:%s\n' "$B_" "$N" "$LAN" "$PA" "$PB"
 
 # Real device identities (node_id == Ed25519 fingerprint — no HIVE_NODE_ID override).
 export HIVE_OWNER_PASSPHRASE=smoke-pass
-HIVE_HOME="$A" "$HV" key init >/dev/null
-HIVE_HOME="$B" "$HV" key init >/dev/null
+export HIVE_OWNER_KEY_PASSPHRASE="${HIVE_OWNER_KEY_PASSPHRASE:-smoke-pass}"   # the sealed owner key (2.0 PR 3b)
+HIVE_HOME="$A" "$HV" config identity init >/dev/null
+HIVE_HOME="$B" "$HV" config identity init >/dev/null
 DEVA="$(cat "$A/.device-id")"; DEVB="$(cat "$B/.device-id")"
 
 # A is the owner and admits BOTH device fingerprints.
-HIVE_HOME="$A" "$HV" owner init >/dev/null
-HIVE_HOME="$A" "$HV" group admit "$DEVA" --principal me >/dev/null
-HIVE_HOME="$A" "$HV" group admit "$DEVB" --principal me >/dev/null
+# Owner acts run on the control plane since 2.0 (public #136).
+HIVE_HOME="$A" python3 "${HV%/hv}/hivemind_ctl.py" owner init >/dev/null
+HIVE_HOME="$A" python3 "${HV%/hv}/hivemind_ctl.py" group admit "$DEVA" --principal me >/dev/null
+HIVE_HOME="$A" python3 "${HV%/hv}/hivemind_ctl.py" group admit "$DEVB" --principal me >/dev/null
 
 # Peer configs: bind the LAN IP (so peer traffic is non-loopback), point at each other.
 cat > "$A/.peers.json" <<JSON
@@ -73,13 +81,13 @@ HIVE_HOME="$A" "$HV" remember "alpha from A" --tags a >/dev/null
 HIVE_HOME="$B" "$HV" remember "beta from B" --tags b >/dev/null
 
 # Start both daemons under enforce.
-HIVE_HOME="$A" HIVE_SYNC_AUTH=enforce python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DA=$!
-HIVE_HOME="$B" HIVE_SYNC_AUTH=enforce python3 -c "import hive_sync_daemon as d; d.serve_forever()" >/dev/null 2>&1 & DB=$!
-curl -sf --retry 60 --retry-connrefused --retry-delay 0 "http://$LAN:$PA/sync/merkle-root" >/dev/null || { no "daemon A failed to start"; exit 1; }
-curl -sf --retry 60 --retry-connrefused --retry-delay 0 "http://$LAN:$PB/sync/merkle-root" >/dev/null || { no "daemon B failed to start"; exit 1; }
+HIVE_HOME="$A" HIVE_SYNC_AUTH=enforce python3 -c "import hive_sync_daemon as d; d.serve_forever()" >"$LOGS/A.log" 2>&1 & DA=$!
+HIVE_HOME="$B" HIVE_SYNC_AUTH=enforce python3 -c "import hive_sync_daemon as d; d.serve_forever()" >"$LOGS/B.log" 2>&1 & DB=$!
+smoke_wait_daemon A "$DA" "$LAN" "$PA" "$A" "$LOGS/A.log" || { no "daemon A failed to start"; exit 1; }
+smoke_wait_daemon B "$DB" "$LAN" "$PB" "$B" "$LOGS/B.log" || { no "daemon B failed to start"; exit 1; }
 
 # Sanity: an UNSIGNED remote read is refused under enforce (the fix is actually on).
-CODE=$(curl -s -o /dev/null -w '%{http_code}' "http://$LAN:$PA/sync/chunk?node=$DEVA&start=1&end=9")
+CODE=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' "http://$LAN:$PA/sync/chunk?node=$DEVA&start=1&end=9")
 eq "unsigned remote /sync/chunk refused (enforce on)" "$CODE" "401"
 
 printf '\n%s── signed two-way sync under enforce ──%s\n' "$B_" "$N"

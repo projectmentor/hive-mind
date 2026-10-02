@@ -11,6 +11,8 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import subprocess  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _keys  # noqa: E402  (where a hive's keys are, 2.0 PR 3a)
 
 
 def _run(home, *args, node_id=None, passphrase=None, now=None, check=True):
@@ -23,17 +25,24 @@ def _run(home, *args, node_id=None, passphrase=None, now=None, check=True):
         env["HIVE_OWNER_PASSPHRASE"] = passphrase     # non-interactive passphrase for tests
     if now is not None:
         env["HIVE_NOW"] = now                         # dates governance entries (dead-man test clock)
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env,
                        capture_output=True, text=True)
     if check:
         assert r.returncode == 0, r.stderr
     return r
 
 
+def _propose_minted(home, now=None, check=True, **kw):
+    """What `hv owner propose-election --mint` did before 2.0, in its two new halves: mint the prospective
+    owner key on the control plane (`hive-mind owner mint`; --force, since the old flag overwrote silently),
+    then propose its public key on the data plane, device-signed."""
+    minted = _run(home, "owner", "mint", "--force", **kw)
+    pub = next(l.split("pub:", 1)[1].strip() for l in minted.stdout.splitlines() if "pub:" in l)
+    return _run(home, "owner", "propose-election", "--pub", pub, now=now, check=check, **kw)
+
+
 def _gov(home):
-    loader = importlib.machinery.SourceFileLoader("hvmod_succ", str(PROJECT / "hv"))
-    m = importlib.util.module_from_spec(importlib.util.spec_from_loader("hvmod_succ", loader))
-    loader.exec_module(m)
+    m = _planes.load_hv(home, "hvmod_succ")      # #160: this hive's pin and keys, not whatever HIVE_HOME is
     import merkle
     return m, m._governance_state(merkle.read_all_entries(str(home / "journal")))
 
@@ -65,7 +74,7 @@ def _sync(src, dst):
         byday[ts[:10]].append(line)
     for day, lines in byday.items():
         (dst_j / f"{day}.jsonl").write_text("\n".join(lines) + "\n")
-    _run(dst, "rebuild")
+    _run(dst, "doctor", "rebuild")
 
 
 def _claim_mint_pub(home, node_id):
@@ -84,7 +93,7 @@ def test_export_import_round_trip_resumes_same_owner(tmp_path):
     keyfile = tmp_path / "owner.key"
     _run(home, "owner", "export", "--out", str(keyfile))
     assert keyfile.exists()
-    (home / ".owner-key").unlink()                          # lose the owner device's key
+    _keys.key_path(home, "owner-key.sealed").unlink()                          # lose the owner device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout
     _run(home, "owner", "import", str(keyfile))             # restore on (this stand-in for) a new device
     show = _run(home, "owner", "show").stdout
@@ -109,6 +118,7 @@ def test_passphrase_seal_unseal_roundtrip_and_wrong_pass():
     loader = importlib.machinery.SourceFileLoader("hvmod_crypto", str(PROJECT / "hv"))
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader("hvmod_crypto", loader))
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     seed = os.urandom(32)
     env = m._owner_seal(seed, "correct horse")
     assert env["enc"] == "scrypt-chacha20poly1305-v2"
@@ -147,7 +157,7 @@ def test_hive_escrow_restore_round_trip(tmp_path):
     import merkle
     entries = merkle.read_all_entries(str(home / "journal"))
     assert any(e.get("payload", {}).get("action") == "owner-escrow" for e in entries)
-    (home / ".owner-key").unlink()                                      # lose the device's key
+    _keys.key_path(home, "owner-key.sealed").unlink()                                      # lose the device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "recovered from the hive" in out
@@ -257,6 +267,7 @@ def _owner_id_for_pub_b64(tmp_path, pub_b64):
     loader = importlib.machinery.SourceFileLoader("hvmod_oid", str(PROJECT / "hv"))
     m = importlib.util.module_from_spec(importlib.util.spec_from_loader("hvmod_oid", loader))
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m._owner_id_for_pub(base64.b64decode(pub_b64))
 
 
@@ -291,14 +302,14 @@ def test_revoke_escrow_tombstones_then_reescrow_restores(tmp_path):
     _run(home, "owner", "revoke-escrow", "all")
     _, gov = _gov(home)
     assert gov["escrows"] == []
-    (home / ".owner-key").unlink()
+    _keys.key_path(home, "owner-key.sealed").unlink()
     out = _run(home, "owner", "restore", passphrase="correct-horse-battery").stdout
     assert "No (live) owner-escrow" in out
     # Recover the key (from the per-home stash, see _run) and re-escrow with a fresh passphrase.
-    stash = home / "stash" / ".owner-key"
-    (home / ".owner-key").write_text(stash.read_text())
+    stash = home / "stash" / ".owner-key.sealed"                    # the stash holds the sealed form (3b)
+    _keys.key_path(home, "owner-key.sealed").write_text(stash.read_text())
     _run(home, "owner", "escrow", passphrase="brand-new-passphrase")
-    (home / ".owner-key").unlink()
+    _keys.key_path(home, "owner-key.sealed").unlink()
     out2 = _run(home, "owner", "restore", passphrase="brand-new-passphrase").stdout
     assert "recovered from the hive" in out2
 
@@ -314,7 +325,7 @@ def test_phase2_backcompat_plain_hive_unchanged(tmp_path):
 
 # ── Phase 3: quorum election + dead-man switch ────────────────────────────────────────────────────
 # Elections are DEVICE-signed (authority = hive membership, not the owner key), so these tests mint a
-# REAL device key per home (`hv key init`) instead of overriding HIVE_NODE_ID — an unsigned election
+# REAL device key per home (`hv config identity init`) instead of overriding HIVE_NODE_ID — an unsigned election
 # entry is dropped by `_governance_state`. The dead-man clock is driven by $HIVE_NOW (the `now=` arg):
 # governance entries are dated by it, and a proposal carries that instant as its `basis_ts`.
 
@@ -343,7 +354,7 @@ def _setup_quorum_hive(tmp_path, quorum_m=2, dead_man_days=30, admit_day="2026-0
     `admit_day` (the admits/config), so an election basis_ts more than dead_man_days later is 'dark'."""
     a, b, c = tmp_path / "A", tmp_path / "B", tmp_path / "C"
     for h in (a, b, c):
-        _run(h, "key", "init")
+        _run(h, "config", "identity", "init")
     db, dc = _device_id(b), _device_id(c)
     now = f"{admit_day}T00:00:00.000+00:00"
     _run(a, "owner", "init", now=now)
@@ -360,7 +371,7 @@ def test_quorum_elects_owner_after_dead_man_inactivity(tmp_path):
     owner0 = gov0["owner_id"]
     _merge_into(b, a)                                        # B learns genesis + admits + config
     basis = "2026-08-15T00:00:00.000+00:00"                  # ~45 days of owner silence (> 30)
-    _run(b, "owner", "propose-election", "--mint", now=basis)
+    _propose_minted(b, now=basis)
     pid = _election_pids(b)[0]
     _merge_into(c, a, b)
     _run(c, "owner", "vote", pid, now=basis)                 # 2nd endorser → quorum
@@ -379,7 +390,7 @@ def test_live_owner_heartbeating_is_not_unseated(tmp_path):
     _run(a, "owner", "heartbeat", now="2026-08-10T00:00:00.000+00:00")   # 5 days before the basis
     _merge_into(b, a)
     basis = "2026-08-15T00:00:00.000+00:00"
-    _run(b, "owner", "propose-election", "--mint", now=basis)
+    _propose_minted(b, now=basis)
     pid = _election_pids(b)[0]
     _merge_into(c, a, b)
     _run(c, "owner", "vote", pid, now=basis)
@@ -394,10 +405,10 @@ def test_below_quorum_and_non_admitted_do_not_elect(tmp_path):
     _, gov0 = _gov(a)
     owner0 = gov0["owner_id"]
     d = tmp_path / "D"
-    _run(d, "key", "init")                                   # D is never admitted
+    _run(d, "config", "identity", "init")                                   # D is never admitted
     _merge_into(b, a)
     basis = "2026-08-15T00:00:00.000+00:00"
-    _run(b, "owner", "propose-election", "--mint", now=basis)
+    _propose_minted(b, now=basis)
     pid = _election_pids(b)[0]
     _merge_into(a, b)                                        # only the proposer endorses (1/2)
     _, gov1 = _gov(a)
@@ -411,8 +422,8 @@ def test_racing_elections_resolve_to_one_deterministic_winner(tmp_path):
     a, b, c = _setup_quorum_hive(tmp_path, quorum_m=2)
     _merge_into(b, a)
     _merge_into(c, a)
-    _run(b, "owner", "propose-election", "--mint", now="2026-08-15T00:00:00.000+00:00")
-    _run(c, "owner", "propose-election", "--mint", now="2026-08-15T00:00:01.000+00:00")
+    _propose_minted(b, now="2026-08-15T00:00:00.000+00:00")
+    _propose_minted(c, now="2026-08-15T00:00:01.000+00:00")
     _merge_into(b, c)
     _merge_into(c, b)
     pids = sorted(set(_election_pids(b)))
@@ -432,7 +443,7 @@ def test_elected_owner_governs_after_election(tmp_path):
     a, b, c = _setup_quorum_hive(tmp_path, quorum_m=2)
     _merge_into(b, a)
     basis = "2026-08-15T00:00:00.000+00:00"
-    _run(b, "owner", "propose-election", "--mint", now=basis)   # B mints the new owner key (held on B)
+    _propose_minted(b, now=basis)   # B mints the new owner key (held on B)
     pid = _election_pids(b)[0]
     _merge_into(c, a, b)
     _run(c, "owner", "vote", pid, now=basis)
@@ -449,8 +460,8 @@ def test_elected_owner_governs_after_election(tmp_path):
 
 def test_quorum_off_is_backcompat(tmp_path):
     a, b = tmp_path / "A", tmp_path / "B"
-    _run(a, "key", "init")
-    _run(b, "key", "init")
+    _run(a, "config", "identity", "init")
+    _run(b, "config", "identity", "init")
     db = _device_id(b)
     _run(a, "owner", "init")
     _run(a, "group", "admit", db, "--principal", "bob")
@@ -458,8 +469,7 @@ def test_quorum_off_is_backcompat(tmp_path):
     owner0 = gov0["owner_id"]
     assert gov0["config"]["quorum_m"] == 0 and gov0["elections"] == []   # defaults: elections OFF
     _merge_into(b, a)
-    out = _run(b, "owner", "propose-election", "--mint",
-               now="2027-01-01T00:00:00.000+00:00", check=False).stdout
+    out = _propose_minted(b, now="2027-01-01T00:00:00.000+00:00", check=False).stdout
     assert "OFF" in out or "quorum_m=0" in out                # proposing is refused while OFF
     _merge_into(a, b)
     _, gov = _gov(a)

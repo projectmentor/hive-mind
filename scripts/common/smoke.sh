@@ -19,10 +19,12 @@ HV="$PROJECT/hv"
 QUIET=0
 [ "${1:-}" = "-q" ] && QUIET=1
 
-# Isolated sandbox; cleaned up on exit.
-SANDBOX="$(mktemp -d)"
+# Isolated sandbox; cleaned up on exit. Its own HOME and identity stash too (#170).
+SANDBOX="$(mktemp -d)"; ISO="$(mktemp -d)"
 export HIVE_HOME="$SANDBOX"
-trap 'rm -rf "$SANDBOX"' EXIT
+trap 'rm -rf "$SANDBOX" "$ISO"' EXIT
+. "$PROJECT/scripts/common/_smoke_isolate.sh"
+smoke_isolate "$ISO"
 
 pass=0; fail=0
 if [ -t 1 ]; then G=$'\033[32m'; R=$'\033[31m'; B=$'\033[1m'; N=$'\033[0m'; else G=""; R=""; B=""; N=""; fi
@@ -69,7 +71,14 @@ fi
 # ── decide + supersede ──────────────────────────────────────────────────────
 sect "decide + supersede"
 "$HV" decide "Use Sonnet for coding" --rationale cost >/dev/null
-"$HV" decide "Use Opus only for architecture" --rationale quality --supersedes 1 >/dev/null
+# 2.0 refuses local ids (#59): pass the first decision's sid.
+FIRST_DEC="$(py <<'PY'
+import os,sqlite3
+c=sqlite3.connect(os.path.join(os.environ["HIVE_HOME"],"store.db"))
+print(c.execute("SELECT sid FROM journal_index WHERE kind='decision' ORDER BY node_id, seq LIMIT 1").fetchone()[0])
+PY
+)"
+"$HV" decide "Use Opus only for architecture" --rationale quality --supersedes "$FIRST_DEC" >/dev/null
 ACTIVE="$(py <<'PY'
 import os,sqlite3
 c=sqlite3.connect(os.path.join(os.environ["HIVE_HOME"],"store.db"))
@@ -81,7 +90,13 @@ assert_eq "superseded decision is no longer active" "$ACTIVE" "1"
 # ── entity add + link are journaled ─────────────────────────────────────────
 sect "entity add + link (journal-first)"
 "$HV" entity add --name Sam --type person --attr '{"role":"engineer"}' >/dev/null
-"$HV" entity link --name Sam --fact-id 1 --confidence 0.9 >/dev/null
+FIRST_FACT="$(py <<'PY'
+import os,sqlite3
+c=sqlite3.connect(os.path.join(os.environ["HIVE_HOME"],"store.db"))
+print(c.execute("SELECT sid FROM journal_index WHERE kind='fact' ORDER BY node_id, seq LIMIT 1").fetchone()[0])
+PY
+)"
+"$HV" entity link --name Sam --fact-id "$FIRST_FACT" --confidence 0.9 >/dev/null
 TYPES="$(py <<'PY'
 import os,json,glob
 types=set()
@@ -93,7 +108,7 @@ print(",".join(sorted(types)))
 PY
 )"
 assert_contains "entity add writes a journal entry"  "$TYPES" "entity"
-assert_contains "entity link writes a journal entry" "$TYPES" "entity_fact"
+assert_contains "entity link writes a journal entry" "$TYPES" "link"   # a `link` entry since 1.19 (was entity_fact)
 
 # ── journal format + hash chain ─────────────────────────────────────────────
 sect "journal format + hash chain"
@@ -129,7 +144,7 @@ assert_eq "journal_mode is WAL" "$MODE" "wal"
 
 # ── Merkle ──────────────────────────────────────────────────────────────────
 sect "Merkle index"
-MROOT="$("$HV" merkle | awk '/^Root:/{print $2}')"
+MROOT="$("$HV" doctor merkle | awk '/^Root:/{print $2}')"
 case "$MROOT" in
   sha256:genesis) no "Merkle root is genesis (expected real hash over entries)";;
   sha256:?*)      ok "Merkle root computed over journal ($MROOT)";;
@@ -140,7 +155,7 @@ esac
 sect "rebuild round-trip (SQLite is derived)"
 BEFORE="$("$HV" stats | grep -E 'Facts:|Decisions:|Entities:')"
 rm -f "$SANDBOX"/store.db*            # nuke the derived index entirely
-"$HV" rebuild >/dev/null
+"$HV" doctor rebuild >/dev/null
 AFTER="$("$HV" stats | grep -E 'Facts:|Decisions:|Entities:')"
 assert_eq "counts identical after rebuild from journal" "$AFTER" "$BEFORE"
 assert_contains "FTS index survives rebuild" "$("$HV" search parallel)" "parallel delegation"

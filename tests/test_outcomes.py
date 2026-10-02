@@ -38,15 +38,15 @@ def _outcome(hv, dev, fact, decision, ts, polarity=1, channel=None, source="manu
 
 # ── CLI surface ──────────────────────────────────────────────────────────────────────────────────
 
-def test_outcome_of_ref_and_id_forms_emit_fact_plus_link(hive):
+def test_outcome_of_ref_and_sid_forms_emit_fact_plus_link(hive):
     hive.run("decide", "ship on friday", "--rationale", "r")
     d = _dec(hive, "ship on friday")
     r1 = hive.run("remember", "CI green after the friday ship", "--source", "alice", "--outcome-of", d["ref"])
     assert "↗ outcome (+1) of decision" in r1.stdout
     r2 = hive.run("remember", "customers were happy after the friday ship", "--source", "bob",
-                  "--outcome-of", f"d{d['id']}", "--polarity", "1")
+                  "--outcome-of", hive.sid(d["id"], "decision"), "--polarity", "1")
     r3 = hive.run("remember", "load stayed flat after the friday ship", "--source", "carol",
-                  "--outcome-of", str(d["id"]))              # bare integer = decision id here
+                  "--outcome-of", hive.sid(d["id"], "decision"))   # 2.0: sid or ref, never a local id
     assert r2.returncode == 0 and r3.returncode == 0
     links = [e for e in hive.entries() if e["type"] == "link"]
     assert len(links) == 3 and all(e["payload"]["kind"] == "outcome-of" for e in links)
@@ -203,8 +203,8 @@ def test_two_node_differential_outcome_columns(tmp_path, monkeypatch):
 
 
 def test_search_json_rows_carry_tag_list_for_every_kind(hive):
-    """#77: `tag_list` is a real list on fact, decision and idea rows; `tags` keeps its string form
-    until 2.0 so existing consumers that decode it keep working."""
+    """#77: `tags` is a real list on fact, decision and idea rows since 2.0 (it was the stored JSON string
+    through 1.x), and `tag_list` stays the same list for consumers that moved to it in 1.21."""
     hive.run("remember", "the payments api paginates at 100", "--tags", "api,payments")
     hive.run("decide", "cache the payments api", "--rationale", "r", "--tags", "api,cache")
     hive.run("propose", "the payments api throttles at night", "--tags", "api,hypothesis")
@@ -216,4 +216,4 @@ def test_search_json_rows_carry_tag_list_for_every_kind(hive):
     assert set(by_kind) == {"fact", "decision", "idea"}
     for kind, r in by_kind.items():
         assert isinstance(r["tag_list"], list) and "api" in r["tag_list"], kind
-        assert isinstance(r["tags"], str) and json.loads(r["tags"]) == r["tag_list"], kind
+        assert isinstance(r["tags"], list) and r["tags"] == r["tag_list"], kind

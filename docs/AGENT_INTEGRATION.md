@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 1.28`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 2.0`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -53,7 +53,11 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | `hv remember "<outcome>" --source <you> --outcome-of <decision sid> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
 | `hv decide "<decision>" --rationale "<why>" --informed <sid>… --source <you>` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
 | `hv propose "<hypothesis>" --tags a,b --source <you>` | Record an idea — it can earn confidence only from others' evidence, never from you *(1.20)* |
-| `hv retract <sid> [--owner]` | Negative evidence / owner-forget (`--owner` is decisive and, once an owner exists, requires + applies the owner signature) |
+| `hv remember "<observation>" --supports <sid>` or `--contradicts <sid>` | Evidence for or against a fact or an idea. Only another identity's observation counts *(1.21)* |
+| `hv remember "<note>" --extends <sid>` | A note that builds on a fact, idea, or decision. It is a relationship, not evidence *(1.22)* |
+| `hv decide --revoke <sid> --rationale "<why>" --source <you>` | Withdraw a decision that was wrong and has no replacement. Read the confirmation: "NOT in effect" means the owner, or the device that wrote it, must run it again *(1.24)* |
+| `hive-mind unforget <sid> --reason "<why>"` | Owner only. Undo an owner-forget. Not for agent adapters, and not on MCP *(1.24)* |
+| `hv retract <sid>` | Negative evidence. The owner forget, `hive-mind retract <sid> --owner`, is decisive and owner-signed, and runs on the owner's control plane (2.0) |
 | `hv nudge --event=<E> [--session=<id>] [--cwd=<dir>]` | Emit a save/audit hint or a startup digest (reads recent text on **stdin**, prints a terse hint to **stdout**, or nothing) |
 | `hv audit [--depth light\|normal\|deep] [--format json] [--session=<id>]` | Surface redundant / obsolete / missing facts |
 | `hv telemetry record --event=start\|end --agent=<you> --identity=<instance> --session=<id> [--cwd=<dir>]` | **(optional, since 1.1)** record session observability into the LOCAL telemetry lane |
@@ -85,6 +89,8 @@ call is fixed; you provide the plumbing (where the text comes from, where the ou
    echoes). Then route by what happened:
    - a **decision** → `hv decide "<decision>" --rationale "<why>" --informed <sid> [<sid>…] --source <you>`,
      naming the entries you searched and relied on (their `sid`, `h:…`, from `hv search`);
+   - a **decision that was wrong and has no replacement** → `hv decide --revoke <sid> --rationale "<why>" --source <you>` *(1.24)*.
+     Read the confirmation. "NOT in effect" means the owner, or the device that wrote the decision, must run it again;
    - the **result of acting on a recorded decision** → `hv remember "<what happened>"
      --outcome-of <decision sid> --polarity 1|0|-1`. Only observed results count toward the
      decision's outcome score; if it is your own assessment rather than an observation, add
@@ -193,7 +199,7 @@ Your adapter **must**:
 - **Use a stable, distinct `--source`.** So independent corroboration across agents works
   (e.g. `claude-code`, `claude-ai`, `hermes:...`). Two agents agreeing must look like two sources.
   `--source` is a human label that distinguishes apps/agents *on one device*; the device itself is
-  identified cryptographically (an Ed25519 key — see `hv key` and INTERNALS "Device identity"), and
+  identified cryptographically (an Ed25519 key — see `hv config identity` and INTERNALS "Device identity"), and
   entries are signed under it. You set the label; you do not get to assert which device you are.
 
 ---
@@ -235,12 +241,48 @@ The contract is **SemVer (`MAJOR.MINOR`)**, reported by `hv version`:
   through a migration window; §0 fires a loud re-integrate nudge; and — because every adapter call
   is best-effort and `exit 0` (§4) — an un-migrated adapter **degrades gracefully** (its nudges
   silently no-op) rather than crashing. Migrate to the new major within the window.
+- **The 2.0 amendment: owner-only commands do not get working shims** (public #136, S6). 2.0 moves every
+  command that reads the owner seed, writes owner-key material or owner-signs off `hv`, onto the control
+  plane, `hive-mind`. For those commands only, `hv` does not keep a working shim, because a working shim
+  would keep an owner-signing path in `hv` and undo the split (S2). Instead, through the 2.x line, it
+  prints the exact `hive-mind` command to run — this invocation's arguments included — and **exits 2**,
+  acting on nothing. Exit 0 would let a script believe the old command worked. The pointers are removed at
+  3.0. **No adapter calls an owner-only command**: no MCP or Hermes tool ever did. The adapter-visible
+  breaks this major does make are on the data plane, promised for it since 1.x, and listed in the `2.0`
+  entry below: local ids refused, `tags` a list, and no `$HERMES_AGENT` source fallback. One visible
+  change is not a pointer: a link written
+  through `hv` as source `manual` on the owner device is now device-signed. The owner-signed form is the
+  same verb through `hive-mind` (decision `h:34cc1dbcd3`). The four 1.x aliases promised for removal at
+  this major, `hv rebuild`, `hv merkle`, `hv key` and `hv doctor wire-agent`, point the same way, at the
+  `hv` command that replaced each (`hv doctor rebuild`, `hv doctor merkle`, `hv config identity`,
+  `hv wire claude`), and exit 2 (decision `h:af137f9421`). No adapter calls one.
 
 This is what makes future breaking changes safe: additive-within-major keeps old adapters running,
 the deprecation window + graceful degradation prevent hard breakage, and §0 tells each agent exactly
 when it must re-wire.
 
+**Reserved names.** Every bare name core writes or reads in the journal (entry types, link kinds,
+governance actions, config keys, channels and the rest) is listed in [`NAMESPACES.md`](NAMESPACES.md),
+generated from `vocabulary.py`, and a name anything else adds takes a prefix.
+
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `2.0` — **the split: `hv` is the agent data plane, `hive-mind` the owner/operator control plane** (public
+  #136). **Re-integrate (§0).** Three adapter-visible breaks, each promised for this major: (1) a bare local
+  id (`118`, `d17`, `i5`) is refused on every flag and MCP or Hermes input that takes a reference; pass the
+  `h:` id or the `node_id:seq` ref that `hv search` shows (#59, #64), and MCP `hive_entity`'s `fact_id` is a
+  `str`; (2) `tags` in `hv search --format json` is a JSON list, and `tag_list` stays (#77); (3)
+  `$HERMES_AGENT` no longer supplies a source, so pass `--source` on every write, or it records `manual`,
+  which means a person (#119). Every other verb, flag and output an adapter calls is unchanged. **Pointers,
+  not shims:** each command that owner-signs moved to `hive-mind` and, run on `hv`, names the `hive-mind`
+  form and exits 2, as do the removed 1.x aliases `hv rebuild`, `hv merkle`, `hv key` and `hv doctor
+  wire-agent` (the amendment above), kept through 2.x; no adapter called any of them. **Removed:** the
+  `sync_daemon.py` shim, the June-era migrations, the internal shims and the pre-1.12 hook names.
+  **Operators:** private keys move out of the checkout into a 0700 key directory and the owner key is
+  sealed at rest (`hive-mind doctor --fix`, `hive-mind owner seal`); an owned hive whose `forget_writers`
+  is still open fails `forget-authz`, and `hive-mind update` ends with ACTION REQUIRED, until the owner runs
+  `hive-mind doctor --fix`; a build without its bundled crypto refuses to run. **Version skew:** no journal
+  or wire change (S7), so a mixed 1.x/2.0 fleet converges. On a 2.0 node, `fleet-contract` lists every 1.x
+  peer as behind, which is intended: upgrade it.
 - `1.28` — **a new hive starts closed** (#135 part 1). Nothing an adapter calls changes: no verb, flag or
   output format moves. `hv owner init` now re-issues every forget that was in effect only because it predates
   the genesis owner as an ordinary owner-signed `retract`, then sets `forget_writers=owner`, so a hive born

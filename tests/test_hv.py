@@ -25,13 +25,14 @@ def _hash(entry):
 
 import os  # noqa: E402
 import subprocess  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _as(home, node_id, *args):
     """Run hv against `home` under a specific device identity (HIVE_NODE_ID) — for writing the
     same content from DISTINCT devices, which (post D0-v2) is what earns full corroboration."""
     env = dict(os.environ, HIVE_HOME=str(home), HIVE_NODE_ID=node_id)
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env,
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return r
@@ -56,7 +57,7 @@ def test_stats_excludes_forgotten_from_average(hive):
     import re
     hive.run("remember", "fact alpha is true", "--source", "alice")
     out = hive.run("remember", "fact beta is true", "--source", "bob").stdout
-    fid = re.search(r"#(\d+)", out).group(1)
+    fid = re.search(r"(h:[0-9a-f]{10})", out).group(1)   # 2.0: the sid, never the local id
     hive.run("retract", fid, "--owner")          # -> FORGET_FLOOR (-1.0)
     s = hive.run("stats").stdout
     assert "1 live" in s and "1 forgotten" in s, s
@@ -152,7 +153,7 @@ def test_confidence_is_pure_projection_across_rebuild(hive):
     before = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
     )[0]["confidence"]
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
     after = hive.query(
         "SELECT confidence FROM facts WHERE content=?", ("stable claim",)
     )[0]["confidence"]
@@ -199,8 +200,8 @@ def test_peer_retract_drives_negative(hive):
     # 1 corroborator, 2 distinct-DEVICE peer retractors → net = 1 - 2 = -1 → -0.45 (rejected).
     hive.run("remember", "claim to reject", "--source", "alice")
     fid = _fid(hive, "claim to reject")
-    _as(hive.home, "dev-b", "retract", str(fid), "--source", "bob")
-    _as(hive.home, "dev-c", "retract", str(fid), "--source", "carol")
+    _as(hive.home, "dev-b", "retract", hive.sid(fid), "--source", "bob")
+    _as(hive.home, "dev-c", "retract", hive.sid(fid), "--source", "carol")
     conf = hive.query("SELECT confidence FROM facts WHERE content=?", ("claim to reject",))[0]["confidence"]
     assert abs(conf - (-0.45)) < 1e-6
 
@@ -210,7 +211,7 @@ def test_owner_retract_forgets(hive):
     hive.run("remember", "owner forget me", "--source", "alice")
     hive.run("remember", "owner forget me", "--source", "bob")     # corroborated → 0.675
     fid = _fid(hive, "owner forget me")
-    hive.run("retract", str(fid), "--owner")
+    hive.run("retract", hive.sid(fid), "--owner")
     conf = hive.query("SELECT confidence FROM facts WHERE content=?", ("owner forget me",))[0]["confidence"]
     assert abs(conf - (-1.0)) < 1e-9
 
@@ -218,8 +219,8 @@ def test_owner_retract_forgets(hive):
 def test_rejected_hidden_from_default_search(hive):
     hive.run("remember", "rejected thing zzz", "--source", "alice")
     fid = _fid(hive, "rejected thing zzz")
-    hive.run("retract", str(fid), "--source", "bob")
-    hive.run("retract", str(fid), "--source", "carol")            # net -1 → -0.45
+    hive.run("retract", hive.sid(fid), "--source", "bob")
+    hive.run("retract", hive.sid(fid), "--source", "carol")            # net -1 → -0.45
     assert "rejected thing zzz" not in hive.run("search", "rejected thing zzz").stdout
     assert "rejected thing zzz" in hive.run("search", "rejected thing zzz", "--min-confidence=-1").stdout
 
@@ -227,10 +228,10 @@ def test_rejected_hidden_from_default_search(hive):
 def test_retract_is_pure_projection_across_rebuild(hive):
     hive.run("remember", "rebuild retract", "--source", "alice")
     fid = _fid(hive, "rebuild retract")
-    _as(hive.home, "dev-b", "retract", str(fid), "--source", "bob")
-    _as(hive.home, "dev-c", "retract", str(fid), "--source", "carol")
+    _as(hive.home, "dev-b", "retract", hive.sid(fid), "--source", "bob")
+    _as(hive.home, "dev-c", "retract", hive.sid(fid), "--source", "carol")
     before = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
     after = hive.query("SELECT confidence FROM facts WHERE content=?", ("rebuild retract",))[0]["confidence"]
     assert abs(before - after) < 1e-9 and abs(before - (-0.45)) < 1e-6
 
@@ -259,6 +260,7 @@ def _loadhv():
     loader = importlib.machinery.SourceFileLoader("hvmod", str(PROJECT / "hv"))
     spec = importlib.util.spec_from_loader("hvmod", loader)
     m = importlib.util.module_from_spec(spec); loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 
@@ -266,7 +268,7 @@ def test_contested_flag_and_marker(hive):
     # Same claim with BOTH a corroborator and a (distinct) retractor → contested + net 0.
     hive.run("remember", "contested claim", "--source", "alice")
     fid = _fid(hive, "contested claim")
-    hive.run("retract", str(fid), "--source", "bob")
+    hive.run("retract", hive.sid(fid), "--source", "bob")
     row = hive.query("SELECT confidence, contested FROM facts WHERE content=?", ("contested claim",))[0]
     assert row["contested"] == 1
     assert abs(row["confidence"] - 0.0) < 1e-9                 # base net 1-1 = 0
@@ -284,7 +286,7 @@ def test_decay_function():
 
 def test_decide_supersede(hive):
     hive.run("decide", "old decision")
-    hive.run("decide", "new decision", "--supersedes", "1")
+    hive.run("decide", "new decision", "--supersedes", hive.sid(1, "decision"))
     assert hive.query("SELECT superseded_by FROM decisions WHERE id=1")[0]["superseded_by"] is not None
     assert hive.query("SELECT count(*) c FROM decisions WHERE superseded_by IS NULL")[0]["c"] == 1
 
@@ -292,7 +294,7 @@ def test_decide_supersede(hive):
 def test_remember_resolves_links_and_soft_retracts(hive):
     hive.run("remember", "issue Z is open", "--source", "alice")
     old = _fid(hive, "issue Z is open")
-    out = hive.run("remember", "issue Z is fixed", "--resolves", str(old), "--source", "alice").stdout
+    out = hive.run("remember", "issue Z is fixed", "--resolves", hive.sid(old), "--source", "alice").stdout
     new = _fid(hive, "issue Z is fixed")
     # link recorded on the NEW row, pointing at the resolved fact
     assert hive.query("SELECT resolves FROM facts WHERE id=?", (new,))[0]["resolves"] == old
@@ -309,9 +311,9 @@ def test_remember_resolves_links_and_soft_retracts(hive):
 
 def test_remember_resolves_survives_rebuild(hive):
     hive.run("remember", "host parked", "--source", "alice")
-    hive.run("remember", "host live", "--resolves", str(_fid(hive, "host parked")), "--source", "alice")
+    hive.run("remember", "host live", "--resolves", hive.sid(_fid(hive, "host parked")), "--source", "alice")
     before = hive.query("SELECT confidence FROM facts WHERE content=?", ("host parked",))[0]["confidence"]
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
     new_id, old_id = _fid(hive, "host live"), _fid(hive, "host parked")
     assert hive.query("SELECT resolves FROM facts WHERE id=?", (new_id,))[0]["resolves"] == old_id
     after = hive.query("SELECT confidence FROM facts WHERE content=?", ("host parked",))[0]["confidence"]
@@ -319,16 +321,16 @@ def test_remember_resolves_survives_rebuild(hive):
 
 
 def test_remember_resolves_missing_target_is_a_warning(hive):
-    out = hive.run("remember", "standalone fact", "--resolves", "999", "--source", "alice").stdout
+    out = hive.run("remember", "standalone fact", "--resolves", "h:0000000000", "--source", "alice").stdout
     assert _fid(hive, "standalone fact")            # the fact is still written
-    assert "no fact #999" in out.lower()
+    assert "no fact h:0000000000" in out.lower()
     assert hive.query("SELECT resolves FROM facts WHERE content=?", ("standalone fact",))[0]["resolves"] is None
 
 
 def test_entity_add_and_link_are_journaled(hive):
     hive.run("remember", "a linkable fact")
     hive.run("entity", "add", "--name", "Acme", "--type", "project")
-    hive.run("entity", "link", "--name", "Acme", "--fact-id", "1", "--confidence", "0.9")
+    hive.run("entity", "link", "--name", "Acme", "--fact-id", hive.sid(1), "--confidence", "0.9")
 
     types = [e["type"] for e in hive.entries()]
     assert "entity" in types, "entity add must append a journal entry"
@@ -374,7 +376,7 @@ def test_rebuild_roundtrip(hive):
     hive.run("remember", "rt fact two")
     hive.run("decide", "rt decision")
     hive.run("entity", "add", "--name", "RtEntity", "--type", "concept")
-    hive.run("entity", "link", "--name", "RtEntity", "--fact-id", "1")
+    hive.run("entity", "link", "--name", "RtEntity", "--fact-id", hive.sid(1))
 
     before = {
         "facts": hive.query("SELECT count(*) c FROM facts")[0]["c"],
@@ -383,7 +385,7 @@ def test_rebuild_roundtrip(hive):
         "links": hive.query("SELECT count(*) c FROM entity_facts")[0]["c"],
     }
 
-    hive.run("rebuild")
+    hive.run("doctor", "rebuild")
 
     after = {
         "facts": hive.query("SELECT count(*) c FROM facts")[0]["c"],
@@ -485,7 +487,7 @@ def test_reconcile_flags_legacy_direct_hooks_as_stale():
     }
 
 
-def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
+def test_wiring_the_claude_cell_migrates_legacy_and_preserves(tmp_path, monkeypatch):
     hv = _loadhv()
     base = hv._CLAUDE_HOOKS_BASE
     cdir = tmp_path / ".claude"; cdir.mkdir()
@@ -500,7 +502,7 @@ def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
         "UserPromptSubmit": [{"hooks": [own, {"type": "command", "command": f"{base}/nudge_hook.sh user-prompt"}]}],
     }}, indent=2))
 
-    res = hv._wire_claude_hooks(write=True)
+    res = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert res["applicable"] and res["wrote"]
     assert len(res["missing"]) == 4 and len(res["stale"]) == 4
 
@@ -518,14 +520,14 @@ def test_wire_claude_hooks_migrates_legacy_and_preserves(tmp_path, monkeypatch):
     assert (cdir / "skills" / "hive-memory").is_symlink()
 
     # Idempotent: a second pass changes nothing.
-    res2 = hv._wire_claude_hooks(write=True)
+    res2 = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert not res2["wrote"] and res2["missing"] == [] and res2["stale"] == []
 
 
-def test_wire_claude_hooks_not_applicable_without_claude(tmp_path, monkeypatch):
+def test_wiring_the_claude_cell_is_not_applicable_without_claude(tmp_path, monkeypatch):
     hv = _loadhv()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-claude-here"))
-    res = hv._wire_claude_hooks(write=True)
+    res = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert res["applicable"] is False and res["wrote"] is False
 
 
@@ -556,9 +558,9 @@ def test_is_daemon_cmdline_excludes_shells():
     assert g(["hv", "sync", "now"]) is False
 
 
-def test_is_salient_shim_is_the_admission_gate():
-    """`_is_salient` is kept as a back-compat alias of `_is_admissible` (1.19 rename): same
-    object, same verdicts. Load the extensionless script the way test_doc_sync does."""
+def test_the_1x_shims_are_gone():
+    """2.0 (#136) removed the internal back-compat names: `_is_salient` (renamed `_is_admissible` in 1.19)
+    and `_wire_claude_hooks` (the built-in Claude cell through `_wire_agent`, 1.13)."""
     import importlib.util
     from importlib.machinery import SourceFileLoader
     from pathlib import Path as _P
@@ -566,7 +568,5 @@ def test_is_salient_shim_is_the_admission_gate():
     spec = importlib.util.spec_from_loader("hv_cli_gate", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
-    assert mod._is_salient is mod._is_admissible
-    assert mod._is_admissible("The node-b deploy succeeded at commit abc123.")
-    assert not mod._is_admissible("hi there")
-    assert not mod._is_admissible("What now?")
+    assert not hasattr(mod, "_is_salient") and not hasattr(mod, "_wire_claude_hooks")
+    assert callable(mod._is_admissible) and callable(mod._wire_agent)

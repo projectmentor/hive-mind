@@ -10,6 +10,8 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _ids  # noqa: E402  (stable ids: 2.0 rejects local ids)
 
 PROJECT = Path(__file__).resolve().parent.parent
 HV = PROJECT / "hv"
@@ -18,7 +20,7 @@ HV = PROJECT / "hv"
 def run_hv(home, *args, stdin="", **env):
     e = dict(os.environ, HIVE_HOME=str(home))
     e.update({k: str(v) for k, v in env.items()})
-    return subprocess.run([sys.executable, str(HV), *args], input=stdin,
+    return subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], input=stdin,
                           env=e, capture_output=True, text=True)
 
 
@@ -125,7 +127,7 @@ def test_audit_flags_contravened(tmp_path):
 def test_audit_resolves_clears_contravened(tmp_path):
     run_hv(tmp_path, "remember", "the widget is broken", "--source", "alice")
     # --resolves soft-retracts #1, so nothing is left un-reconciled even though prose names it
-    run_hv(tmp_path, "remember", "the widget is healed, resolves #1", "--resolves", "1", "--source", "alice")
+    run_hv(tmp_path, "remember", "the widget is healed, resolves #1", "--resolves", _ids.sid(tmp_path, 1), "--source", "alice")
     data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
     assert not data["contravened"], "a --resolves'd correction must not be flagged"
 
@@ -135,7 +137,7 @@ def test_audit_skips_reconciled_referrer(tmp_path):
     # longer asserted, its dangling reference must not be flagged (a referrer must itself be live).
     run_hv(tmp_path, "remember", "alpha is broken", "--source", "alice")
     run_hv(tmp_path, "remember", "alpha fixed, resolves #1", "--source", "alice")
-    run_hv(tmp_path, "remember", "alpha status retired", "--resolves", "2", "--source", "alice")
+    run_hv(tmp_path, "remember", "alpha status retired", "--resolves", _ids.sid(tmp_path, 2), "--source", "alice")
     data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
     assert not any(x["id"] == 2 for x in data["contravened"]), \
         "a referrer that has itself been reconciled must not be flagged"
@@ -145,7 +147,7 @@ def test_audit_excludes_owner_forgotten_from_redundant(tmp_path):
     import re as _re
     run_hv(tmp_path, "remember", "the cache halves cold-start latency", "--source", "alice")
     out = run_hv(tmp_path, "remember", "the cache halves cold-start latency", "--source", "alice").stdout
-    fid = _re.search(r"#(\d+)", out).group(1)
+    fid = _re.search(r"(h:[0-9a-f]{10})", out).group(1)   # 2.0: the sid, never the local id
     # Before forgetting, it is flagged.
     data = json.loads(run_hv(tmp_path, "audit", "--format=json").stdout)
     assert any("cache halves" in x["content"] for x in data["redundant"])
@@ -179,7 +181,7 @@ def test_audit_flags_obsolete_decayed(tmp_path):
 
 def test_audit_flags_contested(tmp_path):
     out = run_hv(tmp_path, "remember", "redis is better than sqlite here", "--source", "alice")
-    m = re.search(r"#(\d+)", out.stdout)
+    m = re.search(r"(h:[0-9a-f]{10})", out.stdout)       # 2.0: the sid, never the local id
     assert m, out.stdout
     run_hv(tmp_path, "retract", m.group(1), "--source", "bob", "--reason", "disagree")
     r = run_hv(tmp_path, "audit", "--format=json")

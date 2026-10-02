@@ -22,13 +22,21 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import (_loadhv, _owned_hive, _fact, _decision, _link, _project, _entry, _conf)  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
+import _ids  # noqa: E402  (stable ids: 2.0 rejects local ids)
 
 
-def _owner_hive(tmp_path):
-    """A CLI hive whose device holds the owner key (like test_links.test_config_knob_bounds_via_cli)."""
+def _owner_hive(tmp_path, owner_links=False):
+    """A CLI hive whose device holds the owner key (like test_links.test_config_knob_bounds_via_cli).
+
+    `owner_links=True` writes the link verbs (remember, decide, entity) through `hive-mind`: since 2.0 that
+    is how a person acting as owner owner-signs a link (decision h:34cc1dbcd3). Through `hv` the same
+    verbs are device-signed."""
     def run(*args, check=True):
         env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_IDENTITY_STASH=str(tmp_path / "stash"))
-        r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+        script = (_planes.CTL if owner_links and args and args[0] in ("remember", "decide", "entity")
+                  else _planes.entry_for(args))
+        r = subprocess.run([sys.executable, str(script), *args], env=env, capture_output=True, text=True)
         if check:
             assert r.returncode == 0, r.stderr
         return r
@@ -45,11 +53,11 @@ def _owner_hive(tmp_path):
 # ── owner machine: only a PERSON's links are owner-signed (1.23, #114) ─────────────────────────
 
 def test_owner_machine_owner_signs_manual_links_and_they_are_hard(tmp_path):
-    run, entries = _owner_hive(tmp_path)
+    run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: a person acting as owner, via hive-mind
     run("remember", "issue Z is open")
-    run("remember", "issue Z is fixed", "--resolves", "1")
+    run("remember", "issue Z is fixed", "--resolves", _ids.sid(tmp_path, 1))
     run("decide", "plan A", "--rationale", "r")
-    run("decide", "plan B replaces A", "--rationale", "r", "--supersedes", "1")
+    run("decide", "plan B replaces A", "--rationale", "r", "--supersedes", _ids.sid(tmp_path, 1, "decision"))
     links = [e for e in entries() if e["type"] == "link"]
     assert sorted(l["payload"]["kind"] for l in links) == ["resolves", "supersedes"]
     for l in links:
@@ -102,7 +110,7 @@ def test_an_agent_on_the_owner_machine_writes_device_signed_links_of_all_eight_k
 
 
 def test_a_person_on_the_owner_machine_writes_owner_signed_links_of_all_eight_kinds(tmp_path):
-    run, entries = _owner_hive(tmp_path)
+    run, entries = _owner_hive(tmp_path, owner_links=True)            # 2.0: through hive-mind
     out = _all_eight(run, [])                                         # no --source: `manual`, a person
     links = [e for e in entries() if e["type"] == "link"]
     assert sorted({l["payload"]["kind"] for l in links}) == EIGHT
@@ -212,10 +220,15 @@ def test_fleet_contract_lists_behind_and_unverified_peers_and_is_empty_when_all_
     fc = hv._fleet_contract(gov, probed, {a["id"]: "1.18"})
     assert [d for d, _c in fc["behind"]] == sorted([a["id"], b["id"]]) and fc["unverified"] == [c["id"]] and fc["ok"] == []
     assert dict(fc["behind"])[b["id"]].startswith("unknown")
-    # everyone current and reachable → nothing to report (1.20 ≥ 1.19; 1.19 exactly is enough)
+    # everyone current and reachable → nothing to report. "Current" is this node's own MAJOR: at 2.0 the floor is
+    # 2.0, so a 1.x peer is behind, which the 2.0 release notes call intended (Fable on #172).
     probed[c["id"]] = ("10.0.0.3:9876", "in sync", "c")
-    fc = hv._fleet_contract(gov, probed, {a["id"]: "1.20", b["id"]: "1.19", c["id"]: "2.0"})
+    major = hv.CONTRACT_VERSION.split(".")[0]
+    fc = hv._fleet_contract(gov, probed, {a["id"]: hv.CONTRACT_VERSION, b["id"]: f"{major}.0", c["id"]: f"{major}.9"})
     assert fc["behind"] == [] and fc["unverified"] == [] and len(fc["ok"]) == 3
+    if major == "2":
+        fc = hv._fleet_contract(gov, probed, {a["id"]: "1.28", b["id"]: "2.0", c["id"]: "2.0"})
+        assert [d for d, _c in fc["behind"]] == [a["id"]], "a 1.x peer is behind a 2.0 node"
     # a purged device is not part of the fleet
     gov2 = dict(gov); gov2["purged"] = {c["id"]}
     assert hv._fleet_contract(gov2, {}, {})["unverified"] == sorted([a["id"], b["id"]])
@@ -233,7 +246,7 @@ def test_fleet_contract_lists_behind_and_unverified_peers_and_is_empty_when_all_
             pass                                       # a failing verdict exits non-zero; the JSON is printed first
     checks = {c_["name"]: c_ for c_ in json.loads(buf.getvalue())["checks"]}
     assert checks["fleet-contract"]["status"] == "warn"
-    assert "1 peer(s) below contract 1.19" in checks["fleet-contract"]["detail"]
+    assert f"1 peer(s) below contract {hv._fleet_floor()}" in checks["fleet-contract"]["detail"]
     assert "2 unverifiable" in checks["fleet-contract"]["detail"]
     daemon = (PROJECT / "hive_sync_daemon.py").read_text()
     assert daemon.count('"contract": hv.CONTRACT_VERSION') == 2                   # advertised on /hive/info and /sync/hello
@@ -277,7 +290,7 @@ import pytest              # noqa: E402
 def _as(tmp_path, node, *args, check=True):
     """Run `hv` as a given device (HIVE_NODE_ID) in one temp hive; no owner, so devices are principals."""
     env = dict(os.environ, HIVE_HOME=str(tmp_path), HIVE_NODE_ID=node)
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
     if check:
         assert r.returncode == 0, r.stderr
     return r
@@ -376,3 +389,17 @@ def test_extends_unknown_target_writes_nothing(tmp_path):
     r = _as(tmp_path, "nodeB", "remember", "builds on a ghost", "--extends", "h:0000000000", check=False)
     assert r.returncode == 1 and "--extends" in r.stderr
     assert len(_journal(tmp_path)) == n
+
+
+def test_the_fleet_floor_is_the_current_major_and_never_below_1_19(tmp_path, monkeypatch):
+    """2.0 (#136): fleet-contract warns below the current MAJOR, not below a fixed 1.19. While the contract is
+    still 1.x the floor stays 1.19 (where `link` entries became honoured); at 2.0 it becomes 2.0."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    for contract, floor in (("1.28", "1.19"), ("1.5", "1.19"), ("2.0", "2.0"), ("2.3", "2.0"), ("3.1", "3.0")):
+        monkeypatch.setattr(hv, "CONTRACT_VERSION", contract)
+        assert hv._fleet_floor() == floor, contract
+    monkeypatch.setattr(hv, "CONTRACT_VERSION", "2.0")
+    gov = {"admitted": {"k1:aaaaaaaaaaaaaaaa", "k1:bbbbbbbbbbbbbbbb"}, "purged": set()}
+    probed = {"k1:aaaaaaaaaaaaaaaa": "x", "k1:bbbbbbbbbbbbbbbb": "y"}
+    fc = hv._fleet_contract(gov, probed, {"k1:aaaaaaaaaaaaaaaa": "1.28", "k1:bbbbbbbbbbbbbbbb": "2.0"})
+    assert [d for d, _ in fc["behind"]] == ["k1:aaaaaaaaaaaaaaaa"] and [d for d, _ in fc["ok"]] == ["k1:bbbbbbbbbbbbbbbb"]

@@ -25,6 +25,31 @@ jobs:
       - name: Run offline test suite
         run: python3 -m pytest -q -n auto   # pytest-xdist: every core (the sign gate runs the same)
 
+  # The suite as it runs on a developer's machine (#160): HIVE_HOME exported to a live-looking hive with
+  # an owner, a genesis pin and keys. That hive is marked as a decoy, so the session guard in conftest.py
+  # fails the run unless every byte of it (journal, store, keys) is unchanged at the end.
+  test-exported-hive-home:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest pytest-xdist==3.8.0
+      - name: Make a decoy hive and export it
+        run: |
+          decoy="$RUNNER_TEMP/decoy-hive"
+          HIVE_HOME="$decoy" HIVE_IDENTITY_STASH="$RUNNER_TEMP/decoy-stash" python3 hv config identity init >/dev/null
+          # HIVE_OWNER_KEY_PASSPHRASE is the sealed owner key's unlock variable from 2.0 PR 3b (separate
+          # from HIVE_OWNER_PASSPHRASE, the export/escrow one); until 3b lands, owner init ignores it.
+          HIVE_HOME="$decoy" HIVE_IDENTITY_STASH="$RUNNER_TEMP/decoy-stash" HIVE_OWNER_KEY_PASSPHRASE=ci \
+            python3 hivemind_ctl.py owner init >/dev/null
+          echo "the test suite must leave this hive byte-identical" > "$decoy/.hive-test-decoy"
+          echo "HIVE_HOME=$decoy" >> "$GITHUB_ENV"
+      - name: Run offline test suite against it
+        run: python3 -m pytest -q -n auto
+
   # Android/Termux supervisor seam, exercised on an ordinary Linux runner (no phone,
   # no termux-services). `TERMUX_VERSION=1` forces the runit branch in _service.sh, so
   # we can validate kind detection + the rendered runit/Termux:Boot scripts without a

@@ -23,6 +23,7 @@ sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_genesis_pin import (HIVE_ID, T_BACKDATED, T_GENESIS, T_LATER,  # noqa: E402
                               _device_key, _fact, _gov, _owner_act, _owner_key)
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _node(tmp_path, monkeypatch, name):
@@ -34,6 +35,7 @@ def _node(tmp_path, monkeypatch, name):
     spec = importlib.util.spec_from_loader(loader.name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     m.JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
     return m
 

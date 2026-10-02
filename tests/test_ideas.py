@@ -20,6 +20,7 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import (_loadhv, _owned_hive, _fact, _link, _project, _entry, _device, _gov)  # noqa: E402
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _json(hive, *args):
@@ -68,7 +69,7 @@ def test_search_hides_raw_ideas_under_all_and_lists_them_under_kind_idea(hive):
     assert [r["kind"] for r in _json(hive, "macos", "--kind", "fact")] == ["fact"]
     assert _json(hive, "macos", "--kind", "decision") == []
     # the i<N> prefix resolves through the kind-checked ref parser (PR3)
-    r = hive.run("decide", "investigate disk io", "--informed", "i1")
+    r = hive.run("decide", "investigate disk io", "--informed", hive.sid(1, "idea"))
     assert "informed by 1 ref(s)" in r.stdout
     assert hive.run("decide", "nope", "--informed", "i9", check=False).returncode != 0
 
@@ -210,7 +211,7 @@ def _as(hive, node, *args, check=True):
     """Run `hv` as a given device (HIVE_NODE_ID), so one temp hive holds two principals (no owner yet:
     different devices are different principals)."""
     env = dict(os.environ, HIVE_HOME=str(hive.home), HIVE_NODE_ID=node)
-    r = subprocess.run([sys.executable, str(PROJECT_HV), *args], env=env, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
     if check and r.returncode != 0:
         raise AssertionError(f"`hv {' '.join(args)}` failed ({r.returncode}):\n{r.stderr}")
     return r

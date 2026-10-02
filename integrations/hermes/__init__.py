@@ -16,8 +16,10 @@ WRITES (on_memory_write + the hive_remember / hive_decide / hive_propose tools)
   - Source identity: hermes/<agent_identity>/<session_id[:8]> — granular enough
     for source-class weighting (primary 1.0 / subagent 0.5 / cron 0.3) and, with the
     entry's `channel` (sense/act/introspect), for telling observation from reasoning.
-  - Epistemic status tag: writer records speculation|observation|confirmed,
+  - Epistemic status tag: writer records observation|confirmed,
     NOT a self-declared trust number (confidence stays a derived projection).
+    A hypothesis is hive_propose, not a speculation tag. The speculation value is still
+    accepted so older callers keep working.
   - Novelty gate: suppress re-ingestion of content recalled from hive this
     session (anti-echo at the write boundary; part of salience L1, the agent-side rubric).
   - Skip: removes (append-only), non-primary contexts (cron/subagent noise).
@@ -295,9 +297,10 @@ def _format_facts_with_provenance(facts: list[dict], self_session_id: str) -> st
     session_prefix = f"hermes/"  # any hermes write from this session
     for f in facts:
         content = f.get("content", "")
-        trust = f.get("confidence", f.get("trust_score", 0.0))  # Phase A: confidence is primary
+        trust = f.get("confidence", 0.0)
         source = f.get("source_agent", "unknown")
-        tags = f.get("tags", "")
+        tags = f.get("tags") or []
+        tags = ",".join(tags) if isinstance(tags, list) else tags   # a list since 2.0 (#77); a string before
 
         # Anti-self-amplification: flag if authored in current session
         self_flag = ""
@@ -503,8 +506,9 @@ class HiveMindMemoryProvider(MemoryProvider):
             "DO NOT save: intermediate reasoning, restatements of known facts, speculation.\n"
             "CONCLUSIONS/PLANS: only if worth finding later, and pass channel=\"introspect\" to hive_remember; "
             "they count 0 until an observation supports them.\n"
-            "TAGS: speculation|observation|confirmed help readers; "
-            "they never change how much a fact counts as evidence.\n"
+            "TAGS: observation or confirmed help readers; "
+            "they never change how much a fact counts as evidence. "
+            "A guess is hive_propose, not a speculation tag.\n"
         )
 
         if session_start_hint:
@@ -606,9 +610,9 @@ class HiveMindMemoryProvider(MemoryProvider):
                 lines.append(
                     f"  CONTESTED:\n"
                     f"    A: \"{a.get('content')}\" "
-                    f"(conf={a.get('confidence', a.get('trust_score', 0)):.2f}, source={a.get('source_agent')})\n"
+                    f"(conf={a.get('confidence', 0):.2f}, source={a.get('source_agent')})\n"
                     f"    B: \"{b.get('content')}\" "
-                    f"(conf={b.get('confidence', b.get('trust_score', 0)):.2f}, source={b.get('source_agent')})\n"
+                    f"(conf={b.get('confidence', 0):.2f}, source={b.get('source_agent')})\n"
                     f"  → Both sides injected. Do not collapse to consensus."
                 )
             lines.append("")
@@ -661,7 +665,9 @@ class HiveMindMemoryProvider(MemoryProvider):
                         "content": {**s, "description": "The fact, in one or two self-contained sentences."},
                         "tags": {**s, "description": "Comma-separated tags (e.g. the project)."},
                         "epistemic_status": {**s, "enum": ["observation", "confirmed", "speculation"], "default": "observation",
-                                             "description": "Folded into the tags so readers can weigh the claim."},
+                                             "description": "Folded into the tags so readers can weigh the claim. "
+                                                            "Use observation or confirmed. A hypothesis is hive_propose, "
+                                                            "not speculation (still accepted for older callers)."},
                         "outcome_of": {**s, "description": "The sid of a decision this fact is the OUTCOME of."},
                         "polarity": {"type": "integer", "enum": [-1, 0, 1], "default": 1,
                                      "description": "With outcome_of: 1 it worked out, -1 it did not, 0 neutral."},
@@ -778,10 +784,11 @@ class HiveMindMemoryProvider(MemoryProvider):
             argv += ["--informed", *refs]
         if rels:
             argv += [f"--{rels[0]}", str(args[rels[0]]).strip()]
-        # `hv decide` gained --source in 1.23 (#114); the adapter still names itself through HERMES_AGENT,
-        # which every contract honours, so it also works against a pre-1.23 hv (the env EXTENDS
-        # os.environ, see _hv).
-        return argv, {"HERMES_AGENT": self._source_id}
+        # 2.0 (#119): `hv` no longer reads $HERMES_AGENT, so the adapter names itself with --source, as it
+        # always has on remember and propose. Without this every Hermes decision would read as `manual`,
+        # which means a person.
+        argv += ["--source", self._source_id]
+        return argv, None
 
     def _argv_propose(self, args: Dict[str, Any]):
         return ["propose", str(args["content"]), "--source", self._source_id] + self._tags(args), None
@@ -810,10 +817,10 @@ class HiveMindMemoryProvider(MemoryProvider):
             "conflicts": [
                 {
                     "fact_a": a.get("content"),
-                    "conf_a": a.get("confidence", a.get("trust_score", 0)),
+                    "conf_a": a.get("confidence", 0),
                     "source_a": a.get("source_agent"),
                     "fact_b": b.get("content"),
-                    "conf_b": b.get("confidence", b.get("trust_score", 0)),
+                    "conf_b": b.get("confidence", 0),
                     "source_b": b.get("source_agent"),
                     "note": "CONTESTED — hold tension, do not collapse to consensus",
                 }
@@ -837,7 +844,8 @@ class HiveMindMemoryProvider(MemoryProvider):
         - Skip non-primary contexts (cron/subagent noise)
         - Novelty gate: suppress re-ingestion of content recalled from hive this session
         - Source identity: hermes:<context>/<agent>/<session> for Phase B2/B3 weighting
-        - Epistemic status tag: speculation|observation (not a self-declared trust score)
+        - Epistemic status tag: observation|confirmed (not a self-declared trust score).
+          A hypothesis is hive_propose, not a speculation tag.
 
         SALIENCE LAYERS (hv core vocabulary; see the L2 header above `_is_admissible` in `hv`):
         - L1  agent rubric — THIS adapter's job: `_salience_gate()` below (stub, passes all) +

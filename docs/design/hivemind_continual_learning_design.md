@@ -1,14 +1,14 @@
 # HiveMind × Alberta Plan — integration design (contract 1.18 → 1.19)
 
-> **Status (2026-09-23, reconciled against `main` at contract 1.20).** This is the plan that
+> **Status (2026-09-23, reconciled against `main` at contract 1.20; items 1 and 2 closed in 1.21).** This is the plan that
 > contract 1.19–1.20 was built from (PRs #49, #57, #60–#66). §1–§9 shipped, mostly as written;
 > where this plan and the code differ, **the code is authoritative** — see `docs/INTERNALS.md`
-> and `docs/CLI_REFERENCE.md`. Differences:
+> and `docs/CLI_REFERENCE.md`. The code through contract 1.25 is authoritative. Differences:
 >
-> 1. The introspect grounding rule was applied to links only; an `introspect`-channel *fact*
->    assertion still counts toward corroboration (§0.1) — a bug, tracked in #73.
-> 2. No command writes `supports`/`contradicts` links, so ideas cannot yet earn confidence
->    (§2, §6) — tracked in #71.
+> 1. Fixed in contract 1.21 (#73). The introspect grounding rule was applied to links only; an `introspect`-channel *fact*
+>    assertion still counted toward corroboration (§0.1).
+> 2. Fixed in contract 1.21 (#71). No command wrote `supports`/`contradicts` links, so ideas could not yet earn confidence
+>    (§2, §6). `hv remember --supports` and `--contradicts` write them now.
 > 3. Importance counts attention from other *principals*, not merely other identities (§7).
 > 4. Ideas take no `outcome-of` evidence (§6).
 >
@@ -541,7 +541,7 @@ def _utility(entry_ref, informed_links, decision_outcome, now):
                        for l in informed_links))
 ```
 
-Knobs (`hv config confidence set …`, namespace exists since 1.5; journaled as governance so every
+Knobs (`hive-mind config set …` since 2.0; the governed-config namespace exists since 1.5; journaled as governance so every
 node projects identically): `importance_self_cap` 0.3, `w_links` 0.6, `w_volatile` 0.1.
 
 `facts.importance` / `ideas.importance` / `facts.utility` are written **only** by the rebuild

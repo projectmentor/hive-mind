@@ -3,8 +3,6 @@ through the governance projection (admission gate + confidence). Drives the real
 an isolated temp HIVE_HOME, writing the same content from DISTINCT devices (HIVE_NODE_ID) where
 independent corroboration is intended. Mirrors tests/test_governance.py helpers."""
 
-import importlib.machinery
-import importlib.util
 import os
 import sqlite3
 import subprocess
@@ -13,13 +11,14 @@ from pathlib import Path
 
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 
 def _run(home, *args, node_id=None, check=True):
     env = dict(os.environ, HIVE_HOME=str(home))
     if node_id:
         env["HIVE_NODE_ID"] = node_id
-    r = subprocess.run([sys.executable, str(PROJECT / "hv"), *args], env=env,
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env,
                        capture_output=True, text=True)
     if check:
         assert r.returncode == 0, r.stderr
@@ -37,10 +36,7 @@ def _conf(home, content):
 
 
 def _gov(home):
-    loader = importlib.machinery.SourceFileLoader("hvmod_grp", str(PROJECT / "hv"))
-    spec = importlib.util.spec_from_loader("hvmod_grp", loader)
-    m = importlib.util.module_from_spec(spec)
-    loader.exec_module(m)
+    m = _planes.load_hv(home, "hvmod_grp")      # #160: this hive's pin and keys, not whatever HIVE_HOME is
     import merkle
     return m, m._governance_state(merkle.read_all_entries(str(home / "journal")))
 
@@ -140,11 +136,14 @@ def test_group_list_shows_all_buckets(tmp_path):
 
 
 def test_aliases_still_work(tmp_path):
-    """`hv admit`, `hv config set`, `hv key show` are kept as silent back-compat aliases."""
+    """`hv admit` and `hv config set` are still reached, on the control plane. `hv key show` was a silent
+    alias of `config identity show` through 1.x; 2.0 removes it, so it names that command and exits 2."""
     home = tmp_path
     _run(home, "owner", "init")
     _run(home, "admit", "dev-a", "--principal", "alice")          # alias of `group admit`
     _run(home, "config", "set", "cap_self", "0.6")                # alias of `config confidence set`
     _, gov = _gov(home)
     assert "dev-a" in gov["admitted"] and gov["config"]["cap_self"] == 0.6
-    assert _run(home, "key", "show").returncode == 0              # alias of `config identity show`
+    old = _run(home, "key", "show", check=False)                  # removed in 2.0 (h:af137f9421)
+    assert old.returncode == 2 and "Run: hv config identity show" in old.stderr, old.stderr
+    assert _run(home, "config", "identity", "show").returncode == 0

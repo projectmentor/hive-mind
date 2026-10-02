@@ -20,6 +20,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 HV = PROJECT / "hv"
 sys.path.insert(0, str(PROJECT))
+import _planes  # noqa: E402  (which plane runs a command, 2.0)
 
 N_ENTRIES = 1000
 
@@ -32,6 +33,7 @@ def _loadhv(home, mp, name="hvmod_perf"):
     spec = importlib.util.spec_from_loader(name, loader)
     m = importlib.util.module_from_spec(spec)
     loader.exec_module(m)
+    _planes.install_control_plane(m)   # 2.0: the owner steps live on the control plane
     return m
 
 
@@ -156,7 +158,7 @@ def test_rebuild_verifies_each_signature_at_most_once_and_a_second_pass_verifies
 def _cli(home, *args, stdin="", env_extra=None):
     env = dict(os.environ, HIVE_HOME=str(home), HIVE_NOW="2026-03-01T00:00:00Z", **(env_extra or {}))
     t = time.monotonic()
-    r = subprocess.run([sys.executable, str(HV), *args], env=env, input=stdin, capture_output=True, text=True)
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, input=stdin, capture_output=True, text=True)
     return r, time.monotonic() - t
 
 

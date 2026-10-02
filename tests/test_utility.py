@@ -204,11 +204,15 @@ def test_access_count_never_alters_importance_or_utility(tmp_path, monkeypatch):
 
 # ── search ranking (CLI) ────────────────────────────────────────────────────────────────────────
 
-def test_search_sort_importance_utility_and_default_unchanged(hive):
+def test_search_sort_importance_utility_and_default_unchanged(hive, monkeypatch):
     hive.run("remember", "alpha claim about the build", "--importance", "0.9", "--source", "alice")
     hive.run("remember", "beta claim about the build", "--source", "alice")
     hive.run("remember", "gamma status of the build is down", "--tags", "volatile", "--source", "alice")
-    hive.run("decide", "act on alpha", "--rationale", "r", "--informed", "1")
+    hive.run("decide", "act on alpha", "--rationale", "r", "--informed", hive.sid(1))
+    # Search at the instant of the last write (#168). `gamma` is volatile (14-day half-life), so on the
+    # wall clock its effective confidence rounds below 0.45 about 1.9s after it is written, and a slow
+    # (loaded, parallel) run then sorted it last. Pinned, no fact has decayed and recency alone decides.
+    monkeypatch.setenv("HIVE_NOW", max(e["timestamp"] for e in hive.entries()))
     rows = _json(hive, "build")
     facts = [r for r in rows if r["kind"] == "fact"]
     assert all("importance" in r and "effective_importance" in r and "utility" in r and "effective_utility" in r for r in facts)
@@ -227,7 +231,7 @@ def test_search_sort_importance_utility_and_default_unchanged(hive):
 def test_api_search_sorts_and_salience_alias(hive, monkeypatch):
     hive.run("remember", "alpha claim about the build", "--importance", "0.9", "--source", "alice")
     hive.run("remember", "gamma status of the build is down", "--tags", "volatile", "--source", "alice")
-    hive.run("decide", "act on alpha", "--rationale", "r", "--informed", "1")
+    hive.run("decide", "act on alpha", "--rationale", "r", "--informed", hive.sid(1))
     hv = _loadhv(hive.home, monkeypatch)
     monkeypatch.setenv("HIVE_HOME", str(hive.home))
     assert hv.api_search("build", sort="salience")["facts"] == hv.api_search("build", sort="confidence")["facts"]

@@ -10,7 +10,187 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## Unreleased — contract 1.28
+## 2.0 — 2026-10-02 · `v2.0.0`
+
+**Upgrading from 1.x.** Run `hive-mind update` on each node. There is no journal or wire change, so a mixed
+1.x and 2.0 fleet converges while you do.
+- **Agents re-integrate** (the §0 check fires on the major): local ids are refused, `tags` is a JSON list,
+  and every write passes `--source`. `docs/AGENT_INTEGRATION.md` §7 has the details.
+- **Owner and operator commands run as `hive-mind`.** Run on `hv`, each names its `hive-mind` form and exits
+  2, acting on nothing. So do the removed aliases, which name their `hv` replacements.
+- **Keys leave the checkout.** `hv doctor --fix` moves the device key, and `hive-mind doctor --fix` the owner
+  key. A plaintext owner key still works; `hive-mind owner seal` seals it, and `hv doctor` fails until then.
+- **An owned hive whose `forget_writers` is still open fails `forget-authz`.** The 15-minute timer's
+  `hv doctor` alerts, and `hive-mind update` ends with ACTION REQUIRED, until the owner runs
+  `hive-mind doctor --fix` once. Nothing a hive forgot comes back.
+- **`fleet-contract` lists every 1.x peer as behind** on a 2.0 node. That is intended: upgrade it.
+- **A build without its bundled crypto refuses to run.**
+
+- **PR 2b, the split: `hv` cannot owner-sign.** `hv` is the agent data plane and `hive-mind` the
+  owner/operator control plane. Every code path that reads the owner seed, writes owner-key material or
+  produces an owner signature now lives on the control plane (`hivemind_ctl.py`, `hivemind_owner.py`), and
+  `hv` reaches none of it. Two static tests hold that true: `hv`'s import graph never reaches `ownerkey` or
+  the control plane, and no `owner_sig` is produced anywhere `hv` can reach. The second one catches an
+  inline signer, which imports nothing. Each check is shown failing on mutants in the suite.
+- **Moved commands point, exit 2, and act on nothing.** These moved: `hv owner` (init, export, import,
+  standby, escrow, restore, nominate, unnominate, claim, transfer, revoke-escrow, heartbeat, pin), `hv admit`,
+  `hv group admit|revoke|deny|change|purge`, `hv config set` (with its `confidence set` and `quorum set` forms),
+  `hv unforget` and `hv retract --owner`. Each now prints the exact `hive-mind` command to run, this
+  invocation's arguments included, and exits 2 (contract §7's 2.0 amendment). `revoke-escrow` becomes
+  `hive-mind owner revoke` (S5), and the three `config … set` forms collapse into `hive-mind config set`.
+- **What stays on `hv`:**
+  - the reads, and the device-signed dead-man recovery: `owner show`, `owner elections`,
+    `owner propose-election --pub` and `owner vote`. A member node that has only `hv` can still elect a
+    new owner.
+  - `hv owner propose-election --mint` points at the new `hive-mind owner mint`, which no longer
+    overwrites a key already on the device without `--force`.
+- **Owner-signed links come from the control plane** (decision `h:34cc1dbcd3`). Through `hv`, every link is
+  device-signed, including source `manual` on the owner device. The same verb through `hive-mind remember`,
+  `decide` or `entity` owner-signs its links, when the source is `manual` (#114). Using owner authority is an
+  explicit act: typing `hive-mind`.
+- **Owner-policy content writes.** Under `capsule_putters=owner` or `cell_writers=owner`, `hv capsule
+  put|rotate|rm` and `hv wire --add` point at `hive-mind`. Under `fertile` they run on `hv` as before,
+  device-signed.
+- **`doctor --fix` is split by what it touches** (5848736351).
+  - `hv doctor --fix`, which the 15-minute timer runs, keeps every data-plane repair: the device key's
+    permissions, orphan daemons, restarts, the key announce, the skill relink and the peer-address repoint.
+  - The owner key's permissions and the genesis pin are operator state, so they move to
+    `hive-mind doctor --fix`. `hv doctor --fix` says when either is needed.
+  - `hive-mind update` and the installer now pin through the control plane.
+- **Key presence without reading the seed.** `hv whoami`, `hv owner show`, `hv doctor` and the admission hint
+  decide whether this device holds the owner key from the key file's metadata and a public sidecar,
+  `owner-pub`, which the control plane writes. They never read the seed. They can say *unknown*: permission
+  denied is not "absent".
+- **No journal or wire change** (S7). A mixed 1.x and 2.0 fleet converges.
+- **PR 3a: private keys leave the working tree** (private #27). `HIVE_HOME` is the git checkout, which
+  every agent CLI runs in and some index, so a 0600 seed there was one `cat` away from any tool running
+  as the user.
+  - The seeds now live in a key directory (0700): `$HIVE_KEY_DIR`, else the path recorded in
+    `$HIVE_HOME/.key-dir`, else `~/.hive/keys/<sha256 of the checkout's path, 16 hex>`. The files are
+    `device-key`, `owner-key` (0600) and `owner-pub` (0644). The pointer keeps a renamed checkout on its
+    keys.
+  - Keys at the old root paths keep working, with a `keyperm` warning. Each plane's `doctor --fix` moves
+    its own: `hv` the device key, `hive-mind` the owner key and its public half. A move never overwrites
+    a key already in the key directory, and finishes one that was interrupted after the copy.
+  - `keyperm` fails on a key directory that is not 0700.
+  - The installer's identity stash saves from and restores into the key directory, and the uninstaller
+    removes only the three key files there.
+  - `hv whoami`, the doctor `owner` check and the dashboard label the device and owner ids as public ids
+    and say where the private keys are, without printing them.
+  - Presence (`_owner_key_state`) now answers *held* only for a regular file of a seed's size, so a
+    directory or an empty file in the key's place reads as *present*, not held (#159 review).
+  - The signed manifest names its one extensionless file, `hv`. A test fails if another runnable
+    extensionless file would ship unsigned.
+- **PR 3b: the owner key is sealed at rest** (private #27). A 0600 file outside the checkout is still
+  readable by every process running as the owner's user, the agents included.
+  - Every new owner key (`owner init`, `mint`, `import`, `restore`, `claim`) is written only as
+    `owner-key.sealed`: the envelope `owner escrow` already uses, scrypt then ChaCha20-Poly1305, written at
+    0600 atomically. The seal is opened once before any plaintext copy is removed.
+  - `hive-mind` unlocks it **once per command** (h:af5ecf48c5), from the tty with three tries, or from
+    `$HIVE_OWNER_KEY_PASSPHRASE` with one. A cancel or a wrong passphrase exits 1 having signed nothing.
+    That variable is separate from `$HIVE_OWNER_PASSPHRASE`, which still encrypts an export or an escrow.
+  - `hive-mind owner seal` converts a plaintext key in place: same owner id, no journal change. It
+    refuses when two different keys are on the device. `hv owner seal` points at it.
+  - Doctor's new `owner-seal` check **fails** while a plaintext owner key exists (the key directory's or
+    the legacy root's), and names the fix.
+  - `hv` never opens either form: presence is still a `stat`, of `owner-key.sealed` first. A test asserts
+    `hv` calls neither the opener nor the sealed-key reader.
+  - The identity stash, the keep-hive backup, restore and uninstall carry `.owner-key.sealed`. A stash
+    holding the sealed form drops its plaintext copy.
+  - The installer asks for the new passphrase once, at bootstrap, for `owner init` and the self-admit.
+- **PR 4a: the agent surface.** The adapter-visible breaks contract §7 promised for the next MAJOR.
+  - **Local ids are refused** (#59, #64). A bare or kind-prefixed rowid (`118`, `d17`, `i5`) on any flag that
+    takes a reference (`remember --resolves/--outcome-of/--supports/--contradicts/--extends`,
+    `decide --supersedes/--revoke/--informed`, `retract`, `entity link --fact-id`, `hive-mind unforget`,
+    `hive-mind retract --owner`, and the MCP and Hermes inputs behind them) exits 1 with
+    `'118' is a local id, which 2.0 no longer accepts: … Pass the sid (h:…) or ref (node_id:seq) that
+    hv search shows.`, having written nothing. `--resolves` aborts too, where an unresolvable target
+    is still only a warning. MCP `hive_entity`'s `fact_id` is a `str`. Journal reads are unchanged: the
+    legacy resolvers still read every historical entry.
+  - **`tags` is a JSON list** in `hv search --format json` (#77), as it already was on every `/api/*` row.
+    `tag_list` stays, the same list. The Hermes prefetch joins it.
+  - **No `$HERMES_AGENT` source fallback** (#119). A write's source is `--source`, else `manual`. The
+    Hermes adapter now passes `--source` on `decide`, as it already did on `remember` and `propose`;
+    without it every Hermes decision would have read as `manual`, which means a person.
+- **The core vocabulary is registered** (#136, #150). `vocabulary.py` lists every bare name core writes or
+  reads, in ten categories: entry types, link kinds, governance actions, `set-config` keys, channels,
+  behaviour tags, announce kinds, source apps, source context classes and envelope fields. Each name has a
+  status (`written`, `legacy`, `read`, or `reserved` for four envelope fields held for the module API), the
+  contract version that introduced it, and one line of meaning.
+  - [`docs/NAMESPACES.md`](docs/NAMESPACES.md) is generated from it by `scripts/common/gen_namespaces.py`, and
+    states the rule: core reserves every bare name, and a module's names take a prefix, `x-<module>:<name>`
+    (decision `h:af137f9421`), which the 2.1 module API enforces. A test fails when the page and the generator
+    differ.
+  - `tests/test_vocabulary.py` holds the registry to the code both ways, by AST at enumerated writer and
+    reader sites. A name written or read there that is not registered fails, and so does a registered name
+    that nothing writes or reads. Each category has a mutant in the suite.
+  - No behaviour change. `hv`'s `_CHANNELS` and `_LINK_EVIDENCE_KINDS` now come from the registry, with the
+    same values. No journal or wire change.
+- **PR 4b: removals** (from this list's "2.0 removals and changes"). No journal read path changes.
+  - **The `sync_daemon.py` shim is gone.** `hive-mind update` repoints an `@reboot` cron fallback that still
+    names it, since nothing rewrote that line before.
+  - **`hv doctor migrate-identity`** (the one-time 1.3 re-keying, #130) and its `hv migrate-device-identity`
+    alias are gone. Both say to run it on a 1.x release first, and exit 2. **`utilities/migrate_journal.py`**
+    goes too, with `scripts/common/deploy_node.sh`, its only caller, which had been broken since the scripts
+    reorg.
+  - **Internal shims** `_is_salient` and `_wire_claude_hooks` are gone. The `trust_score` column is no longer
+    written; a new store no longer has it. The pre-1.12 direct-hook names are no longer patterns of their own.
+  - **A build missing its bundled crypto refuses to run** (`ed25519`, `x25519` or `chacha20poly1305`), at
+    import, so the CLI, the control plane and the sync daemon all stop; through 1.x only `hv doctor` failed.
+  - **`fleet-contract`** warns below the current MAJOR, and never below 1.19 (where `link` entries became
+    honoured).
+  - `smoke.sh`'s entity check expects a `link` entry, as written since 1.19. `crontab` is stubbed in tests.
+  - **The 1.x aliases point, exit 2, and act on nothing** (decision `h:af137f9421`). `hv rebuild`, `hv merkle`,
+    `hv key` and `hv doctor wire-agent` each print the `hv` command that replaced them, this invocation's
+    arguments included (`hv doctor rebuild`, `hv doctor merkle`, `hv config identity …`, `hv wire claude`), and
+    exit 2, the same shape as a moved command. They are kept through 2.x and deleted at 3.0. Their table is
+    `commandmap.RENAMED`, beside `MOVED`. `hive-mind` suggests the new name too. The installer, the smokes and CI
+    call the new names; a test fails if shipped shell or a workflow calls an old one.
+- **4c: the pre-genesis forget grandfather is closed by the owner, not by a default flip** (#135 part 2;
+  decisions `h:af137f9421`, `h:696638b9b7`).
+  - **Nothing reappears.** An unset `forget_writers` still projects as `legacy`. A default that meant `owner`
+    only when nothing depends on the grandfather would project the same forgotten set in every case, because
+    the two policies disagree exactly on the facts `_forgets_grandfathered` lists, and it would not close
+    #122 either. So the projection does not change, and a mixed 1.x/2.0 fleet agrees by construction.
+  - **`hv doctor` fails `forget-authz` on an owned hive whose policy is still open**, whether or not a fact
+    depends on it. Each dependent fact is listed by `h:` id, the form both remedies accept. A closed hive
+    reports `ok`, and a hive with no owner reports nothing.
+  - **`hive-mind doctor --fix` closes it.** With nothing depending, it closes at once through the #122 guard.
+    Otherwise it lists each dependent fact with its text and asks y/N at a terminal, default N, before the
+    owner key is unlocked. `y` runs 1.28's `owner init` routine with its own reason: every dependent forget
+    is re-issued owner-signed, then `forget_writers=owner` is set. `N`, a piped answer or no terminal writes
+    nothing. `hv doctor --fix` (the 15-minute timer) cannot owner-sign, so it only points there.
+  - **`hive-mind update` ends with ACTION REQUIRED** on an owned open hive, after the restart, the rebuild
+    and the re-wire: the dependent facts and the one command. It exits non-zero, and prints the note on every
+    update until the hive is closed. A closed or unowned hive ends as before.
+- **4d (docs): the architecture page describes the two planes.** `docs/HV_ARCHITECTURE.md` is rewritten for
+  the split. It covers what each file holds and on which plane, how `hive-mind` installs its owner steps
+  into the library, the pointer tables, what stays on `hv` and why, where the keys live, and the tests that
+  hold S2. `docs/P2P_DESIGN.md` moves to `docs/history/`, and `INTERNALS.md` no longer calls it the full
+  design. `ownerkey.py`'s docstring no longer says `hv` imports it.
+- **#150 finished: what a module may add, and the local files** (decision `h:a1e3e7cd73`). `docs/NAMESPACES.md`
+  now says, for each category, whether a module may add names. A module may add a link kind or a config key,
+  prefixed. It may never add an entry type, a governance action or a channel. A new *Local files* table lists
+  the per-node names under `$HIVE_HOME` and in the key directory, and a `via` table lists the verification
+  values of a peer sighting. Both are generated from `vocabulary.py` and kept apart from the journal tables,
+  and `tests/test_vocabulary.py` holds them to the path literals in the code, both ways. The ref-bearing
+  payload fields stay deferred to the 2.1 module API. No behaviour change.
+- **The docs name each moved command on the plane it runs on** (decision `h:02010d37e3`). Every reference that told a
+  reader to run a command that moved in 2b as `hv …` now says `hive-mind …`. The files are `CLI_REFERENCE.md`,
+  `AGENT_INTEGRATION.md`'s command table, `INTERNALS.md`, `SYNC_API.md`, `THREAT_MODEL.md`, the continual-learning
+  design and the MCP adapter's `retract` docstring. `CLI_REFERENCE.md`'s owner, group and config sections say which
+  verbs stay on `hv` and which moved. `tests/test_docs_name_moved_commands.py` fails when a document names a
+  `commandmap.MOVED` command, or `retract --owner` or `owner propose-election --mint`, on `hv`. It excludes §7's
+  per-version history, the CHANGELOG, `docs/history/`, and `README.md` and `SECURITY.md`, which #141 reconciles
+  (6 and 2 references).
+- **The docs state what 2.0 does.** Pages written during 1.x described 4a's changes as future ones: bare local ids
+  "still accepted" and "removed at the next MAJOR", `tags` that "becomes the list", and a `$HERMES_AGENT` source
+  fallback. `CLI_REFERENCE.md`, `INTERNALS.md` (whose `_BARE_ID_WARNING` no longer exists), the `hive-memory`
+  skill and the MCP `hive_search` docstring now say a local id is refused, `tags` is a JSON list, and an omitted
+  source is `manual`. `tests/test_docs_state_2_0_behaviour.py` fails if one of those phrases comes back outside
+  the history, using the moved-command sweep's exclusions.
+
+## 1.28 — 2026-09-26 · `v1.28.0`
 
 - **Contract 1.28: `hv owner init` leaves a new hive closed (#135 part 1).** Before a hive has an owner it
   has no key to sign a forget with, so an owner-source forget dated before the genesis owner has always been

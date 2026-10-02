@@ -25,6 +25,9 @@ on:
       - 'tests/conftest.py'                   # the #109 stubs, launchctl included, front every test
       - 'tests/test_service.py'
       - 'tests/test_daemon_code.py'           # the #121 macOS failure was this file's restart count
+      - 'scripts/common/sync_smoke.sh'        # the two-daemon smoke hung #159's macOS run (#161)
+      - 'scripts/common/_smoke_daemon.sh'
+      - 'tests/test_sync.py'
       - '.github/workflows/ci.yml'
       - '.github/workflows/ci-macos.yml'
 
@@ -34,6 +37,9 @@ jobs:
       matrix:
         os: [macos-latest]          # a one-entry matrix keeps the check name `test (macos-latest)`
     runs-on: ${{ matrix.os }}
+    # A green run takes ~12 minutes. Without this a hang runs to GitHub's 6-hour default and ends
+    # cancelled, with no output from the test that hung (#159's run, #161).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
@@ -65,7 +71,7 @@ jobs:
         run: bash scripts/platform/macos/_launchd.sh --render-test
       - name: sync daemon answers on :9876 natively
         run: |
-          HIVE_HOME="$PWD" python3 ./hv rebuild >/dev/null 2>&1 || true
+          HIVE_HOME="$PWD" python3 ./hv doctor rebuild >/dev/null 2>&1 || true
           HIVE_HOME="$PWD" nohup python3 hive_sync_daemon.py >/tmp/d.log 2>&1 &
           ok=
           for i in $(seq 1 20); do

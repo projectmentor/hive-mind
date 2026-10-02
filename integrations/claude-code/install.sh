@@ -4,7 +4,7 @@
 #   2. register the stable DISPATCH SHIM in ~/.claude/settings.json (one `hive_dispatch.sh <event>`
 #      per lifecycle event) — what each event actually runs (telemetry, digest, save/audit nudge)
 #      lives in source, so behaviors update by `git pull`, never by re-editing ~/.claude. The wiring
-#      is delegated to `hv doctor wire-agent`, the single source of truth shared with the self-heal.
+#      is delegated to `hv wire claude`, the single source of truth shared with the self-heal.
 #
 # Idempotent (migrates any older inline hooks to the shim). A RUNNING Claude Code session live-reloads
 # the skill (no restart) — so after this you can tell the running CC: "start using the hive-memory
@@ -26,7 +26,7 @@ ls -ld "$CLAUDE_DIR/skills/hive-memory" "$CLAUDE_DIR/skills/wire-up"
 echo "== register telemetry + nudge/audit hooks (idempotent, additive) =="
 # Delegate to hv's canonical hook spec — the SINGLE source of truth shared with `hv doctor`
 # (the check + the 15-min `--fix` self-heal). Keeping the wiring in one place is why a node updated
-# from before a hook existed now self-heals instead of silently drifting. `_wire_claude_hooks` honors
+# from before a hook existed now self-heals instead of silently drifting. `hv wire claude` honors
 # CLAUDE_CONFIG_DIR, so point it at the dir we resolved above.
 CLAUDE_CONFIG_DIR="$CLAUDE_DIR" python3 "$REPO/hv" wire claude
 

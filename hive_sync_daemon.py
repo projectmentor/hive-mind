@@ -1,5 +1,5 @@
 """
-Hive Mind sync daemon (Phase 2, P2P_DESIGN.md §5).
+Hive Mind sync daemon (Phase 2, docs/history/P2P_DESIGN.md §5).
 
 A tiny stdlib HTTP service (no FastAPI dependency) exposing the 4 sync
 endpoints over the Tailnet. Separate process from the Laravel dashboard
@@ -371,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
         if self._is_loopback() or hv._load_genesis_pin() is not None:
             return True
         self._send(403, {"error": "genesis not pinned on this node", "accepted": 0,
-                         "hint": "the operator pins with `hv owner pin --set` (or `hv doctor --fix`); "
+                         "hint": "the operator pins with `hive-mind owner pin --set` (or `hive-mind doctor --fix`); "
                                  "/hive/info carries the fingerprint to compare"})
         return False
 

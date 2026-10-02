@@ -4,6 +4,10 @@ Thanks for your interest — it genuinely means a lot.
 
 ## How this project is run (please read first)
 
+If several AI helpers will work on a project, read
+[docs/WORKING_TOGETHER.md](docs/WORKING_TOGETHER.md) first.
+It is the job split we use here: one plans, one builds, one checks.
+
 HiveMind is built and maintained by **one person** as personal infrastructure that
 happens to be useful to others. The source is open so you can **read it, audit it
 (important for a tool that holds your memory locally), fork it, and self-host it**.
@@ -15,10 +19,11 @@ To keep it sustainable, the development model is intentionally lightweight:
   repro helps a lot.
 - **Security vulnerabilities** → **don't** open an issue; report privately as described in
   [SECURITY.md](SECURITY.md).
-- **Pull requests** → welcome for bug fixes, security fixes and documentation. The open-source
-  core is feature-complete at contract 1.20, so new features are not taken into it; for anything
-  beyond a focused fix, **open a Discussion first**. Sweeping refactors will likely be declined to
-  keep the project coherent.
+- **Pull requests** → welcome for bug fixes, security fixes and documentation. The current
+  contract is 2.0. New features are not added just because a pull request shows up; for anything
+  beyond a focused fix, **open a Discussion first**. A change to the contract, to signing, to
+  sync, or to the security promises waits until the maintainer says yes. Sweeping refactors will
+  likely be declined to keep the project coherent.
 
 None of this is meant to be cold — it's how a solo maintainer stays sane and keeps the
 project alive. Open source here means the code is yours to use and learn from, not that

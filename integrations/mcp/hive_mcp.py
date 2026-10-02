@@ -85,8 +85,12 @@ mcp = FastMCP("hive-memory", instructions=INSTRUCTIONS)
 
 
 # ── Shell-out helper ─────────────────────────────────────────────────────────
-def _run_hv(args: list[str], timeout: int = 30, stdin_text: str | None = None) -> str:
+def _run_hv(args: list[str], timeout: int = 30, stdin_text: str | None = None,
+            ok_codes: tuple[int, ...] = (0,)) -> str:
     """Run `hv <args>` and return stdout. Raises with hv's stderr on failure.
+
+    ok_codes lists the exit statuses that are a result, not a failure (`hv verify` uses its exit
+    status to report the verdict, and the verdict text is what the caller wants).
 
     stdin_text, if given, is piped to the process (e.g. the user's turn text for
     `hv nudge --event=user-prompt`, which reads recent text on stdin).
@@ -103,7 +107,7 @@ def _run_hv(args: list[str], timeout: int = 30, stdin_text: str | None = None) -
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(f"hv {args[0] if args else ''} timed out after {timeout}s")
-    if proc.returncode != 0:
+    if proc.returncode not in ok_codes:
         msg = proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}"
         raise RuntimeError(f"hv {args[0] if args else ''} failed: {msg}")
     return proc.stdout.strip()
@@ -364,7 +368,7 @@ def hive_discover(format: str = "text") -> str:
 @mcp.tool()
 def hive_verify() -> str:
     """Verify this is the official, untampered HiveMind (checks the signed source manifest). Read-only."""
-    return _run_hv(["verify"])
+    return _run_hv(["verify"], ok_codes=(0, 1, 3))
 
 
 @mcp.tool()

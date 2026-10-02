@@ -5688,11 +5688,11 @@ def _resign_pending_hint(root):
             "is probably still pending on GitHub; run `hive-mind update` again in a few minutes)")
 
 
-# `hv verify` exit codes (#190). 1 is left to an uncaught crash.
+# `hv verify` exit codes (#190). Not 2: argparse usage errors and the 2.0 pointers already exit 2.
 VERIFY_EXIT_VERIFIED = 0     # official: integrity, signature and key anchor all confirmed
-VERIFY_EXIT_FAILED = 2       # modified, signature invalid, fork key, or no manifest: do not trust this install
+VERIFY_EXIT_FAILED = 1       # modified, signature invalid, fork key, or no manifest: do not trust this install
 VERIFY_EXIT_UNCHECKED = 3    # nothing wrong found, but a layer could not be checked (anchor unreachable, unsigned build)
-_VERIFY_EXIT = {"official": VERIFY_EXIT_VERIFIED, "signed": VERIFY_EXIT_VERIFIED,
+_VERIFY_EXIT = {"official": VERIFY_EXIT_VERIFIED, "signed": VERIFY_EXIT_UNCHECKED,
                 "offline_ok": VERIFY_EXIT_UNCHECKED, "integrity_only": VERIFY_EXIT_UNCHECKED}
 
 
@@ -5703,7 +5703,7 @@ def _verify_exit_code(level):
 
 def verify_cmd(args):
     """Integrity + authenticity check (prints the layered verdict; see _verify_status). Exits 0 only
-    when verified; 2 when the install fails a check; 3 when it could not be fully checked. `hv doctor`
+    when verified; 1 when the install fails a check; 3 when it could not be fully checked. `hv doctor`
     stays advisory: it calls `_verify_status` itself and never this."""
     v = _verify_status(Path(__file__).resolve().parent)
     for line in v["lines"]:

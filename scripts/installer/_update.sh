@@ -17,7 +17,7 @@ info() { echo -e "${BLD}[..]${RST}  $*"; }
 warn() { echo -e "${YLW}[!!]${RST}  $*"; }
 
 # The signed-manifest verdict as one word (official/offline_ok/signed/modified/…), offline and fast:
-# `hv verify` only prints (and always exits 0), and its key-anchor layer goes to the network.
+# `hv verify` exits non-zero unless verified, and its key-anchor layer goes to the network.
 _verify_level() {
   python3 - "$HIVE_DIR" 2>/dev/null <<'PY' || echo unknown
 import importlib.util, sys

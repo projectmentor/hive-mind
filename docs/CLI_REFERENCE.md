@@ -1199,10 +1199,10 @@ files yourself it says the install was modified locally.
 | Code | Meaning |
 |---|---|
 | `0` | Verified: integrity, signature and key anchor all confirmed |
-| `2` | Failed: the install is modified, the signature is invalid, the signing key is not the published one (a fork), or there is no manifest. Do not trust it |
+| `1` | Failed: the install is modified, the signature is invalid, the signing key is not the published one (a fork), or there is no manifest. Do not trust it. (`2` is not used: argparse usage errors and the 2.0 pointers exit 2) |
 | `3` | Could not fully check, nothing found wrong: the key anchor was unreachable (offline), or this build predates signed releases. A network outage does not look like tampering |
 
-A fresh checkout still waiting for its release re-sign exits `2`. `hv doctor` is the advisory view of
+A fresh checkout still waiting for its release re-sign exits `1`. `hv doctor` is the advisory view of
 that state and never reads these codes. `hv doctor` runs the same check as
 **authenticity**, and a peer's result is readable at `/api/verify`. Right after an update the signed
 manifest can lag for a few minutes (the release bot re-signs after each merge to `main`): `hive-mind

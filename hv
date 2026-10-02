@@ -912,6 +912,80 @@ def _store_deferred(entry, err, word="Remembered"):
     sys.exit(0)
 
 
+def _feed_cursor_parse(text):
+    """`node:seq,node:seq` -> {node_id: seq}. Node ids contain ':' (`k1:...`), so each pair splits at the
+    LAST colon. A malformed pair is a usage error, never a silent restart from the beginning."""
+    cur = {}
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        node, _, seq = part.rpartition(":")
+        if not node or not seq.isdigit():
+            raise ValueError(f"bad cursor entry {part!r}: expected node_id:seq")
+        cur[node] = max(cur.get(node, 0), int(seq))
+    return cur
+
+
+def _feed_cursor_str(cur):
+    return ",".join(f"{n}:{s}" for n, s in sorted(cur.items()))
+
+
+def feed_page(after=None, limit=200):
+    """One page of the journal for a module (2.1, `hv feed`): the verified entries past a per-node cursor,
+    in `(node_id, seq)` order, each with its `ref`/`sid`. Read from the journal files, not the store. Two
+    fields are core-computed so a consumer never reimplements the forget rule: `forgotten` on a `fact`
+    entry, and `affects` on a `retract` entry (the held facts sharing the target's content when the act is
+    honoured, else empty). `sig` and `pub` pass through; an entry with no `sig` is attributed, not
+    authenticated. Returns {"entries", "cursor", "more"}."""
+    after = dict(after or {})
+    entries = merkle.read_all_entries(JOURNAL_DIR)   # verified lazily, per served entry: a cold process pays for the page, not the journal
+    ev = _content_evidence(entries, _governance_state(entries))
+    held = {}                                   # content -> [refs of held fact entries]
+    for e in entries:
+        c = (e.get("payload") or {}).get("content")
+        if e.get("type") == "fact" and c is not None:
+            held.setdefault(c, []).append(_ref_str([e["node_id"], e["seq"]]))
+    cursor = dict(after)
+    out = []
+    more = False
+    for e in entries:
+        node, seq = e.get("node_id"), e.get("seq")
+        if node is None or not isinstance(seq, int) or seq <= after.get(node, 0):
+            continue
+        if not _verify_entry(e):
+            continue
+        if len(out) >= limit:
+            more = True
+            break
+        item = {"node_id": node, "seq": seq, "ref": _ref_str([node, seq]), "sid": _short_id(node, seq),
+                "type": e.get("type"), "timestamp": e.get("timestamp"), "payload": e.get("payload")}
+        for k in ("sig", "pub"):
+            if k in e:
+                item[k] = e[k]
+        p = e.get("payload") or {}
+        if e.get("type") == "fact" and p.get("content") is not None:
+            item["forgotten"] = bool(ev.get(p["content"], {}).get("forget"))
+        elif e.get("type") == "retract":
+            item["affects"] = []
+            for c, cev in ev.items():
+                if cev.get("acts", {}).get((node, seq)):      # honoured; only a held fact's content has acts
+                    item["affects"] = sorted(held.get(c, []))
+                    break
+        out.append(item)
+        cursor[node] = seq
+    return {"entries": out, "cursor": _feed_cursor_str(cursor), "more": more}
+
+
+def feed(args):
+    try:
+        after = _feed_cursor_parse(args.after)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(feed_page(after, max(1, args.limit)), sort_keys=True))
+
+
 def journal_keys():
     """Set of (node_id, seq) present in the journal — the G-Set membership."""
     return {
@@ -2021,6 +2095,7 @@ def _content_evidence(entries, gov=None):
             else:
                 honored = not unforget   # pre-governance: legacy source-tag forget honored; no owner, no unforget
             owner_acts.setdefault(content, []).append((pos, not unforget, honored))
+            ev.setdefault("acts", {})[(e.get("node_id"), e.get("seq"))] = honored   # `hv feed` reads this (2.1)
             continue                     # governance, not evidence: never moves last_ts
         elif unforget:
             continue                     # only the owner can unforget
@@ -8979,6 +9054,10 @@ def build_parser():
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")
     subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
+    feed_parser = subparsers.add_parser("feed", help="Read-only: journal entries past a per-node cursor, as JSON")
+    feed_parser.add_argument("--after", default="", help="cursor: node_id:seq,node_id:seq (default: from the start)")
+    feed_parser.add_argument("--limit", type=int, default=200, help="entries per page (default 200)")
+    feed_parser.add_argument("--format", choices=["json"], default="json")
     subparsers.add_parser("whoami", help="Show this device's identity + membership status (sterile/fertile/owner)")
     subparsers.add_parser("peers", help="List hive members by device + principal + address + reachability")
 
@@ -9271,6 +9350,8 @@ def _dispatch(args):
         entity(args)
     elif args.command == "stats":
         stats(args)
+    elif args.command == "feed":
+        feed(args)
     elif args.command == "version":
         version_cmd(args)
     elif args.command == "verify":

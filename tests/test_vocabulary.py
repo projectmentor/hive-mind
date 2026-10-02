@@ -77,6 +77,7 @@ READABLE = (vocabulary.WRITTEN, vocabulary.LEGACY, vocabulary.READ)
 READERS = {
     "type": {
         ("hv", "append_foreign_entries"),       # ingest: governance first, then admission-gated content
+        ("hv", "feed_page"),                    # `hv feed` (2.1): forgotten on a fact, affects on a retract
         ("hv", "_capsule_version_conflicts"),
         ("hv", "_self_signed_owner_acts"),      # genesis candidates
         ("hv", "_governance_state"),

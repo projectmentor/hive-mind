@@ -25,7 +25,9 @@ DOCS = PROJECT / "docs"
 # Intentionally undocumented in the user/agent docs: local-only `hv telemetry report|list`
 # observability flags, surfaced via `hv telemetry ... --help` only. They never touch the
 # corpus and are not part of the agent contract. Document one → remove it from here.
-ALLOWLIST = {"--since", "--by", "--limit", "--transcript"}
+# `--after` is `hv feed`'s cursor (2.1 PR 1). `hv feed` is documented with the contract bump, the last 2.1 PR
+# (plan §5, PR 10), so it is not in the public docs before it ships. Remove it from here in PR 10.
+ALLOWLIST = {"--since", "--by", "--limit", "--transcript", "--after"}
 
 
 def _load_hv():

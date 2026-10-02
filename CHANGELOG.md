@@ -10,7 +10,7 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## 2.0 — 2026-10-01 · `v2.0.0`
+## 2.0 — 2026-10-02 · `v2.0.0`
 
 **Upgrading from 1.x.** Run `hive-mind update` on each node. There is no journal or wire change, so a mixed
 1.x and 2.0 fleet converges while you do.

@@ -2004,7 +2004,7 @@ def _content_evidence(entries, gov=None):
         unforget = ref is None and p.get("unretracts_ref") is not None
         if unforget:
             ref = p.get("unretracts_ref")
-        content = seq_content.get(tuple(ref)) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None
+        content = seq_content.get(tuple(ref)) if _valid_ref(ref) else None
         if content is None or content not in out:
             continue
         ev = out[content]
@@ -2056,10 +2056,10 @@ def _content_evidence(entries, gov=None):
         p = e.get("payload", {}) or {}
         side = _LINK_EVIDENCE_KINDS.get(p.get("kind"))
         ref, frm = p.get("to_ref"), p.get("from_ref")
-        content = seq_content.get(tuple(ref)) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None
+        content = seq_content.get(tuple(ref)) if _valid_ref(ref) else None
         if side is None or content is None or content not in out:
             continue
-        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in known):
+        if not (_valid_ref(frm) and tuple(frm) in known):
             continue
         key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
         if _channel(p) == "introspect":
@@ -2177,9 +2177,9 @@ def _decision_evidence(entries, gov=None):
         if _channel(p) != "sense":
             continue                                   # no self-grading: only observed outcomes count
         to_ref, frm = p.get("to_ref"), p.get("from_ref")
-        if not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in known):
+        if not (_valid_ref(to_ref) and tuple(to_ref) in known):
             continue
-        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in known):
+        if not (_valid_ref(frm) and tuple(frm) in known):
             continue
         try:
             pol = float((p.get("data") or {}).get("polarity", 1))
@@ -2247,9 +2247,9 @@ def _idea_evidence(entries, gov=None):
         p = e.get("payload", {}) or {}
         side = {"supports": "pos", "contradicts": "neg"}.get(p.get("kind"))
         to_ref, frm = p.get("to_ref"), p.get("from_ref")
-        if side is None or not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in ideas):
+        if side is None or not (_valid_ref(to_ref) and tuple(to_ref) in ideas):
             continue
-        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in known):
+        if not (_valid_ref(frm) and tuple(frm) in known):
             continue
         if side == "pos" and _same_principal(gov, e.get("node_id"), authors[tuple(to_ref)]):
             continue                                   # #71: an author cannot support their own idea
@@ -2452,9 +2452,9 @@ def _link_attention(entries, gov=None):
             continue
         p = e.get("payload", {}) or {}
         to_ref, frm = p.get("to_ref"), p.get("from_ref")
-        if not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in by_ref):
+        if not (_valid_ref(to_ref) and tuple(to_ref) in by_ref):
             continue
-        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in by_ref):
+        if not (_valid_ref(frm) and tuple(frm) in by_ref):
             continue
         target = by_ref[tuple(to_ref)]
         if _same_principal(gov, e.get("node_id"), target.get("node_id")):
@@ -2508,11 +2508,11 @@ def _utility_evidence(entries, gov=None):
         if p.get("kind") != "informed":
             continue
         to_ref, frm = p.get("to_ref"), p.get("from_ref")
-        if not (isinstance(frm, (list, tuple)) and len(frm) == 2 and tuple(frm) in by_ref):
+        if not (_valid_ref(frm) and tuple(frm) in by_ref):
             continue
         if by_ref[tuple(frm)].get("type") != "decision":
             continue
-        if not (isinstance(to_ref, (list, tuple)) and len(to_ref) == 2 and tuple(to_ref) in by_ref):
+        if not (_valid_ref(to_ref) and tuple(to_ref) in by_ref):
             continue
         key, w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
         mult = 0.25 + 0.75 * max(0.0, dscore.get(tuple(frm), 0.0))
@@ -2763,9 +2763,21 @@ def persist_entry(conn, entry):
     return fn(conn, entry) if fn else None
 
 
+def _is_int64(v):
+    """An int (not a bool) that SQLite can bind; anything wider raises OverflowError."""
+    return isinstance(v, int) and not isinstance(v, bool) and -2**63 <= v < 2**63
+
+
+def _valid_ref(ref):
+    """A journal-identity ref is [node_id: str, seq: int64]. Anything else is skipped, not bound:
+    a signed payload must never make rebuild_db raise on every node."""
+    return isinstance(ref, (list, tuple)) and len(ref) == 2 \
+        and isinstance(ref[0], str) and _is_int64(ref[1])
+
+
 def _resolve_ref(conn, ref):
     """Map a journal-identity reference [node_id, seq] to a local row id."""
-    if not ref:
+    if not _valid_ref(ref):
         return None
     r = conn.execute(
         "SELECT local_id FROM journal_index WHERE node_id = ? AND seq = ?",
@@ -2774,16 +2786,26 @@ def _resolve_ref(conn, ref):
     return r["local_id"] if r else None
 
 
+def _ref_or_legacy_id(conn, p, ref_key, legacy_key, kind, table):
+    """The local id of the `kind` row a payload points at: its journal-identity ref, else the legacy
+    local-id field (pre-Phase-2). None when the target is absent, of another kind, or not a row on this node."""
+    if p.get(ref_key):
+        row = _index_row(conn, p.get(ref_key))
+        return row[1] if row and row[0] == kind else None
+    lid = p.get(legacy_key)
+    if _is_int64(lid) \
+            and conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (lid,)).fetchone():
+        return lid
+    return None
+
+
 def resolve_entity_fact(conn, entry):
     """Pass 2: wire an entity_fact link via journal-identity refs (falling back
-    to legacy local-id fields for pre-Phase-2 journals)."""
+    to legacy local-id fields for pre-Phase-2 journals). A pair it cannot wire
+    (a target absent, of the wrong kind, or no such local id) is skipped."""
     p = entry["payload"]
-    eid = _resolve_ref(conn, p.get("entity_ref"))
-    if eid is None:
-        eid = p.get("entity_id")        # legacy
-    fid = _resolve_ref(conn, p.get("fact_ref"))
-    if fid is None:
-        fid = p.get("fact_id")          # legacy
+    eid = _ref_or_legacy_id(conn, p, "entity_ref", "entity_id", "entity", "entities")
+    fid = _ref_or_legacy_id(conn, p, "fact_ref", "fact_id", "fact", "facts")
     if eid is None or fid is None:
         return
     conn.execute(
@@ -2796,9 +2818,7 @@ def resolve_supersedes(conn, entry):
     """Pass 2: mark the decision this entry supersedes (by journal identity,
     falling back to a legacy local-id field)."""
     p = entry["payload"]
-    old = _resolve_ref(conn, p.get("supersedes_ref"))
-    if old is None:
-        old = p.get("supersedes")       # legacy
+    old = _ref_or_legacy_id(conn, p, "supersedes_ref", "supersedes", "decision", "decisions")
     if not old:
         return
     new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
@@ -2834,7 +2854,7 @@ def resolve_resolves(conn, entry):
 
 def _index_row(conn, ref):
     """(kind, local_id) for a journal-identity ref [node_id, seq] via journal_index, or None."""
-    if not isinstance(ref, (list, tuple)) or len(ref) != 2:
+    if not _valid_ref(ref):
         return None
     r = conn.execute("SELECT kind, local_id FROM journal_index WHERE node_id = ? AND seq = ?",
                      (ref[0], ref[1])).fetchone()

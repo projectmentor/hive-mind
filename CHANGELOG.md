@@ -10,6 +10,21 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.0.2 — 2026-10-03 · `v2.0.2`
+
+No contract change.
+
+- **`rebuild_db` no longer raises on an `entity_fact`, `supersedes`, `resolves_ref` or `link` whose ref or local id is
+  the wrong kind, absent or malformed** (#196, security fix). An `entity_fact` whose `fact_ref` named an entity,
+  whose `entity_ref` named a fact, or whose legacy `entity_id` / `fact_id` named no row made the rebuild fail with
+  `IntegrityError`. A ref that is not `[str, int]`, or an integer outside SQLite's 64-bit range (a ref's seq, a
+  legacy `entity_id` / `fact_id` / `supersedes`), made it fail with `OverflowError` or `ProgrammingError`. Content of
+  these types is accepted from any admitted device and the journal is permanent, so one such entry stopped every
+  node's rebuild. The entry now lands and projects to nothing, as a dangling link does. A `supersedes` is held to
+  the same rule: a `supersedes_ref` to a non-decision, or a `supersedes` that is not a decision row, marks nothing.
+  The link-evidence passes skip a malformed ref instead of raising `TypeError`. Entries that resolve are projected
+  as before.
+
 ## 2.0.1 — 2026-10-02 · `v2.0.1`
 
 No contract change.

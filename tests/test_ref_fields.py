@@ -30,9 +30,11 @@ def _constants(src):
 
 
 def _read_as_payload_key(src):
-    """String literals used as `x.get("k")` or `x["k"]`: how a payload field is read."""
+    """String literals used as `x.get("k")` or `x["k"]`, or passed as the key arguments of `_ref_or_legacy_id`."""
     out = set()
     for n in ast.walk(ast.parse(src)):
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_ref_or_legacy_id":
+            out |= {a.value for a in n.args[2:4] if isinstance(a, ast.Constant) and isinstance(a.value, str)}
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" \
                 and n.args and isinstance(n.args[0], ast.Constant) and isinstance(n.args[0].value, str):
             out.add(n.args[0].value)

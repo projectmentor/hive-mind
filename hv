@@ -1736,7 +1736,8 @@ def _governance_state_uncached(entries):
     gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-           "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
+           "principals": {}, "module_config": {},
+           "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
                                         "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
@@ -1950,6 +1951,9 @@ def _governance_state_uncached(entries):
                     gov["config"][key] = raw
                 elif key == "forget_writers" and raw in ("legacy", "owner"):   # #122 step 2; else ignored
                     gov["config"][key] = raw
+                elif vocabulary.split_module_name(key) and isinstance(raw, str) \
+                        and len(raw) <= vocabulary.MODULE_VALUE_MAX:
+                    gov["module_config"][key] = raw   # 2.1 M3: `x-<module>:<key>`, a string core never interprets
             except (TypeError, ValueError):
                 pass
 
@@ -2161,7 +2165,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {},
+                "principals": {}, "module_config": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2849,16 +2853,26 @@ def _resolve_ref(conn, ref):
     return r["local_id"] if r else None
 
 
+def _ref_or_legacy_id(conn, p, ref_key, legacy_key, kind, table):
+    """The local id of the `kind` row a payload points at: its journal-identity ref, else the legacy
+    local-id field (pre-Phase-2). None when the target is absent, of another kind, or not a row on this node."""
+    if p.get(ref_key):
+        row = _index_row(conn, p.get(ref_key))
+        return row[1] if row and row[0] == kind else None
+    lid = p.get(legacy_key)
+    if isinstance(lid, int) and not isinstance(lid, bool) \
+            and conn.execute(f"SELECT 1 FROM {table} WHERE id = ?", (lid,)).fetchone():
+        return lid
+    return None
+
+
 def resolve_entity_fact(conn, entry):
     """Pass 2: wire an entity_fact link via journal-identity refs (falling back
-    to legacy local-id fields for pre-Phase-2 journals)."""
+    to legacy local-id fields for pre-Phase-2 journals). A pair it cannot wire
+    (a target absent, of the wrong kind, or no such local id) is skipped."""
     p = entry["payload"]
-    eid = _resolve_ref(conn, p.get("entity_ref"))
-    if eid is None:
-        eid = p.get("entity_id")        # legacy
-    fid = _resolve_ref(conn, p.get("fact_ref"))
-    if fid is None:
-        fid = p.get("fact_id")          # legacy
+    eid = _ref_or_legacy_id(conn, p, "entity_ref", "entity_id", "entity", "entities")
+    fid = _ref_or_legacy_id(conn, p, "fact_ref", "fact_id", "fact", "facts")
     if eid is None or fid is None:
         return
     conn.execute(
@@ -2871,9 +2885,7 @@ def resolve_supersedes(conn, entry):
     """Pass 2: mark the decision this entry supersedes (by journal identity,
     falling back to a legacy local-id field)."""
     p = entry["payload"]
-    old = _resolve_ref(conn, p.get("supersedes_ref"))
-    if old is None:
-        old = p.get("supersedes")       # legacy
+    old = _ref_or_legacy_id(conn, p, "supersedes_ref", "supersedes", "decision", "decisions")
     if not old:
         return
     new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])

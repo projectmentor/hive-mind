@@ -63,6 +63,13 @@ def test_an_invalid_module_is_refused():
     assert V.check_module_name("Bad", "link_kinds", "supports")
 
 
+@pytest.mark.parametrize("category", [k for k, *_ in V.CATEGORIES])
+@pytest.mark.parametrize("name", [None, 7, ["x-hw:a"], {"a": 1}, b"x-hw:a"])
+def test_a_name_that_is_not_a_string_is_refused_with_a_reason_not_a_crash(category, name):
+    reason = V.check_module_name("hw", category, name)
+    assert reason and "\n" not in reason
+
+
 def test_no_core_name_looks_prefixed_and_the_validator_covers_every_category():
     for key, _title, _what, table in V.CATEGORIES:
         assert key in V.MODULE_RULES

@@ -362,9 +362,9 @@ def _core_has(table, name):
 # category -> (core names a module may USE bare, or None when it may use none). A module may use a core link
 # kind, tag or source context (they carry no new meaning); it may never write `manual` or `owner` as its source
 # app, nor the `owner` context (a retract from either is a forget). `source_apps` is checked on its own below.
+# Any other category a module may extend (announce kinds, config keys) takes a prefixed name only.
 _BARE_OK = {"link_kinds": LINK_KINDS, "behaviour_tags": BEHAVIOUR_TAGS,
             "source_contexts": {k: v for k, v in SOURCE_CONTEXTS.items() if k != "owner"}}
-_PREFIXED_ONLY = ("announce_kinds", "config_keys")
 _NEVER = ("entry_types", "governance_actions", "channels", "envelope_fields")
 
 
@@ -374,6 +374,8 @@ def check_module_name(module, category, name):
     module (a module cannot write `x-other:` names). A source app is `x-<module>` with no colon part."""
     if not valid_module_name(module):
         return f"{module!r} is not a valid module name"
+    if not isinstance(name, str):
+        return f"a name must be a string, not {type(name).__name__}"
     if category in _NEVER:
         return f"a module may not add {category.replace('_', ' ')}: {MODULE_RULES[category]}"
     if category not in MODULE_RULES:
@@ -396,10 +398,12 @@ def check_module_name(module, category, name):
 
 # ── ref-bearing payload fields (2.1, plan PR 2; the list #150 deferred) ───────────────────────────────
 # Every payload field the code reads as a reference to another entry. `shape`: `pair` is `[node_id, seq]`,
-# `pairs` a list of them, `ref` a pair or its `node_id:seq` or `h:` string form, `local_id` a pre-Phase-2 local row id. A ref-walking check (a rebuild, a doctor pass, the module API) covers this table, and
-# `tests/test_ref_fields.py` fails when the code reads a ref field that is not listed, or a row nothing reads.
+# `pairs` a list of them, `ref` a pair or its `node_id:seq` or `h:` string form, `local_id` a pre-Phase-2 local row id. A ref-walking check (a rebuild, a doctor pass, the module
+# API) covers this table, and `tests/test_ref_fields.py` fails when the code reads a ref field that is not listed,
+# or a row nothing reads.
 # `legacy` rows are read for old journals and never written by core any more. The module envelope's
-# `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved` until the module API reads them.
+# `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved` until the module API reads them; they say `pair`
+# because `_resolve_ref` reads only a pair. The widening to "pair or `h:` short id" comes with the module API.
 REF_FIELDS = {
     "retracts_ref":   {"types": ("retract",), "shape": "pair", "status": WRITTEN,
                        "meaning": "The fact a retract acts on (a forget, when from an owner)."},
@@ -429,10 +433,10 @@ REF_FIELDS = {
                        "meaning": "A pre-Phase-2 decision's replaced decision, as a local id; read when `supersedes_ref` is absent."},
     "escrow_ref":     {"types": ("governance",), "shape": "ref", "status": WRITTEN,
                        "meaning": "The escrow a `revoke-escrow` act tombstones: `all`, a pair or `node_id:seq`."},
-    "from":           {"types": ("link",), "shape": "ref", "status": RESERVED,
-                       "meaning": "A module link's start: a pair or an `h:` short id."},
-    "to":             {"types": ("link",), "shape": "ref", "status": RESERVED,
-                       "meaning": "A module link's end: a pair or an `h:` short id."},
-    "target":         {"types": ("retract",), "shape": "ref", "status": RESERVED,
-                       "meaning": "What a module act is about: a pair or an `h:` short id."},
+    "from":           {"types": ("link",), "shape": "pair", "status": RESERVED,
+                       "meaning": "A module link's start: a pair."},
+    "to":             {"types": ("link",), "shape": "pair", "status": RESERVED,
+                       "meaning": "A module link's end: a pair."},
+    "target":         {"types": ("retract",), "shape": "pair", "status": RESERVED,
+                       "meaning": "What a module act is about: a pair."},
 }

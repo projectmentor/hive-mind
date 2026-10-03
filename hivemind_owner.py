@@ -938,14 +938,54 @@ def admit_cmd(args):
     if args.device_id in _governance_state(merkle.read_all_entries(JOURNAL_DIR))["purged"]:
         print(f"{args.device_id} is purged (tombstoned) — purge is permanent; it cannot be re-admitted.")
         return
+    module = getattr(args, "module", None)
+    if module is not None and not vocabulary.valid_module_name(module):
+        print(f"{module!r} is not a valid module name ({vocabulary.valid_module_name.__doc__.strip()})")
+        return
+    if module and not args.principal:
+        print("--module needs --principal: give the module's device the operator's principal, so `cap_self` bounds it "
+              "and it is not its own voting unit under quorum_by=principal.", file=sys.stderr)
+        sys.exit(1)
     payload = {"action": "admit", "device_id": args.device_id}
     if args.principal:
         payload["principal"] = args.principal
+    if module:
+        payload["module"] = module
     if _append_governance(payload):
-        print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else ""))
+        print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else "")
+              + (f" (module: {module}; it does not vote)" if module else ""))
+        if module:
+            return          # a module has no join-request and no sync address: no reciprocal peer
         if _add_peer(_join_request_url(args.device_id), args.principal or args.device_id):
             print("  + reciprocal peer added from its join-request URL — the owner now syncs to "
                   "this device too (daemon picks it up next cycle, or `hv sync now`).")
+
+
+def mint_module_key(name):
+    """Mint module `name`'s own device key (2.1, plan PR 3) at `<key dir>/modules/<name>/device-key` (0600, in a
+    0700 directory) and return `(device_id, pubkey_b64)`. It is a device key, not owner material: the module
+    signs its own entries with it, and the owner then admits it with `admit --module <name>`. Refuses a bad
+    name, and refuses to replace a key already there (a module's identity is its key; re-minting one would
+    orphan every entry it signed)."""
+    if not vocabulary.valid_module_name(name):
+        raise ValueError(f"{name!r} is not a valid module name")
+    if _ed25519 is None:
+        raise RuntimeError("ed25519 module unavailable; cannot create a module key")
+    d = _ensure_key_dir() / "modules" / name
+    path = d / "device-key"
+    if path.exists():
+        raise FileExistsError(f"module {name!r} already has a key at {path}")
+    d.parent.mkdir(exist_ok=True)
+    d.mkdir(exist_ok=True)
+    for p in (d.parent, d):
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass
+    seed = os.urandom(32)
+    _write_private(path, base64.b64encode(seed).decode() + "\n")
+    pub = _ed25519.pub_from_seed(seed)
+    return _device_id_for_pub(pub), base64.b64encode(pub).decode()
 
 
 def _group_change(action, device_id, principal=None):

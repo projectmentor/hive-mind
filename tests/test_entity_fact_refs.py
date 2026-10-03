@@ -145,3 +145,16 @@ def test_resolves_and_link_with_a_malformed_ref_are_skipped(tmp_path, monkeypatc
     link = _entry(hv, d, "link", {"kind": "relates", "from_ref": [fact["node_id"], fact["seq"]], "to_ref": ref,
                                   "data": {}, "source": "manual"}, "2026-01-01T00:00:03Z")
     _no_dangling(_rebuild(hv, tmp_path, [fact, res, link]))
+
+
+@pytest.mark.parametrize("bad", ["1", True, 1.5, [1], {"a": 1}, _BIG, -_BIG])
+@pytest.mark.parametrize("which", ["entity_id", "fact_id"])
+def test_a_legacy_local_id_of_the_wrong_type_is_skipped_though_both_rows_exist(tmp_path, monkeypatch, bad, which):
+    """Entity 1 and fact 1 both exist, so only the type/range guard stands between this entry and a wrong wiring
+    (`"1"` and `True` would bind as 1 through SQLite affinity; a list or an out-of-range int raises on bind)."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    ent = _entry(hv, d, "entity", {"name": "box", "type": "host"}, "2026-01-01T00:00:01Z")
+    fact = _fact(hv, d, "a fact", "2026-01-01T00:00:02Z")
+    bad_entry = _entry(hv, d, "entity_fact", {"entity_id": 1, "fact_id": 1, which: bad}, "2026-01-01T00:00:03Z")
+    _no_dangling(_rebuild(hv, tmp_path, [ent, fact, bad_entry]))

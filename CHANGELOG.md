@@ -14,13 +14,16 @@ introduced (a contract) or tagged (a patch).
 
 No contract change.
 
-- **`rebuild_db` no longer raises on an `entity_fact` whose ref points at the wrong kind of entry** (#196, security
-  fix). An `entity_fact` whose `fact_ref` named an entity, whose `entity_ref` named a fact, or whose legacy
-  `entity_id` / `fact_id` named no row made the rebuild fail with `IntegrityError`. Content of that type is accepted
-  from any admitted device and the journal is permanent, so one such entry stopped every node's rebuild. The entry
-  now lands and projects to nothing, as a dangling link does. A legacy `supersedes` is held to the same rule: a
-  `supersedes_ref` to a non-decision, or a `supersedes` that is not a decision row, marks nothing. Entries that
-  resolve are projected as before.
+- **`rebuild_db` no longer raises on an `entity_fact`, `supersedes`, `resolves_ref` or `link` whose ref or local id is
+  the wrong kind, absent or malformed** (#196, security fix). An `entity_fact` whose `fact_ref` named an entity,
+  whose `entity_ref` named a fact, or whose legacy `entity_id` / `fact_id` named no row made the rebuild fail with
+  `IntegrityError`. A ref that is not `[str, int]`, or an integer outside SQLite's 64-bit range (a ref's seq, a
+  legacy `entity_id` / `fact_id` / `supersedes`), made it fail with `OverflowError` or `ProgrammingError`. Content of
+  these types is accepted from any admitted device and the journal is permanent, so one such entry stopped every
+  node's rebuild. The entry now lands and projects to nothing, as a dangling link does. A `supersedes` is held to
+  the same rule: a `supersedes_ref` to a non-decision, or a `supersedes` that is not a decision row, marks nothing.
+  The link-evidence passes skip a malformed ref instead of raising `TypeError`. Entries that resolve are projected
+  as before.
 
 ## 2.0.1 — 2026-10-02 · `v2.0.1`
 

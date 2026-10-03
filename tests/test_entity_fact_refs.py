@@ -105,3 +105,43 @@ def test_supersedes_by_ref_and_by_legacy_id_still_marks_the_old_decision(tmp_pat
                                         "tags": [], "supersedes": 1}, "2026-01-01T00:00:03Z")
     conn = _rebuild(hv, tmp_path, [dec, legacy])
     assert conn.execute("SELECT superseded_by FROM decisions WHERE id = 1").fetchone()[0] == 2
+
+
+_BIG = 2**64
+_BAD_REFS = [["x", _BIG], [{"a": 1}, 1], [[1], [2]], {"a": 1}, ["x"], "xy", [True, 1]]
+
+
+@pytest.mark.parametrize("payload", [
+    {"entity_id": _BIG, "fact_id": 1},
+    *({"entity_ref": r, "fact_id": 1} for r in _BAD_REFS),
+    *({"entity_id": 1, "fact_ref": r} for r in _BAD_REFS),
+])
+def test_entity_fact_with_a_malformed_value_is_skipped(tmp_path, monkeypatch, payload):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    ent = _entry(hv, d, "entity", {"name": "box", "type": "host"}, "2026-01-01T00:00:01Z")
+    fact = _fact(hv, d, "a fact", "2026-01-01T00:00:02Z")
+    bad = _entry(hv, d, "entity_fact", dict(payload), "2026-01-01T00:00:03Z")
+    _no_dangling(_rebuild(hv, tmp_path, [ent, fact, bad]))
+
+
+@pytest.mark.parametrize("payload", [{"supersedes": _BIG}, *({"supersedes_ref": r} for r in _BAD_REFS)])
+def test_supersedes_with_a_malformed_value_marks_nothing(tmp_path, monkeypatch, payload):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    dec = _decision(hv, d, "the decision", "2026-01-01T00:00:01Z")
+    bad = _entry(hv, d, "decision", {"content": "x", "rationale": "r", "source": "manual", "tags": [],
+                                     **payload}, "2026-01-01T00:00:02Z")
+    _no_dangling(_rebuild(hv, tmp_path, [dec, bad]))
+
+
+@pytest.mark.parametrize("ref", _BAD_REFS)
+def test_resolves_and_link_with_a_malformed_ref_are_skipped(tmp_path, monkeypatch, ref):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    fact = _fact(hv, d, "a fact", "2026-01-01T00:00:01Z")
+    res = _entry(hv, d, "fact", {"content": "r", "source": "manual", "tags": [], "resolves_ref": ref},
+                 "2026-01-01T00:00:02Z")
+    link = _entry(hv, d, "link", {"kind": "relates", "from_ref": [fact["node_id"], fact["seq"]], "to_ref": ref,
+                                  "data": {}, "source": "manual"}, "2026-01-01T00:00:03Z")
+    _no_dangling(_rebuild(hv, tmp_path, [fact, res, link]))

@@ -942,6 +942,10 @@ def admit_cmd(args):
     if module is not None and not vocabulary.valid_module_name(module):
         print(f"{module!r} is not a valid module name ({vocabulary.valid_module_name.__doc__.strip()})")
         return
+    if module and not args.principal:
+        print("--module needs --principal: give the module's device the operator's principal, so `cap_self` bounds it "
+              "and it is not its own voting unit under quorum_by=principal.")
+        return
     payload = {"action": "admit", "device_id": args.device_id}
     if args.principal:
         payload["principal"] = args.principal

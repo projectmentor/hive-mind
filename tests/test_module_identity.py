@@ -53,7 +53,7 @@ def test_a_later_admit_without_the_module_clears_the_mark(tmp_path):
 def test_a_bad_module_name_is_refused_and_writes_nothing(tmp_path):
     a, b, c = _setup(tmp_path)
     before = sorted(p.read_text() for p in (a / "journal").glob("*.jsonl"))
-    r = _run(a, "group", "admit", _device_id(c), "--module", "Bad Name", now=NOW, check=False)
+    r = _run(a, "group", "admit", _device_id(c), "--principal", "op", "--module", "Bad Name", now=NOW, check=False)
     assert "not a valid module name" in r.stdout
     assert sorted(p.read_text() for p in (a / "journal").glob("*.jsonl")) == before
     assert _gov(a)[1]["modules"] == {}
@@ -149,3 +149,12 @@ def test_mint_module_key_refuses_to_replace_a_key_or_take_a_bad_name(tmp_path):
         with pytest.raises(ValueError):
             hv.mint_module_key(bad)
     assert sorted(p.name for p in (_keys.key_dir(tmp_path) / "modules").iterdir()) == ["hwatch"]
+
+
+def test_module_without_principal_is_refused_and_writes_nothing(tmp_path):
+    a, b, c = _setup(tmp_path)
+    before = sorted(p.read_text() for p in (a / "journal").glob("*.jsonl"))
+    r = _run(a, "group", "admit", _device_id(c), "--module", "hwatch", now=NOW, check=False)
+    assert "--module needs --principal" in r.stdout
+    assert sorted(p.read_text() for p in (a / "journal").glob("*.jsonl")) == before
+    assert _gov(a)[1]["modules"] == {}

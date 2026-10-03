@@ -572,7 +572,7 @@ join-request advertised, so the owner syncs *to* the member too — connectivity
 admission but stays editable in `.peers.json`. `--module NAME` *(2.1)* marks the device as module NAME's: it is admitted like any other
 (give it the operator's `--principal`, so `cap_self` still bounds it), but it neither proposes nor votes in a quorum
 election, and no peer is seeded for it (a module has no sync address). A later `admit` without `--module` clears
-the mark. A 2.0 node ignores the mark and still counts that device's vote. Admission grants only write/fertility, never
+the mark. `--module` requires `--principal`. A 2.0 node ignores the mark and still counts that device's vote. Until the 2.1 doctor lands, `hv doctor` reports the module device as unreachable under `fleet-contract`; a 2.0 node always will. Admission grants only write/fertility, never
 governance. Get a device's id with `hv config identity show` on it. A device that isn't
 admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
 are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.

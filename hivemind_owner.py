@@ -972,7 +972,15 @@ def _config_set(key, value):
     (same_device_lambda, cap_self, introspect_support_weight), the salience/decay knobs
     (importance_self_cap, w_links, w_volatile, halflife_fact/idea/volatile), the trust-velocity knobs
     (trust_long_days, trust_short_days, trust_drift_threshold), the quorum-election knobs (quorum_m,
-    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers, forget_writers)."""
+    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers, forget_writers). A key
+    `x-<module>:<key>` is a module's fleet-wide config (2.1): a string, stored and never interpreted."""
+    if vocabulary.split_module_name(key):      # 2.1 M3: a module's fleet-wide config, `x-<module>:<key>`, a string
+        if not isinstance(value, str) or len(value) > vocabulary.MODULE_VALUE_MAX:
+            print(f"bad value for {key}: a string of at most {vocabulary.MODULE_VALUE_MAX} characters")
+            return
+        if _append_governance({"action": "set-config", "key": key, "value": value}):
+            print(f"set {key} = {value}")
+        return
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
                 "capsule_putters": str, "cell_writers": str, "forget_writers": str,
@@ -980,7 +988,7 @@ def _config_set(key, value):
                 "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float,
                 **{k: float for k in _PR6_KNOB_DEFAULTS}}
     if key not in coercers:
-        print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
+        print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))}, or a module's x-<module>:<key>)")
         return
     try:
         val = coercers[key](value)

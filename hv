@@ -1736,7 +1736,8 @@ def _governance_state_uncached(entries):
     gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-           "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
+           "principals": {}, "module_config": {},
+           "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
                                         "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
@@ -1950,6 +1951,9 @@ def _governance_state_uncached(entries):
                     gov["config"][key] = raw
                 elif key == "forget_writers" and raw in ("legacy", "owner"):   # #122 step 2; else ignored
                     gov["config"][key] = raw
+                elif vocabulary.split_module_name(key) and isinstance(raw, str) \
+                        and len(raw) <= vocabulary.MODULE_VALUE_MAX:
+                    gov["module_config"][key] = raw   # 2.1 M3: `x-<module>:<key>`, a string core never interprets
             except (TypeError, ValueError):
                 pass
 
@@ -2161,7 +2165,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {},
+                "principals": {}, "module_config": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,

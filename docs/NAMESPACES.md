@@ -102,7 +102,7 @@ The `action` of a `governance` entry.
 
 The keys a `set-config` act may set. An older node ignores a key it does not know.
 
-*Modules:* Yes, prefixed. An older node ignores a key it does not know.
+*Modules:* Yes, prefixed. `x-<module>:<key>` holds a string the core stores and never interprets. An older node ignores a key it does not know.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -193,8 +193,8 @@ The fields an entry is made of. A module never writes its own: the core builds t
 | Name | Status | Since | Meaning |
 |---|---|---|---|
 | `action` | written | 1.4 | Which act a `governance` payload records. |
-| `from` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an edge starts from. A link carries `from_ref` today. |
-| `id` | reserved | 2.0 | Reserved for the module envelope (#150): an entry's identity, today `node_id:seq` or its `h:` short id. |
+| `from` | reserved | 2.0 | Reserved for the module envelope: the ref an edge starts from. A module link carries it as a ref `_resolve_ref` resolves, as a core link's `from_ref` is. |
+| `id` | reserved | 2.0 | Reserved for the module envelope: an entry's identity, `node_id:seq` or its `h:` short id. It names the entry; it is not a field a module writes. |
 | `kind` | written | 1.13 | The discriminator inside a typed payload: a link's relationship, an announce's kind, a cell's or capsule's kind. |
 | `node_id` | written | 1.0 | The authoring device; since 1.3, `k1:` and 16 hex of its key's sha256. |
 | `payload` | written | 1.0 | The type-specific body. |
@@ -202,9 +202,9 @@ The fields an entry is made of. A module never writes its own: the core builds t
 | `pub` | written | 1.3 | The signer's Ed25519 public key. |
 | `seq` | written | 1.0 | The device's sequence number; `(node_id, seq)` identifies an entry. |
 | `sig` | written | 1.3 | The device's Ed25519 signature over the entry without `sig`. |
-| `target` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an act is about. Today `retracts_ref` or `to_ref`. |
+| `target` | reserved | 2.0 | Reserved for the module envelope: the ref an act is about, resolved like `retracts_ref` or `to_ref`. |
 | `timestamp` | written | 1.0 | When the entry was written (ISO 8601); it also names the journal's day file. |
-| `to` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an edge points to. A link carries `to_ref` today. |
+| `to` | reserved | 2.0 | Reserved for the module envelope: the ref an edge points to. A module link carries it as a ref `_resolve_ref` resolves, as a core link's `to_ref` is. |
 | `type` | written | 1.0 | The entry type (see Entry types). |
 
 ## Local files

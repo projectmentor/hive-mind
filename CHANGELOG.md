@@ -10,6 +10,18 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.0.2 — 2026-10-03 · `v2.0.2`
+
+No contract change.
+
+- **`rebuild_db` no longer raises on an `entity_fact` whose ref points at the wrong kind of entry** (#196, security
+  fix). An `entity_fact` whose `fact_ref` named an entity, whose `entity_ref` named a fact, or whose legacy
+  `entity_id` / `fact_id` named no row made the rebuild fail with `IntegrityError`. Content of that type is accepted
+  from any admitted device and the journal is permanent, so one such entry stopped every node's rebuild. The entry
+  now lands and projects to nothing, as a dangling link does. A legacy `supersedes` is held to the same rule: a
+  `supersedes_ref` to a non-decision, or a `supersedes` that is not a decision row, marks nothing. Entries that
+  resolve are projected as before.
+
 ## 2.0.1 — 2026-10-02 · `v2.0.1`
 
 No contract change.

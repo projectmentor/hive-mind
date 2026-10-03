@@ -557,6 +557,7 @@ hv group                                       # roster (admitted/pending/denied
 hv group list                                  # same as above
 hive-mind group admit                                 # list devices awaiting admission
 hive-mind group admit k1:597b3e0f5fb92d37 --principal david
+hive-mind group admit k1:… --principal david --module hwatch   # a module's own device (2.1): it never votes
 hive-mind group revoke k1:…                           # un-admit (reversible) → device goes STERILE
 hive-mind group deny k1:…                             # reject a pending join-request (admit overrides)
 hive-mind group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
@@ -568,7 +569,10 @@ in your session-start digest, so your agent can prompt you.) `--principal` tags 
 owns the device; when every device behind a fact belongs to the same principal, its
 confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
 join-request advertised, so the owner syncs *to* the member too — connectivity is seeded by
-admission but stays editable in `.peers.json`. Admission grants only write/fertility, never
+admission but stays editable in `.peers.json`. `--module NAME` *(2.1)* marks the device as module NAME's: it is admitted like any other
+(give it the operator's `--principal`, so `cap_self` still bounds it), but it neither proposes nor votes in a quorum
+election, and no peer is seeded for it (a module has no sync address). A later `admit` without `--module` clears
+the mark. A 2.0 node ignores the mark and still counts that device's vote. Admission grants only write/fertility, never
 governance. Get a device's id with `hv config identity show` on it. A device that isn't
 admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
 are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.

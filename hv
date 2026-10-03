@@ -1736,7 +1736,7 @@ def _governance_state_uncached(entries):
     gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-           "principals": {}, "module_config": {},
+           "principals": {}, "modules": {}, "module_config": {},
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -1811,6 +1811,8 @@ def _governance_state_uncached(entries):
             quorum_m = int(gov["config"].get("quorum_m", 0) or 0)
             if quorum_m <= 0 or _nid not in gov["admitted"] or _nid in gov["purged"]:
                 continue                       # elections off, or a non-admitted/purged signer
+            if _nid in gov["modules"]:
+                continue                       # 2.1: a module device neither proposes nor votes (the owner's `admit` says so)
             pid = p.get("proposal_id")
             if not pid:
                 continue
@@ -1918,6 +1920,12 @@ def _governance_state_uncached(entries):
             gov["denied"].discard(p["device_id"])
             if p.get("principal"):
                 gov["principals"][p["device_id"]] = p["principal"]
+            # 2.1: an owner `admit` carrying `module: <name>` marks a module's device; a later admit without
+            # it clears the mark. A 2.0 node ignores the field, so it still counts that device's vote (§7).
+            if vocabulary.valid_module_name(p.get("module")):
+                gov["modules"][p["device_id"]] = p["module"]
+            else:
+                gov["modules"].pop(p["device_id"], None)
         elif action == "revoke" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
         elif action == "deny" and p.get("device_id"):
@@ -2165,7 +2173,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {}, "module_config": {},
+                "principals": {}, "modules": {}, "module_config": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -9166,12 +9174,14 @@ def build_parser():
     admit_parser = subparsers.add_parser("admit", help="[alias of `hive-mind group admit`] Admit a device; no arg lists pending")
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
     admit_parser.add_argument("--principal", help="Tag the person or agent who owns this device")
+    admit_parser.add_argument("--module", help="Mark the device as module NAME's (2.1): it never votes in an election")
 
     group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list")
     group_sub = group_parser.add_subparsers(dest="group_action")
     g_admit = group_sub.add_parser("admit", help="Admit a device; no arg lists pending requests")
     g_admit.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list pending")
     g_admit.add_argument("--principal", help="Tag the person or agent who owns this device")
+    g_admit.add_argument("--module", help="Mark the device as module NAME's (2.1): it never votes in an election")
     g_revoke = group_sub.add_parser("revoke", help="Un-admit a device (reversible) → returns to STERILE")
     g_revoke.add_argument("device_id")
     g_deny = group_sub.add_parser("deny", help="Reject a pending join-request (a later admit overrides)")

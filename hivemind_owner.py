@@ -944,8 +944,8 @@ def admit_cmd(args):
         return
     if module and not args.principal:
         print("--module needs --principal: give the module's device the operator's principal, so `cap_self` bounds it "
-              "and it is not its own voting unit under quorum_by=principal.")
-        return
+              "and it is not its own voting unit under quorum_by=principal.", file=sys.stderr)
+        sys.exit(1)
     payload = {"action": "admit", "device_id": args.device_id}
     if args.principal:
         payload["principal"] = args.principal

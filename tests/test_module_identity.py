@@ -155,6 +155,7 @@ def test_module_without_principal_is_refused_and_writes_nothing(tmp_path):
     a, b, c = _setup(tmp_path)
     before = sorted(p.read_text() for p in (a / "journal").glob("*.jsonl"))
     r = _run(a, "group", "admit", _device_id(c), "--module", "hwatch", now=NOW, check=False)
-    assert "--module needs --principal" in r.stdout
+    assert r.returncode != 0
+    assert "--module needs --principal" in r.stderr
     assert sorted(p.read_text() for p in (a / "journal").glob("*.jsonl")) == before
     assert _gov(a)[1]["modules"] == {}

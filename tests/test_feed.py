@@ -176,3 +176,31 @@ def test_feed_never_reads_the_owner_key():
     body = src[src.index("def _feed_cursor_parse"):src.index("def journal_keys")]
     for banned in ("ownerkey", "owner_seed", "_owner_seed", "hivemind_owner"):
         assert banned not in body
+
+
+def test_affects_never_names_a_ref_the_feed_withholds(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1, d2), base = _hive(hv)
+    good, bad = _fact(hv, d0, "shared", T % 1), _fact(hv, d1, "other", T % 2)
+    bad["payload"] = dict(bad["payload"], content="shared")               # tampered after signing: shares content
+    forget = _act(hv, d2, good, T % 10, owner=(owner[0], owner[1]))
+    _journal(tmp_path, base + [good, bad, forget])
+    page = _by_ref(_all(hv))
+    assert f"{d1['id']}:1" not in page
+    assert page[f"{d2['id']}:1"]["affects"] == [f"{d0['id']}:1"]
+
+
+def test_affects_is_present_on_owner_acts_only(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1, d2), base = _hive(hv)
+    f = _fact(hv, d0, "target", T % 1)
+    honoured = _act(hv, d1, f, T % 10, owner=(owner[0], owner[1]))
+    forged = _act(hv, d2, f, T % 11)                                      # owner source, no owner signature
+    peer = _act(hv, d0, f, T % 12)
+    peer["payload"] = dict(peer["payload"], source="claude:peer/x")       # an ordinary peer retract
+    peer.pop("sig", None)
+    _journal(tmp_path, base + [f, honoured, forged, peer])
+    page = _by_ref(_all(hv))
+    assert page[f"{d1['id']}:1"]["affects"] == [f"{d0['id']}:1"]
+    assert page[f"{d2['id']}:1"]["affects"] == []
+    assert "affects" not in page[f"{d0['id']}:2"]

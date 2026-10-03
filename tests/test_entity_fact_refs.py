@@ -142,7 +142,7 @@ def test_resolves_and_link_with_a_malformed_ref_are_skipped(tmp_path, monkeypatc
     fact = _fact(hv, d, "a fact", "2026-01-01T00:00:01Z")
     res = _entry(hv, d, "fact", {"content": "r", "source": "manual", "tags": [], "resolves_ref": ref},
                  "2026-01-01T00:00:02Z")
-    link = _entry(hv, d, "link", {"kind": "relates", "from_ref": [fact["node_id"], fact["seq"]], "to_ref": ref,
+    link = _entry(hv, d, "link", {"kind": "supports", "from_ref": [fact["node_id"], fact["seq"]], "to_ref": ref,
                                   "data": {}, "source": "manual"}, "2026-01-01T00:00:03Z")
     _no_dangling(_rebuild(hv, tmp_path, [fact, res, link]))
 
@@ -158,3 +158,16 @@ def test_a_legacy_local_id_of_the_wrong_type_is_skipped_though_both_rows_exist(t
     fact = _fact(hv, d, "a fact", "2026-01-01T00:00:02Z")
     bad_entry = _entry(hv, d, "entity_fact", {"entity_id": 1, "fact_id": 1, which: bad}, "2026-01-01T00:00:03Z")
     _no_dangling(_rebuild(hv, tmp_path, [ent, fact, bad_entry]))
+
+
+@pytest.mark.parametrize("seq_of", [lambda e: True, lambda e: float(e["seq"]), lambda e: str(e["seq"])])
+def test_a_ref_whose_seq_is_the_wrong_type_is_skipped_though_the_target_exists(tmp_path, monkeypatch, seq_of):
+    """The real node id with entity 1 and fact 1 present: `True`, `1.0` and `"1"` hash or bind as 1, so only the
+    ref's seq type guard keeps them from wiring (2.0.1 wired them; 2.0.2 skips)."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    ent = _entry(hv, d, "entity", {"name": "box", "type": "host"}, "2026-01-01T00:00:01Z")
+    fact = _fact(hv, d, "a fact", "2026-01-01T00:00:02Z")
+    bad = _entry(hv, d, "entity_fact", {"entity_ref": [ent["node_id"], seq_of(ent)],
+                                        "fact_ref": [fact["node_id"], fact["seq"]]}, "2026-01-01T00:00:03Z")
+    _no_dangling(_rebuild(hv, tmp_path, [ent, fact, bad]))

@@ -202,7 +202,7 @@ SOURCE_CONTEXTS = {
 ENVELOPE_FIELDS = {
     "action":    _v(WRITTEN, "1.4", "Which act a `governance` payload records."),
     "from":      _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge starts from. A module link "
-                                     "carries it as a ref `_resolve_ref` resolves, as a core link's `from_ref` is."),
+                                     "carries it as a pair `_resolve_ref` resolves (an `h:` id is mapped to a pair first), as a core link's `from_ref` is."),
     "id":        _v(RESERVED, "2.0", "Reserved for the module envelope: an entry's identity, `node_id:seq` or its "
                                      "`h:` short id. It names the entry; it is not a field a module writes."),
     "kind":      _v(WRITTEN, "1.13", "The discriminator inside a typed payload: a link's relationship, an "
@@ -219,7 +219,7 @@ ENVELOPE_FIELDS = {
     "timestamp": _v(WRITTEN, "1.0", "When the entry was written (ISO 8601); it also names the journal's day "
                                     "file."),
     "to":        _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge points to. A module link "
-                                     "carries it as a ref `_resolve_ref` resolves, as a core link's `to_ref` is."),
+                                     "carries it as a pair `_resolve_ref` resolves (an `h:` id is mapped to a pair first), as a core link's `to_ref` is."),
     "type":      _v(WRITTEN, "1.0", "The entry type (see Entry types)."),
 }
 
@@ -396,8 +396,8 @@ def check_module_name(module, category, name):
 
 # ── ref-bearing payload fields (2.1, plan PR 2; the list #150 deferred) ───────────────────────────────
 # Every payload field the code reads as a reference to another entry. `shape`: `pair` is `[node_id, seq]`,
-# `pairs` a list of them, `ref` a pair or its `node_id:seq` or `h:` string form. A ref-walking check (a rebuild, a doctor pass, the module API) covers this table, and
-# `tests/test_vocabulary.py` fails when the code reads a ref field that is not listed, or a row nothing reads.
+# `pairs` a list of them, `ref` a pair or its `node_id:seq` or `h:` string form, `local_id` a pre-Phase-2 local row id. A ref-walking check (a rebuild, a doctor pass, the module API) covers this table, and
+# `tests/test_ref_fields.py` fails when the code reads a ref field that is not listed, or a row nothing reads.
 # `legacy` rows are read for old journals and never written by core any more. The module envelope's
 # `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved` until the module API reads them.
 REF_FIELDS = {
@@ -421,6 +421,12 @@ REF_FIELDS = {
                        "meaning": "The entity a pre-1.19 `entity_fact` entry attaches a fact to."},
     "fact_ref":       {"types": ("entity_fact",), "shape": "pair", "status": LEGACY,
                        "meaning": "The fact a pre-1.19 `entity_fact` entry attaches."},
+    "entity_id":      {"types": ("entity_fact",), "shape": "local_id", "status": LEGACY,
+                       "meaning": "A pre-Phase-2 `entity_fact` entry's entity, as a local id; read when `entity_ref` is absent."},
+    "fact_id":        {"types": ("entity_fact",), "shape": "local_id", "status": LEGACY,
+                       "meaning": "A pre-Phase-2 `entity_fact` entry's fact, as a local id; read when `fact_ref` is absent."},
+    "supersedes":     {"types": ("decision",), "shape": "local_id", "status": LEGACY,
+                       "meaning": "A pre-Phase-2 decision's replaced decision, as a local id; read when `supersedes_ref` is absent."},
     "escrow_ref":     {"types": ("governance",), "shape": "ref", "status": WRITTEN,
                        "meaning": "The escrow a `revoke-escrow` act tombstones: `all`, a pair or `node_id:seq`."},
     "from":           {"types": ("link",), "shape": "ref", "status": RESERVED,

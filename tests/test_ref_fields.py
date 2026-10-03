@@ -20,7 +20,7 @@ from test_links import _loadhv  # noqa: E402
 from test_vocabulary import _sources  # noqa: E402
 
 # Fields that are refs but are not named `*_ref`. The scan finds `*_ref` itself, so a new one cannot hide.
-NAMED_REFS = {"informed_by", "revokes"}
+NAMED_REFS = {"informed_by", "revokes", "entity_id", "fact_id", "supersedes"}
 # `*_ref` names that are not journal payload fields: a key of the local `.genesis-pin` file (LOCAL_FILES).
 NOT_PAYLOAD = {"genesis_ref"}
 
@@ -30,7 +30,7 @@ def _constants(src):
 
 
 def _read_as_payload_key(src):
-    """String literals used as `x.get("k")`, `x["k"]` or `"k" in x`: how a payload field is read."""
+    """String literals used as `x.get("k")` or `x["k"]`: how a payload field is read."""
     out = set()
     for n in ast.walk(ast.parse(src)):
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr == "get" \
@@ -57,7 +57,7 @@ def test_every_ref_field_in_the_table_is_used_by_the_code():
 
 def test_ref_fields_shape():
     for name, rec in vocabulary.REF_FIELDS.items():
-        assert rec["shape"] in ("pair", "pairs", "ref"), name
+        assert rec["shape"] in ("pair", "pairs", "ref", "local_id"), name
         assert rec["status"] in vocabulary.STATUSES and rec["types"] and rec["meaning"].strip(), name
         assert (rec["status"] == vocabulary.RESERVED) == (name in vocabulary.ENVELOPE_FIELDS), name
         assert not name.startswith("x-"), name
@@ -104,6 +104,14 @@ def _carrier(field, ref):
         return "escrow", [_e("dev", 10, "governance", {"action": "revoke-escrow", "escrow_ref": ref}, 10)]
     if field == "entity_ref":
         return "entity", [_e("dev", 11, "entity_fact", {"entity_ref": ref, "fact_ref": NEIGHBOUR}, 11)]
+    lid = 999 if ref[0] == "ghost" else 1      # a legacy local id: one no node has, or the first row's
+    if field == "entity_id":
+        return "entity", [_e("dev", 11, "entity_fact", {"entity_id": lid, "fact_id": 1}, 11)]
+    if field == "fact_id":
+        return "fact", [_e("dev", 9, "entity", {"name": "box", "type": "host"}, 9),
+                        _e("dev", 11, "entity_fact", {"entity_id": 1, "fact_id": lid}, 11)]
+    if field == "supersedes":
+        return "decision", [_decision(10, "the replacement", supersedes=lid)]
     raise AssertionError(f"{field}: no carrier in test_ref_fields.py; add one for the new REF_FIELDS row")
 
 

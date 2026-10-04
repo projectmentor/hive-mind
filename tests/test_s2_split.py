@@ -113,6 +113,14 @@ def test_hv_never_reaches_the_signer_or_the_control_plane():
     assert "merkle" in reached and "commandmap" in reached, "the walk must actually follow hv's imports"
 
 
+def test_the_module_api_never_reaches_the_signer_or_the_control_plane():
+    """2.1 A2/A3: `hive_module_api` is data plane; nothing it imports (the sync daemon, `hv` by path) reaches the owner key."""
+    reached = import_closure(PROJECT / "hive_module_api.py", PROJECT)
+    assert not (reached & FORBIDDEN), f"hive_module_api's import graph reaches {sorted(reached & FORBIDDEN)}"
+    assert "hive_sync_daemon" in reached and "vocabulary" in reached, "the walk must actually follow its imports"
+    assert not owner_sig_writes((PROJECT / "hive_module_api.py").read_text())
+
+
 def _mutant(tmp_path, extra_hv="", helpers=None):
     """A copy of the project's modules with `extra_hv` appended to `hv` and optional helper modules."""
     root = tmp_path / "mutant"

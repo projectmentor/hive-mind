@@ -4077,12 +4077,14 @@ def api_overview():
 
 
 def api_search(query="", tag=None, kind="all", min_confidence=0.0,
-               limit=50, offset=0, sort="salience", status="all"):
+               limit=50, offset=0, sort="salience", status="all", include_forgotten=True):
     """Facts + decisions for `query`, mirroring `hv search` but PAGINATED and sortable/filterable.
     `sort`: confidence (effective confidence, default; `salience` is a legacy alias) | recency (created) |
     importance | utility (1.19 PR6, learned projections decayed at query time). `status` (facts): all (live,
     >= min_confidence) | contested | forgotten (owner-forgotten, normally hidden) | volatile. Returns
-    the page slice plus `*_total` so the UI can page; empty query browses everything."""
+    the page slice plus `*_total` so the UI can page; empty query browses everything.
+    `include_forgotten=False` drops owner-forgotten facts in every status branch (and `status=forgotten`
+    then matches nothing), so totals and paging stay right; the module API passes it (2.1 A5)."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
     sort = "confidence" if sort in (None, "", "salience") else sort
@@ -4114,6 +4116,8 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             if tag and tag not in tags:
                 continue
             tl = [str(t).lower() for t in tags]
+            if not include_forgotten and base <= FORGET_FLOOR:
+                continue
             if status == "contested":
                 if not r["contested"]:
                     continue

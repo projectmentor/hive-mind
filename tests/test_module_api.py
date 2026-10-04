@@ -44,9 +44,12 @@ class Hive:
         self.fact = TL._fact(hv, self.plain, "the backup runs at 02:00", T % 1)
         self.gone = TL._fact(hv, self.plain, "a secret the owner forgot", T % 2)
         forget = _act(hv, self.plain, self.gone, T % 3, owner=o)
+        self.gone_v = TL._entry(hv, self.plain, "fact", {"content": "a volatile secret the owner forgot", "tags": ["volatile"],
+                                                         "importance": 0.5, "source": "manual"}, T % 4)
+        forget_v = _act(hv, self.plain, self.gone_v, T % 5, owner=o)
         cfg = [TL._entry(hv, self.plain, "governance", {"action": "set-config", "key": k, "value": v}, T % (10 + i), owner=o)
                for i, (k, v) in enumerate([("x-hwatch:poll", "30s"), ("x-other:poll", "5m")])]
-        self.entries = base + [self.fact, self.gone, forget] + cfg
+        self.entries = base + [self.fact, self.gone, forget, self.gone_v, forget_v] + cfg
         if not with_owner:
             self.entries = []
         TL._project(hv, tmp_path, self.entries).close()
@@ -152,10 +155,11 @@ def test_a_device_that_is_not_admitted_or_not_a_module_is_403(hive):
 
 
 def test_a_hive_with_no_owner_refuses_every_module_request(tmp_path, monkeypatch):
-    h = Hive(tmp_path / "x", monkeypatch, with_owner=False) if (tmp_path / "x").mkdir() is None else None
+    (tmp_path / "x").mkdir()
+    h = Hive(tmp_path / "x", monkeypatch, with_owner=False)
     try:
         code, body = h.get("/v1/", dev=h.mod["seed"])
-        assert code == 403
+        assert code == 403      # not "no-owner": with no owner `modules` is empty, so no journal reaches that branch
     finally:
         h.close()
 
@@ -202,6 +206,19 @@ def test_search_and_item_read_the_projection_and_never_hand_over_forgotten_text(
     code, body = hive.get("/v1/search")
     assert "a secret the owner forgot" not in json.dumps(body)
     assert hive.get("/v1/search?status=forgotten")[0] == 400
+    for q in ("min_confidence=-1", "min_confidence=-5", "min_confidence=nan", "min_confidence=-inf", "status=volatile",
+              "status=volatile&min_confidence=0", "status=contested", "kind=fact&sort=recency"):
+        code, body = hive.get("/v1/search?" + q)
+        assert code in (200, 400), q
+        assert "secret" not in json.dumps(body), q
+    assert hive.get("/v1/search?min_confidence=-1")[0] == 400 and hive.get("/v1/search?min_confidence=nan")[0] == 400
+    assert hive.get("/v1/search?status=volatile")[1]["facts"] == []
+    assert hive.get("/v1/search")[1]["facts_total"] == 1                # the forgotten facts are not counted either
+    # a forgotten fact that the projection also marks contested is still withheld from the contested branch
+    hive.hv.get_conn().execute("UPDATE facts SET contested = 1 WHERE content LIKE '%secret%'")
+    hive.hv.get_conn().commit()
+    code, body = hive.get("/v1/search?status=contested")
+    assert code == 200 and body["facts"] == [] and body["facts_total"] == 0
     ref = f"{hive.fact['node_id']}:{hive.fact['seq']}"
     code, body = hive.get("/v1/item?id=" + ref)
     assert code == 200 and body["item"]["content"] == "the backup runs at 02:00"

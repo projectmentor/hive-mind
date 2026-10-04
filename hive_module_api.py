@@ -18,6 +18,7 @@ concurrency cap bounds it.
 """
 
 import json
+import math
 import os
 import sys
 import threading
@@ -34,8 +35,10 @@ BIND = "127.0.0.1"
 PORT_DEFAULT = 9886            # HIVE_MODULE_PORT overrides; the sync daemon's own port is 9876
 FEED_LIMIT_DEFAULT, FEED_LIMIT_MAX = 200, 1000
 SEARCH_LIMIT_MAX = 200
-# What `api_search` may be asked. `status=forgotten` is refused: a module must never be handed text the owner
-# forgot (the A5 rule `hv feed` already states with its `forgotten` flag).
+# What `api_search` may be asked. A5 splits two ways: search and item withhold the text of anything the owner
+# forgot (`status=forgotten` is refused, and `include_forgotten=False` hides it in every branch), while
+# `/v1/feed` is `hv feed` and carries the authoritative `forgotten` flag for the module to honour: hide the
+# fact and never republish it.
 _KINDS = ("all", "fact", "decision")
 _SORTS = ("confidence", "recency", "importance", "utility")
 _STATUSES = ("all", "contested", "volatile")
@@ -97,11 +100,14 @@ def route_search(ctx, q):
         min_conf = float(q.get("min_confidence", ["0"])[0] or 0)
     except ValueError:
         raise _Refused(400, {"error": "min_confidence must be a number"})
+    if not math.isfinite(min_conf) or min_conf < 0:
+        raise _Refused(400, {"error": "min_confidence must be a finite number >= 0"})
     return daemon.hv.api_search(
         query=q.get("q", [""])[0], tag=q.get("tag", [None])[0] or None,
         kind=_choice(q, "kind", "all", _KINDS), min_confidence=min_conf,
         limit=_int(q, "limit", 50, 1, SEARCH_LIMIT_MAX), offset=_int(q, "offset", 0, 0, 10 ** 9),
-        sort=_choice(q, "sort", "confidence", _SORTS), status=_choice(q, "status", "all", _STATUSES))
+        sort=_choice(q, "sort", "confidence", _SORTS), status=_choice(q, "status", "all", _STATUSES),
+        include_forgotten=False)
 
 
 def route_item(ctx, q):

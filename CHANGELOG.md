@@ -14,6 +14,12 @@ introduced (a contract) or tagged (a patch).
 
 No contract change.
 
+- **The legacy `supersedes_ref`, `supersedes` and `resolves_ref` payload fields now go through the link authority**
+  (#204, security fix). They projected for any admitted device, so one device could mark another's decision
+  superseded on every node. They now command only when the owner key signed the entry or its signer wrote the
+  target, as a `link` entry does; `resolves_ref` must name a fact. Self-authored and owner-signed history projects
+  as before. `hv doctor` `link-authz` lists a legacy field that no longer commands. A `link` entry is the only way
+  to supersede or resolve (`AGENT_INTEGRATION.md` §7).
 - **`rebuild_db` is atomic** (#206). It committed the deletes before replaying the journal and never closed its
   connection on error, so a failure left the node's projection empty, search returning nothing, and a write lock
   held. It now runs in one transaction (`BEGIN IMMEDIATE` to the final insert, no commit between), rolls back on any

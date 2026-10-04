@@ -90,28 +90,32 @@ def hive(tmp_path, monkeypatch):
 
 
 def test_route_table_is_exactly_the_documented_set():
-    assert sorted(api.ROUTES) == ["/v1/", "/v1/feed", "/v1/item", "/v1/search"]
+    assert sorted(api.ROUTES) == ["/v1/", "/v1/entries", "/v1/feed", "/v1/item", "/v1/search", "/v1/tip"]
+    assert api.WRITE_ROUTES == ("/v1/entries",)
     assert api.API_VERSIONS == ["v1"]
 
 
 def test_no_route_names_governance_or_owner_state():
-    """A3: the module API is data plane only, and the write routes are not here yet."""
+    """A3: the module API is data plane only."""
     for path in api.ROUTES:
-        assert not re.search(r"governance|owner|group|config|capsule|cell|comb|escrow|entries", path), path
+        assert not re.search(r"governance|owner|group|config|capsule|cell|comb|escrow", path), path
 
 
 def test_root_names_the_caller_and_serves_only_its_own_module_config(hive):
     code, body = hive.get("/v1/")
     assert code == 200
     assert body == {"api": ["v1"], "contract": hive.hv.CONTRACT_VERSION, "hive_id": "h1", "device_id": hive.mod["id"],
-                    "module": "hwatch", "quota": None, "config": {"x-hwatch:poll": "30s"}}
+                    "module": "hwatch", "quota": {"limits": api.QUOTA_DEFAULTS, "used": {"per_hour": 0, "per_day": 0, "lifetime": 0},
+                                                  "remaining": {"per_hour": 60, "per_day": 500, "lifetime": 50000}},
+                    "config": {"x-hwatch:poll": "30s"}}
     code, other = hive.get("/v1/", dev="other")
     assert other["module"] == "other" and other["config"] == {"x-other:poll": "5m"}
 
 
 def test_an_unknown_route_is_404_and_an_unsupported_version_names_the_supported_ones(hive):
     assert hive.get("/v1/governance")[0] == 404
-    assert hive.get("/v1/entries")[0] == 404                      # PR 5
+    code, body = hive.get("/v1/entries")                          # a route, but it takes POST
+    assert code == 405 and body["error"] == "/v1/entries takes POST"
     code, body = hive.get("/v2/")
     assert code == 404 and body["supported"] == ["v1"]
     assert hive.get("/v2/feed")[1]["supported"] == ["v1"]
@@ -167,7 +171,7 @@ def test_a_hive_with_no_owner_refuses_every_module_request(tmp_path, monkeypatch
         h.close()
 
 
-def test_the_api_is_read_only(hive):
+def test_only_get_and_post_exist_and_a_write_to_a_read_route_writes_nothing(hive):
     for m in ("POST", "PUT", "DELETE", "PATCH"):
         code, body = hive.get("/v1/feed", method=m, body=b"{}")
         assert code == 405, m
@@ -176,9 +180,8 @@ def test_the_api_is_read_only(hive):
         conn.request(m, "/v1/feed", headers=signed(hive.mod["seed"], m, "/v1/feed", ""))
         r = conn.getresponse()
         assert r.status == 405 and r.getheader("Content-Type") == "application/json", m
-        assert r.getheader("Allow") == "GET", m
+        assert r.getheader("Allow") == "GET, POST", m
         conn.close()
-    assert hive.get("/v1/entries", method="POST", body=b"{}")[0] == 405
     assert len(hive.hv.feed_page({}, 1000)["entries"]) == len(hive.entries)     # nothing was written
 
 

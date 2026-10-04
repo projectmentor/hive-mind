@@ -182,6 +182,41 @@ def test_rebuild_and_adapter_paths_fit_their_budgets(synthetic, tmp_path, monkey
     assert r.returncode == 0 and dt < 10.0, f"hv remember took {dt:.1f}s"
 
 
+def test_a_module_write_returns_inside_the_session_start_budget_on_a_journal_this_size(synthetic, tmp_path, monkeypatch):
+    """A6 (plan §2): `POST /v1/entries` appends one entry and projects under `_ingest_lock`, and must return inside
+    the 8 s that bounds the session-start digest on a hive the size of the live one, so a module's hook never
+    times out an adapter. Measured through the real listener, signature and all, on 1,000 entries."""
+    import threading
+    import urllib.request
+    import hive_module_api as api
+    import hive_module_client as client
+    import hive_sync_daemon as daemon
+    h, entries = synthetic
+    hv = _loadhv(tmp_path, monkeypatch)
+    seed = os.urandom(32)
+    mod = hv._device_id_for_pub(hv._ed25519.pub_from_seed(seed))
+    admit = h.gov({"action": "admit", "device_id": mod, "principal": "op", "module": "perfmod"}, _ts(5))
+    _write_journal(tmp_path, entries + [admit])
+    hv.init_db()
+    hv.rebuild_db()
+    monkeypatch.setattr(daemon, "hv", hv)
+    srv = api.make_module_server(0)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        c = client.ModuleClient(seed, port=srv.server_address[1], timeout=30)
+        worst = 0.0
+        for i in range(3):
+            t = time.monotonic()
+            code, body = c.write("fact", {"content": f"a module observation {i}", "tags": [], "importance": 0.5,
+                                          "source": "x-perfmod"})
+            worst = max(worst, time.monotonic() - t)
+            assert code == 200 and body["accepted"] == 1, body
+        assert worst < 8.0, f"a module write took {worst:.1f}s on a {len(entries)}-entry journal"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
 # ── memo safety: it caches the cryptographic check only, never authorization ─────────────────────────
 
 def test_a_tampered_entry_misses_the_memo_and_is_rejected(tmp_path, monkeypatch):

@@ -5,6 +5,7 @@ signatures: an owner, a plain admitted device, and two devices the owner admitte
 `other`). Requests are signed with the sync daemon's Hive-Auth envelope. The quota, write and rate-limit
 tests land with the write route (PR 5).
 """
+import http.client
 import json
 import os
 import re
@@ -49,7 +50,9 @@ class Hive:
         forget_v = _act(hv, self.plain, self.gone_v, T % 5, owner=o)
         cfg = [TL._entry(hv, self.plain, "governance", {"action": "set-config", "key": k, "value": v}, T % (10 + i), owner=o)
                for i, (k, v) in enumerate([("x-hwatch:poll", "30s"), ("x-other:poll", "5m")])]
-        self.entries = base + [self.fact, self.gone, forget, self.gone_v, forget_v] + cfg
+        self.idea = TL._entry(hv, self.plain, "idea", {"content": "the slow backup is the disk", "tags": [], "source": "manual",
+                                                       "channel": "introspect"}, T % 6)
+        self.entries = base + [self.fact, self.gone, forget, self.gone_v, forget_v, self.idea] + cfg
         if not with_owner:
             self.entries = []
         TL._project(hv, tmp_path, self.entries).close()
@@ -159,7 +162,7 @@ def test_a_hive_with_no_owner_refuses_every_module_request(tmp_path, monkeypatch
     h = Hive(tmp_path / "x", monkeypatch, with_owner=False)
     try:
         code, body = h.get("/v1/", dev=h.mod["seed"])
-        assert code == 403      # not "no-owner": with no owner `modules` is empty, so no journal reaches that branch
+        assert code == 403 and body.get("detail") == "no-owner", body
     finally:
         h.close()
 
@@ -168,6 +171,13 @@ def test_the_api_is_read_only(hive):
     for m in ("POST", "PUT", "DELETE", "PATCH"):
         code, body = hive.get("/v1/feed", method=m, body=b"{}")
         assert code == 405, m
+    for m in ("HEAD", "OPTIONS", "TRACE", "PROPFIND", "FOO", "get"):      # any verb, JSON 405 (not the stdlib's HTML 501)
+        conn = http.client.HTTPConnection("127.0.0.1", hive.port, timeout=10)
+        conn.request(m, "/v1/feed", headers=signed(hive.mod["seed"], m, "/v1/feed", ""))
+        r = conn.getresponse()
+        assert r.status == 405 and r.getheader("Content-Type") == "application/json", m
+        assert r.getheader("Allow") == "GET", m
+        conn.close()
     assert hive.get("/v1/entries", method="POST", body=b"{}")[0] == 405
     assert len(hive.hv.feed_page({}, 1000)["entries"]) == len(hive.entries)     # nothing was written
 
@@ -227,8 +237,10 @@ def test_search_and_item_read_the_projection_and_never_hand_over_forgotten_text(
     assert code == 404 and "secret" not in json.dumps(body)
     assert hive.get("/v1/item")[0] == 400
     assert hive.get("/v1/item?id=h:nope")[0] == 404
-    for bad in ("kind=idea", "sort=bogus", "min_confidence=x"):
+    for bad in ("kind=bogus", "sort=bogus", "min_confidence=x"):
         assert hive.get("/v1/search?" + bad)[0] == 400, bad
+    code, body = hive.get("/v1/search?kind=idea")
+    assert code == 200 and [i["content"] for i in body["ideas"]] == ["the slow backup is the disk"]
     assert hive.get("/v1/search?limit=100000")[0] == 200            # clamped, not refused
 
 

@@ -10,6 +10,13 @@ has no write route yet.
   GET /v1/search    -> `api_search`: ?q=&tag=&kind=&min_confidence=&limit=&offset=&sort=&status=
   GET /v1/item      -> `api_item`: ?id=<h:... or node_id:seq>
 
+Authentication runs before the route lookup, so an unsigned request to any path (even an unknown one) is
+401; the 404s below exist only for a signed module. `item` answers 404 for anything that does not resolve
+(`h:nope`, a local id, a forgotten fact). Every verb other than GET answers a JSON 405.
+
+`config` in `/v1/` is the caller's own `x-<module>:` keys, a convenience and not a confidentiality boundary:
+the journal is shared by design and `/v1/feed` carries all of it, other modules' `set-config` entries included.
+
 Every request is signed (the sync daemon's Hive-Auth envelope) by a device the owner admitted as a module's
 (`admit --module`). Unlike the sync daemon this listener ignores `sync_auth_mode`: an unsigned request is
 always 401. It binds 127.0.0.1 whatever `.peers.json` says and refuses a peer that is not loopback.
@@ -39,7 +46,7 @@ SEARCH_LIMIT_MAX = 200
 # forgot (`status=forgotten` is refused, and `include_forgotten=False` hides it in every branch), while
 # `/v1/feed` is `hv feed` and carries the authoritative `forgotten` flag for the module to honour: hide the
 # fact and never republish it.
-_KINDS = ("all", "fact", "decision")
+_KINDS = ("all", "fact", "decision", "idea")   # idea: the feed already hands a module every idea
 _SORTS = ("confidence", "recency", "importance", "utility")
 _STATUSES = ("all", "contested", "volatile")
 
@@ -151,12 +158,19 @@ class ModuleHandler(BaseHTTPRequestHandler):
         ok, reason, device = daemon._verify_sync_request(self.headers, "GET", u.path, u.query, b"", gov)
         if not ok:
             raise _Refused(403 if reason == "not-admitted" else 401, {"error": "authentication required", "detail": reason})
-        if not gov.get("owner_id"):
+        if not gov.get("owner_id"):       # defence in depth: an owner signs every module admit, so `modules` is empty without one
             raise _Refused(403, {"error": "forbidden", "detail": "no-owner"})
         module = (gov.get("modules") or {}).get(device)
         if not module:
             raise _Refused(403, {"error": "forbidden", "detail": "not-a-module-device"})
         return {"gov": gov, "device_id": device, "module": module}
+
+    def send_error(self, code, message=None, explain=None):
+        """The stdlib answers a verb with no `do_<VERB>` (and a malformed request) with an HTML page; the
+        contract is JSON, so any such answer is JSON, and an unknown verb is the same 405 as a write."""
+        if code == 501:
+            return self._send(405, {"error": "read-only: no write route in this release"}, {"Allow": "GET"})
+        self._send(code, {"error": message or "bad request"})
 
     def _handle(self):
         if not is_loopback_peer(self.client_address[0] if self.client_address else ""):
@@ -186,7 +200,7 @@ class ModuleHandler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = _handle
+    do_GET = do_POST = do_PUT = do_DELETE = do_PATCH = do_HEAD = do_OPTIONS = do_TRACE = do_CONNECT = _handle
 
 
 def make_module_server(port=None):

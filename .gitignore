@@ -31,6 +31,9 @@ hive-owner-*.key
 # device key — never committed, never synced, never in the signed source manifest.
 .genesis-pin
 
+# Module API write windows (2.1): device ids and write times, per-node, never synced
+.module-quota.json
+
 # Nudge config + per-session debounce state (per-node; use config/nudge.env.example as a template)
 nudge.env
 .nudge_state/

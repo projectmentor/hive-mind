@@ -201,8 +201,8 @@ SOURCE_CONTEXTS = {
 # ── envelope fields: the structure every entry is made of. A module never writes its own ────────────
 ENVELOPE_FIELDS = {
     "action":    _v(WRITTEN, "1.4", "Which act a `governance` payload records."),
-    "from":      _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge starts from. A module link "
-                                     "carries it as a pair `_resolve_ref` resolves (an `h:` id is mapped to a pair first), as a core link's `from_ref` is."),
+    "from":      _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge starts from. A module's own link kind "
+                                     "carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `from_ref`."),
     "id":        _v(RESERVED, "2.0", "Reserved for the module envelope: an entry's identity, `node_id:seq` or its "
                                      "`h:` short id. It names the entry; it is not a field a module writes."),
     "kind":      _v(WRITTEN, "1.13", "The discriminator inside a typed payload: a link's relationship, an "
@@ -218,8 +218,8 @@ ENVELOPE_FIELDS = {
                                      "`retracts_ref` or `to_ref`."),
     "timestamp": _v(WRITTEN, "1.0", "When the entry was written (ISO 8601); it also names the journal's day "
                                     "file."),
-    "to":        _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge points to. A module link "
-                                     "carries it as a pair `_resolve_ref` resolves (an `h:` id is mapped to a pair first), as a core link's `to_ref` is."),
+    "to":        _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge points to. A module's own link kind "
+                                     "carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `to_ref`."),
     "type":      _v(WRITTEN, "1.0", "The entry type (see Entry types)."),
 }
 
@@ -238,6 +238,9 @@ LOCAL_FILES = {
                                                  "synced).", where="hive"),
     ".key-dir":              _v(WRITTEN, "2.0", "The path of this checkout's key directory, so a renamed checkout keeps "
                                                 "its keys.", where="hive"),
+    ".module-quota.json":    _v(WRITTEN, "2.1", "Each module device's hourly and daily write times, for the module API's rate "
+                                                "limits (0600, never journaled). The lifetime count is the journal's, not this "
+                                                "file's.", where="hive"),
     ".nudge_state":          _v(WRITTEN, "1.0", "When the save and audit nudges last fired.", where="hive"),
     ".owner-key":            _v(LEGACY, "1.4", "The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` "
                                                "moves it.", where="hive"),
@@ -402,8 +405,10 @@ def check_module_name(module, category, name):
 # API) covers this table, and `tests/test_ref_fields.py` fails when the code reads a ref field that is not listed,
 # or a row nothing reads.
 # `legacy` rows are read for old journals and never written by core any more. The module envelope's
-# `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved` until the module API reads them; they say `pair`
-# because `_resolve_ref` reads only a pair. The widening to "pair or `h:` short id" comes with the module API.
+# `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved`: the module API (`POST /v1/entries`) reads and
+# shape-checks `from` and `to` on a module's own link kind; `target` has no writer, because a module may not
+# retract. They say `ref`: a pair or an `h:` short id, shape-checked as an `h:` id and
+# resolved when a projection first reads a module link kind.
 REF_FIELDS = {
     "retracts_ref":   {"types": ("retract",), "shape": "pair", "status": WRITTEN,
                        "meaning": "The fact a retract acts on (a forget, when from an owner)."},
@@ -433,10 +438,10 @@ REF_FIELDS = {
                        "meaning": "A pre-Phase-2 decision's replaced decision, as a local id; read when `supersedes_ref` is absent."},
     "escrow_ref":     {"types": ("governance",), "shape": "ref", "status": WRITTEN,
                        "meaning": "The escrow a `revoke-escrow` act tombstones: `all`, a pair or `node_id:seq`."},
-    "from":           {"types": ("link",), "shape": "pair", "status": RESERVED,
-                       "meaning": "A module link's start: a pair."},
-    "to":             {"types": ("link",), "shape": "pair", "status": RESERVED,
-                       "meaning": "A module link's end: a pair."},
-    "target":         {"types": ("retract",), "shape": "pair", "status": RESERVED,
-                       "meaning": "What a module act is about: a pair."},
+    "from":           {"types": ("link",), "shape": "ref", "status": RESERVED,
+                       "meaning": "A module link's start: a pair or an `h:` short id."},
+    "to":             {"types": ("link",), "shape": "ref", "status": RESERVED,
+                       "meaning": "A module link's end: a pair or an `h:` short id."},
+    "target":         {"types": ("retract",), "shape": "ref", "status": RESERVED,
+                       "meaning": "What a module act is about: a pair or an `h:` short id."},
 }

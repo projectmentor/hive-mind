@@ -85,7 +85,7 @@ def test_the_envelope_names_have_their_meaning_and_stay_reserved():
         rec = V.ENVELOPE_FIELDS[name]
         assert rec["status"] == V.RESERVED and "module" in rec["meaning"]
     for name in ("from", "to"):
-        assert "_resolve_ref" in V.ENVELOPE_FIELDS[name]["meaning"]
+        assert "shape-checked" in V.ENVELOPE_FIELDS[name]["meaning"]
 
 
 # ── M3: fleet-wide module config ──────────────────────────────────────────────────────────────────────

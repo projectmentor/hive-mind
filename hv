@@ -2867,7 +2867,8 @@ def _valid_ref(ref):
 
 
 def _resolve_ref(conn, ref):
-    """Map a journal-identity reference [node_id, seq] to a local row id."""
+    """Map a journal-identity reference [node_id, seq] to a local row id. A string never binds: binding an `h:`
+    short id on one node only would make two nodes project one journal two ways."""
     if not _valid_ref(ref):
         return None
     r = conn.execute(

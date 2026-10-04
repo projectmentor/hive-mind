@@ -67,7 +67,7 @@ import vocabulary  # noqa: E402
 # Every module that writes or projects journal entries, and the sync modules that carry them. The sync
 # modules have no sites today; they are scanned so that a first one there is held to the registry too.
 SCANNED = ("hv", "hivemind_owner.py", "hivemind_ctl.py", "hive_sync_daemon.py", "sync_client.py",
-           "sync_common.py", "merkle.py", "ownerkey.py")
+           "sync_common.py", "merkle.py", "ownerkey.py", "hive_module_api.py")
 
 REGISTRY = {key: table for key, _title, _what, table in vocabulary.CATEGORIES}
 READABLE = (vocabulary.WRITTEN, vocabulary.LEGACY, vocabulary.READ)
@@ -78,6 +78,7 @@ READERS = {
     "type": {
         ("hv", "append_foreign_entries"),       # ingest: governance first, then admission-gated content
         ("hv", "feed_page"),                    # `hv feed` (2.1): forgotten on a fact, affects on a retract
+        ("hive_module_api.py", "_check_entry"),    # `POST /v1/entries` (2.1): the shape each module-writable type needs
         ("hv", "_capsule_version_conflicts"),
         ("hv", "_self_signed_owner_acts"),      # genesis candidates
         ("hv", "_governance_state"),

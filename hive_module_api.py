@@ -29,6 +29,7 @@ module could fill the daemon's 32 slots and push sync peers into 503. Per-module
 what a module may journal (entries are permanent): see `QUOTA_DEFAULTS`, and `route_entries`.
 """
 
+import sqlite3
 import json
 import math
 import os
@@ -236,20 +237,59 @@ def _check_names(module, payload):
 
 
 def _check_link(module, payload):
-    """A link's kind is a core kind or `x-<module>:…`. A core kind carries `from_ref`/`to_ref` pairs, the fields
-    `resolve_link` reads. A module's own kind carries the envelope's `from`/`to`, each a pair or an `h:` short id
-    (an `h:` id is shape-checked here and resolved when a projection reads it). An end that resolves to nothing yet is allowed: the target may sync
-    later, and a projection skips a dangling edge deterministically."""
-    hv = daemon.hv
+    """A link's kind is a core kind or `x-<module>:…`. A core kind carries the `from_ref`/`to_ref` pairs
+    `resolve_link` reads, and a `data` object whose `confidence` and `polarity` the pass-2 readers
+    (`_link_entity`, `_decision_evidence`) bind or dereference raw. A module's own kind carries the envelope's
+    `from`/`to`, each a pair or an `h:` short id (shape-checked here, resolved when a projection reads it).
+    An end that resolves to nothing yet is allowed: the target may sync later, and a projection skips a dangling
+    edge deterministically. The ref fields themselves are checked in `_check_refs`, from `REF_FIELDS`."""
     kind = payload.get("kind")
     why = vocabulary.check_module_name(module, "link_kinds", kind) if isinstance(kind, str) else "payload.kind is required"
     if why:
         raise _refused(403 if isinstance(kind, str) else 400, why, field="kind")
-    pair_only = kind in vocabulary.LINK_KINDS
-    for field in (("from_ref", "to_ref") if pair_only else ("from", "to")):
-        ref = payload.get(field)
-        if not (hv._valid_ref(ref) or (not pair_only and _is_sid(ref))):
-            raise _refused(400, f"payload.{field} must be a [node_id, seq] pair" + ("" if pair_only else " or an `h:` short id"))
+    if kind in vocabulary.LINK_KINDS and "data" in payload:
+        data = payload["data"]
+        if not isinstance(data, dict):
+            raise _refused(400, "payload.data must be an object or absent")
+        for k in ("confidence", "polarity"):
+            if k in data and not _is_number(data[k]):
+                raise _refused(400, f"payload.data.{k} must be a number or absent")
+
+
+_REF_WANT = {"pair": "a [node_id, seq] pair", "pairs": "a list of [node_id, seq] pairs", "ref": "a [node_id, seq] pair or an `h:` short id"}
+
+
+def _ref_check(shape, v):
+    hv = daemon.hv
+    if shape == "pair":
+        return hv._valid_ref(v)
+    if shape == "pairs":
+        return isinstance(v, list) and all(hv._valid_ref(x) for x in v)
+    if shape == "ref":
+        return hv._valid_ref(v) or _is_sid(v)
+    raise KeyError(f"REF_FIELDS shape {shape!r} has no module-gate check")
+
+
+def _ref_rows(etype, payload):
+    """The `REF_FIELDS` rows a module's `etype` entry must carry or may carry: (field, row, required)."""
+    for k, r in vocabulary.REF_FIELDS.items():
+        if r["status"] not in (vocabulary.WRITTEN, vocabulary.RESERVED) or etype not in r["types"]:
+            continue
+        if etype == "link":     # a core kind carries from_ref/to_ref, a module's own kind the envelope's from/to
+            if (k in ("from_ref", "to_ref")) == (payload.get("kind") in vocabulary.LINK_KINDS):
+                yield k, r, True
+        else:
+            yield k, r, False
+
+
+def _check_refs(etype, payload):
+    """Shape-check every reference field a module may write, read from `REF_FIELDS` so a row added later is
+    covered (or raises in `_ref_check`) without a hand-kept list. A bad value is a 400 that writes nothing."""
+    for k, r, required in _ref_rows(etype, payload):
+        if k not in payload and not required:
+            continue
+        if not _ref_check(r["shape"], payload.get(k)):
+            raise _refused(400, f"payload.{k} must be {_REF_WANT[r['shape']]}" + ("" if required else " or absent"))
 
 
 # Payload fields that name a local row id or a pre-1.19 reference. `rebuild_db` still projects them from an old
@@ -285,11 +325,6 @@ def _check_fields(etype, payload):
     for k, (want, ok) in _BOUND_FIELDS.items():
         if k in payload and not ok(payload[k]):
             raise _refused(400, f"payload.{k} must be {want} or absent")
-    for k, r in vocabulary.REF_FIELDS.items():     # a written ref the readers walk: it must read back, not only bind
-        if r["status"] == vocabulary.WRITTEN and etype in r["types"] and etype != "link" and k in payload:
-            v, hv = payload[k], daemon.hv
-            if not (hv._valid_ref(v) if r["shape"] == "pair" else isinstance(v, list) and all(hv._valid_ref(x) for x in v)):
-                raise _refused(400, f"payload.{k} must be " + ("a [node_id, seq] pair" if r["shape"] == "pair" else "a list of [node_id, seq] pairs") + " or absent")
     if etype == "entity" and "type" in payload and not isinstance(payload["type"], str):
         raise _refused(400, "payload.type must be a string or absent")
 
@@ -305,6 +340,8 @@ def _dry_run(entry):
         finally:
             conn.execute("ROLLBACK TO module_dry_run")
             conn.rollback()
+    except sqlite3.OperationalError:
+        raise       # a locked database is transient: a 500 the client may retry, not a permanent refusal
     except Exception as e:
         raise _refused(400, "the core cannot project this payload", detail=f"{type(e).__name__}: {e}")
     finally:
@@ -341,6 +378,7 @@ def _check_entry(ctx, entry, limits):
         raise _refused(400, "an entity needs payload.name, a non-empty string")
     if t == "link":
         _check_link(ctx["module"], payload)
+    _check_refs(t, payload)
 
 
 def route_entries(ctx, q, body):

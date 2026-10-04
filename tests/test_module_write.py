@@ -17,6 +17,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 sys.path.insert(0, str(PROJECT / "tests"))
+import vocabulary  # noqa: E402
 import hive_module_api as api  # noqa: E402
 import hive_module_client as client  # noqa: E402
 import hive_sync_daemon as daemon  # noqa: E402
@@ -503,3 +504,75 @@ def test_a_well_formed_informed_by_is_accepted(hive):
     assert code == 200
     hive.hv.rebuild_db()
     assert hive.hv.api_search("probe")["decisions"]
+
+
+# ── ruling on cdbd2b7: every ref field a module may write is shape-checked, and a core link's `data` ─────────
+
+BAD_REFS = [[5], 5, "abc", {"a": 1}, [["k1:x"]], [[1, 2, 3]], [["n", True]], None]
+BAD_DATA = [[1], "x", {"confidence": [1]}, {"confidence": {"a": 1}}, {"polarity": "up"}, {"confidence": float("nan")}]
+
+
+def _reads_back(h, before):
+    assert journal(h) == before
+    h.hv.rebuild_db()
+    assert h.hv.api_search("") is not None and h.get("/v1/search?q=a")[0] == 200
+
+
+def _ref_cases():
+    """(entry type, link kind, field) for every REF_FIELDS row a module may write, read from the registry."""
+    for k, r in vocabulary.REF_FIELDS.items():
+        if r["status"] not in (vocabulary.WRITTEN, vocabulary.RESERVED):
+            continue
+        for t in r["types"]:
+            if t in api.MODULE_ENTRY_TYPES:
+                yield t, ("x-hwatch:observes" if k in ("from", "to") else "supports" if t == "link" else None), k
+
+
+def _good(h, t, kind):
+    a = [h.fact["node_id"], h.fact["seq"]]
+    if t == "link":
+        return {"kind": kind, "source": SRC, "data": {}, **({"from": a, "to": a} if kind.startswith("x-") else {"from_ref": a, "to_ref": a})}
+    return {"content": "probe " + t, "tags": [], "source": SRC}
+
+
+def test_the_ref_cases_cover_the_registry_rows_a_module_may_write():
+    got = {k for _, _, k in _ref_cases()}
+    assert {"informed_by", "revokes", "from_ref", "to_ref", "from", "to"} <= got
+
+
+@pytest.mark.parametrize("t,kind,field", sorted(_ref_cases(), key=str))
+@pytest.mark.parametrize("bad", BAD_REFS, ids=repr)
+def test_every_written_ref_field_is_shape_checked(hive, t, kind, field, bad):
+    before = journal(hive)
+    (code, body), _ = post(hive, "mod", t, dict(_good(hive, t, kind), **{field: bad}))
+    assert 400 <= code < 500 and journal(hive) == before
+    if code == 400 and "error" in body:
+        assert field in body["error"] or "payload" in body["error"]
+    _reads_back(hive, before)
+
+
+def test_the_ref_check_is_the_registry_not_a_list(hive, monkeypatch):
+    """A mutant that drops the registry-driven check lets the malformed `informed_by` in: the dry run does not catch a shape only a reader walks."""
+    payload = {"source": SRC, "content": "probe decision zz", "tags": [], "informed_by": [5]}
+    monkeypatch.setattr(api, "_ref_rows", lambda etype, payload: iter(()))
+    (code, _), _ = post(hive, "mod", "decision", payload)
+    assert code == 200
+    monkeypatch.undo()
+    (code, _), _ = post(hive, "mod", "decision", dict(payload, content="probe decision zy"))
+    assert 400 <= code < 500
+
+
+def test_a_new_ref_shape_has_no_silent_pass(monkeypatch):
+    monkeypatch.setitem(vocabulary.REF_FIELDS, "later_ref", {"types": ("fact",), "shape": "triple", "status": vocabulary.WRITTEN, "meaning": "x"})
+    with pytest.raises(KeyError):
+        api._check_refs("fact", {"later_ref": 1})
+
+
+@pytest.mark.parametrize("kind", ["entity", "outcome-of"])
+@pytest.mark.parametrize("data", BAD_DATA, ids=repr)
+def test_a_core_link_with_a_bad_data_is_refused_and_rebuild_survives(hive, kind, data):
+    e, f = [hive.fact["node_id"], hive.fact["seq"]], [hive.idea["node_id"], hive.idea["seq"]]
+    before = journal(hive)
+    (code, _), _ = post(hive, "mod", "link", {"kind": kind, "from_ref": e, "to_ref": f, "data": data, "source": SRC})
+    assert 400 <= code < 500
+    _reads_back(hive, before)

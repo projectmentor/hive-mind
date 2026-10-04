@@ -485,3 +485,21 @@ def test_a_window_limit_of_zero_refuses_instead_of_raising(hive, monkeypatch, wi
     before = journal(hive)
     (code, body), _ = post(hive, "mod", "fact", fact("nothing fits"))
     assert code == 429 and body["limit"] == window and journal(hive) == before
+
+
+@pytest.mark.parametrize("bad", [[5], 5, "abc", {"a": 1}, [["k1:x"]], [[1, 2, 3]], [["n", True]]])
+def test_a_malformed_informed_by_is_refused_and_search_still_reads(hive, bad):
+    """`informed_by` is stored as JSON and read back by `api_search`; a shape the readers cannot walk would 500 every search."""
+    before = journal(hive)
+    (code, body), _ = post(hive, "mod", "decision", {"source": SRC, "content": "probe decision zz", "tags": [], "informed_by": bad})
+    assert 400 <= code < 500 and "informed_by" in body["error"] and journal(hive) == before
+    hive.hv.rebuild_db()
+    assert hive.hv.api_search("") is not None and hive.get("/v1/search?q=probe")[0] == 200
+
+
+def test_a_well_formed_informed_by_is_accepted(hive):
+    pair, _ = _victim(hive)
+    (code, _), _ = post(hive, "mod", "decision", {"source": SRC, "content": "probe decision ok", "tags": [], "informed_by": [pair]})
+    assert code == 200
+    hive.hv.rebuild_db()
+    assert hive.hv.api_search("probe")["decisions"]

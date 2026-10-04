@@ -238,7 +238,7 @@ def _check_names(module, payload):
 def _check_link(module, payload):
     """A link's kind is a core kind or `x-<module>:…`. A core kind carries `from_ref`/`to_ref` pairs, the fields
     `resolve_link` reads. A module's own kind carries the envelope's `from`/`to`, each a pair or an `h:` short id
-    (`_resolve_ref(..., short_ids=True)`). An end that resolves to nothing yet is allowed: the target may sync
+    (an `h:` id is shape-checked here and resolved when a projection reads it). An end that resolves to nothing yet is allowed: the target may sync
     later, and a projection skips a dangling edge deterministically."""
     hv = daemon.hv
     kind = payload.get("kind")
@@ -285,6 +285,11 @@ def _check_fields(etype, payload):
     for k, (want, ok) in _BOUND_FIELDS.items():
         if k in payload and not ok(payload[k]):
             raise _refused(400, f"payload.{k} must be {want} or absent")
+    for k, r in vocabulary.REF_FIELDS.items():     # a written ref the readers walk: it must read back, not only bind
+        if r["status"] == vocabulary.WRITTEN and etype in r["types"] and etype != "link" and k in payload:
+            v, hv = payload[k], daemon.hv
+            if not (hv._valid_ref(v) if r["shape"] == "pair" else isinstance(v, list) and all(hv._valid_ref(x) for x in v)):
+                raise _refused(400, f"payload.{k} must be " + ("a [node_id, seq] pair" if r["shape"] == "pair" else "a list of [node_id, seq] pairs") + " or absent")
     if etype == "entity" and "type" in payload and not isinstance(payload["type"], str):
         raise _refused(400, "payload.type must be a string or absent")
 

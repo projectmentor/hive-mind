@@ -10,6 +10,16 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.0.3 — unreleased
+
+No contract change.
+
+- **`rebuild_db` is atomic** (#206). It committed the deletes before replaying the journal and never closed its
+  connection on error, so a failure left the node's projection empty, search returning nothing, and a write lock
+  held. It now runs in one transaction (`BEGIN IMMEDIATE` to the final insert, no commit between), rolls back on any
+  exception so the previous projection stays queryable, and closes the connection in a `finally`. `_init_fts` runs
+  its statements one at a time, because `executescript` commits.
+
 ## 2.0.2 — 2026-10-03 · `v2.0.2`
 
 No contract change.

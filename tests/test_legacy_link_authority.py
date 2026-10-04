@@ -26,6 +26,10 @@ def _legacy_fact(hv, dev, content, ts, target, owner=None):
                                     "resolves_ref": [target["node_id"], target["seq"]]}, ts, owner=owner)
 
 
+def _local_id(conn, table, content):
+    return conn.execute(f"SELECT id FROM {table} WHERE content = ?", (content,)).fetchone()[0]
+
+
 def _superseded(conn, content):
     return conn.execute("SELECT superseded_by FROM decisions WHERE content = ?", (content,)).fetchone()[0]
 
@@ -39,10 +43,14 @@ def test_a_non_authors_legacy_supersede_leaves_the_target_standing(tmp_path, mon
     hv = _loadhv(tmp_path, monkeypatch)
     _, (a, b, _c), base = _owned_hive(hv)
     old = _decision(hv, a, "ship on friday", "2026-01-02T00:00:00Z")
-    # the local id of `old` on a node that projects [base, old] is 1: one row, the first decision
-    target = old if field == "supersedes_ref" else 1
+    # local ids follow projection order, which depends on device ids: read `old`'s id from the projection,
+    # and check it is the same one in the journal that carries the attack
+    probe = _project(hv, tmp_path, base + [old, _decision(hv, b, "ship never", "2026-01-03T00:00:00Z")])
+    old_id = _local_id(probe, "decisions", "ship on friday")
+    target = old if field == "supersedes_ref" else old_id
     attack = _legacy_decision(hv, b, "ship never", "2026-01-03T00:00:00Z", target, field)
     conn = _project(hv, tmp_path, base + [old, attack])
+    assert _local_id(conn, "decisions", "ship on friday") == old_id
     assert _superseded(conn, "ship on friday") is None
 
 
@@ -51,7 +59,8 @@ def test_an_authors_own_legacy_supersede_still_commands(tmp_path, monkeypatch, f
     hv = _loadhv(tmp_path, monkeypatch)
     _, (a, _b, _c), base = _owned_hive(hv)
     old = _decision(hv, a, "ship on friday", "2026-01-02T00:00:00Z")
-    target = old if field == "supersedes_ref" else 1
+    probe = _project(hv, tmp_path, base + [old])
+    target = old if field == "supersedes_ref" else _local_id(probe, "decisions", "ship on friday")
     new = _legacy_decision(hv, a, "ship on monday", "2026-01-03T00:00:00Z", target, field)
     conn = _project(hv, tmp_path, base + [old, new])
     assert _superseded(conn, "ship on friday") is not None
@@ -76,6 +85,23 @@ def test_a_non_authors_legacy_resolves_ref_writes_nothing_and_an_authors_does(tm
     assert _resolves(conn, "issue Z is fixed by b") is None
     conn = _project(hv, tmp_path, base + [old, by_author])
     assert _resolves(conn, "issue Z is fixed by a") is not None
+
+
+def test_a_shared_row_does_not_lend_its_author_to_a_legacy_field(tmp_path, monkeypatch):
+    """Facts with the same content share one row. The authority judges the entry the ref names, not the row's
+    first author: b writes A's fact's content, then a legacy `resolves_ref` naming A's entry commands nothing,
+    and the doctor agrees with the projection."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, devs, base = _owned_hive(hv)
+    a, b = sorted(devs[:2], key=lambda d: d["id"], reverse=True)   # b's id sorts first: the row's first author
+    theirs = _fact(hv, a, "issue Z is open", "2026-01-02T00:00:00Z")
+    mine = _fact(hv, b, "issue Z is open", "2026-01-02T00:00:01Z")
+    attack = _legacy_fact(hv, b, "issue Z is fixed by b", "2026-01-03T00:00:00Z", theirs)
+    entries = base + [theirs, mine, attack]
+    conn = _project(hv, tmp_path, entries)
+    assert conn.execute("SELECT COUNT(*) FROM facts WHERE content = 'issue Z is open'").fetchone()[0] == 1
+    assert _resolves(conn, "issue Z is fixed by b") is None
+    assert len(hv._links_unauthorized(entries, hv._governance_state(entries))) == 1
 
 
 def test_a_legacy_resolves_ref_naming_a_non_fact_writes_nothing(tmp_path, monkeypatch):

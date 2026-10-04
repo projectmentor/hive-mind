@@ -20,6 +20,9 @@ No contract change.
   target, as a `link` entry does; `resolves_ref` must name a fact. Self-authored and owner-signed history projects
   as before. `hv doctor` `link-authz` lists a legacy field that no longer commands. A `link` entry is the only way
   to supersede or resolve (`AGENT_INTEGRATION.md` §7).
+  **Upgrade effect:** a device-signed legacy supersede or resolve of another author's entry stops commanding on
+  upgrade, and the target stands again on every node until the owner re-ratifies it with an owner-signed `link`.
+  On the live hive this is the four `decide --revoke` entries of 2026-08-19; `hv doctor` `link-authz` lists them.
 - **`rebuild_db` is atomic** (#206). It committed the deletes before replaying the journal and never closed its
   connection on error, so a failure left the node's projection empty, search returning nothing, and a write lock
   held. It now runs in one transaction (`BEGIN IMMEDIATE` to the final insert, no commit between), rolls back on any

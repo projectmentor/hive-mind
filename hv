@@ -2814,14 +2814,17 @@ def resolve_entity_fact(conn, entry):
     )
 
 
-def _legacy_authority(conn, entry, kind, target_id, gov, by_ref):
+def _legacy_authority(conn, entry, kind, target_id, gov, by_ref, ref=None):
     """#204: the verdict `_link_authority` gives a pre-1.19 `supersedes_ref` / `supersedes` / `resolves_ref`
     payload field, read as a link from the entry to its target. It commands only when the owner key signed
     it or its signer wrote the target; otherwise the field does nothing. A target with no journal identity
-    on this node is evidence. Returns "hard" or "evidence"."""
+    on this node is evidence. `ref` is the payload's journal-identity ref when it has one: judge that entry, because
+    rows are shared by identical content and a reverse lookup of the row could name a different writer's entry.
+    Only the local-id `supersedes` falls back to the row lookup. Returns "hard" or "evidence"."""
     if "sig" in entry and not _verify_entry(entry):
         return "evidence"
-    ref = _index_lookup(conn, kind, target_id)
+    if not (isinstance(ref, (list, tuple)) and _valid_ref(ref)):
+        ref = _index_lookup(conn, kind, target_id)
     target = by_ref.get(tuple(ref)) if ref else None
     return _link_authority(entry, target, gov)
 
@@ -2836,7 +2839,7 @@ def resolve_supersedes(conn, entry, gov, by_ref):
     new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
     if new is None:
         return
-    if _legacy_authority(conn, entry, "decision", old, gov, by_ref) != "hard":
+    if _legacy_authority(conn, entry, "decision", old, gov, by_ref, p.get("supersedes_ref")) != "hard":
         return
     conn.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?", (new, old))
 
@@ -2856,7 +2859,7 @@ def resolve_resolves(conn, entry, gov, by_ref):
     new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
     if new is None:
         return
-    if _legacy_authority(conn, entry, "fact", old, gov, by_ref) != "hard":
+    if _legacy_authority(conn, entry, "fact", old, gov, by_ref, p.get("resolves_ref")) != "hard":
         return
     conn.execute("UPDATE facts SET resolves = ? WHERE id = ?", (old, new))
 

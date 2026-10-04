@@ -202,7 +202,7 @@ SOURCE_CONTEXTS = {
 ENVELOPE_FIELDS = {
     "action":    _v(WRITTEN, "1.4", "Which act a `governance` payload records."),
     "from":      _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge starts from. A module's own link kind "
-                                     "carries it as a pair or an `h:` short id, which `_resolve_ref` resolves; a core kind carries `from_ref`."),
+                                     "carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `from_ref`."),
     "id":        _v(RESERVED, "2.0", "Reserved for the module envelope: an entry's identity, `node_id:seq` or its "
                                      "`h:` short id. It names the entry; it is not a field a module writes."),
     "kind":      _v(WRITTEN, "1.13", "The discriminator inside a typed payload: a link's relationship, an "
@@ -219,7 +219,7 @@ ENVELOPE_FIELDS = {
     "timestamp": _v(WRITTEN, "1.0", "When the entry was written (ISO 8601); it also names the journal's day "
                                     "file."),
     "to":        _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge points to. A module's own link kind "
-                                     "carries it as a pair or an `h:` short id, which `_resolve_ref` resolves; a core kind carries `to_ref`."),
+                                     "carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `to_ref`."),
     "type":      _v(WRITTEN, "1.0", "The entry type (see Entry types)."),
 }
 
@@ -407,7 +407,8 @@ def check_module_name(module, category, name):
 # `legacy` rows are read for old journals and never written by core any more. The module envelope's
 # `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved`: the module API (`POST /v1/entries`) reads and
 # shape-checks `from` and `to` on a module's own link kind; `target` has no writer, because a module may not
-# retract. They say `ref`: a pair or an `h:` short id (`_resolve_ref(..., short_ids=True)`).
+# retract. They say `ref`: a pair or an `h:` short id, shape-checked as an `h:` id and
+# resolved when a projection first reads a module link kind.
 REF_FIELDS = {
     "retracts_ref":   {"types": ("retract",), "shape": "pair", "status": WRITTEN,
                        "meaning": "The fact a retract acts on (a forget, when from an owner)."},

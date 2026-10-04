@@ -2866,14 +2866,9 @@ def _valid_ref(ref):
         and isinstance(ref[0], str) and _is_int64(ref[1])
 
 
-def _resolve_ref(conn, ref, short_ids=False):
-    """Map a journal-identity reference [node_id, seq] to a local row id. With `short_ids` (the module API,
-    2.1), an `h:` short id resolves too, by the exact `journal_index.sid` lookup `_parse_ref_arg` uses. Core's
-    own readers leave it off: a `resolves_ref` that is a string has never bound, and binding it on a 2.1 node
-    only would make two nodes project one journal two ways."""
-    if short_ids and isinstance(ref, str) and _SID_RE.match(ref):
-        r = conn.execute("SELECT local_id FROM journal_index WHERE sid = ?", (ref,)).fetchone()
-        return r["local_id"] if r else None
+def _resolve_ref(conn, ref):
+    """Map a journal-identity reference [node_id, seq] to a local row id. A string never binds: binding an `h:`
+    short id on one node only would make two nodes project one journal two ways."""
     if not _valid_ref(ref):
         return None
     r = conn.execute(

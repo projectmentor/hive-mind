@@ -261,15 +261,12 @@ def test_a_link_of_the_modules_own_kind_carries_from_and_to_as_a_pair_or_an_h_id
     assert post(hive, "mod", "link", dangling)[0][0] == 200
 
 
-def test_resolve_ref_reads_an_h_id_only_when_asked(hive):
+def test_resolve_ref_binds_a_pair_and_never_a_string(hive):
     hv, conn = hive.hv, hive.hv.get_conn()
-    sid = hv._short_id(hive.fact["node_id"], hive.fact["seq"])
     pair = [hive.fact["node_id"], hive.fact["seq"]]
-    want = hv._resolve_ref(conn, pair)
-    assert want is not None and hv._resolve_ref(conn, sid, short_ids=True) == want
-    assert hv._resolve_ref(conn, sid) is None                          # core's own readers never bound a string
-    assert hv._resolve_ref(conn, "h:0000000000", short_ids=True) is None and hv._resolve_ref(conn, "h:zz", short_ids=True) is None
-    assert hv._resolve_ref(conn, pair, short_ids=True) == want
+    assert hv._resolve_ref(conn, pair) is not None
+    assert hv._resolve_ref(conn, hv._short_id(*pair)) is None          # core's own readers never bound a string
+    assert "short_ids" not in hv._resolve_ref.__code__.co_varnames
 
 
 # ── quotas and rate limits (A4) ─────────────────────────────────────────────────────────────────────────────
@@ -410,3 +407,81 @@ def test_the_client_walks_the_api_end_to_end(hive):
     code, body = c.write("fact", fact("written by the reference client"))
     assert code == 200 and c.tip()["seq"] == 1 == body["tip"]["seq"]
     assert c.request("GET", "/v1/search", "q=reference+client")[1]["facts"][0]["content"] == "written by the reference client"
+
+
+# ── review rulings on c165b17: legacy refs, bound types, the signer check, a zero limit ───────────────────
+
+def _victim(h):
+    """A human decision the module must not be able to supersede: [node_id, seq] and its local row id."""
+    e = TL._entry(h.hv, h.plain, "decision", {"content": "we deploy on tuesdays", "tags": [], "source": "manual"}, "2026-01-05T00:00:00.000+00:00")
+    assert h.hv.append_foreign_entries([e])[0] == 1
+    h.hv.rebuild_db()
+    return [e["node_id"], e["seq"]], h.hv.get_conn().execute("SELECT id FROM decisions").fetchone()["id"]
+
+
+@pytest.mark.parametrize("field", ["supersedes_ref", "supersedes", "resolves_ref", "entity_ref", "fact_ref", "entity_id", "fact_id"])
+def test_a_legacy_ref_field_is_refused_and_writes_nothing(hive, field):
+    pair, lid = _victim(hive)
+    value = lid if field in ("supersedes", "entity_id", "fact_id") else pair
+    for etype, payload in (("decision", {"source": SRC, "content": "we deploy on fridays", "tags": []}),
+                           ("fact", {"source": SRC, "content": "x", "tags": []})):
+        before = len(journal(hive))
+        (code, body), _ = post(hive, "mod", etype, dict(payload, **{field: value}))
+        assert code == 400 and field in body["fields"] and len(journal(hive)) == before, (etype, body)
+    assert hive.hv.get_conn().execute("SELECT superseded_by FROM decisions WHERE id = ?", (lid,)).fetchone()[0] is None
+
+
+def test_every_legacy_row_of_ref_fields_is_refused(hive):
+    import vocabulary
+    for k, r in vocabulary.REF_FIELDS.items():
+        if r["status"] == vocabulary.LEGACY:
+            (code, _), _ = post(hive, "mod", "fact", fact("legacy probe", **{k: 1}))
+            assert code == 400, k
+
+
+BOUND = [("fact", "importance"), ("fact", "confidence"), ("fact", "source_session"), ("fact", "created_at"), ("fact", "access_count"),
+         ("decision", "rationale"), ("decision", "created_at"), ("entity", "type"), ("entity", "created_at"), ("entity", "attributes"),
+         ("idea", "source_session")]
+
+
+@pytest.mark.parametrize("etype,field", BOUND)
+@pytest.mark.parametrize("bad", [[1], {"a": 1}])
+def test_a_field_the_projection_binds_must_be_the_right_type_and_the_projection_survives(hive, etype, field, bad):
+    base = {"source": SRC, "tags": [], "content": "bound probe", "name": "probe-host"}
+    base = {k: v for k, v in base.items() if not (etype == "entity" and k in ("content", "tags")) and not (etype != "entity" and k == "name")}
+    if etype == "entity":
+        base["tags"] = []
+    before = journal(hive)
+    (code, _), _ = post(hive, "mod", etype, dict(base, **{field: bad}))
+    if field == "attributes" and bad == {"a": 1}:
+        assert code == 200                                             # a dict is what an attributes field is
+        return
+    assert 400 <= code < 500 and journal(hive) == before
+    hive.hv.rebuild_db()
+
+
+def test_the_backstop_refuses_a_payload_the_checks_do_not_know(hive, monkeypatch):
+    """A field added to the projection later: the dry run in a SAVEPOINT refuses what raises, writes nothing, and leaves
+    the store as it was."""
+    before, rows = journal(hive), hive.hv.get_conn().execute("SELECT count(*) FROM facts").fetchone()[0]
+    monkeypatch.setattr(api, "_BOUND_FIELDS", {})
+    (code, body), _ = post(hive, "mod", "fact", fact("backstop", importance=[1]))
+    assert code == 400 and "project" in body["error"] and journal(hive) == before
+    assert hive.hv.get_conn().execute("SELECT count(*) FROM facts").fetchone()[0] == rows
+    assert post(hive, "mod", "fact", fact("backstop ok"))[0][0] == 200 and hive.hv.rebuild_db() is not False
+
+
+def test_an_entry_signed_by_another_module_and_posted_as_this_one_is_403_and_writes_nothing(hive):
+    seed = hive.other["seed"]
+    entry = client.build_entry(seed, "fact", fact("from the other module"), hive.get("/v1/tip", dev="other")[1], "2026-01-06T00:00:00.000+00:00")
+    before = journal(hive)
+    code, body = hive.get("/v1/entries", dev="mod", method="POST", body=json.dumps(entry).encode())
+    assert code == 403 and journal(hive) == before
+
+
+@pytest.mark.parametrize("window", ["per_hour", "per_day"])
+def test_a_window_limit_of_zero_refuses_instead_of_raising(hive, monkeypatch, window):
+    lower(monkeypatch, **{window: 0})
+    before = journal(hive)
+    (code, body), _ = post(hive, "mod", "fact", fact("nothing fits"))
+    assert code == 429 and body["limit"] == window and journal(hive) == before

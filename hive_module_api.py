@@ -179,6 +179,9 @@ def _over_quota(state, times, now):
     lim, used = state["limits"], state["used"]
     if used["lifetime"] >= lim["lifetime"]:
         return "lifetime", None
+    for window in ("per_hour", "per_day"):
+        if lim[window] <= 0:                        # a manifest may ask for less, and 0 is less: nothing fits, no wait helps
+            return window, None
     waits = []
     if used["per_hour"] >= lim["per_hour"]:
         waits.append(("per_hour", [t for t in times if t > now - HOUR][-lim["per_hour"]] + HOUR - now))
@@ -249,6 +252,60 @@ def _check_link(module, payload):
             raise _refused(400, f"payload.{field} must be a [node_id, seq] pair" + ("" if pair_only else " or an `h:` short id"))
 
 
+# Payload fields that name a local row id or a pre-1.19 reference. `rebuild_db` still projects them from an old
+# journal, with no authority check, so a module may not carry them. The table is read from `REF_FIELDS`; the
+# names listed are the ones the plan named, kept so a status change in the table cannot drop them.
+_LEGACY_REF_NAMES = ("supersedes_ref", "supersedes", "resolves_ref", "entity_ref", "fact_ref", "entity_id", "fact_id")
+
+
+def _legacy_ref_fields():
+    return sorted(set(_LEGACY_REF_NAMES) | {k for k, r in vocabulary.REF_FIELDS.items() if r["status"] == vocabulary.LEGACY})
+
+
+def _is_number(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and (not isinstance(v, int) or -2 ** 63 <= v < 2 ** 63)
+
+
+# field -> (what it must be, test); each is "absent or ..." and the projection binds it straight into SQLite
+_BOUND_FIELDS = {
+    "importance": ("a number", _is_number), "confidence": ("a number", _is_number),
+    "source_session": ("a string", lambda v: isinstance(v, str)), "created_at": ("a string", lambda v: isinstance(v, str)),
+    "rationale": ("a string", lambda v: isinstance(v, str)),
+    "access_count": ("an integer", lambda v: isinstance(v, int) and not isinstance(v, bool) and -2 ** 63 <= v < 2 ** 63),
+    "attributes": ("an object", lambda v: isinstance(v, dict)),
+}
+
+
+def _check_fields(etype, payload):
+    """Refuse a legacy ref field, and a field the projection binds whose type SQLite cannot take (plan A4: a signed
+    payload must not make `rebuild_db` raise). `type` is checked only on an entity, where it is the entity's type."""
+    legacy = [k for k in _legacy_ref_fields() if k in payload]
+    if legacy:
+        raise _refused(400, "a module may not carry a legacy reference field; use a link entry", fields=legacy)
+    for k, (want, ok) in _BOUND_FIELDS.items():
+        if k in payload and not ok(payload[k]):
+            raise _refused(400, f"payload.{k} must be {want} or absent")
+    if etype == "entity" and "type" in payload and not isinstance(payload["type"], str):
+        raise _refused(400, "payload.type must be a string or absent")
+
+
+def _dry_run(entry):
+    """Project `entry` into the live store inside a SAVEPOINT and roll it back; the backstop for any field the
+    checks above do not know. Raises _Refused(400) when the core's own projection raises on it."""
+    conn = daemon.hv.get_conn()
+    try:
+        conn.execute("SAVEPOINT module_dry_run")
+        try:
+            daemon.hv.persist_entry(conn, entry)
+        finally:
+            conn.execute("ROLLBACK TO module_dry_run")
+            conn.rollback()
+    except Exception as e:
+        raise _refused(400, "the core cannot project this payload", detail=f"{type(e).__name__}: {e}")
+    finally:
+        conn.close()
+
+
 def _check_entry(ctx, entry, limits):
     """The gate on a module-signed entry, before anything is written. Every refusal is a 4xx and writes nothing."""
     hv = daemon.hv
@@ -272,6 +329,7 @@ def _check_entry(ctx, entry, limits):
         raise _refused(400, "the signature does not verify for this entry and key")
     _check_names(ctx["module"], payload)
     t = entry["type"]
+    _check_fields(t, payload)
     if t in ("fact", "decision", "idea") and not (isinstance(payload.get("content"), str) and payload["content"]):
         raise _refused(400, f"a {t} needs payload.content, a non-empty string")
     if t == "entity" and not (isinstance(payload.get("name"), str) and payload["name"]):
@@ -314,6 +372,7 @@ def route_entries(ctx, q, body):
             wait = None if over[1] is None else max(1, math.ceil(over[1]))
             raise _Refused(429, {"error": f"over quota: {over[0]}", "limit": over[0], "quota": state,
                                  "retry_after": wait}, {"Retry-After": str(wait)} if wait else None)
+        _dry_run(entry)
         accepted, _dup = hv.append_foreign_entries([entry])
         if accepted != 1:
             raise _refused(403, "the core did not accept the entry (admission, signature or timestamp)")

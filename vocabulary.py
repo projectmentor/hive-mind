@@ -84,6 +84,9 @@ LINK_KINDS = {
                                        "outcome score, on the `sense` channel only."),
     "resolves":    _v(WRITTEN, "1.19", "This fact corrects another: negative evidence on the target, and "
                                        "provenance when the link is hard.", evidence="neg"),
+    "same-as":     _v(WRITTEN, "2.1", "Core only. Joins a module's `x-<module>:` entity (`from_ref`) to an "
+                                       "unprefixed entity (`to_ref`); `entity show` lists the joined entity's "
+                                       "facts. A module's is refused, and a `retract` naming it withdraws it."),
     "supersedes":  _v(WRITTEN, "1.19", "This decision replaces another, when the link is hard."),
     "supports":    _v(WRITTEN, "1.19", "Evidence for a fact or an idea.", evidence="pos"),
 }

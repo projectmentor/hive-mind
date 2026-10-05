@@ -101,8 +101,14 @@ READERS = {
         ("hv", "_doctor_status"),
         ("hv", "_join_request_url"),
         ("hv", "_join_request_label"),
+        ("hv", "_entity_declined"),             # 2.1 (#208): a module's entity write, judged in replay order
+        ("hv", "_same_as_pair"),                # a `same-as` end must be an entity entry
+        ("hv", "_same_as_live"),                # which `same-as` joins count, and the retracts that withdraw them
     },
     "kind": {                                   # a `link` payload's kind
+        ("hv", "_same_as_live"),
+        ("hv", "resolve_link"),                 # a `same-as` is written only when it is live
+        ("hive_module_api.py", "_check_link"),  # a module's `same-as` is 403 `same-as-core-only`
         ("hv", "_decision_evidence"),
         ("hv", "_idea_evidence"),               # `{"supports": …, "contradicts": …}.get(kind)`
         ("hv", "_signer_reliability"),

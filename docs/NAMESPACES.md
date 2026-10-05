@@ -67,6 +67,7 @@ The `kind` of a `link` entry. An unknown kind lands and projects to nothing.
 | `informed` | written | 1.19 | A decision relied on this entry; it feeds the entry's utility. |
 | `outcome-of` | written | 1.19 | This fact is an outcome of a decision; it feeds the decision's outcome score, on the `sense` channel only. |
 | `resolves` | written | 1.19 | This fact corrects another: negative evidence on the target, and provenance when the link is hard. |
+| `same-as` | written | 2.1 | Core only. Joins a module's `x-<module>:` entity (`from_ref`) to an unprefixed entity (`to_ref`); `entity show` lists the joined entity's facts. A module's is refused, and a `retract` naming it withdraws it. |
 | `supersedes` | written | 1.19 | This decision replaces another, when the link is hard. |
 | `supports` | written | 1.19 | Evidence for a fact or an idea. |
 

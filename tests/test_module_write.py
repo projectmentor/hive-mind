@@ -203,7 +203,7 @@ def test_content_and_name_are_required_where_the_projection_reads_them(hive):
     assert code == 400
     (code, _), _ = post(hive, "mod", "entity", {"source": SRC})
     assert code == 400
-    assert post(hive, "mod", "entity", {"source": SRC, "name": "backup-host", "type": "host", "attributes": {"os": "linux"}})[0][0] == 200
+    assert post(hive, "mod", "entity", {"source": SRC, "name": "x-hwatch:backup-host", "type": "host", "attributes": {"os": "linux"}})[0][0] == 200
     assert post(hive, "mod", "decision", {"source": SRC, "content": "rotate", "rationale": "r", "tags": []})[0][0] == 200
     assert post(hive, "mod", "idea", {"source": SRC, "content": "maybe the disk", "tags": [], "channel": "introspect"})[0][0] == 200
 
@@ -448,7 +448,7 @@ BOUND = [("fact", "importance"), ("fact", "confidence"), ("fact", "source_sessio
 @pytest.mark.parametrize("etype,field", BOUND)
 @pytest.mark.parametrize("bad", [[1], {"a": 1}])
 def test_a_field_the_projection_binds_must_be_the_right_type_and_the_projection_survives(hive, etype, field, bad):
-    base = {"source": SRC, "tags": [], "content": "bound probe", "name": "probe-host"}
+    base = {"source": SRC, "tags": [], "content": "bound probe", "name": "x-hwatch:probe-host"}
     base = {k: v for k, v in base.items() if not (etype == "entity" and k in ("content", "tags")) and not (etype != "entity" and k == "name")}
     if etype == "entity":
         base["tags"] = []

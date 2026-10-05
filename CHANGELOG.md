@@ -14,6 +14,12 @@ introduced (a contract) or tagged (a patch).
 
 No contract change.
 
+- **`hv doctor` and `hv audit` no longer raise on a malformed ref or content in a payload** (#207). The pure functions
+  behind them (`_links_unauthorized`, `_signer_reliability`, `_forgets_grandfathered`, `_compute_audit`) judged a ref
+  by its length alone and used it as a key, so a ref with a list or dict inside it raised `TypeError` exactly when
+  a bad entry was in the journal. Every read path now uses `_valid_ref`, and the audit counts only string content,
+  as the projection does.
+
 - **The ingest quarantine is bounded and admitted-only** (#205, #216). `.quarantine.jsonl` holds the entries ingest
   refused for a hostile payload. An entry from a signer this node does not admit (or has purged) is refused as before
   and not quarantined; a hive with no owner yet still quarantines. An entry up to 64 KB of canonical bytes is kept

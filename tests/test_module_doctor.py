@@ -89,18 +89,59 @@ def _publish_pub(seed):
     return base64.b64encode(ed25519.pub_from_seed(seed)).decode()
 
 
-def test_an_inactive_unit_warns_and_fix_starts_it(good, units, monkeypatch, tmp_path):
+def _shim(tmp_path, monkeypatch, active, enabled=True):
+    """A `systemctl` that reports `active` for is-active and succeeds or fails is-enabled, logging every call."""
+    log = tmp_path / "systemctl.log"
+    sh = tmp_path / "shim" / "systemctl"
+    sh.write_text('#!/bin/sh\necho "$*" >> %s\ncase "$*" in *is-active*) echo %s;; esac\n'
+                  'case "$*" in *is-enabled*) exit %d;; esac\nexit 0\n' % (log, active, 0 if enabled else 1))
+    return lambda: [l.removeprefix("--user ") for l in log.read_text().splitlines()] if log.exists() else []
+
+
+def test_a_stopped_module_warns_and_fix_leaves_it_alone(good, units, monkeypatch, tmp_path):
     home, _ = good
-    unit_dir, calls = units
-    shim = tmp_path / "shim" / "systemctl"
-    shim.write_text('#!/bin/sh\necho "$*" >> %s\ncase "$*" in *is-active*) echo inactive;; esac\nexit 0\n'
-                    % (tmp_path / "systemctl.log"))
+    calls = _shim(tmp_path, monkeypatch, "inactive")
     _r, c = _mod(home)
-    assert c["status"] == "warn" and "service is inactive" in c["detail"]
+    assert c["status"] == "warn" and "stopped; `systemctl --user start hive-module-demo.service`" in c["detail"]
     before = len(calls())
     r = _run(home, "doctor", "--fix", check=False)
-    assert "restart hive-module-demo.service" in calls()[before:]
+    assert not [l for l in calls()[before:] if l.startswith(("restart", "start", "enable"))]
+    assert "stopped; `systemctl --user start hive-module-demo.service` to resume (left alone)" in r.stdout
+
+
+def test_fix_starts_a_failed_unit(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    calls = _shim(tmp_path, monkeypatch, "failed")
+    _r, c = _mod(home)
+    assert c["status"] == "warn" and "service is failed" in c["detail"]
+    before = len(calls())
+    r = _run(home, "doctor", "--fix", check=False)
+    assert "restart hive-module-demo.service" in calls()[before:] and "--fix: modules" in r.stdout
+
+
+def test_fix_starts_an_inactive_unit_that_is_not_enabled(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    calls = _shim(tmp_path, monkeypatch, "inactive", enabled=False)
+    _r, c = _mod(home)
+    assert c["status"] == "warn" and "inactive and not enabled" in c["detail"]
+    before = len(calls())
+    _run(home, "doctor", "--fix", check=False)
+    assert "enable hive-module-demo.service" in calls()[before:] and "restart hive-module-demo.service" in calls()[before:]
+
+
+def test_fix_writes_through_the_stop_first_path_when_a_daemon_becomes_a_timer(good, units, tmp_path):
+    home, _ = good
+    unit_dir, calls = units
+    repo = tmp_path / "repo"
+    _publish(repo, version="1.1.0", service={"command": ["run.sh"], "interval": 60})
+    # the installed tree is the timer version, its units still the daemon's: drift `fix` must repair
+    for f in ("module.json", "module.json.sig"):
+        (tmp_path / "modules" / "demo" / f).write_bytes((repo / f).read_bytes())
+    r = _run(home, "doctor", "--fix", check=False)
     assert "--fix: modules" in r.stdout
+    assert (unit_dir / "hive-module-demo.timer").exists()
+    log = calls()
+    assert log.index("disable --now hive-module-demo.service") < log.index("restart hive-module-demo.timer")
 
 
 def test_a_drifted_unit_warns_and_fix_re_renders_it_only_when_the_manifest_verifies(good, units, tmp_path):
@@ -199,7 +240,8 @@ def test_a_directory_the_state_does_not_know_warns(good, tmp_path):
     home, _ = good
     (tmp_path / "modules" / "stray").mkdir()
     _r, checks = _doctor(home)
-    assert "stray" in checks["modules"]["detail"] and "not managed" in checks["modules"]["detail"]
+    d = checks["modules"]["detail"]
+    assert "stray" in d and "not managed by this hive" in d and "delete" not in d
 
 
 def test_a_platform_without_a_backend_says_so(good, monkeypatch):

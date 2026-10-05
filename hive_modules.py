@@ -435,13 +435,24 @@ def remove_units(name):
     _systemctl("reset-failed", service)
 
 
+def main_unit(name):
+    """The unit that is the module's switch: the timer when it has one, else the service."""
+    service, timer = unit_names(name)
+    return timer if (unit_dir() / timer).exists() else service
+
+
+def unit_enabled(name):
+    """Whether systemd has the module's main unit enabled (False without a user manager)."""
+    return _systemctl("is-enabled", main_unit(name))
+
+
 def service_state(name):
     """'none' without a unit, else systemd's word for it ('active', 'inactive', 'failed') or 'installed'."""
     service, timer = unit_names(name)
     d = unit_dir()
     if not (d / service).exists():
         return "none"
-    unit = timer if (d / timer).exists() else service
+    unit = main_unit(name)
     try:
         r = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True, timeout=10)
         word = r.stdout.strip()

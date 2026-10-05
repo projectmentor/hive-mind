@@ -767,14 +767,16 @@ def _verify_governance(payload):
         return None
 
 
-def _next_seq_and_prev(node_id):
-    """Next per-node monotonic seq and the hash of this device's latest entry.
-    Derived from the journal itself (stateless, correct after a fresh start)."""
+def _next_seq_and_prev(node_id, with_timestamp=False):
+    """Next per-node monotonic seq and the hash of this device's latest entry (plus that entry's timestamp, or
+    None, when `with_timestamp`). Derived from the journal itself (stateless, correct after a fresh start)."""
     mine = [e for e in merkle.read_all_entries(JOURNAL_DIR) if e.get("node_id") == node_id]
     if not mine:
-        return 1, "sha256:genesis"
+        out = (1, "sha256:genesis")
+        return out + (None,) if with_timestamp else out
     last = max(mine, key=lambda e: e["seq"])
-    return last["seq"] + 1, compute_hash(last)
+    out = (last["seq"] + 1, compute_hash(last))
+    return out + (last.get("timestamp"),) if with_timestamp else out
 
 
 # An entry's timestamp names its journal file, so it must be a real ISO-8601 time before anything is written
@@ -833,12 +835,11 @@ def _ts_instant(ts):
         return None
 
 
-def _ts_is_marker(e):
-    """True for an owner-signed `freeze-timestamps` entry. The marker is never itself checked: it is what arms the
-    rules, so skipping it would make the rules depend on their own verdict."""
-    p = e.get("payload")
-    return (e.get("type") == "governance" and isinstance(p, dict) and p.get("action") == "freeze-timestamps"
-            and _verify_governance(p) is not None)
+def _ts_is_marker(e, gov):
+    """True for a `freeze-timestamps` entry that `_governance_state` honours (signed by the owner current at its
+    position). The marker is never itself checked: it is what arms the rules, so skipping it would make the rules
+    depend on their own verdict. A marker signed by any other embedded key arms nothing and is checked like any entry."""
+    return (e.get("node_id"), e.get("seq")) in (gov.get("ts_markers") or ())
 
 
 def _ts_grandfathered(e, tips):
@@ -886,7 +887,7 @@ def _ts_violations(entries, gov):
         floor = _ts_instant(first.get(nid))
         prior = []
         for e in sorted(es, key=lambda x: x["seq"]):
-            if not (_ts_grandfathered(e, tips) or _ts_is_marker(e)):
+            if not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov)):
                 why = _ts_problem(e, floor, _ts_chain_max(prior))
                 if why is not None:
                     out[(nid, e["seq"])] = why
@@ -911,17 +912,18 @@ def _ts_ingest_problem(e, gov, chain):
     """Why ingest refuses `e` against the chain it joins, or None. `chain` is {node_id: [(seq, instant)]} of the
     entries this node holds, extended as a batch lands. Same predicate as `_ts_violations`."""
     tips = gov.get("ts_tips") or {}
-    if not tips or _ts_grandfathered(e, tips) or _ts_is_marker(e):
+    if not tips or _ts_grandfathered(e, tips) or _ts_is_marker(e, gov):
         return None
     seq = e.get("seq")
     prior = [i for s, i in chain.get(e.get("node_id"), ()) if isinstance(seq, int) and s < seq]
     return _ts_problem(e, _ts_instant((gov.get("first_admit") or {}).get(e.get("node_id"))), _ts_chain_max(prior))
 
 
-def _ts_chain(entries):
-    """{node_id: [(seq, instant)]} over `entries`, for `_ts_ingest_problem`."""
+def _ts_chain(entries, gov):
+    """{node_id: [(seq, instant)]} over the entries `gov`'s bounds keep, for `_ts_ingest_problem`: the chain the
+    projection walks, so an entry it skips cannot raise the bar for a later one."""
     chain = {}
-    for e in entries:
+    for e in _ts_unskipped(entries, gov):
         inst = _ts_instant(e.get("timestamp"))
         if e.get("node_id") is not None and isinstance(e.get("seq"), int) and inst is not None:
             chain.setdefault(e["node_id"], []).append((e["seq"], inst))
@@ -1154,9 +1156,24 @@ def _read_quarantine():
     return out
 
 
+def _clamp_timestamp(now, prev_ts):
+    """`max(now, this device's previous entry's timestamp)` (#217). A clock that stepped back would otherwise write
+    an entry the bounds skip here and every peer refuses, and a seat or hook writes unattended, so the memory would
+    be lost with nobody told. Equal timestamps are allowed. A step past the tolerance is named on stderr."""
+    prev, cur = _ts_instant(prev_ts), _ts_instant(now)
+    if prev is None or cur is None or cur >= prev:
+        return now
+    if prev - cur > TS_TOLERANCE:
+        print(f"hv: this device's clock is {int((prev - cur).total_seconds() // 60)} min behind its last journal "
+              f"entry ({prev_ts}); stamping the entry {prev.isoformat(timespec='milliseconds')} instead",
+              file=sys.stderr)
+    return prev.isoformat(timespec="milliseconds")
+
+
 def append_journal(entry_type, payload, timestamp=None):
     """Mint and append a LOCAL journal entry. This is the core append API —
     every local write goes through here. Returns the full entry dict."""
+    explicit = timestamp is not None
     timestamp = timestamp or _now_iso()
     candidate = {"type": entry_type, "payload": payload}
     problem = _hostile_problem(candidate) or _payload_problem(candidate)
@@ -1167,7 +1184,9 @@ def append_journal(entry_type, payload, timestamp=None):
             gov = None
         _quarantine([({"node_id": NODE_ID, "type": entry_type, "timestamp": timestamp, "payload": payload}, problem)], gov)
         raise ValueError(f"invalid {entry_type} payload: {problem}")      # #205: nothing malformed is journaled
-    seq, prev_hash = _next_seq_and_prev(NODE_ID)
+    seq, prev_hash, prev_ts = _next_seq_and_prev(NODE_ID, with_timestamp=True)
+    if not explicit:
+        timestamp = _clamp_timestamp(timestamp, prev_ts)
     entry = {
         "node_id": NODE_ID,
         "seq": seq,
@@ -1426,8 +1445,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
         journal until the owner admits it. A pre-owner (bootstrap) hive accepts everything so the
         genesis owner declaration can propagate.
 
-    Governance is processed first so an admit that arrives in the same batch takes effect before that
-    device's content is gated. Does NOT persist to SQLite — the caller runs rebuild() once afterwards
+    The batch is swept in (device, seq) order, so a device's entries are judged against its chain in order
+    whatever their type. Content waits for an admit that arrives later in the same batch, and is refused only
+    when no sweep can admit it. Does NOT persist to SQLite — the caller runs rebuild() once afterwards
     if accepted > 0. Returns (accepted, duplicates)."""
     existing = journal_keys()
     accepted = duplicates = rejected = 0
@@ -1453,20 +1473,47 @@ def append_foreign_entries(entries, advertised_chunks=None):
     unsigned_why = []
     ts_refused = []                  # reasons: signed, verified, refused by the timestamp bounds (#217)
     arrived = []                     # (node_id, seq) of each entry that landed, for the local arrival record
-    gov_pre = chain = None
-    if entries:
-        _journal0 = merkle.read_all_entries(JOURNAL_DIR)
-        gov_pre = _governance_state(_journal0)
-        if gov_pre.get("ts_tips"):
-            chain = _ts_chain(_journal0)
-            # A device's entries are judged in seq order, so the batch order cannot change a verdict.
-            entries = sorted(entries, key=lambda x: (str(x.get("node_id")),
-                                                     x.get("seq") if isinstance(x.get("seq"), int) else 0))
+    refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
+    gov = chain = None
+    has_owner = False
+    admitted = set()
+    gov_dirty = False
 
-    def _ts_ok(e, gov):
+    def refresh():
+        """The governance state and the timestamp chain of what this node holds now. The chain is the one the
+        projection walks (entries the bounds skip left out), or None until a marker is honoured."""
+        nonlocal gov, chain, has_owner, admitted, gov_dirty
+        held = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(held)
+        chain = _ts_chain(held, gov) if gov.get("ts_tips") else None
+        # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
+        # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
+        # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
+        has_owner = gov["owner_id"] is not None or bool((gov.get("genesis") or {}).get("mismatch"))
+        admitted = gov["admitted"]
+        gov_dirty = False
+
+    if entries:
+        refresh()
+        # A device's entries are judged in seq order, whatever their type, so neither the batch order nor how
+        # the batch is split can change a verdict: ingest refuses `e` iff `_ts_violations` over what is held,
+        # what landed and `e` skips `e`.
+        # The device that signs a marker goes first, so a marker arms the rest of its batch as it would had it
+        # arrived alone first.
+        markers = {x.get("node_id") for x in entries if x.get("type") == "governance"
+                   and isinstance(x.get("payload"), dict) and x["payload"].get("action") == "freeze-timestamps"}
+        entries = sorted(entries, key=lambda x: (x.get("node_id") not in markers, str(x.get("node_id")),
+                                                 x.get("seq") if isinstance(x.get("seq"), int) else 0))
+
+    def _ts_ok(e):
         """Rules 1-2 and the canonical shape, against the chain this node holds; records the reason if refused."""
         if chain is None:
             return True
+        p = e.get("payload")
+        if (e.get("type") == "governance" and isinstance(p, dict) and p.get("action") == "freeze-timestamps"
+                and (e["node_id"], e["seq"]) in _governance_state(
+                    merkle.read_all_entries(JOURNAL_DIR) + [e]).get("ts_markers", ())):
+            return True              # a marker the projection will honour is exempt, as in `_ts_violations`
         why = _ts_ingest_problem(e, gov, chain)
         if why is not None:
             ts_refused.append(why)
@@ -1479,41 +1526,40 @@ def append_foreign_entries(entries, advertised_chunks=None):
             inst = _ts_instant(e.get("timestamp"))
             if inst is not None:
                 chain.setdefault(e["node_id"], []).append((e["seq"], inst))
-    refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
 
-    # ── Pass 1: governance (owner-signed acts + authority-less join-requests) ────────────────────
-    for e in entries:
-        if e.get("type") != "governance":
-            continue
+    _DONE, _LANDED, _DEFER = 0, 1, 2
+
+    def judge_governance(e):
+        """Governance: owner-signed acts + authority-less join-requests. Never deferred."""
+        nonlocal rejected, accepted, duplicates, gov_dirty
         nid, seq = e.get("node_id"), e.get("seq")
-        if nid is None or seq is None:
-            continue
         refused, why = _unsigned_refused(e, pin, tips, held_hash, door)
         if refused:
             rejected += 1
             unsigned_why.append(why)
-            continue
+            return _DONE
         if (nid, seq) in existing:
             duplicates += 1
-            continue
+            return _DONE
         if not _valid_timestamp(e.get("timestamp")):
             rejected += 1               # the timestamp names the journal file: never persist one that isn't a time
-            continue
+            return _DONE
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
-            continue
-        if not _ts_ok(e, gov_pre):
+            return _DONE
+        if not _ts_ok(e):
             rejected += 1
-            continue
-        if pin is not None and (e.get("payload") or {}).get("action") == "owner" and not _pin_matches(e, pin):
+            return _DONE
+        action = (e.get("payload") or {}).get("action")
+        if pin is not None and action == "owner" and not _pin_matches(e, pin):
             rejected += 1
             # A RIVAL genesis. Its owner signature is perfectly valid — it is signed by the attacker's
             # OWN owner key — so only the pin can tell it from ours. Dropping it is deterministic, so
             # every pinned node drops the same act and the journals stay converged.
-            continue
+            return _DONE
         if (e.get("payload", {}).get("action") not in ("join-request", "propose-election", "vote-election",
                                                        "announce")
                 and _verify_governance(e.get("payload", {})) is None):
@@ -1529,69 +1575,93 @@ def append_foreign_entries(entries, advertised_chunks=None):
             # payload of an announce is never trusted. Unknown announce kinds are accepted and ignored,
             # so future kinds ride through this contract's nodes with no version-skew rejection window.
             rejected += 1
-            continue
+            return _DONE
         try:
             _persist(e)
         except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
             rejected += 1
-            continue
+            return _DONE
         existing.add((nid, seq))
         accepted += 1
         _landed(e)
+        if action in ("freeze-timestamps", "owner", "transfer", "claim-succession"):
+            refresh()                   # arms the bounds, or changes who may sign them: the rest of the batch sees it
+        elif action not in ("join-request", "announce"):
+            gov_dirty = True            # an admit and the like: read at the next sweep
+        return _LANDED
 
-    # Recompute governance AFTER pass 1 so admits that just landed populate the admitted set.
-    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
-    # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
-    # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
-    # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
-    has_owner = gov["owner_id"] is not None or bool((gov.get("genesis") or {}).get("mismatch"))
-    admitted = gov["admitted"]
-
-    # ── Pass 2: content, admission-gated once an owner exists ────────────────────────────────────
-    for e in entries:
-        if e.get("type") == "governance":
-            continue
+    def judge_content(e):
+        """Content, admission-gated once an owner exists. Deferred, not refused, while its device is not yet
+        admitted: an admit later in the batch may still land."""
+        nonlocal rejected, accepted, duplicates
         nid, seq = e.get("node_id"), e.get("seq")
-        if nid is None or seq is None:
-            continue
         refused, why = _unsigned_refused(e, pin, tips, held_hash, door)
         if refused:
             rejected += 1
             unsigned_why.append(why)
-            continue
+            return _DONE
         if (nid, seq) in existing:
             duplicates += 1
-            continue
+            return _DONE
         if not _valid_timestamp(e.get("timestamp")):
             rejected += 1
-            continue
+            return _DONE
         if not _verify_entry(e):
             rejected += 1
-            continue
-        if has_owner and (nid not in admitted or nid in gov["purged"]):
+            return _DONE
+        if has_owner and nid in gov["purged"]:
+            rejected += 1               # a purged device is tombstoned: its new writes are rejected even if later re-admitted
+            return _DONE
+        if has_owner and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
-            # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
+            return _DEFER
+        if not _ts_ok(e):
             rejected += 1
-            continue
-        if not _ts_ok(e, gov):
-            rejected += 1
-            continue
+            return _DONE
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
             refused_payload.append((e, problem))
-            continue
+            return _DONE
         try:
             _persist(e)
         except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
             rejected += 1
-            continue
+            return _DONE
         existing.add((nid, seq))
         accepted += 1
         _landed(e)
         if e.get("type") == "idea" and nid != NODE_ID:
             arrived_ideas.append(e)
+        return _LANDED
+
+    # Sweep the batch in (device, seq) order. An entry whose device is not admitted yet waits, and holds back its
+    # device's later entries, so each device's chain is judged in order; a sweep that lands nothing settles the
+    # waiting entries as refused (the device was never admitted), and the sweeps go on.
+    unresolved = [e for e in entries if e.get("node_id") is not None and e.get("seq") is not None]
+    while unresolved:
+        landed_any, waiting, held_back = False, [], set()
+        for e in unresolved:
+            nid = e["node_id"]
+            if nid in held_back:
+                waiting.append(e)
+                continue
+            r = judge_governance(e) if e.get("type") == "governance" else judge_content(e)
+            if r == _DEFER:
+                held_back.add(nid)
+                waiting.append(e)
+            elif r == _LANDED:
+                landed_any = True
+        if gov_dirty:
+            refresh()
+        if not landed_any:
+            settled = [e for e in waiting if e.get("type") != "governance"]
+            rejected += len(settled)
+            waiting = [e for e in waiting if e.get("type") == "governance"]
+            if not settled:
+                break
+        unresolved = waiting
 
     # 1.20: attention, not announcement — a peer's idea landing here is an `introspect`-channel event
     # on the local bus (internal state arriving, not an observation). Non-journaled, best-effort, one
@@ -2141,7 +2211,7 @@ def _governance_state_uncached(entries):
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
            "principals": {}, "modules": {}, "module_config": {},
-           "ts_tips": {}, "first_admit": {},
+           "ts_tips": {}, "ts_markers": set(), "first_admit": {},
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2355,6 +2425,7 @@ def _governance_state_uncached(entries):
             # #217: the owner-signed marker that arms the timestamp bounds. `tips` freezes each device's chain at
             # a seq; an entry at or below it is unchecked. The per-device maximum across markers, so a marker
             # only ever grandfathers more by seq, never by timestamp.
+            gov["ts_markers"].add((_nid, _seq))
             tips = p.get("tips")
             if isinstance(tips, dict):
                 for tnid, tseq in tips.items():
@@ -2592,7 +2663,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "first_admit": {},
+                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,

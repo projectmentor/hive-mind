@@ -313,3 +313,168 @@ def test_a_mutant_that_grandfathers_by_timestamp_lets_a_backdated_entry_in(tmp_p
     sneaky = _fact(hv, d0, "sneaky", ts(0, 10))
     marker = _marker(hv, owner, {"ownerdev": 3, d0["id"]: 1})
     assert "sneaky" in _contents(_project(hv, tmp_path, base + [marker, held, sneaky]))
+
+
+# ── ingest and projection agree, whatever the batch split (#229 review) ─────────────────────────────
+
+def _held(hv):
+    return {(e["node_id"], e["seq"]) for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
+
+
+def _skipped(hv):
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    return set(hv._ts_violations(j, hv._governance_state(j)))
+
+
+def test_ingest_chain_leaves_out_an_entry_the_projection_skips(tmp_path, monkeypatch):
+    """A held entry above the tip that the projection skips for its shape must not raise the bar for a later one:
+    a node that held it before the marker arrived refuses what a node that got the marker first lands."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    s1 = _fact(hv, d0, "s1", ts(12))
+    s2 = _fact(hv, d0, "s2z", "2026-01-01T13:00:00Z")       # non-canonical, later instant
+    s3 = _fact(hv, d0, "s3", ts(12, 50))
+    _journal(hv, base + [s1, s2])                            # node A held s1, s2 before the marker reached it
+    hv.append_foreign_entries([marker])
+    hv.append_foreign_entries([s3])
+    a = _held(hv)
+    ca = _contents(_project(hv, tmp_path, hv.merkle.read_all_entries(hv.JOURNAL_DIR)))
+    _journal(hv, base + [marker])                            # node B had the marker first
+    hv.append_foreign_entries([s1, s2, s3])
+    b = _held(hv)
+    cb = _contents(_project(hv, tmp_path, hv.merkle.read_all_entries(hv.JOURNAL_DIR)))
+    assert ca == cb == {"s1", "s3"}
+    assert (d0["id"], 3) in a and (d0["id"], 3) in b
+
+
+def test_a_governance_entry_is_judged_after_the_same_batchs_lower_seq_content(tmp_path, monkeypatch):
+    """d0 holds s1 12:00; s2 is a fact at 12:20 and s3 an `announce` at 12:10, 10 minutes behind s2."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    s1 = _fact(hv, d0, "s1", ts(12))
+    s2 = _fact(hv, d0, "s2", ts(12, 20))
+    s3 = _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]}, ts(12, 10))
+    _journal(hv, base + [marker, s1])
+    hv.append_foreign_entries([s2, s3])                      # node A: one batch
+    a = _held(hv)
+    _journal(hv, base + [marker, s1])
+    hv.append_foreign_entries([s2])                          # node B: two batches
+    hv.append_foreign_entries([s3])
+    assert a == _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1), (d0["id"], 2)}
+    assert (d0["id"], 3) not in a
+
+
+def test_ingest_refuses_a_governance_entry_for_its_timestamp(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    s1 = _fact(hv, d0, "s1", ts(12))
+    behind = _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]}, ts(11, 40))
+    shaped = _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]},
+                    "2026-01-01T12:30:00Z")
+    _journal(hv, base + [marker, s1])
+    assert hv.append_foreign_entries([behind, shaped])[:2] == (0, 0)
+    assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1)}
+
+
+def test_a_batch_whose_lower_seq_carries_the_later_timestamp(tmp_path, monkeypatch):
+    """s2 at 12:20, s3 at 12:10: in one batch, in either order, s3 is judged after s2 and refused."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    s1 = _fact(hv, d0, "s1", ts(12))
+    s2 = _fact(hv, d0, "s2", ts(12, 20))
+    s3 = _fact(hv, d0, "s3", ts(12, 10))
+    for batch in ([s3, s2], [s2, s3]):
+        _journal(hv, base + [marker, s1])
+        assert hv.append_foreign_entries(batch)[:2] == (1, 0)
+        assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1), (d0["id"], 2)}
+
+
+def test_ingest_agrees_with_the_projection_for_every_split_of_a_batch(tmp_path, monkeypatch):
+    """Ingest refuses `e` iff `_ts_violations` over held + landed + `e` skips `e`, for any contiguous split."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    s1 = _fact(hv, d0, "s1", ts(12))
+    run = [_fact(hv, d0, "s2", ts(12, 20)),
+           _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]}, ts(12, 10)),
+           _fact(hv, d0, "s4", ts(12, 14)),
+           _fact(hv, d0, "s5", "2026-01-01T13:00:00Z"),
+           _fact(hv, d0, "s6", ts(12, 40))]
+    _journal(hv, base + [marker, s1] + run)
+    expect = _held(hv) - _skipped(hv)
+    assert len(expect) == len(_held(hv)) - 3                 # the announce, s4 and s5 are skipped
+    n = len(run)
+    for cuts in range(1 << (n - 1)):                         # every composition of the run into batches
+        _journal(hv, base + [marker, s1])
+        batch = [run[0]]
+        for i in range(1, n):
+            if cuts >> (i - 1) & 1:
+                hv.append_foreign_entries(batch)
+                batch = []
+            batch.append(run[i])
+        hv.append_foreign_entries(batch)
+        assert _held(hv) == expect, bin(cuts)
+
+
+def test_a_marker_the_projection_does_not_honour_is_checked_like_any_entry(tmp_path, monkeypatch):
+    """A `freeze-timestamps` signed by a key that is not the current owner arms nothing and is not exempt."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    rogue = _owner_key(hv)
+    fake = _entry(hv, d0, "governance", {"action": "freeze-timestamps", "tips": {}}, "2026-01-01T09:00:00Z",
+                  owner=(rogue[0], rogue[1]))
+    j = base + [marker, fake]
+    gov = hv._governance_state(j)
+    assert (d0["id"], 1) not in gov["ts_markers"] and ("ownerdev", 4) in gov["ts_markers"]
+    assert (d0["id"], 1) in hv._ts_violations(j, gov)
+    _journal(hv, base + [marker])
+    assert hv.append_foreign_entries([fake])[:2] == (0, 0)
+
+
+def test_a_marker_that_arrives_in_the_batch_arms_the_rest_of_it(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    s1 = _fact(hv, d0, "s1", ts(12))
+    s2 = _fact(hv, d0, "s2", ts(11))
+    _journal(hv, base)
+    hv.append_foreign_entries([s1, s2, marker])
+    assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1)}
+
+
+# ── a device's own clock stepping back is clamped, not refused ──────────────────────────────────────
+
+def test_a_clock_stepped_back_is_clamped_and_the_fact_still_lands_everywhere(tmp_path, monkeypatch, capsys):
+    import base64
+    hv = _loadhv(tmp_path / "local", monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    first = _fact(hv, d0, "first", ts(12, 30))
+    _journal(hv, base + [marker, first])
+    hv.NODE_ID = d0["id"]
+    hv.DEVICE_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    hv.DEVICE_KEY_PATH.write_text(base64.b64encode(d0["seed"]).decode())
+    monkeypatch.setattr(hv, "_now_iso", lambda: ts(12, 20))              # the clock stepped back 10 minutes
+    e = hv.append_journal("fact", {"content": "after", "tags": [], "importance": 0.5, "source": "manual"})
+    assert e["timestamp"] == ts(12, 30)
+    assert "10 min behind" in capsys.readouterr().err
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    assert "after" in _contents(_project(hv, tmp_path / "local", j))     # projects here
+    peer = _loadhv(tmp_path / "peer", monkeypatch)
+    _journal(peer, base + [marker, first])
+    assert peer.append_foreign_entries([e])[:2] == (1, 0)                # and passes a peer's ingest
+
+
+def test_a_small_step_back_is_clamped_quietly_and_a_forward_clock_is_untouched(tmp_path, monkeypatch, capsys):
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert hv._clamp_timestamp(ts(12, 28), ts(12, 30)) == ts(12, 30)
+    assert capsys.readouterr().err == ""                                 # within the tolerance: no noise
+    assert hv._clamp_timestamp(ts(12, 31), ts(12, 30)) == ts(12, 31)
+    assert hv._clamp_timestamp(ts(12, 30), ts(12, 30)) == ts(12, 30)
+    assert hv._clamp_timestamp(ts(12, 31), None) == ts(12, 31)
+    assert hv._clamp_timestamp(ts(12, 20), "2026-01-01T12:30:00Z") == ts(12, 30)   # an old naive/Z shape is rewritten canonical

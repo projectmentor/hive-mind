@@ -291,3 +291,90 @@ def test_doctor_names_the_signer_of_a_skipped_entry_and_reports_the_quarantine(t
     shape = checks["payload-shape"]["detail"]
     assert f"signed by {d['id']}" in shape and "skipped" in shape and "defaulted" in shape
     assert "1 refused entry" in checks["quarantine"]["detail"] and "importance" in checks["quarantine"]["detail"]
+
+
+# --- the live writers read the journal through the rebuild's one filter (#205) ---
+
+import os
+import subprocess
+import sys
+
+from test_links import _owned_hive
+import _planes
+
+
+def _cli(home, *args):
+    env = dict(os.environ, HIVE_HOME=str(home), HIVE_IDENTITY_STASH=str(Path(home) / "stash"))
+    r = subprocess.run([sys.executable, str(_planes.entry_for(args)), *args], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return r
+
+
+def _store(home, sql, *params):
+    conn = sqlite3.connect(Path(home) / "store.db")
+    try:
+        return conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+
+def _write_journal(home, entries):
+    jd = Path(home) / "journal"
+    jd.mkdir(parents=True, exist_ok=True)
+    (jd / "2026-01-01.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n")
+
+
+def _fact_state(home, content):
+    return _store(home, "SELECT confidence, importance FROM facts WHERE content = ?", content)
+
+
+def test_remember_agrees_with_rebuild_on_a_hostile_entry_already_on_disk(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, (a, b, _c), base = _owned_hive(hv)
+    honest = _entry(hv, a, "fact", dict(_base("fact"), content="shared", importance=0.1), TS % 1)
+    hostile = _entry(hv, b, "fact", dict(_base("fact"), content="shared", importance=2**63), TS % 2)
+    _write_journal(tmp_path, base + [honest, hostile])
+    _cli(tmp_path, "doctor", "rebuild")
+    first = _fact_state(tmp_path, "shared")
+    _cli(tmp_path, "remember", "shared")          # a live write recomputes confidence and importance
+    live = _fact_state(tmp_path, "shared")
+    _cli(tmp_path, "doctor", "rebuild")
+    assert live == _fact_state(tmp_path, "shared")
+    _cli(tmp_path, "remember", "another fact")    # and a write of different content recomputes every importance
+    other = _fact_state(tmp_path, "shared")
+    _cli(tmp_path, "doctor", "rebuild")
+    assert other == _fact_state(tmp_path, "shared")
+    assert first[0][1] == 0.1                      # the hostile writer's 2**63 never reaches the row
+
+
+def test_decide_and_outcome_of_agree_with_rebuild_on_a_hostile_polarity(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, (a, b, c), base = _owned_hive(hv)
+    dec = _entry(hv, a, "decision", _base("decision"), TS % 1)
+    good = _fact(hv, a, "it worked", TS % 2)
+    seen_c, seen_b = _fact(hv, c, "seen too", TS % 5), _fact(hv, b, "seen", TS % 3)
+    honest = _link(hv, c, "outcome-of", seen_c, dec, TS % 6, data={"polarity": 1})
+    hostile = _link(hv, b, "outcome-of", seen_b, dec, TS % 4, data={"polarity": 2**63})
+    _write_journal(tmp_path, base + [dec, good, seen_c, seen_b, honest, hostile])
+    _cli(tmp_path, "doctor", "rebuild")
+    ref = f"{dec['node_id']}:{dec['seq']}"
+    _cli(tmp_path, "remember", "the plan held", "--outcome-of", ref)      # live: _recompute_decision_outcome
+    live = _store(tmp_path, "SELECT outcome_score FROM decisions")
+    assert live[0][0] > 0                          # the honest outcome counts
+    _cli(tmp_path, "doctor", "rebuild")
+    assert live == _store(tmp_path, "SELECT outcome_score FROM decisions")
+    _cli(tmp_path, "decide", "next plan", "--rationale", "r", "--informed", f"{good['node_id']}:{good['seq']}")
+    live = _store(tmp_path, "SELECT content, outcome_score FROM decisions ORDER BY content")
+    _cli(tmp_path, "doctor", "rebuild")
+    assert live == _store(tmp_path, "SELECT content, outcome_score FROM decisions ORDER BY content")
+
+
+def test_the_quarantine_record_of_a_local_refusal_carries_the_principal_when_admitted(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    monkeypatch.setattr(hv, "_governance_state",
+                        lambda entries: {"admitted": [hv.NODE_ID], "principals": {hv.NODE_ID: "p0"}})
+    with pytest.raises(ValueError):
+        hv.append_journal("fact", dict(_base("fact"), importance=2**63))
+    q = _quarantined(tmp_path)
+    assert q[0]["signer"] == {"node_id": hv.NODE_ID, "principal": "p0"}

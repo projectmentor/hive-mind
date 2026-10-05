@@ -891,7 +891,11 @@ def append_journal(entry_type, payload, timestamp=None):
     candidate = {"type": entry_type, "payload": payload}
     problem = _hostile_problem(candidate) or _payload_problem(candidate)
     if problem is not None:
-        _quarantine([({"node_id": NODE_ID, "type": entry_type, "timestamp": timestamp, "payload": payload}, problem)])
+        try:
+            gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))      # the principal, when this device is admitted
+        except Exception:
+            gov = None
+        _quarantine([({"node_id": NODE_ID, "type": entry_type, "timestamp": timestamp, "payload": payload}, problem)], gov)
         raise ValueError(f"invalid {entry_type} payload: {problem}")      # #205: nothing malformed is journaled
     seq, prev_hash = _next_seq_and_prev(NODE_ID)
     entry = {
@@ -3023,6 +3027,14 @@ def _projectable(entry):
     return False
 
 
+def _projection_entries(journal, note=False):
+    """The journal entries the projection reads: those of a shaped type that project to something (#205). The
+    one filter for `rebuild_db` and the live writers (`remember`, `decide`, `link`), so an incremental write
+    and a full rebuild agree on a hostile entry already on disk. `note` records each skip for `rebuild_db`."""
+    return [e for e in journal if e["type"] not in _PAYLOAD_SHAPES
+            or (_projectable(e) if note else _unprojectable(e) is None)]
+
+
 _PROJECTION_NOTES = []     # what the last projection defaulted or skipped (reset by `rebuild_db`)
 
 
@@ -3770,7 +3782,8 @@ def remember(args):
 
         # Read the journal ONCE after all appends, then reproject confidence per affected content
         # (keeps the live path consistent with rebuild without a full rebuild).
-        all_entries = merkle.read_all_entries(JOURNAL_DIR)
+        journal = merkle.read_all_entries(JOURNAL_DIR)
+        all_entries = _projection_entries(journal)
         gov = _governance_state(all_entries)
         by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries}
         if resolves_link is not None:
@@ -3800,7 +3813,7 @@ def remember(args):
         _recompute_importance(conn, all_entries)          # 1.19 PR6: the column is learned, never the raw hint
         if outcome_link is not None:
             _recompute_utility(conn, all_entries)         # an outcome changes what the informing facts earned
-        _mark_projected(conn, all_entries, [entry, resolves_link, outcome_link, evidence_link, extends_link])
+        _mark_projected(conn, journal, [entry, resolves_link, outcome_link, evidence_link, extends_link])
         conn.commit()
         conn.close()
     except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
@@ -3880,13 +3893,14 @@ def retract(args):
 
     try:
         conn = get_conn()
-        all_entries = merkle.read_all_entries(JOURNAL_DIR)
+        journal = merkle.read_all_entries(JOURNAL_DIR)
+        all_entries = _projection_entries(journal)
         gov = _governance_state(all_entries)
         ev = _content_evidence(all_entries, gov).get(
             content, {"pos": {}, "neg": {}, "forget": False, "last_ts": ""})
         conf = _content_confidence(ev, gov)
         _apply_content_confidence(conn, content, ev, gov)
-        _mark_projected(conn, all_entries, [rentry])
+        _mark_projected(conn, journal, [rentry])
         conn.commit()
         conn.close()
     except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
@@ -4209,7 +4223,8 @@ def decide(args):
                       for ref in informed_refs]
     link_entries += informed_links
 
-    all_entries = merkle.read_all_entries(JOURNAL_DIR)
+    journal = merkle.read_all_entries(JOURNAL_DIR)
+    all_entries = _projection_entries(journal)
     gov = _governance_state(all_entries) if link_entries else None
     by_ref = {(e.get("node_id"), e.get("seq")): e for e in all_entries} if link_entries else {}
     try:
@@ -4220,7 +4235,7 @@ def decide(args):
                 resolve_link(conn, le, gov, by_ref)
             _recompute_importance(conn, all_entries)      # 1.19 PR6: `informed` links are attention + utility
             _recompute_utility(conn, all_entries)
-        _mark_projected(conn, all_entries, [entry] + link_entries)
+        _mark_projected(conn, journal, [entry] + link_entries)
         conn.commit()
         conn.close()
     except sqlite3.OperationalError as e:                # after the append: never report failure (#70)
@@ -4962,10 +4977,11 @@ def entity(args):
             _write_source(args),   # #114 (D-6)
             data={"confidence": args.confidence if args.confidence is not None else 1.0}))
         try:
-            all_entries = merkle.read_all_entries(JOURNAL_DIR)
+            journal = merkle.read_all_entries(JOURNAL_DIR)
+            all_entries = _projection_entries(journal)
             resolve_link(conn, entry, _governance_state(all_entries),
                          {(e.get("node_id"), e.get("seq")): e for e in all_entries})
-            _mark_projected(conn, all_entries, [entry])
+            _mark_projected(conn, journal, [entry])
             conn.commit()
             conn.close()
         except sqlite3.OperationalError as e:            # after the append: never report failure (#70)
@@ -5043,7 +5059,7 @@ def _rebuild_in_transaction(conn):
     _PROJECTION_NOTES.clear()
     # One filter for every pass and reader: an entry of a shaped type with no object payload, a non-string
     # required field or a hostile number projects to nothing, so no later pass sees it (#205). The marker still covers the journal.
-    entries = [e for e in journal if e["type"] not in _PAYLOAD_SHAPES or _projectable(e)]
+    entries = _projection_entries(journal, note=True)
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
         if entry["type"] in _PASS1:

@@ -5472,8 +5472,8 @@ def _fleet_contract(gov, probed, contracts, minimum=None):
     need = _contract_tuple(minimum or _fleet_floor())
     out = {"ok": [], "behind": [], "unverified": []}
     for d in sorted(gov.get("admitted") or set()):
-        if d == NODE_ID or d in (gov.get("purged") or set()):
-            continue
+        if d == NODE_ID or d in (gov.get("purged") or set()) or d in (gov.get("modules") or {}):
+            continue                  # a module device (2.1) has no sync address: it is not a node to reach or to upgrade
         if d not in probed:
             out["unverified"].append(d)
             continue
@@ -8327,6 +8327,15 @@ def _doctor_status():
     except Exception:
         pass
 
+    # 3i. Modules (2.1, M7): one result per installed module, none on a node without any.
+    try:
+        import hive_module_doctor
+        checks.extend(hive_module_doctor.checks(
+            _hv_namespace(), gov, entries,
+            probe=lambda: (_probe_peer_map_cached(), _PEER_CONTRACTS)))
+    except Exception as e:
+        checks.append({"name": "modules", "status": "warn", "detail": f"check error: {e}"})
+
     # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
     try:
         a = _compute_audit(depth="light")
@@ -8900,6 +8909,13 @@ def _repoint_peers(path, moves):
     return done
 
 
+def _hv_namespace():
+    """This file's globals as an object, for a helper module that reads `hv`'s paths and functions. It is not
+    `sys.modules[__name__]`: a test (or a tool) may load `hv` under a name nothing registered."""
+    import types
+    return types.SimpleNamespace(**globals())
+
+
 def doctor_cmd(args):
     """Aggregate local health check: authenticity, journal integrity, the derived DB, corpus
     hygiene, the sync daemon, peer reachability, and the Claude Code agent integration. Read-only by
@@ -9100,6 +9116,17 @@ def doctor_cmd(args):
                 print("\n--fix: Claude Code integration already wired.")
         except Exception as e:
             print(f"\n--fix: agent-hooks heal error: {e}")
+
+        # Modules (2.1, M7): re-render a unit that differs from its verified manifest, start a stopped one.
+        # Never admits, revokes or signs anything.
+        try:
+            import hive_module_doctor
+            fixes = hive_module_doctor.fix(_hv_namespace(), dry)
+            if fixes:
+                print("\n--fix: modules")
+                print("\n".join(fixes))
+        except Exception as e:
+            print(f"\n--fix: modules heal error: {e}")
 
         # The forget grandfather is the one failing check `--fix` can settle in place (on the control plane,
         # 4c), so re-read it: a hive closed just now exits clean instead of on the pre-fix verdict.

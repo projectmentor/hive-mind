@@ -296,3 +296,13 @@ def test_d_an_open_forget_grandfather_ends_the_update_with_action_required(sandb
     else:
         assert r.returncode == 0, out + r.stderr
         assert "ACTION REQUIRED" not in out and "Update complete" in out
+
+
+def test_the_update_re_applies_module_units_and_a_broken_module_only_warns(sandbox):
+    sb = sandbox()
+    mods = sb.tmp / "modules"
+    (mods / "ghost").mkdir(parents=True)                 # recorded as installed, but its tree is not a module
+    (sb.hive / ".modules.json").write_text(json.dumps({"ghost": {"version": "1", "publisher": "x"}}))
+    r = sb.update(HIVE_MODULES_DIR=mods)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "ghost: units not re-applied" in r.stdout and "Update complete" in r.stdout

@@ -159,6 +159,8 @@ def validate_manifest(raw, core_version):
             raise ModuleError("manifest service needs a command list, restart no|on-failure|always, optional interval >= 60")
         if not cmd[0].startswith("/") and ".." in Path(cmd[0]).parts:
             raise ModuleError("manifest service command may not leave the module's directory")
+        if any(ord(c) < 0x20 for a in cmd for c in a):
+            raise ModuleError("manifest service command arguments may not hold control characters")
     hooks = m.get("hooks", [])
     if not isinstance(hooks, list) or any(h not in HOOK_EVENTS for h in hooks):
         raise ModuleError(f"manifest hooks must be a list of: {', '.join(HOOK_EVENTS)}")
@@ -334,6 +336,12 @@ def _quote(arg):
     return f'"{esc}"'
 
 
+def _env(key, value):
+    """One `Environment="K=V"` line: the quotes keep a space in the value, `%` is doubled against specifiers."""
+    esc = f"{key}={value}".replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%")
+    return f'Environment="{esc}"'
+
+
 def render_units(name, manifest, module_dir, key_dir):
     """{filename: text} for a module's unit(s), or {} when its manifest has no `service` block.
 
@@ -352,10 +360,10 @@ def render_units(name, manifest, module_dir, key_dir):
     interval, restart = svc.get("interval"), svc.get("restart", "on-failure")
     service, timer = unit_names(name)
     lines = ["[Unit]", f"Description=Hive Mind module {name}", "After=network.target", ""]
-    lines += ["[Service]", f"Type={'oneshot' if interval else 'simple'}", f"WorkingDirectory={module_dir}",
+    lines += ["[Service]", f"Type={'oneshot' if interval else 'simple'}", f"WorkingDirectory={str(module_dir).replace('%', '%%')}",
               "ExecStart=" + " ".join(_quote(a) for a in cmd),
-              f"Environment=HIVE_MODULE_NAME={name}", f"Environment=HIVE_MODULE_DIR={module_dir}",
-              f"Environment=HIVE_MODULE_KEY_DIR={key_dir}", "NoNewPrivileges=yes",
+              _env("HIVE_MODULE_NAME", name), _env("HIVE_MODULE_DIR", module_dir),
+              _env("HIVE_MODULE_KEY_DIR", key_dir), "NoNewPrivileges=yes",
               "StandardOutput=journal", "StandardError=journal"]
     if not interval:                    # a timer re-fires a oneshot; a daemon is kept up by its restart policy
         lines += [f"Restart={restart}", "RestartSec=5", "KillMode=control-group"]
@@ -368,29 +376,48 @@ def render_units(name, manifest, module_dir, key_dir):
     return out
 
 
-def install_units(lib, name, manifest):
-    """Write the module's unit files (removing a timer it no longer declares) and, where a user systemd manager is
-    reachable, enable and (re)start them. Without one the files are still written; returns a note for the operator."""
+def _write_units(lib, name, manifest, only_changed=False):
+    """Stop whatever is installed, then write the module's unit files (and drop a timer it no longer declares).
+    Returns the unit to enable and start (the timer when there is one), or None when there is nothing to start:
+    no service block, or `only_changed` and the files are already what the manifest renders."""
     keep = render_units(name, manifest, modules_dir() / name, Path(lib._ensure_key_dir()) / "modules" / name)
     if not keep:
         remove_units(name)
-        return ""
+        return None
     d = unit_dir()
+    if only_changed and all((d / f).exists() and (d / f).read_text() == keep.get(f) for f in unit_names(name)
+                            if f in keep) and not any((d / f).exists() for f in unit_names(name) if f not in keep):
+        return None
     d.mkdir(parents=True, exist_ok=True)
-    for fname in unit_names(name):
-        if fname not in keep and (d / fname).exists():
-            _systemctl("disable", "--now", fname)            # a timer the new manifest dropped stops first
-            (d / fname).unlink()
+    for fname in unit_names(name)[::-1]:                    # a daemon that becomes a timer must not keep running
+        if (d / fname).exists():
+            _systemctl("disable", "--now", fname)
+            if fname not in keep:
+                (d / fname).unlink()
     for fname, text in keep.items():
         (d / fname).write_text(text)
+    return next(f for f in unit_names(name)[::-1] if f in keep)
+
+
+def _start_unit(unit):
+    """Enable and (re)start `unit`; a note for the operator when systemd would not."""
+    if not _systemctl("enable", unit):
+        return "the unit is written, but systemd would not enable it"
+    if not _systemctl("restart", unit):
+        return "the unit is enabled, but systemd would not start it"
+    return ""
+
+
+def install_units(lib, name, manifest):
+    """Write the module's unit files and, where a user systemd manager is reachable, enable and (re)start them.
+    Without one the files are still written; returns a note for the operator."""
+    unit = _write_units(lib, name, manifest)
+    if unit is None:
+        return ""
     if not _systemctl("show-environment"):
         return "no user systemd manager is reachable: the unit is written, not started"
     _systemctl("daemon-reload")
-    active = next(f for f in unit_names(name)[::-1] if f in keep)       # the timer when there is one
-    if not _systemctl("enable", active):
-        return "the unit is written, but systemd would not enable it"
-    _systemctl("restart", active)
-    return ""
+    return _start_unit(unit)
 
 
 def remove_units(name):
@@ -545,15 +572,17 @@ def cmd_update(lib, args):
             shutil.rmtree(staging, ignore_errors=True)
             raise
         live = root / args.name
+        swapped = False
         try:
             _write_config(staging, {**manifest.get("config", {}),
                                     **(json.loads((live / "config").read_text()) if (live / "config").exists() else {})})
             shutil.rmtree(old, ignore_errors=True)
             os.rename(live, old)                  # two renames: a crash between them leaves the old copy at `.old`
+            swapped = True                        # only now is `.old` this update's; a stale one is never rolled back
             os.rename(staging, live)
             note = install_units(lib, args.name, manifest)
         except BaseException:
-            if old.exists():
+            if swapped:
                 shutil.rmtree(live, ignore_errors=True)
                 os.rename(old, live)
                 try:                                  # put the old unit back beside the old files
@@ -625,6 +654,35 @@ def cmd_quota(lib, args):
     print(f"{args.name} limits: " + ", ".join(f"{k}={eff[k]}" for k in QUOTA_KEYS))
 
 
+def cmd_reapply(lib, args):
+    """Internal, run by `hive-mind update` after a core update: render every installed module's units again, write
+    the files that changed, reload systemd once and restart only those units. It never fails: a module that cannot
+    be re-applied is a warning that names it."""
+    if not platform_supported()[0]:
+        return
+    pending = []
+    for name in sorted(load_state(lib)):
+        try:
+            manifest = check_tree(modules_dir() / name, lib.CONTRACT_VERSION, ignore=("config",))
+            unit = _write_units(lib, name, manifest, only_changed=True)
+        except (ModuleError, OSError, ValueError, KeyError) as e:
+            print(f"hive-mind module: warning: {name}: units not re-applied ({e})", file=sys.stderr)
+            continue
+        if unit:
+            pending.append((name, unit))
+    if not pending:
+        return
+    if not _systemctl("show-environment"):
+        print("hive-mind module: warning: no user systemd manager is reachable: units written, not restarted",
+              file=sys.stderr)
+        return
+    _systemctl("daemon-reload")
+    for name, unit in pending:
+        note = _start_unit(unit)
+        if note:
+            print(f"hive-mind module: warning: {name}: {note}", file=sys.stderr)
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="hive-mind module", description="Install and manage modules (Linux, 2.1).")
     sub = p.add_subparsers(dest="verb", required=True)
@@ -640,6 +698,7 @@ def build_parser():
     u.add_argument("--from", dest="source", help="a different repository (default: where it came from)")
     u.add_argument("--publisher", help="ignored unless it equals the pinned key")
     sub.add_parser("list", help="installed modules: version, publisher, signature, service, device, quota use")
+    sub.add_parser("reapply", help=argparse.SUPPRESS)           # internal: `hive-mind update` re-renders the units
     q = sub.add_parser("quota", help="the owner raises or lowers a module's limits")
     q.add_argument("name")
     for k in QUOTA_KEYS:
@@ -647,7 +706,8 @@ def build_parser():
     return p
 
 
-VERBS = {"add": cmd_add, "remove": cmd_remove, "update": cmd_update, "list": cmd_list, "quota": cmd_quota}
+VERBS = {"add": cmd_add, "remove": cmd_remove, "update": cmd_update, "list": cmd_list, "quota": cmd_quota,
+         "reapply": cmd_reapply}
 
 
 def main(lib, argv):

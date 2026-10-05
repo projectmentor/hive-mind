@@ -345,7 +345,7 @@ def test_an_owner_raise_of_entry_bytes_reaches_the_route_but_only_for_that_modul
 
 # ── 2.1 plan PR 7 (M2): the module's systemd unit ───────────────────────────────────────────────────
 
-SERVICE = {"command": ["run.sh", "--poll", "a b", "100%$HOME"], "restart": "always"}
+SERVICE = {"command": ["run.sh", "--poll", "a b", "100%$HOME", 'q"x', "back\\slash"], "restart": "always"}
 
 
 @pytest.fixture
@@ -354,7 +354,8 @@ def units(tmp_path, monkeypatch):
     shim = tmp_path / "shim"
     shim.mkdir()
     log = tmp_path / "systemctl.log"
-    (shim / "systemctl").write_text(f'#!/bin/sh\necho "$*" >> {log}\nexit 0\n')
+    (shim / "systemctl").write_text(f'#!/bin/sh\necho "$*" >> {log}\ncase "$*" in *is-active*) echo active;; esac\n'
+                                    f'[ -n "$FAIL_SYSTEMCTL" ] && case "$*" in *"$FAIL_SYSTEMCTL"*) exit 1;; esac\nexit 0\n')
     (shim / "systemctl").chmod(0o755)
     monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
     unit_dir = Path(os.environ["HOME"]) / ".config" / "systemd" / "user"
@@ -369,10 +370,10 @@ def test_a_service_block_is_rendered_as_a_user_unit_and_installed(hive, tmp_path
     text = (unit_dir / "hive-module-demo.service").read_text()
     d = tmp_path / "modules" / "demo"
     assert "Type=simple" in text and "Restart=always" in text and f"WorkingDirectory={d}" in text
-    assert f'ExecStart="{d}/run.sh" "--poll" "a b" "100%%$$HOME"' in text      # anchored to the module, one word each
+    assert f'ExecStart="{d}/run.sh" "--poll" "a b" "100%%$$HOME" "q\\"x" "back\\\\slash"' in text      # anchored to the module, one word each
     assert "User=" not in text                                 # a user unit: it runs as the operator
     key_dir = _keys.key_dir(hive) / "modules" / "demo"
-    assert f"HIVE_MODULE_KEY_DIR={key_dir}" in text
+    assert f'Environment="HIVE_MODULE_KEY_DIR={key_dir}"' in text and 'Environment="HIVE_MODULE_NAME=demo"' in text
     assert "owner" not in text.lower() and "HIVE_HOME" not in text     # no owner-key path, no hive home
     assert "pkill" not in text and "ExecStartPre" not in text
     assert not (unit_dir / "hive-module-demo.timer").exists()
@@ -452,3 +453,75 @@ def test_a_service_command_cannot_leave_the_module_directory(hive, tmp_path, uni
     r = _add(hive, tmp_path / "repo", pub, check=False)
     assert r.returncode == 1 and "leave the module's directory" in r.stderr
     assert not list(unit_dir.glob("hive-module-*")) and not _key_dir_has_module(hive)
+
+
+def test_update_from_a_daemon_to_a_timer_stops_the_daemon(hive, tmp_path, units):
+    unit_dir, calls = units
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service={"command": ["run.sh"], "restart": "always"}))
+    _publish(repo, version="1.1.0", service={"command": ["run.sh"], "interval": 60})
+    _run(hive, "module", "update", "demo")
+    assert any(c in calls() for c in ("disable --now hive-module-demo.service", "stop hive-module-demo.service"))
+    assert "enable hive-module-demo.timer" in calls() and "Type=oneshot" in (unit_dir / "hive-module-demo.service").read_text()
+
+
+def test_a_control_character_in_a_service_argument_is_refused(hive, tmp_path, units):
+    unit_dir, _ = units
+    pub = _publish(tmp_path / "repo", service={"command": ["run.sh", "x\nEnvironment=HIVE_HOME=/elsewhere"]})
+    r = _add(hive, tmp_path / "repo", pub, check=False)
+    assert r.returncode == 1
+    assert not list(unit_dir.glob("hive-module-*"))
+
+
+def test_a_stale_old_copy_is_not_rolled_back_over_a_good_install(hive, tmp_path, units):
+    """A crash after the swap leaves `.old` beside a good live copy; a later update that fails before its own swap
+    must not put that older copy back."""
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo))
+    live, stale = tmp_path / "modules" / "demo", tmp_path / "modules" / ".demo.old"
+    stale.mkdir()
+    (stale / "run.sh").write_text("#!/bin/sh\necho STALE\n")
+    (live / "config").write_text("not json")                    # _write_config fails before the swap
+    _publish(repo, version="1.1.0")
+    assert _run(hive, "module", "update", "demo", check=False).returncode != 0
+    assert "STALE" not in (live / "run.sh").read_text() and (live / "module.json").exists()
+
+
+def test_a_unit_that_will_not_start_is_reported(hive, tmp_path, units, monkeypatch):
+    monkeypatch.setenv("FAIL_SYSTEMCTL", "restart")
+    repo = tmp_path / "repo"
+    r = _add(hive, repo, _publish(repo, service=SERVICE))
+    assert "would not start" in r.stdout
+
+
+def test_list_shows_the_state_of_a_module_with_a_service(hive, tmp_path, units):
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service=SERVICE))
+    row = next(l for l in _run(hive, "module", "list").stdout.splitlines() if l.startswith("demo"))
+    assert " active " in row
+
+
+def test_reapply_carries_a_renderer_change_to_an_installed_module_and_restarts_only_that_unit(hive, tmp_path, units):
+    unit_dir, calls = units
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service=SERVICE))
+    _add(hive, tmp_path / "r2", _publish(tmp_path / "r2", name="plain"), name="plain")     # no service: untouched
+    unit = unit_dir / "hive-module-demo.service"
+    good = unit.read_text()
+    unit.write_text(good.replace("NoNewPrivileges=yes\n", ""))          # what an older renderer wrote
+    log = tmp_path / "systemctl.log"
+    log.write_text("")
+    r = _run(hive, "module", "reapply")
+    assert r.returncode == 0 and r.stdout == "" and unit.read_text() == good
+    assert calls().count("daemon-reload") == 1 and "restart hive-module-demo.service" in calls()
+    log.write_text("")
+    _run(hive, "module", "reapply")                                       # nothing changed: nothing restarted
+    assert calls() == []
+
+
+def test_reapply_warns_about_a_module_it_cannot_re_apply_and_still_succeeds(hive, tmp_path, units):
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service=SERVICE))
+    (tmp_path / "modules" / "demo" / "run.sh").write_text("#!/bin/sh\necho owned\n")
+    r = _run(hive, "module", "reapply")
+    assert r.returncode == 0 and "warning: demo" in r.stderr

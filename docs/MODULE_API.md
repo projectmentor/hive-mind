@@ -30,11 +30,11 @@ the algorithm, method, path, canonical query, body hash, timestamp and nonce, se
 refused) and the device's admission are checked the way a peer's are. On top of that the device must be a **module
 device**: one the owner admitted with the module marker (`admit --module`, which `hive-mind module add` does).
 
-Unlike the sync daemon, this listener **ignores `sync_auth_mode`**: an unsigned request is always `401`.
+Unlike the sync daemon, this listener **ignores `sync_auth_mode`**: an unsigned request is never served. A request is answered `403` (not loopback), `503` (busy) or `405` (verb) before authentication, and a `POST` body is read first, so an unsigned `POST` with a missing or malformed `Content-Length` is `400` and one past the entry size limit is `413`. Every other unsigned request is `401`.
 
 | Answer | When |
 |---|---|
-| `401` | Unsigned, stale, replayed, wrong path or wrong body. `detail` names why. Authentication runs before the route lookup, so an unsigned request to *any* path, an unknown one included, is `401`. |
+| `401` | Unsigned, stale, replayed, wrong path or wrong body. `detail` names why. Authentication runs before the route lookup, so an unsigned `GET` to *any* path, an unknown one included, is `401`. (The answers that come first are listed above.) |
 | `403` | Signed by a device that is not admitted (`not-admitted`), is admitted but not a module device (`not-a-module-device`), or the hive has no owner yet (`no-owner`). |
 
 ## Routes
@@ -131,7 +131,7 @@ The body is one **signed entry**, exactly these fields and no others:
  "payload": {"content": "…", "source": "x-hwatch"}, "prev_hash": "sha256:…", "pub": "<b64>", "sig": "<b64>"}
 ```
 
-The gate, in order. Every refusal is a 4xx and writes nothing.
+The gate. Every refusal is a 4xx and writes nothing. The table groups checks by answer, not by order. The order that matters: `node_id` and `type` (`403`) are checked before `timestamp` and the signature (`400`), so a `governance` entry with a bad signature is `403`; and the dry run (`400`) runs inside the lock, after the chain (`409`) and quota (`429`) checks.
 
 | Check | Refusal |
 |---|---|
@@ -145,9 +145,9 @@ The gate, in order. Every refusal is a 4xx and writes nothing.
 | A legacy reference field (`supersedes_ref`, `supersedes`, `resolves_ref`, `entity_ref`, `fact_ref`, `entity_id`, `fact_id`); a bound field of the wrong type | `400` |
 | A `fact`, `decision` or `idea` with no non-empty string `payload.content`; an `entity` with no `payload.name` | `400` |
 | A reference field that is not the shape its row in `REF_FIELDS` says | `400` |
-| The core's own projection raises on the payload (a dry run, rolled back) | `400` |
 | The chain: a different entry already held at this `seq`; a `seq` or `prev_hash` that does not extend the tip | `409`, with the tip |
 | Over quota | `429`, with `Retry-After` when waiting helps |
+| The core's own projection raises on the payload (a dry run, rolled back) | `400` |
 | The core would not append it (admission, signature, timestamp) | `403` |
 
 An accepted write answers `200`:
@@ -343,7 +343,7 @@ acts only on a module whose manifest verifies, never re-admits a revoked device 
 
 ### Hooks and events
 
-> **PENDING: plan PR 8, then 9b's hooks check.** This section is a placeholder and is filled after PR 8 merges. The
+> **PENDING: plan PR 8, then the hooks check that follows it.** This section is a placeholder and is filled after PR 8 merges. The
 > `hooks` manifest field is *provisional* until then. See [`CONTRACT.md`](CONTRACT.md#pending-until-plan-pr-8-merges).
 
 ## Fleet config

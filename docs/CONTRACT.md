@@ -22,7 +22,7 @@ Everything a module can reach is marked with one of three tiers.
 - **The routes and their verbs**: `GET /v1/`, `/v1/feed`, `/v1/search`, `/v1/item`, `/v1/entity`, `/v1/tip` and
   `POST /v1/entries`, with the parameters, the status codes and the fields [`MODULE_API.md`](MODULE_API.md) lists.
 - **The authentication**: the Hive-Auth envelope, its signing bytes and the module-device requirement; an unsigned
-  request is always `401`.
+  request is never served.
 - **The entry format a module signs.** Once a module signs its own entry, these must be reproducible in any
   language, so they are stable: the entry's fields (`node_id`, `seq`, `type`, `timestamp`, `payload`, `prev_hash`,
   `pub`, `sig`), the canonical form (`merkle._canonical`), the signing bytes (everything but `sig`, `pub` included),
@@ -141,7 +141,7 @@ The feed carries what the core computes. A consumer **must not** compute its own
 > - **Hooks and events (PR 8).** The `hooks` manifest field names the events a module hooks. The manifest checker
 >   already accepts the six it names (`session-start`, `user-prompt`, `precompact`, `sessionend`, `notification`,
 >   `stop`), but the dispatcher that runs them is PR 8's. Until then `hooks` is **provisional**.
-> - **The hooks check (PR 9b, #232).** The doctor's re-verification of an installed module's hook scripts.
+> - **The hooks check (follows PR 8).** The doctor's re-verification of an installed module's hook scripts.
 
 ## Deferred
 

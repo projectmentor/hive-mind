@@ -279,7 +279,7 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   bounded. **Operators:** modules run on Linux only in 2.1. **Version skew:** a 2.0 node ignores the module marker
   and still counts a module device's vote (only with `quorum_m > 0` and `quorum_by=device`), and lists a module
   device as unreachable in `fleet-contract`; `hv doctor` on a 2.1 node warns about any node still on 2.0 in a hive
-  that has modules. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+  that has modules, but only when `quorum_m > 0`. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `2.0` — **the split: `hv` is the agent data plane, `hive-mind` the owner/operator control plane** (public
   #136). **Re-integrate (§0).** Three adapter-visible breaks, each promised for this major: (1) a bare local
   id (`118`, `d17`, `i5`) is refused on every flag and MCP or Hermes input that takes a reference; pass the

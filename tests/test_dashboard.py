@@ -98,6 +98,13 @@ def test_api_search_kind_is_exclusive_and_min_confidence_spares_raw_ideas(daemon
     assert get("kind=idea&min_confidence=0.9") == {"facts": 0, "decisions": 0, "ideas": 1}
 
 
+def test_api_search_unknown_kind_is_a_400(daemon):
+    # the CLI's argparse `choices` refuse `--kind facts`; the API answers 400, not an empty 200
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _get(daemon, "/api/search?q=android&kind=facts")
+    assert e.value.code == 400
+
+
 def test_api_search_tag_scopes_results(daemon):
     # `installer` tags only the fact, so the decision must drop out — the 1.15 project-scoping payoff.
     o = json.loads(_get(daemon, "/api/search?tag=installer")[1])

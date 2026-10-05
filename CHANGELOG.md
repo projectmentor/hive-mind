@@ -43,10 +43,11 @@ No contract change.
   not a contract bump (`AGENT_INTEGRATION.md` §7).
 - **`api_search` `kind` is exclusive** (#209). `kind=idea` also returned every live fact and decision (the
   fact and decision branches ran for any kind but their own opposite); the dashboard's `/api/search` and any caller of `api_search`
-  inherited it. `fact`, `decision` and `idea` now return only that type, and `all` returns the three together
-  (raw ideas stay hidden under `all`, as before). `min_confidence` filters facts only: raw ideas, which sit at 0.0
-  by design, come back under `kind=idea` whatever their confidence (decision by David, `h:0167a9c01a`). `hv search`
-  already behaved this way.
+  inherited it. `fact`, `decision` and `idea` now return only that type, and `all` returns the three together.
+  `kind` outside those four answers 400 on `/api/search`, as the CLI's `--kind` choices refuse it. `min_confidence`
+  filters facts everywhere, and earned ideas under `kind=all` on both surfaces (raw ideas stay hidden under `all`).
+  Under `kind=idea` raw ideas, which sit at 0.0 by design, come back whatever their confidence (decision by David,
+  `h:0167a9c01a`). Decisions have no confidence filter. `hv search` already behaved this way.
 
 ## 2.0.2 — 2026-10-03 · `v2.0.2`
 

@@ -11,7 +11,16 @@
 # its own script. The hook's stdin is consumed ONCE and replayed to each behavior; behaviors' stdout
 # passes through unchanged, so SessionStart / UserPromptSubmit context injection still works.
 #
-# Usage (from settings.json):  hive_dispatch.sh {session-start|user-prompt|precompact|sessionend}
+# Usage (from settings.json):  hive_dispatch.sh {session-start|user-prompt|precompact|sessionend|notification|stop}
+#
+# Modules (2.1, M4): after the core behaviors for an event, each INSTALLED module's
+# $HIVE_MODULES_DIR/<name>/hooks/<event> runs, in name order, with the payload on stdin. Those files are NOT
+# under `hv verify` (they are outside the checkout); `hive-mind module add|update` verified them against the
+# signed manifest and `hv doctor` re-verifies them, and this loop does not hash per event. It does run a hook
+# only if the module is recorded in .modules.json and the file is a regular, executable, own-user,
+# not group/world-writable file in a real directory. A hook's stdout and stderr are discarded (adding to the
+# digest is M6); it is capped (HIVE_MODULE_HOOK_TIMEOUT, default 3s) and the event's modules share a budget
+# (HIVE_MODULE_EVENT_BUDGET, default 6s); an overrun or a skipped hook is logged to $HIVE_HOME/.bus/modules.log.
 #
 # Bus (1.20): `hv` appends `introspect`-channel events to $HIVE_HOME/.bus/introspect.log (today:
 # `idea-arrived <node_id:seq> <text>` when a PEER's idea lands on ingest). Non-journaled, local,
@@ -32,4 +41,46 @@ case "$event" in
   user-prompt)   run nudge_hook.sh user-prompt ;;
   precompact)    run nudge_hook.sh precompact ;;
 esac
+
+# ── module hooks (M4) ──────────────────────────────────────────────────────────────────────────────
+# Everything below is best-effort: no path writes to stdout or changes the exit status.
+case "$event" in session-start|user-prompt|precompact|sessionend|notification|stop) ;; *) exit 0 ;; esac
+
+MODULES_DIR="${HIVE_MODULES_DIR:-$HOME/.hive/modules}"
+HOOK_CAP="${HIVE_MODULE_HOOK_TIMEOUT:-3}"
+EVENT_BUDGET="${HIVE_MODULE_EVENT_BUDGET:-6}"
+case "$HOOK_CAP$EVENT_BUDGET" in *[!0-9]*|"") HOOK_CAP=3; EVENT_BUDGET=6 ;; esac
+
+bus_log() {  # bus_log <what> <module> — a non-journaled local line; never shown
+  { mkdir -p "${HIVE_HOME:-$HOME/projects/hive-mind}/.bus" \
+      && printf '%s %s %s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "$2" "$event" \
+         >> "${HIVE_HOME:-$HOME/projects/hive-mind}/.bus/modules.log"; } 2>/dev/null || true
+}
+
+# a hook may run only if it is a regular file (not a link), executable, ours, and not writable by group or other
+hook_ok() {
+  [ -f "$1" ] && [ ! -L "$1" ] && [ -x "$1" ] && [ -O "$1" ] || return 1
+  local m; m="$(stat -c %A "$1" 2>/dev/null)" || return 1
+  [ "${m:5:1}${m:8:1}" = "--" ]   # no group or other write bit
+}
+
+STATE="${HIVE_HOME:-$HOME/projects/hive-mind}/.modules.json"
+if [ -d "$MODULES_DIR" ] && [ ! -L "$MODULES_DIR" ] && [ -f "$STATE" ]; then
+  start=$SECONDS
+  for dir in "$MODULES_DIR"/*/; do
+    name="$(basename "$dir")"
+    case "$name" in ""|.*|*[!a-z0-9-]*) continue ;; esac
+    hook="$MODULES_DIR/$name/hooks/$event"
+    [ -e "$hook" ] || [ -L "$hook" ] || continue
+    [ ! -L "$MODULES_DIR/$name" ] && [ ! -L "$MODULES_DIR/$name/hooks" ] || { bus_log hook-skipped "$name"; continue; }
+    grep -q "^ *\"$name\": " "$STATE" 2>/dev/null || { bus_log hook-skipped "$name"; continue; }
+    hook_ok "$hook" || { bus_log hook-skipped "$name"; continue; }
+    left=$(( EVENT_BUDGET - (SECONDS - start) ))
+    [ "$left" -gt 0 ] || { bus_log hook-skipped "$name"; continue; }
+    cap=$(( HOOK_CAP < left ? HOOK_CAP : left ))
+    printf '%s' "$payload" | timeout -k 1 "$cap" "$hook" >/dev/null 2>&1
+    rc=$?
+    { [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; } && bus_log hook-timeout "$name"
+  done 2>/dev/null
+fi
 exit 0

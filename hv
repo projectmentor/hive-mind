@@ -768,15 +768,18 @@ def _verify_governance(payload):
 
 
 def _next_seq_and_prev(node_id, with_timestamp=False):
-    """Next per-node monotonic seq and the hash of this device's latest entry (plus that entry's timestamp, or
-    None, when `with_timestamp`). Derived from the journal itself (stateless, correct after a fresh start)."""
+    """Next per-node monotonic seq and the hash of this device's latest entry (plus the LATEST timestamp this device
+    holds, by instant, or None, when `with_timestamp`: rule 1 measures against the chain max). Derived from the journal itself (stateless, correct after a fresh start)."""
     mine = [e for e in merkle.read_all_entries(JOURNAL_DIR) if e.get("node_id") == node_id]
     if not mine:
         out = (1, "sha256:genesis")
         return out + (None,) if with_timestamp else out
     last = max(mine, key=lambda e: e["seq"])
     out = (last["seq"] + 1, compute_hash(last))
-    return out + (last.get("timestamp"),) if with_timestamp else out
+    if not with_timestamp:
+        return out
+    stamped = [(i, e["timestamp"]) for e in mine for i in [_ts_instant(e.get("timestamp"))] if i is not None]
+    return out + (max(stamped)[1] if stamped else last.get("timestamp"),)
 
 
 # An entry's timestamp names its journal file, so it must be a real ISO-8601 time before anything is written
@@ -1157,7 +1160,7 @@ def _read_quarantine():
 
 
 def _clamp_timestamp(now, prev_ts):
-    """`max(now, this device's previous entry's timestamp)` (#217). A clock that stepped back would otherwise write
+    """`max(now, the latest timestamp this device holds)` (#217; the chain max, which rule 1 measures against). A clock that stepped back would otherwise write
     an entry the bounds skip here and every peer refuses, and a seat or hook writes unattended, so the memory would
     be lost with nobody told. Equal timestamps are allowed. A step past the tolerance is named on stderr."""
     prev, cur = _ts_instant(prev_ts), _ts_instant(now)
@@ -1500,8 +1503,11 @@ def append_foreign_entries(entries, advertised_chunks=None):
         # what landed and `e` skips `e`.
         # The device that signs a marker goes first, so a marker arms the rest of its batch as it would had it
         # arrived alone first.
+        # A device carrying an owner-chain act goes first too, so nothing in a batch that carries the genesis is
+        # judged as pre-owner.
         markers = {x.get("node_id") for x in entries if x.get("type") == "governance"
-                   and isinstance(x.get("payload"), dict) and x["payload"].get("action") == "freeze-timestamps"}
+                   and isinstance(x.get("payload"), dict)
+                   and x["payload"].get("action") in ("freeze-timestamps", "owner", "transfer", "claim-succession")}
         entries = sorted(entries, key=lambda x: (x.get("node_id") not in markers, str(x.get("node_id")),
                                                  x.get("seq") if isinstance(x.get("seq"), int) else 0))
 
@@ -1637,8 +1643,10 @@ def append_foreign_entries(entries, advertised_chunks=None):
         return _LANDED
 
     # Sweep the batch in (device, seq) order. An entry whose device is not admitted yet waits, and holds back its
-    # device's later entries, so each device's chain is judged in order; a sweep that lands nothing settles the
-    # waiting entries as refused (the device was never admitted), and the sweeps go on.
+    # device's later entries, so each device's chain is judged in order. A sweep that lands nothing first lets the
+    # held-back governance run (an admit may be what the waiting content needs); only when none is waiting are the
+    # deferred entries settled as refused (their device was never admitted). Every sweep lands or refuses at least
+    # one entry, so the loop is finite.
     unresolved = [e for e in entries if e.get("node_id") is not None and e.get("seq") is not None]
     while unresolved:
         landed_any, waiting, held_back = False, [], set()
@@ -1656,10 +1664,18 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if gov_dirty:
             refresh()
         if not landed_any:
-            settled = [e for e in waiting if e.get("type") != "governance"]
-            rejected += len(settled)
-            waiting = [e for e in waiting if e.get("type") == "governance"]
-            if not settled:
+            if any(e.get("type") == "governance" for e in waiting):
+                still = []
+                for e in waiting:
+                    if e.get("type") == "governance":
+                        judge_governance(e)          # never deferred: lands or is refused, either way it is done
+                    else:
+                        still.append(e)
+                if gov_dirty:
+                    refresh()
+                waiting = still
+            else:
+                rejected += len(waiting)
                 break
         unresolved = waiting
 

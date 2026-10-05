@@ -478,3 +478,23 @@ def test_a_small_step_back_is_clamped_quietly_and_a_forward_clock_is_untouched(t
     assert hv._clamp_timestamp(ts(12, 30), ts(12, 30)) == ts(12, 30)
     assert hv._clamp_timestamp(ts(12, 31), None) == ts(12, 31)
     assert hv._clamp_timestamp(ts(12, 20), "2026-01-01T12:30:00Z") == ts(12, 30)   # an old naive/Z shape is rewritten canonical
+
+
+def test_a_clock_behind_the_chain_max_is_clamped_to_the_max_not_the_previous_entry(tmp_path, monkeypatch, capsys):
+    """The live-journal shape: the last grandfathered entry sits 13 minutes behind an earlier one. Rule 1 measures
+    against the max, so clamping to the previous entry would still be refused by peers."""
+    import base64
+    hv = _loadhv(tmp_path / "local", monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    old1, old2 = _fact(hv, d0, "old1", ts(12, 58, 20)), _fact(hv, d0, "old2", ts(12, 45, 3))
+    marker = _marker(hv, owner, {"ownerdev": 3, d0["id"]: 2})
+    _journal(hv, base + [old1, old2, marker])
+    hv.NODE_ID = d0["id"]
+    hv.DEVICE_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+    hv.DEVICE_KEY_PATH.write_text(base64.b64encode(d0["seed"]).decode())
+    monkeypatch.setattr(hv, "_now_iso", lambda: ts(12, 40))
+    e = hv.append_journal("fact", {"content": "after", "tags": [], "importance": 0.5, "source": "manual"})
+    assert e["timestamp"] == ts(12, 58, 20)
+    peer = _loadhv(tmp_path / "peer", monkeypatch)
+    _journal(peer, base + [old1, old2, marker])
+    assert peer.append_foreign_entries([e])[:2] == (1, 0)

@@ -525,6 +525,9 @@ class Handler(BaseHTTPRequestHandler):
             elif u.path == "/api/overview":
                 self._send(200, hv.api_overview())
             elif u.path == "/api/search":
+                if q.get("kind", ["all"])[0] not in ("all", "fact", "decision", "idea"):
+                    self._send(400, {"error": "kind must be all, fact, decision or idea"})
+                    return
                 self._send(200, hv.api_search(
                     query=q.get("q", [""])[0], tag=(q.get("tag", [None])[0] or None),
                     kind=q.get("kind", ["all"])[0],

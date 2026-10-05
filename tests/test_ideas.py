@@ -111,6 +111,34 @@ def test_sense_support_raises_introspect_support_does_not_until_knob(tmp_path, m
     assert conn.execute("SELECT confidence FROM ideas WHERE content LIKE 'the macos%'").fetchone()[0] > 0
 
 
+def test_api_search_and_hv_search_agree_on_a_supported_idea_under_min_confidence(tmp_path, monkeypatch, capsys):
+    # #209: under kind=all an earned idea follows min_confidence on both surfaces; a raw one never appears.
+    import argparse
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, (a, b, _c), base = _owned_hive(hv)
+    idea = _idea(hv, a, "the macos runner is slow because of disk io", "2026-01-02T00:00:00Z")
+    raw = _idea(hv, a, "the macos cache is cold", "2026-01-02T00:00:01Z")
+    obs = _fact(hv, b, "iostat showed 95% disk busy during the macos test job", "2026-01-03T00:00:00Z")
+    sup = _link(hv, b, "supports", obs, idea, "2026-01-04T00:00:00Z")
+    _project(hv, tmp_path, base + [idea, raw, obs, sup]).close()
+    earned = hv.api_search("macos", kind="idea")["ideas"]
+    conf = max(i["confidence"] for i in earned)
+    assert conf > 0
+
+    def both(kind, minc):
+        api = sorted(i["content"] for i in hv.api_search("macos", kind=kind, min_confidence=minc)["ideas"])
+        hv.search(argparse.Namespace(query="macos", format="json", min_confidence=minc, kind=kind, sort="confidence"))
+        cli = sorted(r["content"] for r in json.loads(capsys.readouterr().out) if r["kind"] == "idea")
+        return api, cli
+
+    earned_only = ["the macos runner is slow because of disk io"]
+    for kind, minc, want in (("all", 0.0, earned_only),               # raw idea hidden, earned shown
+                             ("all", conf + 0.1, []),                 # earned idea below min_confidence drops
+                             ("idea", conf + 0.1, sorted(i["content"] for i in earned))):  # kind=idea ignores it
+        api, cli = both(kind, minc)
+        assert api == cli == want, (kind, minc, api, cli)
+
+
 def test_contradicts_lowers_contested_flag_and_cap_self(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     _, (a, b, c), base = _owned_hive(hv)

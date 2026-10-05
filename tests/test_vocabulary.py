@@ -92,7 +92,7 @@ READERS = {
         ("hv", "_forgets_grandfathered"),
         ("hv", "_grandfather_facts"),           # doctor forget-authz, `hive-mind doctor --fix` (4c)
         ("hv", "_links_unauthorized"),          # doctor link-authz
-        ("hv", "rebuild_db"),                   # pass 2: the legacy resolvers and `link`
+        ("hv", "_rebuild_in_transaction"),                 # pass 2: the legacy resolvers and `link`
         ("hv", "_pending_admissions"),
         ("hv", "_compute_audit"),
         ("hv", "_recipient_pubkeys"),           # capsule recipients

@@ -102,6 +102,9 @@ GOVERNANCE_ACTIONS = {
                                              "key."),
     "deny":               _v(WRITTEN, "1.5", "Drop a pending join-request; a later admit overrides it. "
                                              "Owner-signed."),
+    "freeze-timestamps":  _v(WRITTEN, "2.1", "Arms the bounded entry timestamps: `tips` maps each device to the seq "
+                                              "its chain is frozen at, and only later entries are checked. "
+                                              "Owner-signed."),
     "heartbeat":          _v(WRITTEN, "1.9", "Owner liveness: an owner-signed act with no other effect, which "
                                              "keeps the dead-man switch shut."),
     "join-request":       _v(WRITTEN, "1.4", "A device asks to be admitted. Device-signed; it carries no "
@@ -135,6 +138,10 @@ CONFIG_KEYS = {
                                                      "`fertile`."),
     "dead_man_days":             _v(WRITTEN, "1.9", "Days of owner silence before a quorum election can "
                                                     "install a new owner."),
+    "flood_per_day":             _v(WRITTEN, "2.1", "Entries one device may stamp into a day before `hv doctor` "
+                                                    "reports a flood; 2000 by default. Detection only."),
+    "flood_per_minute":          _v(WRITTEN, "2.1", "Entries one device may stamp into a minute before `hv doctor` "
+                                                    "reports a flood; 120 by default. Detection only."),
     "forget_writers":            _v(WRITTEN, "1.25", "Whether an unsigned owner forget dated before genesis "
                                                      "still counts: `legacy` or `owner`."),
     "halflife_fact":             _v(WRITTEN, "1.20", "Half-life, in days, of a fact's confidence and "
@@ -232,6 +239,8 @@ ENVELOPE_FIELDS = {
 # h:a1e3e7cd73). `where`: "hive" is $HIVE_HOME, the checkout; "keys" is the 0700 key directory (2.0 PR 3a).
 # tests/test_vocabulary.py holds this table to the path literals in the code, both ways.
 LOCAL_FILES = {
+    ".arrivals.jsonl":       _v(WRITTEN, "2.1", "When this node first received each foreign entry, for the `future-dated` "
+                                                "check; never synced, never read by the projection.", where="hive"),
     ".bus":                  _v(WRITTEN, "1.10", "Directory for the local event log, `introspect.log`; never synced.",
                                 where="hive"),
     ".device-id":            _v(WRITTEN, "1.3", "This device's id, `k1:` and 16 hex of its key's sha256.", where="hive"),

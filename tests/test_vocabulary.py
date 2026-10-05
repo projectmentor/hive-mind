@@ -104,6 +104,8 @@ READERS = {
         ("hv", "_entity_declined"),             # 2.1 (#208): a module's entity write, judged in replay order
         ("hv", "_same_as_pair"),                # a `same-as` end must be an entity entry
         ("hv", "_same_as_live"),                # which `same-as` joins count, and the retracts that withdraw them
+        ("hv", "_ts_is_marker"),                # 2.1 (#217): the owner-signed `freeze-timestamps` marker
+        ("hv", "_ts_problem"),                  # 2.1 (#217): a governance `join-request` / `announce` is exempt from rule 2
     },
     "kind": {                                   # a `link` payload's kind
         ("hv", "_same_as_live"),
@@ -119,6 +121,8 @@ READERS = {
         ("hv", "append_foreign_entries"),       # the authority-less allowlist, the pinned genesis
         ("hv", "_self_signed_owner_acts"),
         ("hv", "_governance_state_uncached"),   # every act the walk honours
+        ("hv", "_governance_state"),            # 2.1 (#217): the cache key widens once a `freeze-timestamps` exists
+        ("hv", "_ts_is_marker"),
         ("hv", "_owner_declaration"),
         ("hv", "_pending_admissions"),
         ("hv", "_recipient_pubkeys"),

@@ -122,6 +122,19 @@ def limits_for(module):
     return limits
 
 
+def max_entry_bytes():
+    """The largest `entry_bytes` any installed module may send: the default, or the owner's raise on one module.
+    The pre-authentication body cap (the caller is not known yet); each module is then held to its own
+    `limits_for` in `route_entries`."""
+    try:
+        recs = json.loads((daemon.hv.HIVE_HOME / ".modules.json").read_text())
+    except (OSError, ValueError, AttributeError):
+        return QUOTA_DEFAULTS["entry_bytes"]
+    if not isinstance(recs, dict):
+        return QUOTA_DEFAULTS["entry_bytes"]
+    return max([QUOTA_DEFAULTS["entry_bytes"]] + [limits_for(m)["entry_bytes"] for m in recs])
+
+
 def _chain(device_id):
     """(entries by seq, tip seq, tip hash) of one device's chain, read from the journal."""
     hv = daemon.hv
@@ -522,12 +535,12 @@ class ModuleHandler(BaseHTTPRequestHandler):
 
     def _read_body(self):
         """A POST's body, bounded before it is read: a missing or garbage Content-Length is 400, one past the
-        largest entry any module may send (`QUOTA_DEFAULTS`: a manifest may only lower it) is 413."""
+        largest entry any installed module may send (`max_entry_bytes`: the default, or an owner's raise) is 413."""
         try:
             n = int(self.headers.get("Content-Length", ""))
         except ValueError:
             raise _Refused(400, {"error": "Content-Length is required"})
-        cap = QUOTA_DEFAULTS["entry_bytes"]
+        cap = max_entry_bytes()
         if n < 0 or n > cap:
             raise _Refused(413, {"error": "entry too large", "max_bytes": cap})
         return self.rfile.read(n) if n else b""

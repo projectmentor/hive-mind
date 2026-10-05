@@ -307,3 +307,37 @@ def test_a_signed_manifest_with_an_unknown_top_level_key_is_refused(hive, tmp_pa
     r = _add(hive, tmp_path / "repo", pub, "demo", False)
     assert r.returncode == 1 and "does not know" in r.stderr
     assert not (tmp_path / "modules" / "demo").exists() and not _key_dir_has_module(hive)
+
+
+def test_an_owner_raise_of_entry_bytes_reaches_the_route_but_only_for_that_module(hive, tmp_path, monkeypatch):
+    import io
+    import hive_module_api as api
+    from hive_module_api import _Refused
+    pub = _publish(tmp_path / "repo")
+    _add(hive, tmp_path / "repo", pub)
+    pub2 = _publish(tmp_path / "repo2", name="other")
+    _add(hive, tmp_path / "repo2", pub2, name="other")
+    big = api.QUOTA_DEFAULTS["entry_bytes"] * 4
+    _run(hive, "module", "quota", "demo", "--entry-bytes", str(big))
+    monkeypatch.setattr(api.daemon, "hv", type("H", (), {"HIVE_HOME": hive})(), raising=False)
+    mid = api.QUOTA_DEFAULTS["entry_bytes"] + 100
+
+    def read(n):
+        h = api.ModuleHandler.__new__(api.ModuleHandler)
+        h.headers = {"Content-Length": str(n)}
+        h.rfile = io.BytesIO(b"x" * n)
+        return h._read_body()
+
+    assert len(read(mid)) == mid                                   # within the raised module's size cap
+    with pytest.raises(_Refused) as e:
+        read(big + 1)
+    assert e.value.code == 413
+    assert api.limits_for("other")["entry_bytes"] == api.QUOTA_DEFAULTS["entry_bytes"]
+    assert api.limits_for("demo")["entry_bytes"] == big
+    # a module without the raise is still held to the default by route_entries
+    with pytest.raises(_Refused) as e:
+        api.route_entries({"device_id": "d", "module": "other"}, {}, b"x" * mid)
+    assert e.value.code == 413
+    # a manifest that asks for more than the default is still refused at add
+    pub3 = _publish(tmp_path / "repo3", name="greedy", quota={"entry_bytes": mid})
+    assert _add(hive, tmp_path / "repo3", pub3, name="greedy", check=False).returncode != 0

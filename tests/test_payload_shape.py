@@ -450,3 +450,48 @@ def test_the_quarantine_record_of_a_local_refusal_carries_the_principal_when_adm
         hv.append_journal("fact", dict(_base("fact"), importance=2**63))
     q = _quarantined(tmp_path)
     assert q[0]["signer"] == {"node_id": hv.NODE_ID, "principal": "p0"}
+
+
+def _hostile_hive(hv, tmp_path, extra=()):
+    """An owned hive whose journal holds an honest `shared` fact at 0.1 and a second device's `shared` at 2**63."""
+    _, (a, b, _c), base = _owned_hive(hv)
+    honest = _entry(hv, a, "fact", dict(_base("fact"), content="shared", importance=0.1), TS % 1)
+    hostile = _entry(hv, b, "fact", dict(_base("fact"), content="shared", importance=2**63), TS % 2)
+    _write_journal(tmp_path, base + [honest, hostile, *extra])
+    _cli(tmp_path, "doctor", "rebuild")
+    return honest
+
+
+def _agrees_after_rebuild(home, sql):
+    live = _store(home, sql)
+    _cli(home, "doctor", "rebuild")
+    assert live == _store(home, sql)
+
+
+def test_decide_importance_agrees_with_rebuild_on_a_hostile_importance(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    honest = _hostile_hive(hv, tmp_path)
+    _cli(tmp_path, "decide", "next plan", "--rationale", "r", "--informed", f"{honest['node_id']}:{honest['seq']}")
+    assert _store(tmp_path, "SELECT importance FROM facts WHERE content = 'shared'")[0][0] <= 1
+    _agrees_after_rebuild(tmp_path, "SELECT content, importance, utility FROM facts ORDER BY content")
+
+
+def test_retract_agrees_with_rebuild_on_a_hostile_importance(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _hostile_hive(hv, tmp_path)
+    _cli(tmp_path, "remember", "shared")
+    _cli(tmp_path, "retract", f"{hv.NODE_ID}:{_local_seq(tmp_path)}", "--reason", "x")
+    _agrees_after_rebuild(tmp_path, "SELECT content, confidence, importance FROM facts ORDER BY content")
+
+
+def _local_seq(home):
+    es = [json.loads(l) for f in sorted((Path(home) / "journal").glob("*.jsonl")) for l in f.read_text().splitlines() if l]
+    return [e["seq"] for e in es if e["type"] == "fact" and e["payload"].get("content") == "shared"][-1]
+
+
+def test_entity_link_agrees_with_rebuild_on_a_hostile_fact_on_disk(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    honest = _hostile_hive(hv, tmp_path)
+    _cli(tmp_path, "entity", "add", "--name", "Daemon", "--type", "project")
+    _cli(tmp_path, "entity", "link", "--name", "Daemon", "--fact-id", f"{honest['node_id']}:{honest['seq']}")
+    _agrees_after_rebuild(tmp_path, "SELECT * FROM entity_facts ORDER BY 1, 2")

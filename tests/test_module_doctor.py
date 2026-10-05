@@ -129,6 +129,67 @@ def test_fix_starts_an_inactive_unit_that_is_not_enabled(good, units, monkeypatc
     assert "enable hive-module-demo.service" in calls()[before:] and "restart hive-module-demo.service" in calls()[before:]
 
 
+def _acts(calls, before):
+    return [l for l in calls()[before:] if l.startswith(("restart", "start", "stop", "enable", "disable", "kill"))]
+
+
+def test_fix_re_renders_a_drifted_stopped_unit_and_enables_it_without_starting(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    unit_dir, _c = units
+    calls = _shim(tmp_path, monkeypatch, "inactive")
+    f = unit_dir / "hive-module-demo.service"
+    good_text = f.read_text()
+    f.write_text(good_text.replace("Restart=always", "Restart=no"))
+    before = len(calls())
+    r = _run(home, "doctor", "--fix", check=False)
+    assert f.read_text() == good_text
+    acts = _acts(calls, before)
+    assert "enable hive-module-demo.service" in acts and not [a for a in acts if a.startswith(("restart", "start"))]
+    assert "unit enabled, left stopped" in r.stdout and "unit started" not in r.stdout
+
+
+def test_fix_only_enables_a_running_unit_that_is_not_enabled(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    calls = _shim(tmp_path, monkeypatch, "active", enabled=False)
+    pid = tmp_path / "mainpid"
+    pid.write_text("4242")
+    sh = tmp_path / "shim" / "systemctl"
+    # a MainPID that changes the moment anything is restarted or started
+    sh.write_text('#!/bin/sh\necho "$*" >> %s\ncase "$*" in *is-active*) echo active;; *is-enabled*) exit 1;;\n'
+                  '*restart*|*" start "*) echo 9999 > %s;; *MainPID*) cat %s;; esac\nexit 0\n'
+                  % (tmp_path / "systemctl.log", pid, pid))
+    before = len(calls())
+    r = _run(home, "doctor", "--fix", check=False)
+    acts = _acts(calls, before)
+    assert "enable hive-module-demo.service" in acts
+    assert not [a for a in acts if a.startswith(("restart", "start", "stop", "kill", "disable"))]
+    assert pid.read_text().strip() == "4242"                   # MainPID unchanged: the process was never restarted
+    assert "enabled (was running, not enabled)" in r.stdout
+
+
+@pytest.mark.parametrize("how", ["no-runtime-dir", "manager-offline"])
+@pytest.mark.parametrize("dry", [False, True])
+def test_without_a_user_systemd_manager_fix_skips_every_unit_action_and_says_so_once(
+        good, units, monkeypatch, tmp_path, how, dry):
+    home, _ = good
+    unit_dir, _c = units
+    calls = _shim(tmp_path, monkeypatch, "failed")
+    if how == "no-runtime-dir":
+        monkeypatch.delenv("XDG_RUNTIME_DIR")
+    else:
+        sh = tmp_path / "shim" / "systemctl"
+        sh.write_text(sh.read_text().replace("case", 'case "$*" in *is-system-running*) echo offline; exit 1;; esac\ncase', 1))
+    f = unit_dir / "hive-module-demo.service"
+    drifted = f.read_text().replace("Restart=always", "Restart=no")
+    f.write_text(drifted)
+    before = len(calls())
+    r = _run(home, "doctor", "--fix", *(["--dry-run"] if dry else []), check=False)
+    assert r.stdout.count("no user systemd: module units not managed here") == 1
+    assert f.read_text() == drifted                            # nothing written
+    assert not _acts(calls, before)                            # nothing started, enabled or reloaded
+    assert not any(w in r.stdout for w in ("re-rendered", "would re-render", "would start", "would enable", "unit started"))
+
+
 def test_fix_writes_through_the_stop_first_path_when_a_daemon_becomes_a_timer(good, units, tmp_path):
     home, _ = good
     unit_dir, calls = units

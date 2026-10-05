@@ -358,6 +358,7 @@ def units(tmp_path, monkeypatch):
                                     f'[ -n "$FAIL_SYSTEMCTL" ] && case "$*" in *"$FAIL_SYSTEMCTL"*) exit 1;; esac\nexit 0\n')
     (shim / "systemctl").chmod(0o755)
     monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))         # a user manager exists, as far as the doctor can tell
     unit_dir = Path(os.environ["HOME"]) / ".config" / "systemd" / "user"
     return unit_dir, (lambda: [l.removeprefix("--user ") for l in log.read_text().splitlines()] if log.exists() else [])
 

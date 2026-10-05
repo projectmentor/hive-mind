@@ -2486,7 +2486,7 @@ def _signer_reliability(entries, gov, window_days, now):
             ref = p.get("to_ref")
         else:
             continue
-        if not (isinstance(ref, (list, tuple)) and len(ref) == 2):
+        if not _valid_ref(ref):
             continue
         key = tuple(ref)
         if key not in facts or facts[key][0] == e.get("node_id"):
@@ -3354,7 +3354,8 @@ def _forgets_grandfathered(entries, gov):
         return [], []
     timeline = gov.get("owner_timeline") or []
     seq_content = {(e.get("node_id"), e.get("seq")): (e.get("payload") or {}).get("content")
-                   for e in entries if e.get("type") == "fact" and (e.get("payload") or {}).get("content") is not None}
+                   for e in entries if e.get("type") == "fact"
+                   and isinstance((e.get("payload") or {}).get("content"), str)}
     acts, dangling = {}, []          # content -> [(pos, is_forget, honored, label if grandfathered)]
     for e in entries:
         if e.get("type") != "retract":
@@ -3364,7 +3365,7 @@ def _forgets_grandfathered(entries, gov):
         unforget = ref is None and p.get("unretracts_ref") is not None
         if unforget:
             ref = p.get("unretracts_ref")
-        if not (isinstance(ref, (list, tuple)) and len(ref) == 2):
+        if not _valid_ref(ref):
             continue
         app, ctx, _inst, _sess = _parse_source(p.get("source", "manual"))
         if not (app in OWNER_APPS or ctx == "owner"):
@@ -3477,11 +3478,11 @@ def _links_unauthorized(entries, gov):
         p = e.get("payload", {}) or {}
         if p.get("kind") not in ("supersedes", "resolves"):
             continue
-        to_ref = p.get("to_ref") if isinstance(p.get("to_ref"), (list, tuple)) and len(p.get("to_ref")) == 2 else None
+        to_ref = p.get("to_ref") if _valid_ref(p.get("to_ref")) else None
         if to_ref is None:
             continue
         if _link_authority(e, by_ref.get(tuple(to_ref)), gov) == "evidence":
-            fr = p.get("from_ref") if isinstance(p.get("from_ref"), (list, tuple)) and len(p.get("from_ref")) == 2 else ["?", "?"]
+            fr = p.get("from_ref") if _valid_ref(p.get("from_ref")) else ["?", "?"]
             out.append(f"{p['kind']} {fr[0]}:{fr[1]}→{to_ref[0]}:{to_ref[1]} by {e.get('node_id', '?')}")
     return out
 
@@ -5686,10 +5687,10 @@ def _compute_audit(depth=None, session=""):
     for e in entries:
         if e.get("type") != "fact":
             continue
-        p = e.get("payload", {})
-        c = p.get("content")
-        if c is None:
-            continue
+        p = e.get("payload")
+        c = p.get("content") if isinstance(p, dict) else None
+        if not isinstance(c, str):
+            continue                  # a hostile content is not a fact the projection holds (#205)
         counts[c] += 1
         key, _w = _identity_weight(e.get("node_id"), p.get("source", "manual"))
         idents[c].add(key)
@@ -5773,12 +5774,13 @@ def _compute_audit(depth=None, session=""):
     content_to_id = {r["content"]: r["id"] for r in frows}
     reconciled_ids = {r["id"] for r in frows if r["confidence"] <= 0}
     reconciled_ids |= {r["resolves"] for r in frows if r["resolves"]}
-    seq_content = {(e.get("node_id"), e.get("seq")): e.get("payload", {}).get("content")
-                   for e in entries if e.get("type") == "fact"}
+    seq_content = {(e.get("node_id"), e.get("seq")): (e.get("payload") or {}).get("content")
+                   for e in entries if e.get("type") == "fact" and isinstance(e.get("payload"), dict)
+                   and isinstance((e.get("payload") or {}).get("content"), str)}
     for e in entries:
-        if e.get("type") == "retract":
-            ref = e.get("payload", {}).get("retracts_ref")
-            cid = content_to_id.get(seq_content.get(tuple(ref))) if ref else None
+        if e.get("type") == "retract" and isinstance(e.get("payload"), dict):
+            ref = e["payload"].get("retracts_ref")
+            cid = content_to_id.get(seq_content.get(tuple(ref))) if _valid_ref(ref) else None
             if cid is not None:
                 reconciled_ids.add(cid)
     contravened = []

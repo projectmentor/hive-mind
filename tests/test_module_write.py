@@ -463,12 +463,17 @@ def test_a_field_the_projection_binds_must_be_the_right_type_and_the_projection_
 
 def test_the_backstop_refuses_a_payload_the_checks_do_not_know(hive, monkeypatch):
     """A field added to the projection later: the dry run in a SAVEPOINT refuses what raises, writes nothing, and leaves
-    the store as it was."""
+    the store as it was. (2.0.3 #205 made the projection default a bad known field, so the raise is injected.)"""
     before, rows = journal(hive), hive.hv.get_conn().execute("SELECT count(*) FROM facts").fetchone()[0]
-    monkeypatch.setattr(api, "_BOUND_FIELDS", {})
-    (code, body), _ = post(hive, "mod", "fact", fact("backstop", importance=[1]))
-    assert code == 400 and "project" in body["error"] and journal(hive) == before
+    real = hive.hv.persist_entry
+    def boom(conn, entry):
+        real(conn, entry)
+        raise ValueError("project")
+    monkeypatch.setattr(hive.hv, "persist_entry", boom)
+    (code, body), _ = post(hive, "mod", "fact", fact("backstop"))
+    assert code == 400 and "project" in str(body) and journal(hive) == before
     assert hive.hv.get_conn().execute("SELECT count(*) FROM facts").fetchone()[0] == rows
+    monkeypatch.setattr(hive.hv, "persist_entry", real)
     assert post(hive, "mod", "fact", fact("backstop ok"))[0][0] == 200 and hive.hv.rebuild_db() is not False
 
 
@@ -555,6 +560,7 @@ def test_the_ref_check_is_the_registry_not_a_list(hive, monkeypatch):
     """A mutant that drops the registry-driven check lets the malformed `informed_by` in: the dry run does not catch a shape only a reader walks."""
     payload = {"source": SRC, "content": "probe decision zz", "tags": [], "informed_by": [5]}
     monkeypatch.setattr(api, "_ref_rows", lambda etype, payload: iter(()))
+    monkeypatch.setattr(hive.hv, "_payload_problem", lambda entry: None)    # 2.0.3 #205: ingest also refuses it; this probes the route's own check
     (code, _), _ = post(hive, "mod", "decision", payload)
     assert code == 200
     monkeypatch.undo()

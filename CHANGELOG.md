@@ -10,6 +10,73 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.0.3 — unreleased
+
+No contract change.
+
+- **`hv doctor` and `hv audit` no longer raise on a malformed ref or content in a payload** (#207). The pure functions
+  behind them (`_links_unauthorized`, `_signer_reliability`, `_forgets_grandfathered`, `_compute_audit`) judged a ref
+  by its length alone and used it as a key, so a ref with a list or dict inside it raised `TypeError` exactly when
+  a bad entry was in the journal. Every read path now uses `_valid_ref`, and the audit counts only string content,
+  as the projection does.
+
+- **The ingest quarantine is bounded and admitted-only** (#205, #216). `.quarantine.jsonl` holds the entries ingest
+  refused for a hostile payload. An entry from a signer this node does not admit (or has purged) is refused as before
+  and not quarantined; a hive with no owner yet still quarantines. An entry up to 64 KB of canonical bytes is kept
+  verbatim, a larger one as its hash, size and first 4 KB. The file keeps the newest 200 records within 16 MB.
+  A refusal appends one line and reads only a small index, `.quarantine.idx`; the file is rewritten only when a
+  cap is crossed.
+
+- **The legacy `supersedes_ref`, `supersedes` and `resolves_ref` payload fields now go through the link authority**
+  (#204, security fix). They projected for any admitted device, so one device could mark another's decision
+  superseded on every node. They now command only when the owner key signed the entry or its signer wrote the
+  target, as a `link` entry does; `resolves_ref` must name a fact. Signed self-authored and owner-signed history
+  projects as before. An unsigned legacy field commands only while the journal has no owner; once an owner exists
+  it is evidence, and a matching `node_id` is not a signer. `hv doctor` `link-authz` lists a legacy field that no
+  longer commands. A `link` entry is the only way to supersede or resolve (`AGENT_INTEGRATION.md` §7).
+  **Upgrade effect:** a device-signed legacy supersede or resolve of another author's entry stops commanding on
+  upgrade, and the target stands again on every node until the owner re-ratifies it with an owner-signed `link`.
+  On the live hive this is the four `decide --revoke` entries of 2026-08-19; `hv doctor` `link-authz` lists them.
+  An unsigned self-authored legacy field likewise stops commanding once any owner exists. The live hive has none:
+  its legacy fields are device-signed, and its unsigned entries carry no legacy field.
+- **`rebuild_db` is atomic** (#206). It committed the deletes before replaying the journal and never closed its
+  connection on error, so a failure left the node's projection empty, search returning nothing, and a write lock
+  held. It now runs in one transaction (`BEGIN IMMEDIATE` to the final insert, no commit between), rolls back on any
+  exception so the previous projection stays queryable, and closes the connection in a `finally`. `_init_fts` runs
+  its statements one at a time, because `executescript` commits.
+- **`ed25519.verify` enforces RFC 8032's canonical-encoding checks** (#213, security fix). It rejects a signature
+  whose `S` is `l` or more (§5.1.7), and an `R` or public key whose `y` is `q` or more or whose `x` is 0 with the
+  sign bit set (§5.1.3). It had skipped them on purpose, to match the reference it replaced, so `S + k*l`
+  verified for every `k` that fits in 32 bytes. Anyone who had seen a signed entry could re-encode its `sig`
+  without the key; ingest keeps the first copy of a `(node_id, seq)` and `sig` is inside the entry hash and the
+  Merkle chunk hashes, so a node fed the malleated copy first held different bytes from the fleet for good. No
+  forgery was possible. The cofactorless equation is unchanged, and `sign` is byte-identical. The live journals
+  hold no such encoding, so tightening rejects nothing already held. A node still on v2.0.2 accepts the
+  malleated copies, so update every node. No adapter-visible change: no verb, flag or output moves, so this is
+  not a contract bump (`AGENT_INTEGRATION.md` §7).
+- **`api_search` `kind` is exclusive** (#209). `kind=idea` also returned every live fact and decision (the
+  fact and decision branches ran for any kind but their own opposite); the dashboard's `/api/search` and any caller of `api_search`
+  inherited it. `fact`, `decision` and `idea` now return only that type, and `all` returns the three together.
+  `kind` outside those four answers 400 on `/api/search`, as the CLI's `--kind` choices refuse it. `min_confidence`
+  filters facts everywhere, and earned ideas under `kind=all` on both surfaces (raw ideas stay hidden under `all`).
+  Under `kind=idea` raw ideas, which sit at 0.0 by design, come back whatever their confidence (decision by David,
+  `h:0167a9c01a`). Decisions have no confidence filter. `hv search` already behaved this way.
+
+## 2.0.2 — 2026-10-03 · `v2.0.2`
+
+No contract change.
+
+- **`rebuild_db` no longer raises on an `entity_fact`, `supersedes`, `resolves_ref` or `link` whose ref or local id is
+  the wrong kind, absent or malformed** (#196, security fix). An `entity_fact` whose `fact_ref` named an entity,
+  whose `entity_ref` named a fact, or whose legacy `entity_id` / `fact_id` named no row made the rebuild fail with
+  `IntegrityError`. A ref that is not `[str, int]`, or an integer outside SQLite's 64-bit range (a ref's seq, a
+  legacy `entity_id` / `fact_id` / `supersedes`), made it fail with `OverflowError` or `ProgrammingError`. Content of
+  these types is accepted from any admitted device and the journal is permanent, so one such entry stopped every
+  node's rebuild. The entry now lands and projects to nothing, as a dangling link does. A `supersedes` is held to
+  the same rule: a `supersedes_ref` to a non-decision, or a `supersedes` that is not a decision row, marks nothing.
+  The link-evidence passes skip a malformed ref instead of raising `TypeError`. Entries that resolve are projected
+  as before.
+
 ## 2.0.1 — 2026-10-02 · `v2.0.1`
 
 No contract change.

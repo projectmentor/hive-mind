@@ -5,15 +5,18 @@ Fast since v1.20.1 (#70): extended twisted-Edwards coordinates (one modular inve
 instead of one per point addition), a 4-bit window for [h]A and a precomputed table for the base point.
 The public-domain reference it replaced took on the order of a second per verify; this takes a few ms.
 
-ACCEPT-SET PARITY IS DELIBERATE. Every node must agree on which journal entries are validly signed, so
-`verify` accepts exactly what the reference accepted, no more and no less, and `sign` is deterministic and
-byte-identical to it. `tests/test_ed25519.py` checks both against the frozen reference in
-`tests/_ed25519_reference.py`. Kept on purpose, although strict RFC 8032 would reject them:
-  - no `S < l` check (a malleated `S + l` verifies);
-  - `y` is the low 255 bits of an encoding, without a `y < q` check (a non-canonical `y >= q` decodes);
-  - `x = 0` with the sign bit set decodes (to `x = q`);
-  - the cofactorless equation `[S]B == R + [h]A`, with `h` never reduced below the group order.
-Tightening any of these would be a consensus change: a separate, versioned decision.
+ACCEPT SET. Every node must agree on which journal entries are validly signed. Up to v2.0.2 `verify`
+accepted exactly what the frozen reference accepted, which is more than RFC 8032 allows: `S + k*l` verified
+for every k that fits in 32 bytes, so anyone could re-encode a signed entry's `sig` without the key, and a
+node fed such a copy first kept different bytes from the fleet for good (#213). Since v2.0.3 `verify` is
+the reference's accept set minus the non-canonical encodings, the three checks RFC 8032 requires:
+  - `S < l` (§5.1.7): a signature whose S is `l` or more is rejected;
+  - `y < q` (§5.1.3): R and A are rejected when the 255-bit y field is `q` or more;
+  - `x = 0` with the sign bit set (§5.1.3): R and A are rejected.
+Kept as the reference had it, because RFC 8032 permits it: the cofactorless equation `[S]B == R + [h]A`,
+with `h` never reduced below the group order. `sign` is unchanged and byte-identical to the reference.
+`tests/test_ed25519.py` checks both against the frozen reference in `tests/_ed25519_reference.py`.
+Any further narrowing is a consensus change: a separate, versioned decision.
 
 NOT SIDE-CHANNEL HARDENED (neither was the reference): Python big-integer arithmetic is not constant time,
 so do not sign on hardware whose timing an attacker can measure closely.
@@ -135,10 +138,14 @@ def _encode(P):
 
 
 def _decodepoint(s):
-    """The reference's decoding: y is the low 255 bits (no y < q check), x takes the sign bit's parity
-    (so x = 0 with the sign bit set becomes q), and the point must satisfy the curve equation."""
+    """RFC 8032 §5.1.3 decoding: y is the low 255 bits and must be < q, x takes the sign bit's parity and
+    x = 0 with the sign bit set is refused, and the point must satisfy the curve equation."""
     y = int.from_bytes(s, "little") & ((1 << 255) - 1)
+    if y >= _q:
+        raise ValueError("non-canonical y")
     x = _xrecover(y)
+    if x == 0 and s[31] >> 7:
+        raise ValueError("x = 0 with the sign bit set")
     if x & 1 != s[31] >> 7:
         x = _q - x
     if (-x * x + y * y - 1 - _d * x * x * y * y) % _q != 0:
@@ -172,20 +179,22 @@ def sign(message, seed):
 
 
 def verify(message, sig, pub):
-    """True iff `sig` is a valid Ed25519 signature of `message` under `pub`, by the reference's rules
-    (see the module docstring). Never raises."""
+    """True iff `sig` is a valid Ed25519 signature of `message` under `pub`, by the accept set in the module
+    docstring (RFC 8032 §5.1.7 and §5.1.3 enforced). Never raises."""
     try:
         if len(sig) != 64 or len(pub) != 32:
             return False
         sig, pub = bytes(sig), bytes(pub)
         R = _decodepoint(sig[:32])
         A = _decodepoint(pub)
-        S = int.from_bytes(sig[32:], "little")                 # no S < l check (reference parity)
+        S = int.from_bytes(sig[32:], "little")
+        if S >= _l:                                            # RFC 8032 §5.1.7
+            return False
         # The reference hashed its re-encoding of R, which for every encoding it can decode round-trips to
         # the original 32 bytes, so hashing the raw bytes is identical (and is what RFC 8032 specifies).
         h = int.from_bytes(hashlib.sha512(sig[:32] + pub + bytes(message)).digest(), "little")
-        # [S]B: B has prime order l, so S may be reduced mod l. [h]A: A may carry a torsion component, so h
+        # [S]B: S < l here already. [h]A: A may carry a torsion component, so h
         # is reduced only mod the full group order 8l, never mod l.
-        return _pt_eq(_mul_base(S % _l), _pt_add(R, _mul(A, h % _GROUP_ORDER)))
+        return _pt_eq(_mul_base(S), _pt_add(R, _mul(A, h % _GROUP_ORDER)))
     except Exception:
         return False

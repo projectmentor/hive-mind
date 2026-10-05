@@ -83,6 +83,28 @@ def test_api_search_returns_facts_and_decisions(daemon):
     assert any(d["content"].startswith("use runit") for d in o["decisions"])
 
 
+def test_api_search_kind_is_exclusive_and_min_confidence_spares_raw_ideas(daemon, hive):
+    # #209: kind=idea used to return every live fact and decision too. Each kind returns only its own type.
+    hive.run("propose", "android needs a termux shim", "--source", "alice")
+    def get(q):
+        o = json.loads(_get(daemon, f"/api/search?q=android&{q}")[1])
+        return {k: len(o[k]) for k in ("facts", "decisions", "ideas")}
+    assert get("kind=fact") == {"facts": 1, "decisions": 0, "ideas": 0}
+    assert get("kind=decision") == {"facts": 0, "decisions": 1, "ideas": 0}
+    assert get("kind=idea") == {"facts": 0, "decisions": 0, "ideas": 1}
+    assert get("kind=all") == {"facts": 1, "decisions": 1, "ideas": 0}      # a raw idea stays hidden under all
+    # min_confidence filters facts only: a fact at 0.45 drops, the raw idea at 0.0 stays (David, h:0167a9c01a)
+    assert get("kind=fact&min_confidence=0.9") == {"facts": 0, "decisions": 0, "ideas": 0}
+    assert get("kind=idea&min_confidence=0.9") == {"facts": 0, "decisions": 0, "ideas": 1}
+
+
+def test_api_search_unknown_kind_is_a_400(daemon):
+    # the CLI's argparse `choices` refuse `--kind facts`; the API answers 400, not an empty 200
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _get(daemon, "/api/search?q=android&kind=facts")
+    assert e.value.code == 400
+
+
 def test_api_search_tag_scopes_results(daemon):
     # `installer` tags only the fact, so the decision must drop out — the 1.15 project-scoping payoff.
     o = json.loads(_get(daemon, "/api/search?tag=installer")[1])

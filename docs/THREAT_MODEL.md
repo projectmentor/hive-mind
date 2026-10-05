@@ -263,10 +263,13 @@ shown because a planted forget would be re-signed too. Once set,
   Under the trust model (0600 local keys; a local-code attacker has already won by reading the key
   file directly), this is **out of scope**. Do not run HiveMind crypto as a remote oracle that
   signs/decrypts attacker-chosen inputs and returns fine-grained timing.
-- **Ed25519 accept set (v1.20.1).** The faster `ed25519.py` accepts exactly what the reference it
-  replaced accepted, including the reference's permissive rules (no `S < l` check, non-canonical `y`,
-  cofactorless verification), so upgraded and older nodes agree on every entry. Strict RFC 8032
-  checks would be a consensus change and would need their own contract version.
+- **Ed25519 accept set (v2.0.3, #213).** `ed25519.py` accepts the reference's accept set minus the
+  encodings RFC 8032 forbids: `S >= l` (§5.1.7), `y >= q` in R or A, and `x = 0` with the sign bit set
+  (§5.1.3). Up to v2.0.2 it kept the reference's permissive rules for parity, so anyone could re-encode a
+  signed entry's `sig` as `S + k*l` without the key; a node fed that copy first kept different bytes from
+  the fleet for good, since ingest keeps the first copy of a `(node_id, seq)` and `sig` is inside the entry
+  hash. No forgery was possible. The cofactorless equation stays, since RFC 8032 permits it. A node that
+  has not updated to v2.0.3 still accepts malleated copies, so update every node.
 - **Verification memo (v1.20.1).** Each process remembers which signatures it has verified, keyed on
   the exact signed bytes, signature and key, so a changed byte is always checked afresh. Only the
   cryptographic result is cached, never authorization (admission, revocation, owner-as-of, writer

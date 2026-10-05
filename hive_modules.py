@@ -330,6 +330,18 @@ def _systemctl(*args):
         return False
 
 
+def user_systemd():
+    """Whether a user systemd manager is reachable: a runtime dir, and `is-system-running` answering (a `degraded`
+    manager still manages units). Never raises."""
+    if not os.environ.get("XDG_RUNTIME_DIR"):
+        return False
+    try:
+        r = subprocess.run(["systemctl", "--user", "is-system-running"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return r.returncode == 0 or r.stdout.strip() in ("running", "degraded", "starting", "initializing", "stopping")
+
+
 def _quote(arg):
     """One ExecStart word: systemd splits on whitespace and expands `%` and `$`, so quote and double them."""
     esc = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$")

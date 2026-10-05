@@ -12,7 +12,8 @@ degraded, not hostile. A record in `.modules.json` that is not an object is repo
 
 `fix` is `hv doctor --fix`'s part: re-render a unit that differs from the manifest (through the stop-first path
 `module add` and `update` use) and start one that is `failed` or not enabled. A unit that is enabled but `inactive`
-was stopped on purpose: it is reported and left alone. `fix` acts only on a module whose manifest verifies, never
+was stopped on purpose: it is reported and left alone, and a running unit that is only not enabled is enabled,
+never restarted. With no user systemd manager `fix` touches no unit and says so. `fix` acts only on a module whose manifest verifies, never
 re-admits a device, and never touches governance.
 """
 
@@ -223,7 +224,8 @@ def checks(hv, gov, entries, probe=None, now=None):
 
 
 def fix(hv, dry=False, now=None):
-    """Re-render a unit that differs from its manifest and start one that is failed or not enabled. Returns lines
+    """Re-render a unit that differs from its manifest and start one that is failed or not enabled (a running one that
+    is only not enabled is enabled, never restarted). Without a user systemd manager it does nothing but say so. Returns lines
     to print. A unit that is enabled but inactive was stopped on purpose: reported, never restarted. Only a module
     whose manifest verifies, whose device is admitted, on a platform with a backend. Nothing here admits, revokes
     or signs anything."""
@@ -231,7 +233,8 @@ def fix(hv, dry=False, now=None):
     if not state or not hive_modules.platform_supported()[0]:
         return []
     gov = hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))
-    lines, plan = [], []
+    lines, plan, no_manager = [], [], False
+    manager = None                                              # detected once, on the first module with units
     for name, rec in sorted(state.items()):
         if not isinstance(rec, dict) or _device(gov, name, rec.get("device_id")):
             continue
@@ -246,10 +249,17 @@ def fix(hv, dry=False, now=None):
                                              Path(hv.KEY_DIR) / "modules" / name)
         if not expected:
             continue
+        if manager is None:
+            manager = hive_modules.user_systemd()
+        if not manager:                                         # no write, no start: nothing here would be true
+            no_manager = True
+            continue
         d = hive_modules.unit_dir()
         changed = [f for f, text in expected.items() if not (d / f).exists() or (d / f).read_text() != text]
         before = hive_modules.service_state(name)
-        stopped = before == "inactive" and hive_modules.unit_enabled(name)   # the operator's own doing
+        enabled = hive_modules.unit_enabled(name)
+        stopped = before == "inactive" and enabled              # the operator's own doing
+        running = before in ("active", "activating") and not enabled
         unit = next(f for f in hive_modules.unit_names(name)[::-1] if f in expected)
         for f in changed:
             lines.append(f"  {'would re-render' if dry else 're-rendered'} unit {f} (module {name})")
@@ -259,19 +269,22 @@ def fix(hv, dry=False, now=None):
             lines.append(f"  module {name} is stopped; `systemctl --user start {unit}` to resume (left alone)")
         if stopped and not changed:
             continue
-        if stopped or changed or before == "failed" or not hive_modules.unit_enabled(name):
-            plan.append((name, unit, stopped))
+        if running and not changed:                             # a live process is never restarted for a missing enable
+            plan.append((name, unit, "running"))
+        elif stopped or changed or before == "failed" or not enabled:
+            plan.append((name, unit, "stopped" if stopped else "start"))
+    if no_manager:
+        lines.append("  no user systemd: module units not managed here")
     if dry:
-        lines += [f"  would {'enable' if stopped else 'start'} {unit} (module {name})" for name, unit, stopped in plan]
+        lines += [f"  would {'start' if mode == 'start' else 'enable'} {unit} (module {name})" for name, unit, mode in plan]
     elif plan:
-        if not hive_modules._systemctl("show-environment"):
-            lines.append("  no user systemd manager is reachable: module units written, not started")
-        else:
-            hive_modules._systemctl("daemon-reload")
-            for name, unit, stopped in plan:
-                if stopped:                                     # re-enabled after the rewrite, still stopped
-                    note = "" if hive_modules._systemctl("enable", unit) else "the unit is written, but systemd would not enable it"
-                else:
-                    note = hive_modules._start_unit(unit)
-                lines.append(f"  module {name}: {note or ('unit enabled, left stopped' if stopped else 'unit started')}")
+        hive_modules._systemctl("daemon-reload")
+        for name, unit, mode in plan:
+            if mode == "start":
+                note = hive_modules._start_unit(unit)
+                done = "unit started"
+            else:                                               # enable only: never start or restart
+                note = "" if hive_modules._systemctl("enable", unit) else "the unit is written, but systemd would not enable it"
+                done = "enabled (was running, not enabled)" if mode == "running" else "unit enabled, left stopped"
+            lines.append(f"  module {name}: {note or done}")
     return lines

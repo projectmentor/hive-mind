@@ -31,6 +31,16 @@ No contract change.
   held. It now runs in one transaction (`BEGIN IMMEDIATE` to the final insert, no commit between), rolls back on any
   exception so the previous projection stays queryable, and closes the connection in a `finally`. `_init_fts` runs
   its statements one at a time, because `executescript` commits.
+- **`ed25519.verify` enforces RFC 8032's canonical-encoding checks** (#213, security fix). It rejects a signature
+  whose `S` is `l` or more (§5.1.7), and an `R` or public key whose `y` is `q` or more or whose `x` is 0 with the
+  sign bit set (§5.1.3). It had skipped them on purpose, to match the reference it replaced, so `S + k*l`
+  verified for every `k` that fits in 32 bytes. Anyone who had seen a signed entry could re-encode its `sig`
+  without the key; ingest keeps the first copy of a `(node_id, seq)` and `sig` is inside the entry hash and the
+  Merkle chunk hashes, so a node fed the malleated copy first held different bytes from the fleet for good. No
+  forgery was possible. The cofactorless equation is unchanged, and `sign` is byte-identical. The live journals
+  hold no such encoding, so tightening rejects nothing already held. A node still on v2.0.2 accepts the
+  malleated copies, so update every node. No adapter-visible change: no verb, flag or output moves, so this is
+  not a contract bump (`AGENT_INTEGRATION.md` §7).
 
 ## 2.0.2 — 2026-10-03 · `v2.0.2`
 

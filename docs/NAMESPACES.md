@@ -227,7 +227,9 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 | `.owner-pub` | `$HIVE_HOME` | legacy | 2.0 | The owner key's public half at its first 2.0 path. `hive-mind doctor --fix` moves it. |
 | `.peer_candidates.json` | `$HIVE_HOME` | written | 1.21 | The addresses each admitted device verified itself from; local, never journaled (see `via` values). |
 | `.peers.json` | `$HIVE_HOME` | written | 1.0 | This node's sync settings and its peers' addresses. |
-| `.quarantine.jsonl` | `$HIVE_HOME` | written | 2.0 | The entries ingest refused for a malformed or hostile payload, verbatim, with the reason, the signer and the time; the newest 200, local, never synced (`hv doctor` reports it). |
+| `.quarantine.idx` | `$HIVE_HOME` | written | 2.0 | One `hash size` line per quarantine record: the dedupe key and the byte count, so a refusal appends without reading the quarantine; local. |
+| `.quarantine.jsonl` | `$HIVE_HOME` | written | 2.0 | The entries ingest refused for a malformed or hostile payload, verbatim, with the reason, the signer and the time (an entry over 64 KB as its hash, size and first 4 KB); only admitted signers, the newest 200 records within 16 MB, local, never synced (`hv doctor` reports it). |
+| `.quarantine.lock` | `$HIVE_HOME` | written | 2.0 | The lock the quarantine writers take; empty, local. |
 | `.telemetry` | `$HIVE_HOME` | written | 1.1 | Directory for the local-only session telemetry store; never synced. |
 | `journal` | `$HIVE_HOME` | written | 1.0 | The journal's day files: the source of truth, and all that sync carries. |
 | `nudge.env` | `$HIVE_HOME` | read | 1.0 | Optional nudge settings (`KEY=value`), read here or at the repository root. |

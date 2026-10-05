@@ -829,7 +829,10 @@ def _append_line(path, line):
         f.write(line + "\n")
 
 
-QUARANTINE_MAX = 200     # the most entries the quarantine keeps: the newest 200, older ones are dropped
+QUARANTINE_MAX = 200               # the most records the quarantine keeps: the newest 200, older ones are dropped
+QUARANTINE_BYTES_MAX = 16 * 1024 * 1024   # ...and the file stays within this many bytes, oldest dropped first
+QUARANTINE_ENTRY_MAX = 64 * 1024   # an entry up to this many canonical bytes is kept verbatim; a larger one as hash, size, head
+QUARANTINE_HEAD = 4096             # the first bytes kept of an oversize entry
 
 
 def _signer(node_id, gov=None):
@@ -839,34 +842,89 @@ def _signer(node_id, gov=None):
 
 
 def _quarantine(refused, gov=None):
-    """Node-local evidence (#205): write each refused entry, verbatim, with the reason, the signer and the time, to
-    `$HIVE_HOME/.quarantine.jsonl`. Never synced and never journaled. Bounded to the newest `QUARANTINE_MAX`
-    entries; an entry already held (a peer re-pushes it each sync) is not written twice. Best effort: it never
-    makes ingest raise. `refused` is a list of (entry, reason)."""
+    """Node-local evidence (#205): write each refused entry with the reason, the signer and the time to
+    `$HIVE_HOME/.quarantine.jsonl`. Never synced and never journaled. An entry up to `QUARANTINE_ENTRY_MAX` canonical
+    bytes is kept verbatim; a larger one as `{hash, size, head}` (the first `QUARANTINE_HEAD` bytes). The file keeps
+    the newest `QUARANTINE_MAX` records and at most `QUARANTINE_BYTES_MAX` bytes. A refusal APPENDS one line and
+    never reads the file: the dedupe key (the entry's canonical hash) and the record size live in a small index,
+    `.quarantine.idx`, one `hash size` line per record. The file is rewritten only when a cap is crossed (it is
+    then at most 16 MB). An entry already held (a peer re-pushes it each sync) is not written twice. Best effort:
+    it never makes ingest raise. `refused` is a list of (entry, reason); the caller has already dropped
+    signers this node does not admit."""
     try:
         path = HIVE_HOME / ".quarantine.jsonl"
-        lines = path.read_text().splitlines() if path.exists() else []
-        seen = set()
-        for l in lines:
-            try:
-                seen.add(json.dumps(json.loads(l).get("entry"), sort_keys=True))
-            except ValueError:
-                pass
-        added = False
-        for entry, reason in refused:
-            key = json.dumps(entry, sort_keys=True)
-            if key in seen:
-                continue
-            seen.add(key)
-            lines.append(json.dumps({"at": _now_iso(), "reason": reason,
-                                     "signer": _signer(entry.get("node_id"), gov), "entry": entry}))
-            added = True
-        if added:
-            tmp = path.with_name(path.name + ".tmp")
-            tmp.write_text("\n".join(lines[-QUARANTINE_MAX:]) + "\n")
-            os.replace(tmp, path)
+        idx_path = HIVE_HOME / ".quarantine.idx"
+        with open(HIVE_HOME / ".quarantine.lock", "a") as lock:
+            if _fcntl:
+                _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
+            index = _quarantine_index(path, idx_path)
+            seen = {h for h, _n in index}
+            fresh = []
+            for entry, reason in refused:
+                try:
+                    raw = _canonical(entry)
+                except Exception:
+                    continue
+                h = hashlib.sha256(raw).hexdigest()
+                if h in seen:
+                    continue
+                seen.add(h)
+                rec = {"at": _now_iso(), "reason": reason, "signer": _signer(entry.get("node_id"), gov)}
+                if len(raw) <= QUARANTINE_ENTRY_MAX:
+                    rec["entry"] = entry
+                else:
+                    rec["oversize"] = {"hash": "sha256:" + h, "size": len(raw),
+                                       "head": raw[:QUARANTINE_HEAD].decode("utf-8", "replace")}
+                line = json.dumps(rec) + "\n"
+                fresh.append((h, line))
+            if not fresh:
+                return
+            with open(path, "a") as f, open(idx_path, "a") as ix:
+                for h, line in fresh:
+                    f.write(line)
+                    ix.write(f"{h} {len(line.encode())}\n")
+            index += [(h, len(line.encode())) for h, line in fresh]
+            if len(index) > QUARANTINE_MAX or sum(n for _h, n in index) > QUARANTINE_BYTES_MAX:
+                lines = path.read_text().splitlines(keepends=True)
+                if len(lines) != len(index):          # the index drifted (a crash between the two appends)
+                    index = _quarantine_index(path, idx_path, rebuild=True)
+                while len(index) > QUARANTINE_MAX or sum(n for _h, n in index) > QUARANTINE_BYTES_MAX:
+                    index.pop(0)
+                    lines.pop(0)
+                for p, body in ((path, "".join(lines)), (idx_path, "".join(f"{h} {n}\n" for h, n in index))):
+                    tmp = p.with_name(p.name + ".tmp")
+                    tmp.write_text(body)
+                    os.replace(tmp, p)
     except Exception:
         pass
+
+
+def _quarantine_index(path, idx_path, rebuild=False):
+    """The quarantine's (canonical hash, line bytes) per record, oldest first, from the small index. A missing or
+    unreadable index (or `rebuild`) is rebuilt by one read of the file: a record's `entry` hashes as stored, an
+    oversize record carries its hash."""
+    if not rebuild:
+        try:
+            if idx_path.exists() or not path.exists():
+                return [(h, int(n)) for h, n in (l.split() for l in idx_path.read_text().splitlines())]
+        except (OSError, ValueError):
+            pass
+    out = []
+    try:
+        for l in path.read_text().splitlines(keepends=True):
+            try:
+                r = json.loads(l)
+                if "entry" in r:
+                    h = hashlib.sha256(_canonical(r["entry"])).hexdigest()
+                else:
+                    h = r["oversize"]["hash"].split(":", 1)[-1]
+            except (ValueError, KeyError, TypeError):
+                h = "damaged-" + hashlib.sha256(l.encode()).hexdigest()
+            out.append((h, len(l.encode())))
+    except OSError:
+        pass
+    idx_path.write_text("".join(f"{h} {n}\n" for h, n in out))
+    return out
 
 
 def _read_quarantine():
@@ -1188,15 +1246,16 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if not _verify_entry(e):
             rejected += 1
             continue
+        if has_owner and (nid not in admitted or nid in gov["purged"]):
+            # Read-only member: its content does not land until the owner admits the device.
+            # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
+            # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
+            rejected += 1
+            continue
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
             refused_payload.append((e, problem))
-            continue
-        if has_owner and (nid not in admitted or nid in gov["purged"]):
-            # Read-only member: its content does not land until the owner admits the device.
-            # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
-            rejected += 1
             continue
         try:
             _persist(e)

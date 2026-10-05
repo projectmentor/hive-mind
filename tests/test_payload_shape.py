@@ -279,6 +279,78 @@ def test_quarantine_stays_within_its_bound_and_keeps_the_newest(tmp_path, monkey
     assert [r["entry"]["payload"]["content"] for r in q] == [f"b{i}" for i in range(7, 12)]
 
 
+def _owned(hv, home):
+    """An owned hive on disk: genesis owner, three admitted devices, plus one stranger. Returns (admitted a, stranger)."""
+    from test_links import _owned_hive
+    _, (a, _b, _c), base = _owned_hive(hv)
+    _project(hv, home, base).close()
+    return a, _device(hv)
+
+
+def test_a_strangers_hostile_entry_is_refused_and_not_quarantined(tmp_path, monkeypatch):
+    # #216: the quarantine must not be a sink for devices the owner never admitted
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, stranger = _owned(hv, tmp_path)
+    bad = _entry(hv, stranger, "fact", dict(_base("fact"), importance=2**63), TS % 1)
+    assert hv.append_foreign_entries([bad])[0] == 0
+    assert _quarantined(tmp_path) == []
+    mine = _entry(hv, a, "fact", dict(_base("fact"), importance=2**63), TS % 2)      # an admitted signer is kept
+    hv.append_foreign_entries([mine])
+    assert [r["signer"]["node_id"] for r in _quarantined(tmp_path)] == [a["id"]]
+
+
+def test_an_admitted_signers_small_entry_is_stored_verbatim(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, _ = _owned(hv, tmp_path)
+    bad = _entry(hv, a, "fact", dict(_base("fact"), importance=2**63), TS % 1)
+    hv.append_foreign_entries([bad])
+    q = _quarantined(tmp_path)
+    assert len(q) == 1 and q[0]["entry"] == bad and "oversize" not in q[0]
+
+
+def test_a_2mb_hostile_entry_from_an_admitted_device_is_stored_as_hash_size_and_head(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, _ = _owned(hv, tmp_path)
+    bad = _entry(hv, a, "fact", dict(_base("fact"), content="x" * (2 * 1024 * 1024), importance=2**63), TS % 1)
+    hv.append_foreign_entries([bad])
+    q = _quarantined(tmp_path)
+    raw = hv._canonical(bad)
+    assert len(q) == 1 and "entry" not in q[0]
+    o = q[0]["oversize"]
+    assert o["size"] == len(raw) and o["hash"] == "sha256:" + __import__("hashlib").sha256(raw).hexdigest()
+    assert o["head"] == raw[:hv.QUARANTINE_HEAD].decode() and "importance" in q[0]["reason"]
+    assert (Path(tmp_path) / ".quarantine.jsonl").stat().st_size < 16 * 1024
+
+
+def test_the_quarantine_file_stays_within_16mb_after_many_large_refusals(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, _ = _owned(hv, tmp_path)
+    monkeypatch.setattr(hv, "QUARANTINE_ENTRY_MAX", 1 << 30)         # keep every entry verbatim: the byte cap must bind
+    monkeypatch.setattr(hv, "QUARANTINE_BYTES_MAX", 2 * 1024 * 1024)
+    bad = [_entry(hv, a, "fact", dict(_base("fact"), content=f"{i}" + "x" * 300_000, importance=2**63), TS % 1)
+           for i in range(12)]
+    for e in bad:
+        hv.append_foreign_entries([e])
+        assert (Path(tmp_path) / ".quarantine.jsonl").stat().st_size <= hv.QUARANTINE_BYTES_MAX
+    q = _quarantined(tmp_path)
+    assert 0 < len(q) < 12 and q[-1]["entry"] == bad[-1]            # the oldest went first, the newest stayed
+    assert (Path(tmp_path) / ".quarantine.jsonl").stat().st_size <= 16 * 1024 * 1024
+
+
+def test_a_refusal_does_not_read_the_quarantine_file(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, _ = _owned(hv, tmp_path)
+    hv.append_foreign_entries([_entry(hv, a, "fact", dict(_base("fact"), content="b0", importance=2**63), TS % 1)])
+    real = Path.read_text
+    def spy(self, *args, **kw):
+        assert self.name != ".quarantine.jsonl", "a refusal read the whole quarantine file"
+        return real(self, *args, **kw)
+    monkeypatch.setattr(Path, "read_text", spy)
+    hv.append_foreign_entries([_entry(hv, a, "fact", dict(_base("fact"), content="b1", importance=2**63), TS % 2)])
+    monkeypatch.setattr(Path, "read_text", real)
+    assert len(_quarantined(tmp_path)) == 2
+
+
 def test_doctor_names_the_signer_of_a_skipped_entry_and_reports_the_quarantine(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     _jd(tmp_path)

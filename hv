@@ -2814,9 +2814,24 @@ def resolve_entity_fact(conn, entry):
     )
 
 
-def resolve_supersedes(conn, entry):
-    """Pass 2: mark the decision this entry supersedes (by journal identity,
-    falling back to a legacy local-id field)."""
+def _legacy_authority(conn, entry, kind, target_id, gov, by_ref, ref=None):
+    """#204: the verdict `_link_authority` gives a pre-1.19 `supersedes_ref` / `supersedes` / `resolves_ref`
+    payload field, read as a link from the entry to its target. It commands only when the owner key signed
+    it or its signer wrote the target; otherwise the field does nothing. A target with no journal identity
+    on this node is evidence. `ref` is the payload's journal-identity ref when it has one: judge that entry, because
+    rows are shared by identical content and a reverse lookup of the row could name a different writer's entry.
+    Only the local-id `supersedes` falls back to the row lookup. Returns "hard" or "evidence"."""
+    if "sig" in entry and not _verify_entry(entry):
+        return "evidence"
+    if not (isinstance(ref, (list, tuple)) and _valid_ref(ref)):
+        ref = _index_lookup(conn, kind, target_id)
+    target = by_ref.get(tuple(ref)) if ref else None
+    return _link_authority(entry, target, gov)
+
+
+def resolve_supersedes(conn, entry, gov, by_ref):
+    """Pass 2: mark the decision this entry supersedes (by journal identity, falling back to a legacy
+    local-id field), when `_legacy_authority` says the entry may command it (#204)."""
     p = entry["payload"]
     old = _ref_or_legacy_id(conn, p, "supersedes_ref", "supersedes", "decision", "decisions")
     if not old:
@@ -2824,21 +2839,27 @@ def resolve_supersedes(conn, entry):
     new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
     if new is None:
         return
+    if _legacy_authority(conn, entry, "decision", old, gov, by_ref, p.get("supersedes_ref")) != "hard":
+        return
     conn.execute("UPDATE decisions SET superseded_by = ? WHERE id = ?", (new, old))
 
 
-def resolve_resolves(conn, entry):
+def resolve_resolves(conn, entry, gov, by_ref):
     """Pass 2: record on the NEW fact row which prior fact it resolves (`facts.resolves`
     -> the resolved fact's local id). The actual confidence effect rides on the separate
     `retract` entry `remember --resolves` emits; this link is provenance ("what did fact X
     resolve") and lets the audit/search show the chain. New-row direction, unlike decision
-    supersedes which marks the old row."""
+    supersedes which marks the old row. The target must be a fact, and the entry must pass
+    `_legacy_authority` (#204)."""
     p = entry["payload"]
-    old = _resolve_ref(conn, p.get("resolves_ref"))
-    if not old:
+    row = _index_row(conn, p.get("resolves_ref"))
+    if row is None or row[0] != "fact":
         return
+    old = row[1]
     new = _resolve_ref(conn, [entry.get("node_id"), entry.get("seq")])
     if new is None:
+        return
+    if _legacy_authority(conn, entry, "fact", old, gov, by_ref, p.get("resolves_ref")) != "hard":
         return
     conn.execute("UPDATE facts SET resolves = ? WHERE id = ?", (old, new))
 
@@ -3091,6 +3112,19 @@ def _links_unauthorized(entries, gov):
     by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
     out = []
     for e in entries:
+        if e.get("type") in ("decision", "fact"):
+            # #204: a pre-1.19 payload field is read as a link from the entry to its target, under the same
+            # rule. Only the journal-identity forms can be judged from the journal alone: a legacy local id
+            # (`supersedes`) names a row, not an entry, and projects only where that row's author is known.
+            lp = e.get("payload", {}) or {}
+            field, tkind = (("supersedes_ref", "decision") if e["type"] == "decision" else ("resolves_ref", "fact"))
+            lref, lkind = lp.get(field), "supersedes" if e["type"] == "decision" else "resolves"
+            tgt = by_ref.get(tuple(lref)) if _valid_ref(lref) else None
+            if tgt is not None and tgt.get("type") == tkind and not ("sig" in e and not _verify_entry(e)) \
+                    and _link_authority(e, tgt, gov) == "evidence":
+                out.append(f"{lkind} (legacy {field}) {e.get('node_id', '?')}:{e.get('seq', '?')}"
+                           f"→{lref[0]}:{lref[1]} by {e.get('node_id', '?')}")
+            continue
         if e.get("type") != "link" or ("sig" in e and not _verify_entry(e)):
             continue
         p = e.get("payload", {}) or {}
@@ -4744,9 +4778,9 @@ def _rebuild_in_transaction(conn):
         elif entry["type"] == "decision" and (
             entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
         ):
-            resolve_supersedes(conn, entry)
+            resolve_supersedes(conn, entry, gov, by_ref)
         elif entry["type"] == "fact" and entry["payload"].get("resolves_ref"):
-            resolve_resolves(conn, entry)
+            resolve_resolves(conn, entry, gov, by_ref)
         elif entry["type"] == "link":
             resolve_link(conn, entry, gov, by_ref)
 

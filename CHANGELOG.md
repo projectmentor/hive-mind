@@ -14,6 +14,18 @@ introduced (a contract) or tagged (a patch).
 
 No contract change.
 
+- **The legacy `supersedes_ref`, `supersedes` and `resolves_ref` payload fields now go through the link authority**
+  (#204, security fix). They projected for any admitted device, so one device could mark another's decision
+  superseded on every node. They now command only when the owner key signed the entry or its signer wrote the
+  target, as a `link` entry does; `resolves_ref` must name a fact. Signed self-authored and owner-signed history
+  projects as before. An unsigned legacy field commands only while the journal has no owner; once an owner exists
+  it is evidence, and a matching `node_id` is not a signer. `hv doctor` `link-authz` lists a legacy field that no
+  longer commands. A `link` entry is the only way to supersede or resolve (`AGENT_INTEGRATION.md` §7).
+  **Upgrade effect:** a device-signed legacy supersede or resolve of another author's entry stops commanding on
+  upgrade, and the target stands again on every node until the owner re-ratifies it with an owner-signed `link`.
+  On the live hive this is the four `decide --revoke` entries of 2026-08-19; `hv doctor` `link-authz` lists them.
+  An unsigned self-authored legacy field likewise stops commanding once any owner exists. The live hive has none:
+  its legacy fields are device-signed, and its unsigned entries carry no legacy field.
 - **`rebuild_db` is atomic** (#206). It committed the deletes before replaying the journal and never closed its
   connection on error, so a failure left the node's projection empty, search returning nothing, and a write lock
   held. It now runs in one transaction (`BEGIN IMMEDIATE` to the final insert, no commit between), rolls back on any

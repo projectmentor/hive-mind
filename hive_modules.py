@@ -15,8 +15,9 @@ directory and hashed again there, so a repo that changes between the check and t
 The platform is checked first. Where there is no module backend (everything but Linux with a user supervisor
 in 2.1) `add` says so and exits non-zero before it fetches, mints or installs anything.
 
-Units (M2, PR 7), hooks (M4, PR 8) and the doctor checks (M7, PR 9) read what this records; this PR validates
-their manifest blocks and installs the files, and starts nothing.
+Units (M2, PR 7) are rendered from the manifest's `service` block into `hive-module-<name>.service` (and `.timer`
+when `interval` is set) in the operator's systemd user directory, installed on `add`, re-applied on `update` and
+stopped and removed on `remove`. Hooks (M4, PR 8) and the doctor checks (M7, PR 9) read what this records.
 """
 
 import argparse
@@ -156,6 +157,8 @@ def validate_manifest(raw, core_version):
                 or not (svc.get("interval") is None or (isinstance(svc["interval"], int) and svc["interval"] >= 60))
                 or set(svc) - {"command", "restart", "interval"}):
             raise ModuleError("manifest service needs a command list, restart no|on-failure|always, optional interval >= 60")
+        if not cmd[0].startswith("/") and ".." in Path(cmd[0]).parts:
+            raise ModuleError("manifest service command may not leave the module's directory")
     hooks = m.get("hooks", [])
     if not isinstance(hooks, list) or any(h not in HOOK_EVENTS for h in hooks):
         raise ModuleError(f"manifest hooks must be a list of: {', '.join(HOOK_EVENTS)}")
@@ -307,6 +310,117 @@ def _device_state(lib, device_id):
     return "admitted" if device_id in gov["admitted"] else "revoked"
 
 
+# ── the unit (M2) ───────────────────────────────────────────────────────────────────────────────────
+
+def unit_dir():
+    return Path.home() / ".config" / "systemd" / "user"
+
+
+def unit_names(name):
+    return f"hive-module-{name}.service", f"hive-module-{name}.timer"
+
+
+def _systemctl(*args):
+    """Run `systemctl --user ...`; False when there is no user manager or the call fails. Never raises."""
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _quote(arg):
+    """One ExecStart word: systemd splits on whitespace and expands `%` and `$`, so quote and double them."""
+    esc = arg.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%").replace("$", "$$")
+    return f'"{esc}"'
+
+
+def render_units(name, manifest, module_dir, key_dir):
+    """{filename: text} for a module's unit(s), or {} when its manifest has no `service` block.
+
+    It runs as the operator's user (a user unit), in the module's own directory, with the module's own key
+    directory and nothing of the owner's in its environment. The command's first word is made absolute: a path
+    inside the module (one it ships, or any relative path) is anchored to its directory and any other bare name is
+    looked up by `env`. Unlike the sync unit it
+    has no `ExecStartPre` that kills by command line (such a pattern could match another module)."""
+    svc = manifest.get("service")
+    if not svc:
+        return {}
+    cmd = list(svc["command"])
+    if not cmd[0].startswith("/"):
+        own = "/" in cmd[0] or cmd[0] in manifest.get("files", {})
+        cmd = [str(module_dir / cmd[0]), *cmd[1:]] if own else ["/usr/bin/env", *cmd]
+    interval, restart = svc.get("interval"), svc.get("restart", "on-failure")
+    service, timer = unit_names(name)
+    lines = ["[Unit]", f"Description=Hive Mind module {name}", "After=network.target", ""]
+    lines += ["[Service]", f"Type={'oneshot' if interval else 'simple'}", f"WorkingDirectory={module_dir}",
+              "ExecStart=" + " ".join(_quote(a) for a in cmd),
+              f"Environment=HIVE_MODULE_NAME={name}", f"Environment=HIVE_MODULE_DIR={module_dir}",
+              f"Environment=HIVE_MODULE_KEY_DIR={key_dir}", "NoNewPrivileges=yes",
+              "StandardOutput=journal", "StandardError=journal"]
+    if not interval:                    # a timer re-fires a oneshot; a daemon is kept up by its restart policy
+        lines += [f"Restart={restart}", "RestartSec=5", "KillMode=control-group"]
+        lines += ["", "[Install]", "WantedBy=default.target"]
+    out = {service: "\n".join(lines) + "\n"}
+    if interval:
+        out[timer] = "\n".join(["[Unit]", f"Description=Run Hive Mind module {name} every {interval}s", "",
+                                 "[Timer]", f"OnBootSec={interval}", f"OnUnitActiveSec={interval}",
+                                 "Persistent=true", "", "[Install]", "WantedBy=timers.target"]) + "\n"
+    return out
+
+
+def install_units(lib, name, manifest):
+    """Write the module's unit files (removing a timer it no longer declares) and, where a user systemd manager is
+    reachable, enable and (re)start them. Without one the files are still written; returns a note for the operator."""
+    keep = render_units(name, manifest, modules_dir() / name, Path(lib._ensure_key_dir()) / "modules" / name)
+    if not keep:
+        remove_units(name)
+        return ""
+    d = unit_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    for fname in unit_names(name):
+        if fname not in keep and (d / fname).exists():
+            _systemctl("disable", "--now", fname)            # a timer the new manifest dropped stops first
+            (d / fname).unlink()
+    for fname, text in keep.items():
+        (d / fname).write_text(text)
+    if not _systemctl("show-environment"):
+        return "no user systemd manager is reachable: the unit is written, not started"
+    _systemctl("daemon-reload")
+    active = next(f for f in unit_names(name)[::-1] if f in keep)       # the timer when there is one
+    if not _systemctl("enable", active):
+        return "the unit is written, but systemd would not enable it"
+    _systemctl("restart", active)
+    return ""
+
+
+def remove_units(name):
+    """Stop, disable and delete the module's units. Safe when there are none."""
+    service, timer = unit_names(name)
+    d = unit_dir()
+    if not any((d / f).exists() for f in (service, timer)):
+        return
+    for f in (timer, service):
+        _systemctl("disable", "--now", f)
+        (d / f).unlink(missing_ok=True)
+    _systemctl("daemon-reload")
+    _systemctl("reset-failed", service)
+
+
+def service_state(name):
+    """'none' without a unit, else systemd's word for it ('active', 'inactive', 'failed') or 'installed'."""
+    service, timer = unit_names(name)
+    d = unit_dir()
+    if not (d / service).exists():
+        return "none"
+    unit = timer if (d / timer).exists() else service
+    try:
+        r = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True, timeout=10)
+        word = r.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        word = ""
+    return word if word in ("active", "inactive", "failed", "activating") else "installed"
+
+
 # ── verbs ───────────────────────────────────────────────────────────────────────────────────────────
 
 def _write_config(dest_dir, defaults):
@@ -360,6 +474,7 @@ def cmd_add(lib, args):
                 raise ModuleError("the owner could not admit the module's device: nothing installed")
             _write_config(staging, manifest.get("config", {}))
             os.rename(staging, root / name)
+            note = install_units(lib, name, manifest)
             state[name] = {"version": manifest["version"], "publisher": manifest["publisher"], "device_id": device_id,
                            "source": args.source, "commit": head, "installed_at": int(time.time()),
                            "quota": dict(manifest.get("quota") or {}), "owner_quota": {}}
@@ -369,7 +484,9 @@ def cmd_add(lib, args):
             _undo_add(lib, name, device_id)
             raise
     print(f"installed module {name} {manifest['version']} (device {device_id}, principal {principal}); "
-          f"nothing is started: its unit and hooks arrive with later 2.1 changes")
+          + (f"service {unit_names(name)[0]}" + (" with a timer" if manifest["service"].get("interval") else "")
+             if manifest.get("service") else "no service")
+          + (f" ({note})" if note else "") + "; its hooks arrive with a later 2.1 change")
 
 
 def _undo_add(lib, name, device_id):
@@ -381,6 +498,7 @@ def _undo_add(lib, name, device_id):
         pass
     shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / name, ignore_errors=True)
     shutil.rmtree(modules_dir() / name, ignore_errors=True)
+    remove_units(name)
 
 
 def cmd_remove(lib, args):
@@ -394,6 +512,7 @@ def cmd_remove(lib, args):
         lib._group_change("revoke", device_id)
     if _device_state(lib, device_id) == "admitted":
         raise ModuleError("the owner could not revoke the module's device: nothing removed")
+    remove_units(args.name)                       # stop it before its files and key go
     shutil.rmtree(modules_dir() / args.name, ignore_errors=True)
     shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / args.name, ignore_errors=True)
     state.pop(args.name)
@@ -432,16 +551,23 @@ def cmd_update(lib, args):
             shutil.rmtree(old, ignore_errors=True)
             os.rename(live, old)                  # two renames: a crash between them leaves the old copy at `.old`
             os.rename(staging, live)
+            note = install_units(lib, args.name, manifest)
         except BaseException:
-            if old.exists() and not live.exists():
+            if old.exists():
+                shutil.rmtree(live, ignore_errors=True)
                 os.rename(old, live)
+                try:                                  # put the old unit back beside the old files
+                    install_units(lib, args.name, json.loads((live / MANIFEST).read_text()))
+                except (OSError, ValueError, KeyError):
+                    pass
             shutil.rmtree(staging, ignore_errors=True)
             raise
         shutil.rmtree(old, ignore_errors=True)
         rec.update(version=manifest["version"], source=source, commit=head,
                    quota=dict(manifest.get("quota") or {}))     # the owner's own limits (owner_quota) are kept
         save_state(lib, state)
-    print(f"updated module {args.name} to {manifest['version']}; its key, device and pinned publisher are unchanged")
+    print(f"updated module {args.name} to {manifest['version']}; its key, device and pinned publisher are unchanged"
+          + (f" ({note})" if note else ""))
 
 
 def _installed_signature(lib, name):
@@ -474,7 +600,7 @@ def cmd_list(lib, args):
     for name, rec in sorted(state.items()):
         sig = _installed_signature(lib, name)
         print(f"{name:<16}{rec['version']:<10}{fingerprint(rec['publisher']):<18}{sig.split(' ')[0]:<10}"
-              f"{'not installed':<14}{_device_state(lib, rec['device_id']):<10}{_quota_use(lib, rec['device_id'])}")
+              f"{service_state(name):<14}{_device_state(lib, rec['device_id']):<10}{_quota_use(lib, rec['device_id'])}")
         if sig != "valid":
             print(f"  ! {sig}")
 

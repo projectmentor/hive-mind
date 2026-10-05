@@ -341,3 +341,114 @@ def test_an_owner_raise_of_entry_bytes_reaches_the_route_but_only_for_that_modul
     # a manifest that asks for more than the default is still refused at add
     pub3 = _publish(tmp_path / "repo3", name="greedy", quota={"entry_bytes": mid})
     assert _add(hive, tmp_path / "repo3", pub3, name="greedy", check=False).returncode != 0
+
+
+# ── 2.1 plan PR 7 (M2): the module's systemd unit ───────────────────────────────────────────────────
+
+SERVICE = {"command": ["run.sh", "--poll", "a b", "100%$HOME"], "restart": "always"}
+
+
+@pytest.fixture
+def units(tmp_path, monkeypatch):
+    """A `systemctl` that succeeds and logs, so install/remove reach it; unit files land in the sandbox HOME."""
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    log = tmp_path / "systemctl.log"
+    (shim / "systemctl").write_text(f'#!/bin/sh\necho "$*" >> {log}\nexit 0\n')
+    (shim / "systemctl").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{shim}:{os.environ['PATH']}")
+    unit_dir = Path(os.environ["HOME"]) / ".config" / "systemd" / "user"
+    return unit_dir, (lambda: [l.removeprefix("--user ") for l in log.read_text().splitlines()] if log.exists() else [])
+
+
+def test_a_service_block_is_rendered_as_a_user_unit_and_installed(hive, tmp_path, units):
+    unit_dir, calls = units
+    pub = _publish(tmp_path / "repo", service=SERVICE)
+    r = _add(hive, tmp_path / "repo", pub)
+    assert "hive-module-demo.service" in r.stdout
+    text = (unit_dir / "hive-module-demo.service").read_text()
+    d = tmp_path / "modules" / "demo"
+    assert "Type=simple" in text and "Restart=always" in text and f"WorkingDirectory={d}" in text
+    assert f'ExecStart="{d}/run.sh" "--poll" "a b" "100%%$$HOME"' in text      # anchored to the module, one word each
+    assert "User=" not in text                                 # a user unit: it runs as the operator
+    key_dir = _keys.key_dir(hive) / "modules" / "demo"
+    assert f"HIVE_MODULE_KEY_DIR={key_dir}" in text
+    assert "owner" not in text.lower() and "HIVE_HOME" not in text     # no owner-key path, no hive home
+    assert "pkill" not in text and "ExecStartPre" not in text
+    assert not (unit_dir / "hive-module-demo.timer").exists()
+    assert "enable hive-module-demo.service" in calls() and "restart hive-module-demo.service" in calls()
+
+
+def test_an_interval_makes_a_oneshot_service_and_a_timer(hive, tmp_path, units):
+    unit_dir, calls = units
+    pub = _publish(tmp_path / "repo", service={"command": ["python3", "run.sh"], "interval": 300})
+    _add(hive, tmp_path / "repo", pub)
+    svc = (unit_dir / "hive-module-demo.service").read_text()
+    timer = (unit_dir / "hive-module-demo.timer").read_text()
+    assert "Type=oneshot" in svc and "Restart=" not in svc and 'ExecStart="/usr/bin/env" "python3" "run.sh"' in svc
+    assert "OnUnitActiveSec=300" in timer and "WantedBy=timers.target" in timer
+    assert "enable hive-module-demo.timer" in calls()          # the timer is what is enabled and started
+
+
+def test_a_module_without_a_service_gets_no_unit(hive, tmp_path, units):
+    unit_dir, calls = units
+    _add(hive, tmp_path / "repo", _publish(tmp_path / "repo"))
+    assert not list(unit_dir.glob("hive-module-*")) and calls() == []
+    row = next(l for l in _run(hive, "module", "list").stdout.splitlines() if l.startswith("demo"))
+    assert " none " in row
+
+
+def test_remove_stops_and_deletes_the_units(hive, tmp_path, units):
+    unit_dir, calls = units
+    _add(hive, tmp_path / "repo", _publish(tmp_path / "repo", service={"command": ["run.sh"], "interval": 60}))
+    assert len(list(unit_dir.glob("hive-module-demo.*"))) == 2
+    _run(hive, "module", "remove", "demo")
+    assert not list(unit_dir.glob("hive-module-*"))
+    assert "disable --now hive-module-demo.timer" in calls() and "disable --now hive-module-demo.service" in calls()
+
+
+def test_update_reapplies_the_unit_and_drops_a_timer_it_no_longer_declares(hive, tmp_path, units):
+    unit_dir, calls = units
+    repo = tmp_path / "repo"
+    pub = _publish(repo, service={"command": ["run.sh"], "interval": 60})
+    _add(hive, repo, pub)
+    _publish(repo, version="1.1.0", service={"command": ["run.sh", "--v2"], "restart": "no"})
+    _run(hive, "module", "update", "demo")
+    assert "--v2" in (unit_dir / "hive-module-demo.service").read_text()
+    assert not (unit_dir / "hive-module-demo.timer").exists()
+    assert "disable --now hive-module-demo.timer" in calls() and "restart hive-module-demo.service" in calls()
+    _publish(repo, version="1.2.0")                            # no service block any more: the unit goes
+    _run(hive, "module", "update", "demo")
+    assert not list(unit_dir.glob("hive-module-*"))
+
+
+def test_without_a_user_systemd_the_unit_is_written_and_not_started(hive, tmp_path):
+    # the suite's stub `systemctl` always fails: no user manager
+    pub = _publish(tmp_path / "repo", service=SERVICE)
+    r = _add(hive, tmp_path / "repo", pub)
+    assert "written, not started" in r.stdout
+    assert (Path(os.environ["HOME"]) / ".config/systemd/user/hive-module-demo.service").exists()
+
+
+def test_uninstall_removes_module_units(tmp_path, units):
+    unit_dir, calls = units
+    unit_dir.mkdir(parents=True)
+    for f in ("hive-module-demo.service", "hive-module-demo.timer"):
+        (unit_dir / f).write_text("[Unit]\n")
+    hive_dir = tmp_path / "hivedir"
+    hive_dir.mkdir()
+    env = dict(os.environ, HIVE_DIR=str(hive_dir), BIN_DIR=str(tmp_path / "bin"), SETTINGS=str(tmp_path / "s.json"),
+               HIVE_UNINSTALL_TEST="1")
+    r = subprocess.run(["bash", str(PROJECT / "scripts/installer/_uninstall.sh"), "--yes"], env=env,
+                       capture_output=True, text=True, input="")
+    assert r.returncode == 0, r.stderr
+    assert not list(unit_dir.glob("hive-module-*"))
+    assert "disable --now hive-module-demo.timer" in calls()
+
+
+def test_a_service_command_cannot_leave_the_module_directory(hive, tmp_path, units):
+    unit_dir, _ = units
+    pub = _publish(tmp_path / "repo", service={"command": ["../other/run.sh"]})
+    r = _add(hive, tmp_path / "repo", pub, check=False)
+    assert r.returncode == 1 and "leave the module's directory" in r.stderr
+    assert not list(unit_dir.glob("hive-module-*")) and not _key_dir_has_module(hive)

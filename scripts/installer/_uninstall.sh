@@ -87,6 +87,12 @@ elif [ "$(uname -o 2>/dev/null)" = "Android" ] || [ -n "${TERMUX_VERSION:-}" ] |
   rm -f "$HOME/.termux/boot/start-hive-mind"
   [ -z "${HIVE_UNINSTALL_TEST:-}" ] && pkill -f "hive_sync_daemon.py" 2>/dev/null || true
 else
+  # module units (`hive-module-<name>.service|timer`): stop and remove each, before the modules directory goes
+  for _u in "$(dirname "$DOCTOR_TIMER")"/hive-module-*.timer "$(dirname "$DOCTOR_TIMER")"/hive-module-*.service; do
+    [ -e "$_u" ] || continue
+    systemctl --user disable --now "$(basename "$_u")" 2>/dev/null || true
+    rm -f "$_u"
+  done
   systemctl --user disable --now hive-doctor.timer 2>/dev/null || true
   systemctl --user stop hive-doctor.service        2>/dev/null || true
   rm -f "$DOCTOR_TIMER" "$DOCTOR_SVC"

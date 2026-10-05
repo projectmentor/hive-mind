@@ -25,10 +25,7 @@ DOCS = PROJECT / "docs"
 # Intentionally undocumented in the user/agent docs: local-only `hv telemetry report|list`
 # observability flags, surfaced via `hv telemetry ... --help` only. They never touch the
 # corpus and are not part of the agent contract. Document one → remove it from here.
-# `--after` is `hv feed`'s cursor (2.1 PR 1). `hv feed` is documented with the contract bump, the last 2.1 PR
-# (plan §5, PR 10), so it is not in the public docs before it ships. Remove it from here in PR 10.
-# `--to` and `--no-joins` are `hv entity join|unjoin|show`'s (2.1 PR 5b, #208): documented in PR 10 with the rest.
-ALLOWLIST = {"--since", "--by", "--limit", "--transcript", "--after", "--to", "--no-joins"}
+ALLOWLIST = {"--since", "--by", "--limit", "--transcript"}
 
 
 def _load_hv():
@@ -121,7 +118,7 @@ def test_mutant_a_bump_of_only_one_side_is_caught():
     assert _history_head(history) != "9.9"
 
 
-# The five places the docs state the contract version in prose (#141, set to 2.0 by the bump on #136).
+# The five places the docs state the contract version in prose (#141, set to 2.1 by the bump in 2.1 PR 10).
 _VERSION_STATEMENTS = [
     ("README.md", "Current agent contract: **{v}**"),
     ("CONTRIBUTING.md", "contract is {v}."),
@@ -146,3 +143,33 @@ def test_mutant_a_stale_version_statement_is_caught():
     rel, template = _VERSION_STATEMENTS[0]
     stale = (PROJECT / rel).read_text().replace(template.format(v=hv.CONTRACT_VERSION), template.format(v="1.25"))
     assert template.format(v=hv.CONTRACT_VERSION) not in stale
+
+
+def _doc_routes(text):
+    """The `| `/v1/…` | GET |` rows of a route table: {path: verb}."""
+    return dict(re.findall(r"^\| `(/v1/[a-z/]*)` \| (GET|POST) \|", text, re.M))
+
+
+def test_module_api_doc_route_table_equals_the_handler():
+    """docs/MODULE_API.md lists exactly the routes `hive_module_api` serves, each with its verb (A5: the doc
+    cannot claim a route the code lacks, or omit one it has)."""
+    import hive_module_api as api
+    want = {path: ("POST" if path in api.WRITE_ROUTES else "GET") for path in api.ROUTES}
+    assert _doc_routes((DOCS / "MODULE_API.md").read_text()) == want
+
+
+def test_mutant_a_route_missing_from_the_doc_is_caught():
+    import hive_module_api as api
+    doc = (DOCS / "MODULE_API.md").read_text().replace("| `/v1/tip` | GET |", "| `/v1/tap` | GET |")
+    assert _doc_routes(doc) != {path: ("POST" if path in api.WRITE_ROUTES else "GET") for path in api.ROUTES}
+
+
+def test_contract_names_every_route_and_the_quota_defaults():
+    import hive_module_api as api
+    text = (DOCS / "CONTRACT.md").read_text()
+    for path in api.ROUTES:
+        assert path in text, f"docs/CONTRACT.md does not mention {path}"
+    module_api = (DOCS / "MODULE_API.md").read_text()
+    for key, default in api.QUOTA_DEFAULTS.items():
+        assert f"`{key}`" in module_api, f"docs/MODULE_API.md does not name the `{key}` quota"
+    assert "50,000" in module_api and "16 KiB" in module_api and "| 60 |" in module_api and "| 500 |" in module_api

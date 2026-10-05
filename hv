@@ -4025,7 +4025,10 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
     `sort`: confidence (effective confidence, default; `salience` is a legacy alias) | recency (created) |
     importance | utility (1.19 PR6, learned projections decayed at query time). `status` (facts): all (live,
     >= min_confidence) | contested | forgotten (owner-forgotten, normally hidden) | volatile. Returns
-    the page slice plus `*_total` so the UI can page; empty query browses everything."""
+    the page slice plus `*_total` so the UI can page; empty query browses everything. `kind` is exclusive:
+    fact | decision | idea return only that type, `all` returns facts, decisions and ideas above zero.
+    `min_confidence` filters facts, and earned ideas under kind=all (as `hv search`); raw ideas
+    (kind=idea) come back whatever their confidence. Decisions have no confidence filter."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
     sort = "confidence" if sort in (None, "", "salience") else sort
@@ -4047,7 +4050,7 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
         items.sort(key=k, reverse=True)
 
     facts, decisions, facts_total, dec_total = [], [], 0, 0
-    if kind != "decision":
+    if kind in ("all", "fact"):
         matched = []
         for r in _query_facts(conn, query or "", limit=10000):
             base = r["confidence"]
@@ -4081,7 +4084,7 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
         order(matched)
         facts_total = len(matched)
         facts = matched[offset:offset + limit]
-    if kind != "fact":
+    if kind in ("all", "decision"):
         dmatched = []
         for r in _query_decisions(conn, query or "", limit=10000):
             tags = json.loads(r["tags"]) if r["tags"] else []
@@ -4105,8 +4108,8 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
         imatched = []
         for r in _query_ideas(conn, query or "", limit=10000):
             eff = _effective_confidence(r["confidence"], r["last_evidence_at"], now, _halflife(gov, "idea"))
-            if kind == "all" and eff <= 0:
-                continue                      # raw hypotheses surface only under kind=idea
+            if kind == "all" and (eff <= 0 or eff < min_confidence):
+                continue                      # under all, as `hv search`: only earned ideas, above min_confidence
             itags = json.loads(r["tags"]) if r["tags"] else []
             if tag and tag not in itags:
                 continue

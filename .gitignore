@@ -33,6 +33,7 @@ hive-owner-*.key
 
 # Module API write windows (2.1): device ids and write times, per-node, never synced
 .module-quota.json
+.modules.json
 
 # Nudge config + per-session debounce state (per-node; use config/nudge.env.example as a template)
 nudge.env

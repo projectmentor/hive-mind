@@ -39,7 +39,7 @@ case "$CMD" in
   # `hive-mind` command — it is already in the signed manifest by its .sh suffix and already symlinked
   # into PATH — and simply execs the module. It never reads the owner key, never passes a seed on a
   # command line, and never puts one in the environment.
-  owner|group|admit|config|unforget|retract|remember|decide|entity|capsule|wire|doctor)
+  owner|group|admit|config|unforget|retract|remember|decide|entity|capsule|wire|doctor|module)
     exec python3 "$HIVE_DIR/hivemind_ctl.py" "$CMD" "$@" ;;
   *)
     echo "Usage: hive-mind <subcommand>"
@@ -61,6 +61,7 @@ case "$CMD" in
     echo "  remember|decide|entity …   The owner-signed form of their links (source manual)"
     echo "  capsule put|rotate|rm, wire --add   Under an owner policy"
     echo "  doctor --fix  The operator-state repairs (owner key permissions, genesis pin)"
+    echo "  module add|remove|update|list|quota   Install and manage modules (Linux, 2.1)"
     echo ""
     ;;
 esac

@@ -244,6 +244,8 @@ LOCAL_FILES = {
     ".module-quota.json":    _v(WRITTEN, "2.1", "Each module device's hourly and daily write times, for the module API's rate "
                                                 "limits (0600, never journaled). The lifetime count is the journal's, not this "
                                                 "file's.", where="hive"),
+    ".modules.json":         _v(WRITTEN, "2.1", "The modules installed on this node: version, pinned publisher key, device id, source and "
+                                                "quota limits (0600, never journaled). Written by `hive-mind module`.", where="hive"),
     ".nudge_state":          _v(WRITTEN, "1.0", "When the save and audit nudges last fired.", where="hive"),
     ".owner-key":            _v(LEGACY, "1.4", "The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` "
                                                "moves it.", where="hive"),

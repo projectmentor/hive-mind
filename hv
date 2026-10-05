@@ -2193,7 +2193,7 @@ def _decision_evidence(entries, gov=None):
         data = p.get("data")
         try:
             pol = float((data if isinstance(data, dict) else {}).get("polarity", 1))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if not math.isfinite(pol):
             continue
@@ -2810,8 +2810,13 @@ def _valid_ref(ref):
 # --------------------------------------------------------------------------
 
 def _is_number(v):
-    """A finite int or float (not a bool): what SQLite binds as a REAL and what arithmetic can use."""
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+    """A finite int or float (not a bool): what SQLite binds and what arithmetic can use. Never raises. An int
+    beyond int64 is refused (not stored as a float): SQLite cannot bind it and `float()` may overflow on it."""
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return -2**63 <= v < 2**63
+    return isinstance(v, float) and math.isfinite(v)
 
 
 def _is_str(v):

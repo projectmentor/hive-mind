@@ -176,3 +176,52 @@ def test_nan_importance_in_a_journal_projects_as_the_default(tmp_path, monkeypat
     conn = _project(hv, tmp_path, es)
     imp = {r["content"]: r["importance"] for r in conn.execute("SELECT content, importance FROM facts")}
     assert imp["f1"] == imp["f0"] == imp["f2"] and imp["f1"] <= 0.3
+
+
+# --- an out-of-range number: `_is_number` returns False, never raises; ingest keeps going; a journal defaults it ---
+
+OVERFLOW = [2**63, 2**1024, -2**1024]
+
+
+def _overflow_entries(hv, d, v):
+    fact = _fact(hv, d, "a fact", TS % 1)
+    dec = _entry(hv, d, "decision", _base("decision"), TS % 2)
+    ent = _entry(hv, d, "entity", _base("entity"), TS % 3)
+    imp = _entry(hv, d, "fact", dict(_base("fact"), content="imp", importance=v), TS % 4)
+    lc = _link(hv, d, "supports", fact, dec, TS % 5, data={"confidence": v})
+    ef = _link(hv, d, "entity", ent, fact, TS % 6, data={"confidence": v})
+    oo = _link(hv, d, "outcome-of", fact, dec, TS % 7, data={"polarity": v}, channel="sense")
+    return fact, dec, ent, [imp, lc, ef, oo]
+
+
+@pytest.mark.parametrize("v", OVERFLOW, ids=["2**63", "2**1024", "-2**1024"])
+def test_is_number_never_raises_on_an_overflowing_value(tmp_path, monkeypatch, v):
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert hv._is_number(v) is False
+    assert hv._is_number(2**63 - 1) is True and hv._is_number(1.5) is True and hv._is_number(True) is False
+
+
+@pytest.mark.parametrize("v", OVERFLOW, ids=["2**63", "2**1024", "-2**1024"])
+def test_overflowing_number_is_refused_at_ingest_and_the_batch_continues(tmp_path, monkeypatch, v):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    d = _device(hv)
+    fact, dec, ent, bad = _overflow_entries(hv, d, v)
+    ok = _fact(hv, d, "after", TS % 8)
+    assert all(hv._payload_problem(e) is not None for e in bad)
+    accepted, _ = hv.append_foreign_entries(bad + [ok])
+    assert accepted == 1
+
+
+@pytest.mark.parametrize("v", OVERFLOW, ids=["2**63", "2**1024", "-2**1024"])
+def test_journaled_overflowing_number_defaults_and_the_other_rows_survive(tmp_path, monkeypatch, v):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    fact, dec, ent, bad = _overflow_entries(hv, d, v)
+    later = _fact(hv, d, "later", TS % 8)
+    conn = _project(hv, tmp_path, [fact, dec, ent] + bad + [later])
+    assert {r["content"] for r in conn.execute("SELECT content FROM facts")} >= {"a fact", "imp", "later"}
+    imp = conn.execute("SELECT importance FROM facts WHERE content='imp'").fetchone()[0]
+    assert imp <= 0.3
+    hv.rebuild_db()
+    hv.api_search("")

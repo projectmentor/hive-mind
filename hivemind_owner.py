@@ -507,7 +507,7 @@ def _heal_forget_authz(entries, dry):
 
 # The `owner` actions this plane implements. Every other action is `hv`'s and runs there unchanged.
 _OWNER_ACTIONS_HERE = {"pin", "export", "import", "standby", "escrow", "restore", "nominate", "unnominate",
-                       "claim", "transfer", "revoke-escrow", "heartbeat", "init", "mint", "seal"}
+                       "claim", "transfer", "revoke-escrow", "heartbeat", "freeze-timestamps", "init", "mint", "seal"}
 
 
 def owner_cmd(args):
@@ -873,6 +873,20 @@ def owner_cmd(args):
         if _append_governance({"action": "heartbeat"}):
             print("Heartbeat recorded — owner liveness refreshed (resets the dead-man timer).")
         return
+    if action == "freeze-timestamps":
+        if _owner_seed() is None:
+            print("This device does not hold the owner key — freeze-timestamps must run on a key holder.")
+            return
+        tips = {}
+        for e in merkle.read_all_entries(JOURNAL_DIR):
+            if e.get("node_id") is not None and isinstance(e.get("seq"), int):
+                tips[e["node_id"]] = max(tips.get(e["node_id"], 0), e["seq"])
+        if _append_governance({"action": "freeze-timestamps", "tips": tips}):
+            print(f"Timestamp bounds armed (#217): {len(tips)} device chain(s) frozen at their tips. Entries up to "
+                  f"those seqs are unchecked; every later entry must carry the canonical timestamp, be no more "
+                  f"than 5 minutes before its device's latest earlier entry, and be no earlier than its device's "
+                  f"first admit.")
+        return
     if action == "init":
         if _ed25519 is None:
             print("ed25519 unavailable; cannot create an owner key.")
@@ -1024,7 +1038,7 @@ def _config_set(key, value):
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
                 "capsule_putters": str, "cell_writers": str, "forget_writers": str,
-                "introspect_support_weight": float,
+                "introspect_support_weight": float, "flood_per_minute": int, "flood_per_day": int,
                 "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float,
                 **{k: float for k in _PR6_KNOB_DEFAULTS}}
     if key not in coercers:
@@ -1061,6 +1075,9 @@ def _config_set(key, value):
         if val == "legacy" and hides and (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
             print(f"Note: reopening the grandfather hides {len(hides)} fact(s) again (listed by `hv doctor`, "
                   f"forget-authz).")
+    if key in ("flood_per_minute", "flood_per_day") and val < 1:
+        print(f"{key} must be >= 1 entries")
+        return
     if key == "quorum_m" and val < 0:
         print("quorum_m must be >= 0 (0 disables elections)")
         return

@@ -42,6 +42,7 @@ MOVED = {
     ("owner", "transfer"):          ("owner transfer",          "owner-signed"),
     ("owner", "revoke-escrow"):     ("owner revoke",            "owner-signed; S5 renames it here"),
     ("owner", "heartbeat"):         ("owner heartbeat",         "owner-signed"),
+    ("owner", "freeze-timestamps"): ("owner freeze-timestamps", "owner-signed"),
     ("owner", "pin"):               ("owner pin",               "operator state: the genesis pin"),
     ("owner", "mint"):              ("owner mint",              "mints owner-key material; propose it "
                                                                 "with `hv owner propose-election --pub`"),

@@ -84,6 +84,7 @@ The `action` of a `governance` entry.
 | `change` | written | 1.5 | Re-tag an admitted device's principal. Owner-signed. |
 | `claim-succession` | written | 1.7 | A nominated successor takes ownership, signed by the new owner key. |
 | `deny` | written | 1.5 | Drop a pending join-request; a later admit overrides it. Owner-signed. |
+| `freeze-timestamps` | written | 2.1 | Arms the bounded entry timestamps: `tips` maps each device to the seq its chain is frozen at, and only later entries are checked. Owner-signed. |
 | `heartbeat` | written | 1.9 | Owner liveness: an owner-signed act with no other effect, which keeps the dead-man switch shut. |
 | `join-request` | written | 1.4 | A device asks to be admitted. Device-signed; it carries no authority. |
 | `nominate-successor` | written | 1.7 | Nominate a successor owner key. Owner-signed. |
@@ -111,6 +112,8 @@ The keys a `set-config` act may set. An older node ignores a key it does not kno
 | `capsule_putters` | written | 1.13 | Who may write capsules: `owner` (the default) or `fertile` (any admitted device). |
 | `cell_writers` | written | 1.17 | Who may write cells and combs: `owner` (the default) or `fertile`. |
 | `dead_man_days` | written | 1.9 | Days of owner silence before a quorum election can install a new owner. |
+| `flood_per_day` | written | 2.1 | Entries one device may stamp into a day before `hv doctor` reports a flood; 2000 by default. Detection only. |
+| `flood_per_minute` | written | 2.1 | Entries one device may stamp into a minute before `hv doctor` reports a flood; 120 by default. Detection only. |
 | `forget_writers` | written | 1.25 | Whether an unsigned owner forget dated before genesis still counts: `legacy` or `owner`. |
 | `halflife_fact` | written | 1.20 | Half-life, in days, of a fact's confidence and importance. |
 | `halflife_idea` | written | 1.20 | Half-life, in days, of an idea's confidence and importance. |
@@ -218,6 +221,7 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 
 | Name | Where | Status | Since | Meaning |
 |---|---|---|---|---|
+| `.arrivals.jsonl` | `$HIVE_HOME` | written | 2.1 | When this node first received each foreign entry, for the `future-dated` check; never synced, never read by the projection. |
 | `.bus` | `$HIVE_HOME` | written | 1.10 | Directory for the local event log, `introspect.log`; never synced. |
 | `.device-id` | `$HIVE_HOME` | written | 1.3 | This device's id, `k1:` and 16 hex of its key's sha256. |
 | `.device-key` | `$HIVE_HOME` | legacy | 1.3 | The device key's pre-2.0 path in the checkout. It still loads, with a `keyperm` warning, and `hv doctor --fix` moves it. |

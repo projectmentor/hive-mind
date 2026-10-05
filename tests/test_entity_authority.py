@@ -523,6 +523,21 @@ def test_unjoin_leaves_another_devices_join_and_says_so(tmp_path, monkeypatch, c
     assert "Joined: x-hr:david" in run(action="show", name="david")              # nothing was signed on its behalf
 
 
+def test_unjoin_when_another_devices_join_sorts_last_retracts_only_this_devices(tmp_path, monkeypatch, capsys):
+    hv, run = _cli_runner(tmp_path, monkeypatch, capsys)
+    mine = hv.NODE_ID
+    run(action="join", name="x-hr:david", to="david", source="manual")
+    monkeypatch.setattr(hv, "NODE_ID", "zz-other-device")                        # a second device's join, last in the journal
+    run(action="join", name="x-hr:david", to="david", source="manual")
+    monkeypatch.setattr(hv, "NODE_ID", mine)
+    before = {(e["node_id"], e["seq"]) for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR) if e["type"] == "link"}
+    assert len(before) == 2 and max(before)[0] == "zz-other-device"
+    assert "Withdrew 1 join" in run(action="unjoin", name="x-hr:david", to="david", source="manual")
+    retracts = [e for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR) if e["type"] == "retract"]
+    assert [tuple(e["payload"]["retracts_ref"]) for e in retracts] == [min(before)]   # this device's join, not live[-1]
+    assert "Joined: x-hr:david" in run(action="show", name="david")              # the other device's join stays live
+
+
 def test_unjoin_owner_retracts_every_live_join(tmp_path, monkeypatch, capsys):
     hv, run = _cli_runner(tmp_path, monkeypatch, capsys)
     run(action="join", name="x-hr:david", to="david", source="manual")

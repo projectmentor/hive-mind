@@ -76,7 +76,7 @@ READABLE = (vocabulary.WRITTEN, vocabulary.LEGACY, vocabulary.READ)
 # name assigned from it) to literals, and each must still do so (test_every_enumerated_reader_still_reads).
 READERS = {
     "type": {
-        ("hv", "append_foreign_entries"),       # ingest: governance first, then admission-gated content
+        ("hv", "append_foreign_entries"),       # ingest: swept in (device, seq) order, content waits for an admit
         ("hv", "feed_page"),                    # `hv feed` (2.1): forgotten on a fact, affects on a retract
         ("hive_module_api.py", "_check_entry"),    # `POST /v1/entries` (2.1): the shape each module-writable type needs
         ("hv", "_capsule_version_conflicts"),
@@ -104,6 +104,7 @@ READERS = {
         ("hv", "_entity_declined"),             # 2.1 (#208): a module's entity write, judged in replay order
         ("hv", "_same_as_pair"),                # a `same-as` end must be an entity entry
         ("hv", "_same_as_live"),                # which `same-as` joins count, and the retracts that withdraw them
+        ("hv", "_ts_problem"),                  # 2.1 (#217): a governance `join-request` / `announce` is exempt from rule 2
     },
     "kind": {                                   # a `link` payload's kind
         ("hv", "_same_as_live"),
@@ -119,6 +120,7 @@ READERS = {
         ("hv", "append_foreign_entries"),       # the authority-less allowlist, the pinned genesis
         ("hv", "_self_signed_owner_acts"),
         ("hv", "_governance_state_uncached"),   # every act the walk honours
+        ("hv", "_governance_state"),            # 2.1 (#217): the cache key widens once a `freeze-timestamps` exists
         ("hv", "_owner_declaration"),
         ("hv", "_pending_admissions"),
         ("hv", "_recipient_pubkeys"),

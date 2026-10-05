@@ -31,6 +31,9 @@ hive-owner-*.key
 # device key — never committed, never synced, never in the signed source manifest.
 .genesis-pin
 
+# When this node first received each foreign entry (#217): per-node detection evidence, never synced
+.arrivals.jsonl
+
 # Module API write windows (2.1): device ids and write times, per-node, never synced
 .module-quota.json
 .modules.json

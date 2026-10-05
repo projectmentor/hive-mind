@@ -2996,6 +2996,39 @@ def persist_entity(conn, entry):
     return {"id": eid, "name": payload["name"], "type": etype}
 
 
+def _entity_name(entry):
+    n = (entry.get("payload") or {}).get("name")
+    return n if isinstance(n, str) else None
+
+
+def _entity_declined(entries, gov):
+    """2.1 (#208, option 3): the `entity` entries the projection does not apply, as a set of (node_id, seq).
+    A module device (the `module` admit marker, `gov["modules"]`) may write only `x-<its module>:<name>` entities
+    (the gate's `entity-prefix-required`), and may update one only if it is that name's creator, the first APPLIED
+    entity entry for the name in replay order `(node_id, seq)`, the order `persist_entity`'s `ON CONFLICT(name)`
+    folds in (the gate's `not-entity-owner`). A non-module device is never declined: its entity write by name is
+    as it was. Pure over the journal and governance, so every node declines the same entries whatever order they
+    arrived in. A declined entry is skipped, not kept as evidence. The module marker is read as of the end of the
+    journal, like the election exclusion."""
+    modules = gov.get("modules") or {}
+    declined, creator = set(), {}
+    for e in entries:
+        if e.get("type") != "entity":
+            continue
+        name = _entity_name(e)
+        if name is None:
+            continue
+        node = e.get("node_id")
+        module = modules.get(node)
+        if module is not None:
+            split = vocabulary.split_module_name(name)
+            if split is None or split[0] != module or creator.get(name, node) != node:
+                declined.add((node, e.get("seq")))
+                continue
+        creator.setdefault(name, node)
+    return declined
+
+
 _PASS1 = {
     "fact": persist_fact,
     "decision": persist_decision,
@@ -3229,14 +3262,18 @@ def _ref_or_legacy_id(conn, p, ref_key, legacy_key, kind, table):
     return None
 
 
-def resolve_entity_fact(conn, entry):
+def resolve_entity_fact(conn, entry, gov=None):
     """Pass 2: wire an entity_fact link via journal-identity refs (falling back
     to legacy local-id fields for pre-Phase-2 journals). A pair it cannot wire
-    (a target absent, of the wrong kind, or no such local id) is skipped."""
+    (a target absent, of the wrong kind, or no such local id) is skipped. 2.1 (#208): the legacy form of a
+    link, which a module may not write, so a module-signed `entity_fact` wires nothing. It attaches a fact to
+    its own entity with a `link` of kind `entity`."""
     p = entry["payload"]
     eid = _ref_or_legacy_id(conn, p, "entity_ref", "entity_id", "entity", "entities")
     fid = _ref_or_legacy_id(conn, p, "fact_ref", "fact_id", "fact", "facts")
     if eid is None or fid is None:
+        return
+    if gov is not None and _module_of(gov, entry) is not None:
         return
     conn.execute(
         "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
@@ -3378,6 +3415,7 @@ _LINK_RESOLVERS = {
     "informed": None,
     "outcome-of": None,
     "extends": None,
+    "same-as": None,     # 2.1 (#208): a core join, `x-<module>:` entity → unprefixed entity; `_same_as_live` decides which count
 }
 
 
@@ -3405,11 +3443,86 @@ def _signing_note(link_entry):
             else f"(device-signed: source {p.get('source')})")
 
 
-def resolve_link(conn, entry, gov, by_ref):
+def _same_as_pair(p, by_ref):
+    """(from_name, to_name) of a `same-as` payload when it has the join's shape: `from_ref` an `x-<module>:`
+    entity entry, `to_ref` an unprefixed entity entry. None otherwise (such a link is never a join)."""
+    ends = []
+    for k in ("from_ref", "to_ref"):
+        ref = p.get(k)
+        e = by_ref.get(tuple(ref)) if _valid_ref(ref) else None
+        ends.append(_entity_name(e) if e is not None and e.get("type") == "entity" else None)
+    frm, to = ends
+    if frm is None or to is None or vocabulary.split_module_name(frm) is None or vocabulary.split_module_name(to) is not None:
+        return None
+    return frm, to
+
+
+def _same_as_live(entries, gov, by_ref=None):
+    """2.1 (#208): the `same-as` link entries that are a join now, as a set of (node_id, seq).
+
+    A join is written by a non-module device or the owner (a module's `same-as` never counts) and withdrawn by a
+    `retract` whose `retracts_ref` names the `same-as` entry. Joins and withdrawals are judged together, in governance order `(timestamp, node_id, seq)`: a join stands until a later withdrawal of THAT entry,
+    and a later `same-as` re-joins. Honoured acts: a `same-as` by a non-module device; a withdrawal of an honoured
+    join signed by that `same-as` entry's node_id; a withdrawal the owner signed as of its position (`_owner_at`,
+    the forget rule). Pure over (entries, gov): every node reaches the same set. A withdrawal is not fact evidence: `_content_evidence`
+    reads only retracts of facts."""
+    if by_ref is None:
+        by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    modules = gov.get("modules") or {}
+    timeline = gov.get("owner_timeline") or []
+    joins = {}                                 # ref -> pos, every honoured `same-as` join
+    withdrawals = []                           # (pos, target_ref) of every honoured withdrawal
+    for e in entries:
+        t, p = e.get("type"), e.get("payload") or {}
+        if "sig" in e and not _verify_entry(e):
+            continue
+        pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
+        ref = (e.get("node_id"), e.get("seq"))
+        if t == "link" and p.get("kind") == "same-as":
+            if _same_as_pair(p, by_ref) is not None and e.get("node_id") not in modules:
+                joins[ref] = pos
+        elif t == "retract" and _valid_ref(p.get("retracts_ref")):
+            target = by_ref.get(tuple(p["retracts_ref"]))
+            if target is None or target.get("type") != "link" or (target.get("payload") or {}).get("kind") != "same-as":
+                continue
+            owner = False
+            if "owner_sig" in p:
+                oid = _verify_governance(p)
+                owner = oid is not None and oid == _owner_at(timeline, pos)
+            if e.get("node_id") == target.get("node_id") or owner:
+                withdrawals.append((pos, tuple(p["retracts_ref"])))
+    # Each join stands until a withdrawal that follows it names it: a withdrawal of a `same-as` that was never an
+    # honoured join does nothing, and one join's withdrawal never removes another writer's join of the same pair.
+    live = set(joins)
+    for wpos, target in withdrawals:
+        if target in joins and wpos > joins[target]:
+            live.discard(target)
+    return live
+
+
+def _module_of(gov, entry):
+    return (gov.get("modules") or {}).get(entry.get("node_id"))
+
+
+def _shared_entity_end(conn, module, kind, local_id):
+    """True when an end of a module's link is an entity the module may not link to: an unprefixed name, or
+    another module's `x-<other>:` name (#208). Its own `x-<module>:` entities, and every non-entity end, are fine."""
+    if kind != "entity":
+        return False
+    row = conn.execute("SELECT name FROM entities WHERE id = ?", (local_id,)).fetchone()
+    split = vocabulary.split_module_name(row["name"]) if row else None
+    return not (split is not None and split[0] == module)
+
+
+def resolve_link(conn, entry, gov, by_ref, live_joins=None):
     """Pass 2 (1.19): fold ONE `link` entry. Unknown `kind` → no row, no error. A link whose from_ref or
     to_ref does not resolve through journal_index is skipped deterministically (no dangling edges).
     Known kinds write an edge row in `links` carrying the §5 authority verdict; hard kinds also command
-    via their handler. `by_ref` maps (node_id, seq) → entry (for the author rule)."""
+    via their handler. `by_ref` maps (node_id, seq) → entry (for the author rule).
+
+    2.1 (#208): a link a MODULE signed is skipped, with no `links` row and no `entity_facts` row, when either end
+    is an entity other than its own `x-<module>:` ones (the core makes that join); and a `same-as` is written
+    only when `_same_as_live` counts it (`live_joins`, computed from `by_ref` when not passed)."""
     if "sig" in entry and not _verify_entry(entry):
         return
     p = entry.get("payload", {}) or {}
@@ -3420,6 +3533,15 @@ def resolve_link(conn, entry, gov, by_ref):
     if src is None or dst is None:
         return
     (from_kind, from_id), (to_kind, to_id) = src, dst
+    module = _module_of(gov, entry)
+    if module is not None and (_shared_entity_end(conn, module, from_kind, from_id)
+                               or _shared_entity_end(conn, module, to_kind, to_id)):
+        return
+    if kind == "same-as":
+        if live_joins is None:
+            live_joins = _same_as_live(list(by_ref.values()), gov, by_ref)
+        if (entry.get("node_id"), entry.get("seq")) not in live_joins:
+            return
     authority = _link_authority(entry, by_ref.get(tuple(p.get("to_ref"))), gov)
     handler = _LINK_RESOLVERS[kind]
     if handler is not None:
@@ -5099,6 +5221,112 @@ def dash(args):
     print("\n  (Couldn't auto-open a browser — open the Local URL above.)")
 
 
+def _entity_facts(conn, entity_id, hide_forgotten):
+    rows = conn.execute("""
+        SELECT f.id, f.content, ef.confidence AS link_confidence, f.confidence AS fact_confidence
+        FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
+        WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
+    """, (entity_id,)).fetchall()
+    if hide_forgotten:
+        rows = [r for r in rows if r["fact_confidence"] > FORGET_FLOOR]
+    sids = _ids_for(conn, "fact", [r["id"] for r in rows]) if rows else {}
+    return [{"id": r["id"], "sid": (sids.get(r["id"]) or {}).get("sid"), "content": r["content"],
+             "confidence": r["link_confidence"]} for r in rows]
+
+
+def entity_view(conn, name, joins=True, hide_forgotten=False):
+    """One entity and its linked facts, and (2.1, #208) with `joins` each `x-<module>:` entity a core `same-as`
+    joins to it, under its own name with the join's ref (`node_id:seq`) and signer and that entity's own facts.
+    Only a join `_same_as_live` counts is listed, so a withdrawn or module-written one is absent on every node.
+    None when there is no such entity."""
+    row = conn.execute("SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?",
+                       (name,)).fetchone()
+    if not row:
+        return None
+    view = {"id": row["id"], "name": row["name"], "type": row["type"], "attributes": row["attributes"],
+            "first_seen": row["first_seen"], "last_updated": row["last_updated"],
+            "facts": _entity_facts(conn, row["id"], hide_forgotten), "joined": []}
+    if not joins:
+        return view
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    for ref in sorted(_same_as_live(entries, _governance_state(entries), by_ref)):
+        p = by_ref[ref]["payload"]
+        src, dst = _index_row(conn, p.get("from_ref")), _index_row(conn, p.get("to_ref"))
+        if not src or not dst or src[0] != "entity" or dst != ("entity", row["id"]):
+            continue
+        if not conn.execute("SELECT 1 FROM links WHERE kind = 'same-as' AND from_id = ? AND to_id = ? AND signer = ?",
+                            (src[1], row["id"], str(ref[0]))).fetchone():
+            continue
+        other = conn.execute("SELECT name, type, attributes FROM entities WHERE id = ?", (src[1],)).fetchone()
+        view["joined"].append({"name": other["name"], "type": other["type"], "attributes": other["attributes"],
+                               "ref": f"{ref[0]}:{ref[1]}", "signer": ref[0],
+                               "facts": _entity_facts(conn, src[1], hide_forgotten)})
+    view["joined"].sort(key=lambda j: (j["name"], j["ref"]))
+    return view
+
+
+def _print_entity_facts(facts, indent):
+    print(f"{indent}Linked facts ({len(facts)}):")
+    for lf in facts:
+        print(f"{indent}  [{lf['sid']} · {lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+
+
+def _entity_join(conn, args, withdraw):
+    """`entity join|unjoin --name x-<module>:<n> --to <n>`: write a core `same-as` (2.1, #208), or withdraw the
+    live one this device wrote (`--owner`: the owner's withdrawal, on the control plane)."""
+    to_name = getattr(args, "to", None)
+    if not args.name or not to_name:
+        print(f"entity {args.action}: --name (the `x-<module>:` entity) and --to (the unprefixed one) are required",
+              file=sys.stderr)
+        sys.exit(1)
+    refs = []
+    for n in (args.name, to_name):
+        erow = conn.execute("SELECT id FROM entities WHERE name = ?", (n,)).fetchone()
+        refs.append(_index_lookup(conn, "entity", erow["id"]) if erow else None)
+        if erow is None:
+            print(f"entity {args.action}: no entity named '{n}'", file=sys.stderr)
+            sys.exit(1)
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    if _same_as_pair({"from_ref": refs[0], "to_ref": refs[1]}, by_ref) is None:
+        print(f"entity {args.action}: --name must be an `x-<module>:` entity and --to an unprefixed one",
+              file=sys.stderr)
+        sys.exit(1)
+    if not withdraw:
+        entry = append_journal("link", _link_payload("same-as", refs[0], refs[1], _write_source(args)))
+        print(f"Joined '{args.name}' to '{to_name}' {_signing_note(entry)}")
+        rebuild_db()
+        return
+    gov = _governance_state(entries)
+    live = [r for r in sorted(_same_as_live(entries, gov, by_ref))
+            if _same_as_pair(by_ref[r]["payload"], by_ref) == (args.name, to_name)]
+    if not live:
+        print(f"entity unjoin: '{args.name}' is not joined to '{to_name}'", file=sys.stderr)
+        sys.exit(1)
+    owner = getattr(args, "owner", False)
+    if not owner:                                    # a device withdraws only the joins it wrote
+        mine = _resolve_node_id()
+        live = [r for r in live if r[0] == mine]
+        if not live:
+            print(f"entity unjoin: this device wrote no live join of '{args.name}' to '{to_name}'; "
+                  f"another device's join is withdrawn by its writer, or by the owner with --owner", file=sys.stderr)
+            sys.exit(1)
+    for r in live:                                   # one retract per entry: each join is judged on its own
+        target = list(r)
+        if owner:
+            rentry = _owner_forget(target, "withdraw same-as")
+            if rentry is None:
+                return
+        else:
+            append_journal("retract", {"retracts_ref": target, "reason": "withdraw same-as",
+                                       "source": _write_source(args)})
+    rebuild_db()
+    refs_ = ", ".join(f"{r[0]}:{r[1]}" for r in live)
+    print(f"Withdrew {len(live)} join{'s' if len(live) != 1 else ''} of '{args.name}' to '{to_name}' ({refs_}); "
+          f"it holds only if this device wrote the join, or the owner signed the withdrawal.")
+
+
 def entity(args):
     """Register or query an entity."""
     if args.action == "add":
@@ -5117,6 +5345,14 @@ def entity(args):
         except sqlite3.OperationalError as e:            # after the append: never report failure (#70)
             _store_deferred(entry, e, "Entity")
         print(f"Entity #{res['id']}: {res['name']} ({res['type']})")
+        return
+
+    if args.action in ("join", "unjoin"):
+        conn = get_conn()
+        try:
+            _entity_join(conn, args, args.action == "unjoin")
+        finally:
+            conn.close()
         return
 
     if args.action == "link":
@@ -5166,27 +5402,21 @@ def entity(args):
         conn.close()
 
     elif args.action == "show":
-        row = conn.execute(
-            "SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?",
-            (args.name,),
-        ).fetchone()
-        if not row:
+        view = entity_view(conn, args.name, joins=not getattr(args, "no_joins", False))
+        if not view:
             print(f"No entity named '{args.name}'")
             conn.close()
             return
-        print(f"Entity #{row['id']}: {row['name']} ({row['type']})")
-        print(f"  Attributes: {row['attributes']}")
-        print(f"  First seen: {row['first_seen']}  Last updated: {row['last_updated']}")
-        linked = conn.execute("""
-            SELECT f.id, f.content, ef.confidence
-            FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
-            WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
-        """, (row["id"],)).fetchall()
-        if linked:
-            lsids = _ids_for(conn, "fact", [lf["id"] for lf in linked])
-            print(f"  Linked facts ({len(linked)}):")
-            for lf in linked:
-                print(f"    [{(lsids.get(lf['id']) or {}).get('sid')} · {lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+        print(f"Entity #{view['id']}: {view['name']} ({view['type']})")
+        print(f"  Attributes: {view['attributes']}")
+        print(f"  First seen: {view['first_seen']}  Last updated: {view['last_updated']}")
+        if view["facts"]:
+            _print_entity_facts(view["facts"], "  ")
+        for j in view["joined"]:
+            print(f"  Joined: {j['name']} ({j['type']})  same-as {j['ref']}, signed by {j['signer']}")
+            print(f"    Attributes: {j['attributes']}")
+            if j["facts"]:
+                _print_entity_facts(j["facts"], "    ")
         conn.close()
 
 
@@ -5224,17 +5454,21 @@ def _rebuild_in_transaction(conn):
     # One filter for every pass and reader: an entry of a shaped type with no object payload, a non-string
     # required field or a hostile number projects to nothing, so no later pass sees it (#205). The marker still covers the journal.
     entries = _projection_entries(journal, note=True)
+    # Governance is pure over the entries, so it is read before pass 1: an entity write by a module is judged
+    # against the module marker and the name's creator (#208).
+    gov = _governance_state(entries)
+    declined = _entity_declined(entries, gov)
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
-        if entry["type"] in _PASS1:
+        if entry["type"] in _PASS1 and (entry["node_id"], entry["seq"]) not in declined:
             persist_entry(conn, entry)
     # Pass 2: cross-row links. The three legacy mechanisms keep their resolvers forever (append-only
     # journal, nothing is migrated); 1.19 `link` entries go through the one generic resolver.
-    gov = _governance_state(entries)
     by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    live_joins = _same_as_live(entries, gov, by_ref)
     for entry in entries:
         if entry["type"] == "entity_fact":
-            resolve_entity_fact(conn, entry)
+            resolve_entity_fact(conn, entry, gov)
         elif entry["type"] == "decision" and (
             entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
         ):
@@ -5242,7 +5476,7 @@ def _rebuild_in_transaction(conn):
         elif entry["type"] == "fact" and entry["payload"].get("resolves_ref"):
             resolve_resolves(conn, entry, gov, by_ref)
         elif entry["type"] == "link":
-            resolve_link(conn, entry, gov, by_ref)
+            resolve_link(conn, entry, gov, by_ref, live_joins)
 
     # Phase A: confidence is a derived projection over the journal — recompute it
     # here so every node converges to identical values over the same journal.
@@ -9519,12 +9753,18 @@ def build_parser():
                                 help="Owner forget — governance, decisive (drives to the forget floor)")
 
     entity_parser = subparsers.add_parser("entity", help="Manage entities")
-    entity_parser.add_argument("action", choices=["add", "list", "show", "link"], help="Sub-command")
+    entity_parser.add_argument("action", choices=["add", "list", "show", "link", "join", "unjoin"], help="Sub-command")
     entity_parser.add_argument("--name", help="Entity name")
     entity_parser.add_argument("--type", help="Entity type (person, project, concept)")
     entity_parser.add_argument("--attr", help="JSON attributes")
     entity_parser.add_argument("--fact-id", metavar="FACT", help="Fact to link: its `h:` short id or `ref` (2.0 refuses local ids)")
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
+    entity_parser.add_argument("--to", help="`join`/`unjoin`: the unprefixed entity a module's `x-<module>:` "
+                                           "entity (`--name`) is the same as (2.1, #208)")
+    entity_parser.add_argument("--no-joins", action="store_true",
+                               help="`show`: the core entity only, without the module entities joined to it")
+    entity_parser.add_argument("--owner", action="store_true",
+                               help="`unjoin`: an owner withdrawal (control plane, owner key)")
     entity_parser.add_argument("--source", help="Source agent for `link` (e.g. claude-code). Omitted: "
                                                "`manual`, the only source that is owner-signed on the owner "
                                                "device (#114)")

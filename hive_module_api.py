@@ -8,6 +8,7 @@ through the core. It is data plane only. It imports no owner-key code (the S2 bo
   GET  /v1/feed     -> `hv feed`: ?after=<node_id:seq,...>&limit=
   GET  /v1/search   -> `api_search`: ?q=&tag=&kind=&min_confidence=&limit=&offset=&sort=&status=
   GET  /v1/item     -> `api_item`: ?id=<h:... or node_id:seq>
+  GET  /v1/entity   -> `entity_view`: ?name=<entity name>, with the module entities a core `same-as` joins to it
   GET  /v1/tip      -> {node_id, seq, hash}: the caller's own chain tip (seq 0 and `sha256:genesis` before its first write)
   POST /v1/entries  -> append one entry the module signed itself (see `route_entries`)
 
@@ -247,6 +248,10 @@ def _check_link(module, payload):
     why = vocabulary.check_module_name(module, "link_kinds", kind) if isinstance(kind, str) else "payload.kind is required"
     if why:
         raise _refused(403 if isinstance(kind, str) else 400, why, field="kind")
+    if kind == "same-as":
+        raise _refused(403, "same-as-core-only", detail="a join between a module's entity and a shared one is written by a "
+                       "device or the owner, never by a module", field="kind")
+    _check_link_ends(module, payload)
     if kind in vocabulary.LINK_KINDS and "data" in payload:
         data = payload["data"]
         if not isinstance(data, dict):
@@ -254,6 +259,54 @@ def _check_link(module, payload):
         for k in ("confidence", "polarity"):
             if k in data and not _is_number(data[k]):
                 raise _refused(400, f"payload.data.{k} must be a number or absent")
+
+
+def _link_end(conn, v):
+    """(kind, local id) of a link end named by a [node_id, seq] pair or an `h:` short id, if it resolves here."""
+    hv = daemon.hv
+    if hv._valid_ref(v):
+        return hv._index_row(conn, v)
+    if _is_sid(v):
+        r = conn.execute("SELECT kind, local_id FROM journal_index WHERE sid = ?", (v,)).fetchone()
+        return (r["kind"], r["local_id"]) if r else None
+    return None
+
+
+def _check_link_ends(module, payload):
+    """#208: a module does not link to a shared entity, of any link kind. An end that resolves here to an entity
+    other than the module's own `x-<module>:` ones is 403 `shared-entity-link`. An end that resolves to nothing yet
+    stays allowed, as above; the projection skips the link once that entity entry is in the journal."""
+    hv = daemon.hv
+    conn = hv.get_conn()
+    try:
+        for k in ("from_ref", "to_ref", "from", "to"):
+            end = _link_end(conn, payload.get(k)) if k in payload else None
+            if end is not None and hv._shared_entity_end(conn, module, end[0], end[1]):
+                raise _refused(403, "shared-entity-link", field=k, detail="a module links only its own `x-" + module +
+                               ":` entities; the core joins them to shared ones with `same-as`")
+    finally:
+        conn.close()
+
+
+def _check_entity(ctx, payload):
+    """#208 (option 3): a module writes only `x-<its module>:<name>` entities (`entity-prefix-required`), and may
+    update one only if it created it (`not-entity-owner`), the creator being the name's first applied entity entry
+    on this node. The projection decides the same on every node (`_entity_declined`); this is the early, clear
+    refusal that writes nothing."""
+    hv = daemon.hv
+    name, module = payload["name"], ctx["module"]
+    split = vocabulary.split_module_name(name)
+    if split is None or split[0] != module:
+        raise _refused(403, "entity-prefix-required", field="name",
+                       detail=f"a module's entity is named `{vocabulary.module_prefix(module)}<name>`")
+    conn = hv.get_conn()
+    try:
+        row = conn.execute("SELECT id FROM entities WHERE name = ?", (name,)).fetchone()
+        creator = hv._index_lookup(conn, "entity", row["id"]) if row else None
+    finally:
+        conn.close()
+    if creator is not None and creator[0] != ctx["device_id"]:
+        raise _refused(403, "not-entity-owner", field="name", detail="the entity was created by another writer")
 
 
 _REF_WANT = {"pair": "a [node_id, seq] pair", "pairs": "a list of [node_id, seq] pairs", "ref": "a [node_id, seq] pair or an `h:` short id"}
@@ -376,6 +429,8 @@ def _check_entry(ctx, entry, limits):
         raise _refused(400, f"a {t} needs payload.content, a non-empty string")
     if t == "entity" and not (isinstance(payload.get("name"), str) and payload["name"]):
         raise _refused(400, "an entity needs payload.name, a non-empty string")
+    if t == "entity":
+        _check_entity(ctx, payload)
     if t == "link":
         _check_link(ctx["module"], payload)
     _check_refs(t, payload)
@@ -464,9 +519,29 @@ def route_item(ctx, q):
     return out
 
 
+def route_entity(ctx, q):
+    """An entity and its linked facts, with each `x-<module>:` entity a core `same-as` joins to it (2.1, #208): the
+    view `hv entity show --name` prints. Forgotten facts are left out, as on `/v1/search`."""
+    name = q.get("name", [""])[0]
+    if not name:
+        raise _Refused(400, {"error": "name is required"})
+    hv = daemon.hv
+    conn = hv.get_conn()
+    try:
+        view = hv.entity_view(conn, name, hide_forgotten=True)
+    finally:
+        conn.close()
+    if view is None:
+        raise _Refused(404, {"error": f"no entity named {name!r}"})
+    view.pop("id")                      # a local row id changes on every rebuild
+    for group in [view] + view["joined"]:
+        group["facts"] = [{k: v for k, v in f.items() if k != "id"} for f in group["facts"]]
+    return view
+
+
 # The whole route table. A route is in this dict or it does not exist; `tests/test_module_api.py` pins it.
 ROUTES = {"/v1/": route_root, "/v1/feed": route_feed, "/v1/search": route_search, "/v1/item": route_item,
-          "/v1/tip": route_tip, "/v1/entries": route_entries}
+          "/v1/tip": route_tip, "/v1/entries": route_entries, "/v1/entity": route_entity}
 WRITE_ROUTES = ("/v1/entries",)             # the POST routes; every other route is GET
 
 

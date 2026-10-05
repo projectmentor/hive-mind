@@ -201,7 +201,7 @@ def _will_owner_sign_links(args):
     and the write's source is `manual`, by `hv`'s own `_write_source`."""
     cmd = getattr(args, "command", None)
     if cmd == "entity":
-        wants = getattr(args, "action", None) == "link"
+        wants = getattr(args, "action", None) in ("link", "join")
     else:
         wants = any(getattr(args, f, None) for f in _LINK_FLAGS.get(cmd, ()))
     return bool(wants) and _write_source(args) == "manual"

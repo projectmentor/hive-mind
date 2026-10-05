@@ -1,7 +1,7 @@
 """#204: the pre-1.19 payload fields `supersedes_ref`, `supersedes` and `resolves_ref` go through the same
 authority rule as a `link` entry. They command only when the owner key signed the entry or its signer wrote
-the target; from anyone else they do nothing. `resolves_ref` must name a fact. A `link` entry is the only way
-to supersede or resolve."""
+the target; from anyone else they do nothing. An unsigned field has no signer and commands only while the
+journal has no owner. `resolves_ref` must name a fact. A `link` entry is the only way to supersede or resolve."""
 
 import sys
 from pathlib import Path
@@ -24,6 +24,11 @@ def _legacy_decision(hv, dev, content, ts, target, field="supersedes_ref", owner
 def _legacy_fact(hv, dev, content, ts, target, owner=None):
     return _entry(hv, dev, "fact", {"content": content, "tags": [], "importance": 0.5, "source": "manual",
                                     "resolves_ref": [target["node_id"], target["seq"]]}, ts, owner=owner)
+
+
+def _unsigned(entry):
+    """A pre-key entry: the device name stays, and nothing proves it."""
+    return {k: v for k, v in entry.items() if k not in ("sig", "pub")}
 
 
 def _local_id(conn, table, content):
@@ -113,8 +118,46 @@ def test_a_legacy_resolves_ref_naming_a_non_fact_writes_nothing(tmp_path, monkey
     assert _resolves(conn, "this resolves a decision") is None
 
 
+@pytest.mark.parametrize("when", ["before the owner", "after the owner"])
+def test_an_unsigned_self_authored_legacy_field_is_evidence_once_an_owner_exists(tmp_path, monkeypatch, when):
+    """#211 finding 4. Grandfathering reads the final governance state, not the entry's date. Once an
+    owner exists, an unsigned legacy field is evidence even when its node_id matches the target's author,
+    and `link-authz` lists it."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    _, (a, _b, _c), base = _owned_hive(hv)
+    ts_old, ts_new = (("2025-06-01T00:00:00Z", "2025-06-02T00:00:00Z") if when.startswith("before")
+                      else ("2026-02-01T00:00:00Z", "2026-02-02T00:00:00Z"))
+    old = _unsigned(_decision(hv, a, "ship on friday", ts_old))
+    new = _unsigned(_legacy_decision(hv, a, "ship on monday", ts_new, old))
+    fact_old = _unsigned(_fact(hv, a, "issue Z is open", ts_old))
+    fixed = _unsigned(_legacy_fact(hv, a, "issue Z is fixed", ts_new, fact_old))
+    entries = base + [old, new, fact_old, fixed]
+    conn = _project(hv, tmp_path, entries)
+    assert _superseded(conn, "ship on friday") is None
+    assert _resolves(conn, "issue Z is fixed") is None
+    down = hv._links_unauthorized(entries, hv._governance_state(entries))
+    assert len(down) == 2
+    assert any("legacy supersedes_ref" in d and a["id"] in d for d in down)
+    assert any("legacy resolves_ref" in d and a["id"] in d for d in down)
+
+
+def test_an_unsigned_self_authored_legacy_field_commands_while_the_journal_has_no_owner(tmp_path, monkeypatch):
+    """The other half of finding 4: with no owner, the unsigned grandfather reads the entry's node_id, so a
+    self-authored legacy field still commands."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    from test_links import _device
+    a = _device(hv)
+    old = _unsigned(_decision(hv, a, "ship on friday", "2026-01-02T00:00:00Z"))
+    new = _unsigned(_legacy_decision(hv, a, "ship on monday", "2026-01-03T00:00:00Z", old))
+    fact_old = _unsigned(_fact(hv, a, "issue Z is open", "2026-01-02T00:00:01Z"))
+    fixed = _unsigned(_legacy_fact(hv, a, "issue Z is fixed", "2026-01-03T00:00:01Z", fact_old))
+    conn = _project(hv, tmp_path, [old, new, fact_old, fixed])
+    assert _superseded(conn, "ship on friday") is not None
+    assert _resolves(conn, "issue Z is fixed") is not None
+
+
 def test_a_self_authored_pre_link_journal_projects_as_before(tmp_path, monkeypatch):
-    """No governance and unsigned-era entries: every legacy field is self-authored, so all of it commands."""
+    """Device-signed entries and no governance: the author rule applies, so a self-authored field commands."""
     hv = _loadhv(tmp_path, monkeypatch)
     from test_links import _device
     a = _device(hv)

@@ -595,9 +595,11 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   `supersedes_ref`, `supersedes` and `resolves_ref` are read-only history. A writer must emit a `link` entry
   (`kind: supersedes | resolves`); no core write path emits a legacy field. The projection still reads one in
   an old journal, but under the `link` rule (§5, `_link_authority`): it commands only when the owner key
-  signed the entry or the signer wrote the target, and from anyone else it does nothing. `resolves_ref` must
-  name a fact. `hv doctor` `link-authz` lists a legacy field that no longer commands, so the owner can ratify
-  it with an owner-signed `link`. No contract bump: this changes how the hive governs, not the adapter
+  signed the entry or the signer wrote the target, and from anyone else it does nothing. An unsigned field has
+  no signer. It commands only while the journal has no owner; once an owner exists it is evidence, even when
+  its `node_id` is the target's author. `resolves_ref` must name a fact. `hv doctor` `link-authz` lists a
+  legacy field that no longer commands, so the owner can ratify it with an owner-signed `link`. No contract
+  bump: this changes how the hive governs, not the adapter
   surface (the MINOR rule above), and an adapter that already writes links is unaffected.
 
 ---

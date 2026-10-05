@@ -1,5 +1,5 @@
 {
-  "digest": "c5dd20be330f5b786338a650ce6707111086391e4608c18787a66b3d2583aa36",
+  "digest": "576a5e323ffc933e9f43bc28b0231c2ef178e16c1b0c2cac5e9014b50516947d",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -10,7 +10,7 @@
     ".github/workflows/ci.yml": "757cc07ddfdafa609c315425dfe1000c838ba9a0caf938406d2604b2bdd779ad",
     ".github/workflows/cla.yml": "900240ebc0ee273c4e29e791790a357532b038ac0dcfe61fe9a76772b0c6896a",
     ".github/workflows/sign.yml": "432f7702e5b901c432e936ff7e4858855e869fe7fb7804a68368d086858989b2",
-    "CHANGELOG.md": "a3a825f9d5c065d6afd8adbf68ffc8d685592a47a9abb919711ecba3fa5732a7",
+    "CHANGELOG.md": "646390a11e74088415e5348795f8915559ddd2ff558c92bb265fe30d84817ce9",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "c3a23f903e9f677d0fef79ef6d10ad34e49417dc6cac6af4dad8dfe28db97484",
     "README.md": "1ecee4f6a8974a4e67d172bed0c8ddc2caa3cd2730f375e922fdcf48832e5703",
@@ -42,7 +42,7 @@
     "hive_sync_daemon.py": "d8df2ce4f7e7be0a8fa1ecf4f4ac4dca33b433ab8351b8e7f9ede7ebb8564208",
     "hivemind_ctl.py": "0bb07129547109c4dec49080bbca66df02d147122bb7b4b94b91981f5dd8c1f5",
     "hivemind_owner.py": "438a90d2d46cb370abfaf35e851412cdb2b5758d5efb2698c35ac46c61c0067a",
-    "hv": "19227379d50e7adb09063c45609911acd7e0a57c1c62d2ab4ccfa8e5175805ba",
+    "hv": "09eeb85989dc66cd9a924b8963088a9dcbece698734bce485d5659857122968f",
     "integrations/claude-code/hive-memory/SKILL.md": "55c025490cd4afecce87901ade9077bada2a73b3443143f42391c2958ccf91bb",
     "integrations/claude-code/install.sh": "588f0f6894c25893d3a098f4ddd422a480e63c85b5bb48c97f2d242069a93894",
     "integrations/claude-code/wire-up/SKILL.md": "e99f90fa4feadbb8e300defd09173c73d3b82833e3dc013f0448fd1dabf28159",
@@ -107,6 +107,7 @@
     "tests/test_docs_state_2_0_behaviour.py": "932c664ddefe6ae74cb9eec5b514533d948825c4f2dce2cf63a041fd83ee3e2b",
     "tests/test_doctor_crypto.py": "021447cb7d06155027e582aa33360bfa63c19ea2475ce35c81dd2700a458b1d9",
     "tests/test_ed25519.py": "def4b5275768ce98ca9289fdaf45f6324641de113c9fd8bf7f8156922e883924",
+    "tests/test_entity_fact_refs.py": "f65aa8711048dbaef54c106350050b0954c18e358b45524f52c06a59128db5aa",
     "tests/test_forget_authz.py": "9af3f8e5faa5d46ee93bce6c75f8ca14c34056864ff132a55820336a31677cc5",
     "tests/test_forget_close.py": "09ce75072ecbca66156d32b71bf4c64fe8a58c98e074310afd276e567cb0e012",
     "tests/test_forget_writers.py": "d8615ae548b3496033a1b50766aca4dc2c2e5eccac21de1c8b2cfa0b2ab46a56",

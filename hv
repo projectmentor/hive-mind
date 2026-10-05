@@ -829,12 +829,69 @@ def _append_line(path, line):
         f.write(line + "\n")
 
 
+QUARANTINE_MAX = 200     # the most entries the quarantine keeps: the newest 200, older ones are dropped
+
+
+def _signer(node_id, gov=None):
+    """Who signed: the device id, and the principal when the device is admitted."""
+    prin = ((gov or {}).get("principals") or {}).get(node_id) if node_id in ((gov or {}).get("admitted") or ()) else None
+    return {"node_id": node_id, "principal": prin}
+
+
+def _quarantine(refused, gov=None):
+    """Node-local evidence (#205): write each refused entry, verbatim, with the reason, the signer and the time, to
+    `$HIVE_HOME/.quarantine.jsonl`. Never synced and never journaled. Bounded to the newest `QUARANTINE_MAX`
+    entries; an entry already held (a peer re-pushes it each sync) is not written twice. Best effort: it never
+    makes ingest raise. `refused` is a list of (entry, reason)."""
+    try:
+        path = HIVE_HOME / ".quarantine.jsonl"
+        lines = path.read_text().splitlines() if path.exists() else []
+        seen = set()
+        for l in lines:
+            try:
+                seen.add(json.dumps(json.loads(l).get("entry"), sort_keys=True))
+            except ValueError:
+                pass
+        added = False
+        for entry, reason in refused:
+            key = json.dumps(entry, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            lines.append(json.dumps({"at": _now_iso(), "reason": reason,
+                                     "signer": _signer(entry.get("node_id"), gov), "entry": entry}))
+            added = True
+        if added:
+            tmp = path.with_name(path.name + ".tmp")
+            tmp.write_text("\n".join(lines[-QUARANTINE_MAX:]) + "\n")
+            os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _read_quarantine():
+    """The quarantine's records, oldest first (a damaged line is skipped)."""
+    path = HIVE_HOME / ".quarantine.jsonl"
+    out = []
+    try:
+        for l in path.read_text().splitlines():
+            try:
+                out.append(json.loads(l))
+            except ValueError:
+                pass
+    except OSError:
+        pass
+    return out
+
+
 def append_journal(entry_type, payload, timestamp=None):
     """Mint and append a LOCAL journal entry. This is the core append API —
     every local write goes through here. Returns the full entry dict."""
     timestamp = timestamp or _now_iso()
-    problem = _payload_problem({"type": entry_type, "payload": payload})
+    candidate = {"type": entry_type, "payload": payload}
+    problem = _hostile_problem(candidate) or _payload_problem(candidate)
     if problem is not None:
+        _quarantine([({"node_id": NODE_ID, "type": entry_type, "timestamp": timestamp, "payload": payload}, problem)])
         raise ValueError(f"invalid {entry_type} payload: {problem}")      # #205: nothing malformed is journaled
     seq, prev_hash = _next_seq_and_prev(NODE_ID)
     entry = {
@@ -1042,6 +1099,7 @@ def append_foreign_entries(entries, advertised_chunks=None):
 
     door = _first_pull_door(entries, tips, advertised_chunks)
     unsigned_why = []
+    refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
@@ -1126,8 +1184,10 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if not _verify_entry(e):
             rejected += 1
             continue
-        if _payload_problem(e) is not None:
+        problem = _hostile_problem(e) or _payload_problem(e)
+        if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
+            refused_payload.append((e, problem))
             continue
         if has_owner and (nid not in admitted or nid in gov["purged"]):
             # Read-only member: its content does not land until the owner admits the device.
@@ -1159,6 +1219,8 @@ def append_foreign_entries(entries, advertised_chunks=None):
         except Exception:
             pass
 
+    if refused_payload:
+        _quarantine(refused_payload, gov)        # node-local evidence for `hv doctor`; never synced
     if rejected:
         reasons = "bad signature, malformed timestamp or payload, unauthorized governance, or content from an " \
                   "unadmitted device"
@@ -2906,11 +2968,56 @@ def _payload_field(entry, field):
     return default
 
 
-def _projectable(entry):
-    """False, and the skip recorded, when the entry's payload is not an object or a required field has the
-    wrong shape: there is nothing to project."""
+def _hostile_number(v):
+    """An int or float no honest writer produces: an int beyond int64 (SQLite cannot bind it, `float()` may
+    overflow on it), or a NaN / inf. A bool, a string or a list is an ordinary shape mistake, not this."""
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return not -2**63 <= v < 2**63
+    return isinstance(v, float) and not math.isfinite(v)
+
+
+def _hostile_problem(entry):
+    """The first number field of this entry holding a hostile value, or None (#205). Such an entry is refused at
+    ingest and skipped whole by the projection: it is not defaulted, because only a hostile or broken writer
+    produces it."""
     p = entry.get("payload")
-    if isinstance(p, dict) and all(isinstance(p.get(f), str) for f in _PAYLOAD_REQUIRED.get(entry.get("type"), ())):
+    shapes = _PAYLOAD_SHAPES.get(entry.get("type"))
+    if shapes is None or not isinstance(p, dict):
+        return None
+    for field, (check, _default) in shapes.items():
+        if check in (_is_number, _is_int64) and _hostile_number(p.get(field)):
+            return f"{field} is not a finite number within int64"
+    extra = _HOSTILE_EXTRA.get(entry.get("type"))
+    return extra(p) if extra else None
+
+
+def _link_data_hostile(p):
+    """A core link kind's `data.confidence` / `data.polarity` holding a hostile number, or None."""
+    data = p.get("data")
+    if p.get("kind") in _LINK_RESOLVERS and isinstance(data, dict):
+        for k in ("confidence", "polarity"):
+            if _hostile_number(data.get(k)):
+                return f"data.{k} is not a finite number within int64"
+    return None
+
+
+_HOSTILE_EXTRA = {"link": _link_data_hostile}
+
+
+def _unprojectable(entry):
+    """Why this entry projects to nothing, or None: the payload is not an object, a required field has the
+    wrong shape, or a number field holds a hostile value. Pure; `_projectable` records the skip."""
+    p = entry.get("payload")
+    if not isinstance(p, dict) or not all(isinstance(p.get(f), str) for f in _PAYLOAD_REQUIRED.get(entry.get("type"), ())):
+        return "payload is not an object or a required field has the wrong shape"
+    return _hostile_problem(entry)
+
+
+def _projectable(entry):
+    """False, and the skip recorded, when the entry projects to nothing (`_unprojectable`)."""
+    if _unprojectable(entry) is None:
         return True
     _PROJECTION_NOTES.append(f"{entry.get('node_id')}:{entry.get('seq')} {entry.get('type')}: skipped")
     return False
@@ -4934,8 +5041,8 @@ def _rebuild_in_transaction(conn):
 
     journal = merkle.read_all_entries(JOURNAL_DIR)
     _PROJECTION_NOTES.clear()
-    # One filter for every pass and reader: an entry of a shaped type with no object payload or a non-string
-    # required field projects to nothing, so no later pass sees it (#205). The marker still covers the journal.
+    # One filter for every pass and reader: an entry of a shaped type with no object payload, a non-string
+    # required field or a hostile number projects to nothing, so no later pass sees it (#205). The marker still covers the journal.
     entries = [e for e in journal if e["type"] not in _PAYLOAD_SHAPES or _projectable(e)]
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
@@ -7312,15 +7419,35 @@ def _doctor_status():
         pass
 
     # 3f1. Entries whose payload the projection cannot bind as written (#205): ingest refuses them now, but a
-    #      journal is permanent, so one that landed earlier is projected by default or skipped. Advisory.
+    #      journal is permanent, so one that landed earlier is skipped (a non-object payload, a hostile number)
+    #      or projected by default. Each names its signer so the owner can revoke the device. Advisory.
     try:
-        bad = [f"{e.get('node_id')}:{e.get('seq')} ({e.get('type')}: {_payload_problem(e)})"
-               for e in entries if _payload_problem(e) is not None]
+        bad = []
+        for e in entries:
+            why = _payload_problem(e) or _hostile_problem(e)
+            if why is not None:
+                sg = _signer(e.get("node_id"), gov)
+                who = sg["node_id"] if not sg["principal"] else f"{sg['node_id']}, principal {sg['principal']}"
+                bad.append(f"{e.get('node_id')}:{e.get('seq')} ({e.get('type')}: {why}; "
+                           f"{'skipped' if _unprojectable(e) else 'defaulted'}; signed by {who})")
         if bad:
             checks.append({"name": "payload-shape", "status": "warn",
                            "detail": f"{len(bad)} entr{'y' if len(bad) == 1 else 'ies'} with a malformed payload "
-                                     f"field, projected by default or skipped: {', '.join(bad[:10])}"
+                                     f"field, skipped or projected by default: {', '.join(bad[:10])}"
                                      f"{' …' if len(bad) > 10 else ''}"})
+    except Exception:
+        pass
+
+    # 3f1b. The local quarantine (#205): entries ingest refused for their payload, kept verbatim on this node
+    #       only (the newest QUARANTINE_MAX). Advisory.
+    try:
+        held = _read_quarantine()
+        if held:
+            latest = [f"{r.get('signer', {}).get('node_id')}: {r.get('reason')}" for r in held[-3:]]
+            checks.append({"name": "quarantine", "status": "warn",
+                           "detail": f"{len(held)} refused entr{'y' if len(held) == 1 else 'ies'} in "
+                                     f"$HIVE_HOME/.quarantine.jsonl (local, never synced; newest {QUARANTINE_MAX} "
+                                     f"kept); latest: {'; '.join(latest)}"})
     except Exception:
         pass
 

@@ -242,6 +242,9 @@ LOCAL_FILES = {
                                                "moves it.", where="hive"),
     ".owner-pub":            _v(LEGACY, "2.0", "The owner key's public half at its first 2.0 path. `hive-mind doctor "
                                                "--fix` moves it.", where="hive"),
+    ".quarantine.jsonl":    _v(WRITTEN, "2.0", "The entries ingest refused for a malformed or hostile payload, verbatim, with the "
+                                                "reason, the signer and the time; the newest 200, local, never synced "
+                                                "(`hv doctor` reports it).", where="hive"),
     ".peer_candidates.json": _v(WRITTEN, "1.21", "The addresses each admitted device verified itself from; local, never "
                                                  "journaled (see `via` values).", where="hive"),
     ".peers.json":           _v(WRITTEN, "1.0", "This node's sync settings and its peers' addresses.", where="hive"),

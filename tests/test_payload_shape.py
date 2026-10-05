@@ -168,14 +168,14 @@ def test_unprojectable_journaled_entry_never_raises_in_any_pass_or_reader(tmp_pa
     hv.api_search("")
 
 
-def test_nan_importance_in_a_journal_projects_as_the_default(tmp_path, monkeypatch):
+def test_nan_string_importance_defaults_but_a_float_nan_entry_is_skipped(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     d = _device(hv)
     es = [_journaled(hv, d, "fact", {"content": f"f{i}", "tags": [], "importance": v, "source": "manual"}, i + 1)
           for i, v in enumerate([0.5, float("nan"), "nan"])]
     conn = _project(hv, tmp_path, es)
     imp = {r["content"]: r["importance"] for r in conn.execute("SELECT content, importance FROM facts")}
-    assert imp["f1"] == imp["f0"] == imp["f2"] and imp["f1"] <= 0.3
+    assert set(imp) == {"f0", "f2"} and imp["f2"] == imp["f0"] and imp["f2"] <= 0.3     # f1 (a float NaN) is skipped whole
 
 
 # --- an out-of-range number: `_is_number` returns False, never raises; ingest keeps going; a journal defaults it ---
@@ -214,14 +214,80 @@ def test_overflowing_number_is_refused_at_ingest_and_the_batch_continues(tmp_pat
 
 
 @pytest.mark.parametrize("v", OVERFLOW, ids=["2**63", "2**1024", "-2**1024"])
-def test_journaled_overflowing_number_defaults_and_the_other_rows_survive(tmp_path, monkeypatch, v):
+def test_journaled_hostile_number_skips_the_whole_entry_and_the_other_rows_survive(tmp_path, monkeypatch, v):
     hv = _loadhv(tmp_path, monkeypatch)
     d = _device(hv)
     fact, dec, ent, bad = _overflow_entries(hv, d, v)
     later = _fact(hv, d, "later", TS % 8)
     conn = _project(hv, tmp_path, [fact, dec, ent] + bad + [later])
-    assert {r["content"] for r in conn.execute("SELECT content FROM facts")} >= {"a fact", "imp", "later"}
-    imp = conn.execute("SELECT importance FROM facts WHERE content='imp'").fetchone()[0]
-    assert imp <= 0.3
-    hv.rebuild_db()
+    assert {r["content"] for r in conn.execute("SELECT content FROM facts")} == {"a fact", "later"}   # "imp" is skipped, not defaulted
+    assert conn.execute("SELECT count(*) FROM links").fetchone()[0] == 0          # no hostile link projected, not even defaulted
+    assert conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0] == 0
+    c = hv.rebuild_db()
+    assert c["malformed"] == 4 and c["entries"] == 8
     hv.api_search("")
+
+
+def test_ordinary_shape_mistake_is_still_defaulted_not_skipped(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    conn = _project(hv, tmp_path, [_entry(hv, d, "fact", dict(_base("fact"), content="kept", importance=[1]), TS % 1)])
+    assert conn.execute("SELECT content FROM facts").fetchone()[0] == "kept"
+
+
+# --- hostile values: refused at ingest into a local, bounded quarantine; doctor names the signer ---
+
+def _quarantined(home):
+    p = Path(home) / ".quarantine.jsonl"
+    return [json.loads(l) for l in p.read_text().splitlines() if l] if p.exists() else []
+
+
+@pytest.mark.parametrize("v", OVERFLOW + [float("nan"), float("inf")], ids=["2**63", "2**1024", "-2**1024", "nan", "inf"])
+def test_hostile_value_in_a_synced_batch_is_quarantined_with_reason_and_signer_and_the_next_entry_lands(
+        tmp_path, monkeypatch, v):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    d = _device(hv)
+    bad = _entry(hv, d, "fact", dict(_base("fact"), importance=v), TS % 1)
+    ok = _fact(hv, d, "after", TS % 2)
+    accepted, _ = hv.append_foreign_entries([bad, ok])
+    assert accepted == 1
+    q = _quarantined(tmp_path)
+    assert len(q) == 1 and json.dumps(q[0]["entry"]) == json.dumps(bad)    # verbatim
+    assert "importance" in q[0]["reason"] and q[0]["signer"]["node_id"] == d["id"] and q[0]["at"]
+    hv.append_foreign_entries([bad])                                    # a peer re-pushes it: not written twice
+    assert len(_quarantined(tmp_path)) == 1
+
+
+def test_local_writer_quarantines_a_hostile_payload(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    with pytest.raises(ValueError):
+        hv.append_journal("fact", dict(_base("fact"), importance=2**63))
+    q = _quarantined(tmp_path)
+    assert len(q) == 1 and q[0]["entry"]["payload"]["importance"] == 2**63 and q[0]["signer"]["node_id"] == hv.NODE_ID
+
+
+def test_quarantine_stays_within_its_bound_and_keeps_the_newest(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    monkeypatch.setattr(hv, "QUARANTINE_MAX", 5)
+    d = _device(hv)
+    bad = [_entry(hv, d, "fact", dict(_base("fact"), content=f"b{i}", importance=2**63), TS % 1) for i in range(12)]
+    hv.append_foreign_entries(bad)
+    q = _quarantined(tmp_path)
+    assert [r["entry"]["payload"]["content"] for r in q] == [f"b{i}" for i in range(7, 12)]
+
+
+def test_doctor_names_the_signer_of_a_skipped_entry_and_reports_the_quarantine(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    d = _device(hv)
+    bad = _entry(hv, d, "fact", dict(_base("fact"), importance=2**63), TS % 1)
+    odd = _entry(hv, d, "fact", dict(_base("fact"), content="odd", importance=[1]), TS % 2)
+    _project(hv, tmp_path, [bad, odd])
+    hv.append_foreign_entries([_entry(hv, d, "fact", dict(_base("fact"), importance=2**1024), TS % 3)])
+    checks = {c["name"]: c for c in hv._doctor_status()}
+    shape = checks["payload-shape"]["detail"]
+    assert f"signed by {d['id']}" in shape and "skipped" in shape and "defaulted" in shape
+    assert "1 refused entry" in checks["quarantine"]["detail"] and "importance" in checks["quarantine"]["detail"]

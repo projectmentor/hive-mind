@@ -626,28 +626,28 @@ def _init_fts(conn):
         existed = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='facts_fts'"
         ).fetchone()
-        conn.executescript("""
-        CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
-            content, tags, content='facts', content_rowid='id'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
-            INSERT INTO facts_fts(rowid, content, tags)
-            VALUES (new.id, new.content, new.tags);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
-            INSERT INTO facts_fts(facts_fts, rowid, content, tags)
-            VALUES ('delete', old.id, old.content, old.tags);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
-            INSERT INTO facts_fts(facts_fts, rowid, content, tags)
-            VALUES ('delete', old.id, old.content, old.tags);
-            INSERT INTO facts_fts(rowid, content, tags)
-            VALUES (new.id, new.content, new.tags);
-        END;
-        """)
+        # One statement per execute: `executescript` would COMMIT a transaction the caller holds open
+        # (`rebuild_db` builds the whole projection in one, #206).
+        for stmt in (
+            """CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+                content, tags, content='facts', content_rowid='id'
+            )""",
+            """CREATE TRIGGER IF NOT EXISTS facts_ai AFTER INSERT ON facts BEGIN
+                INSERT INTO facts_fts(rowid, content, tags)
+                VALUES (new.id, new.content, new.tags);
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS facts_ad AFTER DELETE ON facts BEGIN
+                INSERT INTO facts_fts(facts_fts, rowid, content, tags)
+                VALUES ('delete', old.id, old.content, old.tags);
+            END""",
+            """CREATE TRIGGER IF NOT EXISTS facts_au AFTER UPDATE ON facts BEGIN
+                INSERT INTO facts_fts(facts_fts, rowid, content, tags)
+                VALUES ('delete', old.id, old.content, old.tags);
+                INSERT INTO facts_fts(rowid, content, tags)
+                VALUES (new.id, new.content, new.tags);
+            END""",
+        ):
+            conn.execute(stmt)
         if not existed:
             # Freshly created: backfill the index from existing facts rows
             # (first upgrade, or after a rebuild dropped+recreated it).
@@ -4705,30 +4705,35 @@ def rebuild_db():
     resolve regardless of journal order. Returns a counts dict."""
     init_db()
     conn = get_conn()
+    try:
+        counts = _rebuild_in_transaction(conn)
+        conn.commit()
+        return counts
+    except BaseException:
+        conn.rollback()      # the previous projection stays queryable (#206)
+        raise
+    finally:
+        conn.close()
+
+
+def _rebuild_in_transaction(conn):
+    """The body of `rebuild_db`: ONE transaction from the first delete to the last insert, and no commit
+    inside (#206). Statements run one by one because `executescript` commits."""
+    conn.execute("BEGIN IMMEDIATE")
     # Drop the FTS index + triggers first: deleting every content row through
     # the external-content delete triggers can desync FTS5 ("disk image is
     # malformed"). We recreate and backfill the index after replay instead.
-    conn.executescript("""
-        DROP TRIGGER IF EXISTS facts_ai;
-        DROP TRIGGER IF EXISTS facts_ad;
-        DROP TRIGGER IF EXISTS facts_au;
-        DROP TABLE IF EXISTS facts_fts;
-        DELETE FROM entity_facts;
-        DELETE FROM links;
-        DELETE FROM ideas;
-        DELETE FROM facts;
-        DELETE FROM decisions;
-        DELETE FROM entities;
-        DELETE FROM journal_index;
-    """)
-    conn.commit()
+    for stmt in ("DROP TRIGGER IF EXISTS facts_ai", "DROP TRIGGER IF EXISTS facts_ad",
+                 "DROP TRIGGER IF EXISTS facts_au", "DROP TABLE IF EXISTS facts_fts",
+                 "DELETE FROM entity_facts", "DELETE FROM links", "DELETE FROM ideas", "DELETE FROM facts",
+                 "DELETE FROM decisions", "DELETE FROM entities", "DELETE FROM journal_index"):
+        conn.execute(stmt)
 
     entries = merkle.read_all_entries(JOURNAL_DIR)
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
         if entry["type"] in _PASS1:
             persist_entry(conn, entry)
-    conn.commit()
     # Pass 2: cross-row links. The three legacy mechanisms keep their resolvers forever (append-only
     # journal, nothing is migrated); 1.19 `link` entries go through the one generic resolver.
     gov = _governance_state(entries)
@@ -4744,7 +4749,6 @@ def rebuild_db():
             resolve_resolves(conn, entry)
         elif entry["type"] == "link":
             resolve_link(conn, entry, gov, by_ref)
-    conn.commit()
 
     # Phase A: confidence is a derived projection over the journal — recompute it
     # here so every node converges to identical values over the same journal.
@@ -4753,11 +4757,9 @@ def rebuild_db():
     _recompute_idea_confidence(conn, entries)       # 1.20 PR5: ideas.confidence (earned from links only)
     _recompute_importance(conn, entries)            # 1.19 PR6: salience L3 — learned, never asserted
     _recompute_utility(conn, entries)               # 1.19 PR6: what recorded decisions relied on
-    conn.commit()
 
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
     _mark_projected(conn, entries)   # #70: the store now holds exactly this journal
-    conn.commit()
 
     counts = {
         "entries": len(entries),
@@ -4768,7 +4770,6 @@ def rebuild_db():
         "edges": conn.execute("SELECT count(*) FROM links").fetchone()[0],
         "ideas": conn.execute("SELECT count(*) FROM ideas").fetchone()[0],
     }
-    conn.close()
     return counts
 
 

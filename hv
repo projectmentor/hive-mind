@@ -3262,14 +3262,18 @@ def _ref_or_legacy_id(conn, p, ref_key, legacy_key, kind, table):
     return None
 
 
-def resolve_entity_fact(conn, entry):
+def resolve_entity_fact(conn, entry, gov=None):
     """Pass 2: wire an entity_fact link via journal-identity refs (falling back
     to legacy local-id fields for pre-Phase-2 journals). A pair it cannot wire
-    (a target absent, of the wrong kind, or no such local id) is skipped."""
+    (a target absent, of the wrong kind, or no such local id) is skipped. 2.1 (#208): the legacy form of a
+    link, so a module's `entity_fact` onto an entity other than its own `x-<module>:` ones wires nothing."""
     p = entry["payload"]
     eid = _ref_or_legacy_id(conn, p, "entity_ref", "entity_id", "entity", "entities")
     fid = _ref_or_legacy_id(conn, p, "fact_ref", "fact_id", "fact", "facts")
     if eid is None or fid is None:
+        return
+    module = _module_of(gov, entry) if gov is not None else None
+    if module is not None and _shared_entity_end(conn, module, "entity", eid):
         return
     conn.execute(
         "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
@@ -3457,18 +3461,17 @@ def _same_as_live(entries, gov, by_ref=None):
     """2.1 (#208): the `same-as` link entries that are a join now, as a set of (node_id, seq).
 
     A join is written by a non-module device or the owner (a module's `same-as` never counts) and withdrawn by a
-    `retract` whose `retracts_ref` names the `same-as` entry. Joins and withdrawals are judged TOGETHER, per
-    (from, to) name pair, in governance order `(timestamp, node_id, seq)`: the latest honoured act wins, so an
-    owner withdrawal whose node_id sorts first is still seen against the join it follows, and a later `same-as`
-    re-joins. Honoured acts: a `same-as` by a non-module device; a withdrawal signed by that `same-as` entry's
-    node_id; a withdrawal the owner signed as of its position (`_owner_at`, the forget rule). Pure over
-    (entries, gov): every node reaches the same set. A withdrawal is not fact evidence: `_content_evidence`
+    `retract` whose `retracts_ref` names the `same-as` entry. Joins and withdrawals are judged together, in governance order `(timestamp, node_id, seq)`: a join stands until a later withdrawal of THAT entry,
+    and a later `same-as` re-joins. Honoured acts: a `same-as` by a non-module device; a withdrawal of an honoured
+    join signed by that `same-as` entry's node_id; a withdrawal the owner signed as of its position (`_owner_at`,
+    the forget rule). Pure over (entries, gov): every node reaches the same set. A withdrawal is not fact evidence: `_content_evidence`
     reads only retracts of facts."""
     if by_ref is None:
         by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
     modules = gov.get("modules") or {}
     timeline = gov.get("owner_timeline") or []
-    acts = {}                                  # (from_name, to_name) -> [(pos, is_join, ref)]
+    joins = {}                                 # ref -> pos, every honoured `same-as` join
+    withdrawals = []                           # (pos, target_ref) of every honoured withdrawal
     for e in entries:
         t, p = e.get("type"), e.get("payload") or {}
         if "sig" in e and not _verify_entry(e):
@@ -3476,29 +3479,24 @@ def _same_as_live(entries, gov, by_ref=None):
         pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
         ref = (e.get("node_id"), e.get("seq"))
         if t == "link" and p.get("kind") == "same-as":
-            pair = _same_as_pair(p, by_ref)
-            if pair is not None and e.get("node_id") not in modules:
-                acts.setdefault(pair, []).append((pos, True, ref))
+            if _same_as_pair(p, by_ref) is not None and e.get("node_id") not in modules:
+                joins[ref] = pos
         elif t == "retract" and _valid_ref(p.get("retracts_ref")):
             target = by_ref.get(tuple(p["retracts_ref"]))
-            tp = (target.get("payload") or {}) if target is not None else {}
-            if target is None or target.get("type") != "link" or tp.get("kind") != "same-as":
+            if target is None or target.get("type") != "link" or (target.get("payload") or {}).get("kind") != "same-as":
                 continue
-            pair = _same_as_pair(tp, by_ref)
-            if pair is None:
-                continue
-            by_writer = e.get("node_id") == target.get("node_id")
             owner = False
             if "owner_sig" in p:
                 oid = _verify_governance(p)
                 owner = oid is not None and oid == _owner_at(timeline, pos)
-            if by_writer or owner:
-                acts.setdefault(pair, []).append((pos, False, ref))
-    live = set()
-    for lst in acts.values():
-        last = max(lst, key=lambda a: a[0])
-        if last[1]:
-            live.add(last[2])
+            if e.get("node_id") == target.get("node_id") or owner:
+                withdrawals.append((pos, tuple(p["retracts_ref"])))
+    # Each join stands until a withdrawal that follows it names it: a withdrawal of a `same-as` that was never an
+    # honoured join does nothing, and one join's withdrawal never removes another writer's join of the same pair.
+    live = set(joins)
+    for wpos, target in withdrawals:
+        if target in joins and wpos > joins[target]:
+            live.discard(target)
     return live
 
 
@@ -5460,7 +5458,7 @@ def _rebuild_in_transaction(conn):
     live_joins = _same_as_live(entries, gov, by_ref)
     for entry in entries:
         if entry["type"] == "entity_fact":
-            resolve_entity_fact(conn, entry)
+            resolve_entity_fact(conn, entry, gov)
         elif entry["type"] == "decision" and (
             entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
         ):

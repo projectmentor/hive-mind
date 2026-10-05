@@ -412,6 +412,41 @@ def test_an_owner_withdrawal_judged_in_governance_order_not_replay_order(hive):
     # an owner signature that was not the owner as of its position (before genesis) counts for nothing
     early = retract(hv, first, join, "2019-01-01T00:00:00Z", owner=(oseed, opub))
     assert joined(hive, hive.entries + [join, early]) == ["x-hwatch:david"]
+    # ...even when the join is earlier still: the owner key signs after genesis only if it was the owner then
+    old_join = link(hv, hive.plain, "same-as", mine, david, "2018-01-01T00:00:00Z")
+    old_out = retract(hv, first, old_join, "2019-01-01T00:00:00Z", owner=(oseed, opub))
+    assert joined(hive, hive.entries + [old_join, old_out]) == ["x-hwatch:david"]
+
+
+def test_a_withdrawal_of_a_same_as_that_was_never_a_honoured_join_does_not_drop_anothers_join(hive):
+    hv = hive.hv
+    david, mine, _ = _join_world(hive)
+    # (a) a module's own `same-as` (never honoured), then the module's withdrawal of it, over a device's join
+    device_join = link(hv, hive.plain, "same-as", mine, david, T % 10)
+    mod_join = link(hv, hive.mod, "same-as", mine, david, T % 9)
+    mod_out = retract(hv, hive.mod, mod_join, T % 11)
+    assert joined(hive, hive.entries + [device_join, mod_join, mod_out]) == ["x-hwatch:david"]
+    # (b) a stranger device's own join and its withdrawal of that join leave the plain device's join standing
+    stranger = device_sorted(hive)
+    own = link(hv, stranger, "same-as", mine, david, T % 11)
+    own_out = retract(hv, stranger, own, T % 12)
+    assert joined(hive, hive.entries + [device_join, own, own_out]) == ["x-hwatch:david"]
+    # the writer's own withdrawal still drops its own join
+    assert joined(hive, hive.entries + [device_join, retract(hv, hive.plain, device_join, T % 13)]) == []
+
+
+def test_a_module_entity_fact_onto_a_shared_entity_wires_nothing(hive):
+    hv = hive.hv
+    david, fact_, mine, theirs = _world(hive)
+    mfact = TL._entry(hv, hive.mod, "fact", fact("a module fact"), T % 6)
+
+    def ef(dev, entity, fct, ts):
+        return TL._entry(hv, dev, "entity_fact", {"entity_ref": ref(entity), "fact_ref": ref(fct), "source": SRC}, ts)
+    count = lambda conn: conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+    assert count(project(hive, hive.entries + [mfact, ef(hive.mod, david, mfact, T % 10)])) == 0
+    assert count(project(hive, hive.entries + [mfact, ef(hive.mod, theirs, mfact, T % 10)])) == 0
+    assert count(project(hive, hive.entries + [mfact, ef(hive.mod, mine, mfact, T % 10)])) == 1       # its own entity: fine
+    assert count(project(hive, hive.entries + [mfact, ef(hive.plain, david, mfact, T % 10)])) == 1     # a device: fine
 
 
 def test_mutant_ignoring_the_withdrawal_leaves_the_join(hive, monkeypatch):

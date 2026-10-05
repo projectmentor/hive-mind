@@ -133,3 +133,46 @@ def test_rebuild_reports_what_it_defaulted(tmp_path, monkeypatch):
     conn = _project(hv, tmp_path, [bad])
     assert isinstance(conn.execute("SELECT importance FROM facts").fetchone()[0], float)
     assert hv.rebuild_db()["malformed"] == 2
+
+
+# --- a journal that already holds an unprojectable entry (a 2.0.2 node stored it): no pass or reader raises ---
+
+def _journaled(hv, d, typ, payload, n=2):
+    return _entry(hv, d, typ, payload, TS % n)
+
+
+UNPROJECTABLE = [
+    ("fact", ["not", "a", "dict"]),
+    ("fact", {"content": [1], "tags": [], "importance": 0.5, "source": "manual"}),
+    ("fact", {"content": {"a": 1}, "tags": [], "importance": 0.5, "source": "manual"}),
+    ("decision", ["not", "a", "dict"]),
+    ("decision", {"content": [1], "rationale": "r"}),
+    ("entity", "not a dict"),
+    ("entity", {"name": {"a": 1}}),
+    ("link", ["not", "a", "dict"]),
+    ("entity_fact", [1]),
+]
+
+
+@pytest.mark.parametrize("typ,payload", UNPROJECTABLE, ids=[f"{t}-{i}" for i, (t, _) in enumerate(UNPROJECTABLE)])
+def test_unprojectable_journaled_entry_never_raises_in_any_pass_or_reader(tmp_path, monkeypatch, typ, payload):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    good = _fact(hv, d, "kept", TS % 1)
+    bad = _journaled(hv, d, typ, payload)
+    later = _fact(hv, d, "later", TS % 3)
+    conn = _project(hv, tmp_path, [good, bad, later])
+    assert {r["content"] for r in conn.execute("SELECT content FROM facts")} == {"kept", "later"}
+    c = hv.rebuild_db()
+    assert c["malformed"] == 1 and c["entries"] == 3
+    hv.api_search("")
+
+
+def test_nan_importance_in_a_journal_projects_as_the_default(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    es = [_journaled(hv, d, "fact", {"content": f"f{i}", "tags": [], "importance": v, "source": "manual"}, i + 1)
+          for i, v in enumerate([0.5, float("nan"), "nan"])]
+    conn = _project(hv, tmp_path, es)
+    imp = {r["content"]: r["importance"] for r in conn.execute("SELECT content, importance FROM facts")}
+    assert imp["f1"] == imp["f0"] == imp["f2"] and imp["f1"] <= 0.3

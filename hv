@@ -2556,10 +2556,8 @@ def _salience_rows(conn, entries, gov):
         if f is None:
             continue
         f["refs"].append((e.get("node_id"), e.get("seq")))
-        try:
-            a = float(p.get("importance", 0.5))
-        except (TypeError, ValueError):
-            a = 0.5
+        check, default = _PAYLOAD_SHAPES["fact"]["importance"]       # a journaled NaN / "nan" / list is the default
+        a = float(p["importance"]) if p.get("importance") is not None and check(p["importance"]) else default
         f["asserted"] = a if f["asserted"] is None else max(f["asserted"], a)
     ideas = {}
     for e in entries:
@@ -4929,8 +4927,11 @@ def _rebuild_in_transaction(conn):
                  "DELETE FROM decisions", "DELETE FROM entities", "DELETE FROM journal_index"):
         conn.execute(stmt)
 
-    entries = merkle.read_all_entries(JOURNAL_DIR)
+    journal = merkle.read_all_entries(JOURNAL_DIR)
     _PROJECTION_NOTES.clear()
+    # One filter for every pass and reader: an entry of a shaped type with no object payload or a non-string
+    # required field projects to nothing, so no later pass sees it (#205). The marker still covers the journal.
+    entries = [e for e in journal if e["type"] not in _PAYLOAD_SHAPES or _projectable(e)]
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
         if entry["type"] in _PASS1:
@@ -4960,10 +4961,10 @@ def _rebuild_in_transaction(conn):
     _recompute_utility(conn, entries)               # 1.19 PR6: what recorded decisions relied on
 
     _init_fts(conn)  # recreate FTS table + triggers and backfill from facts
-    _mark_projected(conn, entries)   # #70: the store now holds exactly this journal
+    _mark_projected(conn, journal)   # #70: the store now holds exactly this journal
 
     counts = {
-        "entries": len(entries),
+        "entries": len(journal),
         "facts": conn.execute("SELECT count(*) FROM facts").fetchone()[0],
         "decisions": conn.execute("SELECT count(*) FROM decisions").fetchone()[0],
         "entities": conn.execute("SELECT count(*) FROM entities").fetchone()[0],

@@ -14,6 +14,13 @@ introduced (a contract) or tagged (a patch).
 
 No contract change.
 
+- **The ingest quarantine is bounded and admitted-only** (#205, #216). `.quarantine.jsonl` holds the entries ingest
+  refused for a hostile payload. An entry from a signer this node does not admit (or has purged) is refused as before
+  and not quarantined; a hive with no owner yet still quarantines. An entry up to 64 KB of canonical bytes is kept
+  verbatim, a larger one as its hash, size and first 4 KB. The file keeps the newest 200 records within 16 MB.
+  A refusal appends one line and reads only a small index, `.quarantine.idx`; the file is rewritten only when a
+  cap is crossed.
+
 - **The legacy `supersedes_ref`, `supersedes` and `resolves_ref` payload fields now go through the link authority**
   (#204, security fix). They projected for any admitted device, so one device could mark another's decision
   superseded on every node. They now command only when the owner key signed the entry or its signer wrote the

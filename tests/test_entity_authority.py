@@ -445,7 +445,9 @@ def test_a_module_entity_fact_onto_a_shared_entity_wires_nothing(hive):
     count = lambda conn: conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
     assert count(project(hive, hive.entries + [mfact, ef(hive.mod, david, mfact, T % 10)])) == 0
     assert count(project(hive, hive.entries + [mfact, ef(hive.mod, theirs, mfact, T % 10)])) == 0
-    assert count(project(hive, hive.entries + [mfact, ef(hive.mod, mine, mfact, T % 10)])) == 1       # its own entity: fine
+    assert count(project(hive, hive.entries + [mfact, ef(hive.mod, mine, mfact, T % 10)])) == 0       # not even its own
+    own = link(hv, hive.mod, "entity", mine, mfact, T % 10, source=SRC)                                 # a module's way: a link
+    assert count(project(hive, hive.entries + [mfact, own])) == 1
     assert count(project(hive, hive.entries + [mfact, ef(hive.plain, david, mfact, T % 10)])) == 1     # a device: fine
 
 
@@ -487,3 +489,15 @@ def test_cli_join_show_no_joins_and_unjoin(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit):
         run(action="unjoin", name="x-hr:david", to="david")                      # nothing live to withdraw
     capsys.readouterr()
+
+
+def test_mutant_applying_a_module_entity_fact_puts_the_fact_on_the_shared_entity(hive, monkeypatch):
+    hv = hive.hv
+    david, fact_, mine, theirs = _world(hive)
+    mfact = TL._entry(hv, hive.mod, "fact", fact("a module fact"), T % 6)
+    ef = TL._entry(hv, hive.mod, "entity_fact", {"entity_ref": ref(david), "fact_ref": ref(mfact), "source": SRC}, T % 10)
+    entries = hive.entries + [mfact, ef]
+    count = lambda conn: conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
+    assert count(project(hive, entries)) == 0
+    monkeypatch.setattr(hv, "_module_of", lambda gov, entry: None)
+    assert count(project(hive, entries)) == 1

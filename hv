@@ -3266,14 +3266,14 @@ def resolve_entity_fact(conn, entry, gov=None):
     """Pass 2: wire an entity_fact link via journal-identity refs (falling back
     to legacy local-id fields for pre-Phase-2 journals). A pair it cannot wire
     (a target absent, of the wrong kind, or no such local id) is skipped. 2.1 (#208): the legacy form of a
-    link, so a module's `entity_fact` onto an entity other than its own `x-<module>:` ones wires nothing."""
+    link, which a module may not write, so a module-signed `entity_fact` wires nothing. It attaches a fact to
+    its own entity with a `link` of kind `entity`."""
     p = entry["payload"]
     eid = _ref_or_legacy_id(conn, p, "entity_ref", "entity_id", "entity", "entities")
     fid = _ref_or_legacy_id(conn, p, "fact_ref", "fact_id", "fact", "facts")
     if eid is None or fid is None:
         return
-    module = _module_of(gov, entry) if gov is not None else None
-    if module is not None and _shared_entity_end(conn, module, "entity", eid):
+    if gov is not None and _module_of(gov, entry) is not None:
         return
     conn.execute(
         "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",

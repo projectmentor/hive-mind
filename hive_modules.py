@@ -372,7 +372,7 @@ def render_units(name, manifest, module_dir, key_dir):
     if interval:
         out[timer] = "\n".join(["[Unit]", f"Description=Run Hive Mind module {name} every {interval}s", "",
                                  "[Timer]", f"OnBootSec={interval}", f"OnUnitActiveSec={interval}",
-                                 "Persistent=true", "", "[Install]", "WantedBy=timers.target"]) + "\n"
+                                 "", "[Install]", "WantedBy=timers.target"]) + "\n"
     return out
 
 
@@ -429,6 +429,8 @@ def remove_units(name):
     for f in (timer, service):
         _systemctl("disable", "--now", f)
         (d / f).unlink(missing_ok=True)
+    # an older renderer wrote Persistent=true, which left this stamp: it marks OnBootSec as elapsed, so a re-added timer never fires
+    (Path.home() / ".local" / "share" / "systemd" / "timers" / f"stamp-{timer}").unlink(missing_ok=True)
     _systemctl("daemon-reload")
     _systemctl("reset-failed", service)
 

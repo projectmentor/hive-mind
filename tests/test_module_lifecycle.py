@@ -525,3 +525,36 @@ def test_reapply_warns_about_a_module_it_cannot_re_apply_and_still_succeeds(hive
     (tmp_path / "modules" / "demo" / "run.sh").write_text("#!/bin/sh\necho owned\n")
     r = _run(hive, "module", "reapply")
     assert r.returncode == 0 and "warning: demo" in r.stderr
+
+
+def test_a_timer_unit_writes_no_persistent_stamp():
+    units = hive_modules.render_units("demo", {"service": {"command": ["run.sh"], "interval": 60}}, Path("/m"), Path("/k"))
+    assert "OnUnitActiveSec=60" in units["hive-module-demo.timer"]
+    assert "Persistent=" not in units["hive-module-demo.timer"]
+
+
+def test_a_percent_in_a_module_path_is_doubled_in_the_environment_and_working_directory():
+    text = hive_modules.render_units("demo", {"service": {"command": ["run.sh"]}}, Path("/m 50%dir"), Path("/k 5%"))["hive-module-demo.service"]
+    assert "WorkingDirectory=/m 50%%dir" in text
+    assert 'Environment="HIVE_MODULE_DIR=/m 50%%dir"' in text and 'Environment="HIVE_MODULE_KEY_DIR=/k 5%%"' in text
+
+
+def test_remove_deletes_the_stamp_an_older_timer_left(hive, tmp_path, units):
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service={"command": ["run.sh"], "interval": 60}))
+    stamp = Path(os.environ["HOME"]) / ".local" / "share" / "systemd" / "timers" / "stamp-hive-module-demo.timer"
+    stamp.parent.mkdir(parents=True)
+    stamp.write_text("")
+    _run(hive, "module", "remove", "demo")
+    assert not stamp.exists()
+
+
+def test_reapply_warns_when_a_restart_fails(hive, tmp_path, units, monkeypatch):
+    unit_dir, _ = units
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service=SERVICE))
+    unit = unit_dir / "hive-module-demo.service"
+    unit.write_text(unit.read_text().replace("NoNewPrivileges=yes\n", ""))
+    monkeypatch.setenv("FAIL_SYSTEMCTL", "restart")
+    r = _run(hive, "module", "reapply")
+    assert r.returncode == 0 and "warning: demo" in r.stderr and "would not start" in r.stderr

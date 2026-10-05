@@ -30,7 +30,7 @@ the algorithm, method, path, canonical query, body hash, timestamp and nonce, se
 refused) and the device's admission are checked the way a peer's are. On top of that the device must be a **module
 device**: one the owner admitted with the module marker (`admit --module`, which `hive-mind module add` does).
 
-Unlike the sync daemon, this listener **ignores `sync_auth_mode`**: an unsigned request is never served. A request is answered `403` (not loopback), `503` (busy) or `405` (verb) before authentication, and a `POST` body is read first, so an unsigned `POST` with a missing or malformed `Content-Length` is `400` and one past the entry size limit is `413`. Every other unsigned request is `401`.
+Unlike the sync daemon, this listener **ignores `sync_auth_mode`**: an unsigned request is never served. A request is answered `403` (not loopback), `503` (busy) or `405` (verb) before authentication, and a `POST` body is read first, so an unsigned `POST` with a missing or non-numeric `Content-Length` is `400`, and one that is negative or past the entry size limit is `413`. Every other unsigned request is `401`.
 
 | Answer | When |
 |---|---|
@@ -337,7 +337,10 @@ the directory is shared between hives on a machine. `modules-contract` warns, on
 `quorum_m > 0`, about any node still on contract 2.0.
 
 `hive-mind doctor --fix` re-renders a unit that differs from its manifest and starts one that is `failed` or not
-enabled. **A unit that is enabled but `inactive` was stopped on purpose, and `--fix` leaves it alone**: the doctor
+enabled. **A unit that is running but not enabled is only enabled, never restarted**, so the live process keeps its
+PID. **With no user systemd manager** (no `XDG_RUNTIME_DIR`, or `is-system-running` fails; `degraded` still counts as
+a manager) `--fix` and `--dry-run` touch no unit, write nothing and say "no user systemd: module units not managed
+here". **A unit that is enabled but `inactive` was stopped on purpose, and `--fix` leaves it alone**: the doctor
 reports it, with the `systemctl --user start` line that resumes it, and the 15-minute timer never restarts it. `--fix`
 acts only on a module whose manifest verifies, never re-admits a revoked device and never touches governance.
 

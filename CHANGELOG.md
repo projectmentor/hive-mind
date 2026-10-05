@@ -28,7 +28,8 @@ working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.
 - **Module units** (PR 7): a manifest `service` block becomes `hive-module-<name>.service` (and a timer), and
   `hive-mind update` runs `hive-mind module reapply` to re-render them, restarting only the units that changed.
 - **`hv doctor` checks each module** (PR 9): `modules:<name>` and `modules-contract`. `hive-mind doctor --fix`
-  re-renders a unit and starts one that failed, and leaves a unit the operator stopped alone (#232).
+  re-renders a unit and starts one that failed, and leaves a unit the operator stopped alone (#232). It only enables
+  a unit that is running but not enabled, and with no user systemd manager it touches no unit and says so (#234).
 - **Module entities and `same-as`** (#208). A module writes only `x-<module>:` entities and links only its own. The
   core joins one to a shared entity with `hv entity join`, and `unjoin` withdraws only the joins this device wrote
   (`--owner` withdraws any). `hv entity show` lists the joined entities (`--no-joins` hides them).

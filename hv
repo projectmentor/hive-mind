@@ -25,6 +25,7 @@ import copy
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import shutil
@@ -832,6 +833,9 @@ def append_journal(entry_type, payload, timestamp=None):
     """Mint and append a LOCAL journal entry. This is the core append API —
     every local write goes through here. Returns the full entry dict."""
     timestamp = timestamp or _now_iso()
+    problem = _payload_problem({"type": entry_type, "payload": payload})
+    if problem is not None:
+        raise ValueError(f"invalid {entry_type} payload: {problem}")      # #205: nothing malformed is journaled
     seq, prev_hash = _next_seq_and_prev(NODE_ID)
     entry = {
         "node_id": NODE_ID,
@@ -1122,6 +1126,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if not _verify_entry(e):
             rejected += 1
             continue
+        if _payload_problem(e) is not None:
+            rejected += 1               # #205: a payload the projection cannot bind safely never lands
+            continue
         if has_owner and (nid not in admitted or nid in gov["purged"]):
             # Read-only member: its content does not land until the owner admits the device.
             # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
@@ -1153,7 +1160,7 @@ def append_foreign_entries(entries, advertised_chunks=None):
             pass
 
     if rejected:
-        reasons = "bad signature, malformed timestamp, unauthorized governance, or content from an " \
+        reasons = "bad signature, malformed timestamp or payload, unauthorized governance, or content from an " \
                   "unadmitted device"
         if unsigned_why:
             reasons += "; " + "; ".join(sorted(set(unsigned_why)))
@@ -1193,6 +1200,8 @@ def _short_id(node_id, seq):
 
 
 def persist_fact(conn, entry):
+    if not _projectable(entry):
+        return None
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
@@ -1218,12 +1227,12 @@ def persist_fact(conn, entry):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         content,
-        json.dumps(payload.get("tags", [])),
-        payload.get("importance", 0.5),
-        payload.get("source", "manual"),
-        payload.get("source_session"),
-        payload.get("created_at", ts),
-        payload.get("access_count", 0),
+        json.dumps(_payload_field(entry, "tags")),
+        _payload_field(entry, "importance"),
+        _payload_field(entry, "source"),
+        _payload_field(entry, "source_session"),
+        _payload_field(entry, "created_at") or ts,
+        _payload_field(entry, "access_count"),
         0.0,                                # confidence placeholder — set by _recompute_confidence()
     ))
     fid = cur.lastrowid
@@ -1272,7 +1281,7 @@ def _parse_source(source):
     Structured: '<app>:<context_class>/<instance>/<session8>'.
     Flat/legacy/CLI (e.g. 'manual', 'claude-code'): app=instance=string,
     context_class='primary', session=None."""
-    s = source or "manual"
+    s = source if isinstance(source, str) and source else "manual"      # #205: a non-string source is `manual`
     if ":" in s:
         app, _, rest = s.partition(":")
         parts = rest.split("/")
@@ -2181,9 +2190,12 @@ def _decision_evidence(entries, gov=None):
             continue
         if not (_valid_ref(frm) and tuple(frm) in known):
             continue
+        data = p.get("data")
         try:
-            pol = float((p.get("data") or {}).get("polarity", 1))
+            pol = float((data if isinstance(data, dict) else {}).get("polarity", 1))
         except (TypeError, ValueError):
+            continue
+        if not math.isfinite(pol):
             continue
         pol = max(-1.0, min(1.0, pol))
         ev = out.setdefault(tuple(to_ref), {"pos": {}, "neg": {}, "forget": False, "last_ts": "", "evidence": []})
@@ -2688,6 +2700,8 @@ def _effective_salience(base, last_link_at, now, halflife, floor=0.0):
 
 
 def persist_decision(conn, entry):
+    if not _projectable(entry):
+        return None
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
@@ -2696,11 +2710,11 @@ def persist_decision(conn, entry):
         VALUES (?, ?, ?, ?, ?, ?)
     """, (
         payload["content"],
-        payload.get("rationale"),
-        payload.get("source", "manual"),
-        payload.get("created_at", ts),
-        json.dumps(payload.get("tags", [])),
-        json.dumps(payload.get("informed_by") or []),   # pre-1.19 decisions read back as []
+        _payload_field(entry, "rationale"),
+        _payload_field(entry, "source"),
+        _payload_field(entry, "created_at") or ts,
+        json.dumps(_payload_field(entry, "tags")),
+        json.dumps(_clean_refs(payload.get("informed_by"))),   # pre-1.19 decisions read back as []
     ))
     did = cur.lastrowid
     _record_index(conn, entry, "decision", did)
@@ -2711,25 +2725,39 @@ def persist_idea(conn, entry):
     """Pass 1 (1.20): one row per `idea` ENTRY — deliberately NO content de-dup (unlike persist_fact):
     a hypothesis restated by another agent is another hypothesis, not corroboration. Confidence starts
     at 0.0 and is written only by `_recompute_idea_confidence`."""
+    if not _projectable(entry):
+        return None
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO ideas (content, tags, source_agent, source_session, created_at, confidence)
         VALUES (?, ?, ?, ?, ?, 0.0)
-    """, (payload["content"], json.dumps(payload.get("tags", [])), payload.get("source", "manual"),
-          payload.get("source_session"), payload.get("created_at", ts)))
+    """, (payload["content"], json.dumps(_payload_field(entry, "tags")), _payload_field(entry, "source"),
+          _payload_field(entry, "source_session"), _payload_field(entry, "created_at") or ts))
     iid = cur.lastrowid
     _record_index(conn, entry, "idea", iid)
     return {"id": iid}
 
 
 def persist_entity(conn, entry):
+    if not _projectable(entry):
+        return None
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
-    attrs = payload.get("attributes", {})
-    attrs_json = attrs if isinstance(attrs, str) else json.dumps(attrs)
+    attrs = payload.get("attributes")
+    if isinstance(attrs, str):
+        # An older writer stored the attributes as JSON text. Keep it when it is an object, else default.
+        try:
+            attrs = json.loads(attrs)
+        except ValueError:
+            attrs = None
+    if attrs is not None and not isinstance(attrs, dict):
+        _PROJECTION_NOTES.append(f"{entry.get('node_id')}:{entry.get('seq')} entity.attributes: defaulted")
+        attrs = None
+    attrs_json = json.dumps(attrs if attrs is not None else {})
+    etype = _payload_field(entry, "type")
     cur.execute("""
         INSERT INTO entities (name, type, attributes, first_seen, last_updated)
         VALUES (?, ?, ?, ?, ?)
@@ -2739,14 +2767,14 @@ def persist_entity(conn, entry):
             last_updated = excluded.last_updated
     """, (
         payload["name"],
-        payload.get("type", "unknown"),
+        etype,
         attrs_json,
-        payload.get("created_at", ts),
+        _payload_field(entry, "created_at") or ts,
         ts,
     ))
     eid = cur.execute("SELECT id FROM entities WHERE name = ?", (payload["name"],)).fetchone()[0]
     _record_index(conn, entry, "entity", eid)
-    return {"id": eid, "name": payload["name"], "type": payload.get("type", "unknown")}
+    return {"id": eid, "name": payload["name"], "type": etype}
 
 
 _PASS1 = {
@@ -2773,6 +2801,130 @@ def _valid_ref(ref):
     a signed payload must never make rebuild_db raise on every node."""
     return isinstance(ref, (list, tuple)) and len(ref) == 2 \
         and isinstance(ref[0], str) and _is_int64(ref[1])
+
+
+# --------------------------------------------------------------------------
+# #205: the shape of the payload fields the projection binds or reads. ONE validator for every place an
+# entry enters (`append_foreign_entries`, so sync and the module route; `append_journal`, the local
+# writers), and the same table drives the projection's fallbacks, so a bad value that is already in a
+# journal (a journal is permanent; refusing at ingest cannot remove it) is defaulted or skipped and never
+# makes `rebuild_db` or a reader raise. An absent field, or an explicit null, is always acceptable.
+# --------------------------------------------------------------------------
+
+def _is_number(v):
+    """A finite int or float (not a bool): what SQLite binds as a REAL and what arithmetic can use."""
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _is_str(v):
+    return isinstance(v, str)
+
+
+def _is_tags(v):
+    return isinstance(v, list) and all(isinstance(t, str) for t in v)
+
+
+def _is_pairs(v):
+    return isinstance(v, list) and all(_valid_ref(r) for r in v)
+
+
+# type -> {field: (check, default)}. `required` fields have no default: an entry without one projects to nothing.
+_PAYLOAD_SHAPES = {
+    "fact": {"content": (_is_str, None), "tags": (_is_tags, []), "importance": (_is_number, 0.5),
+             "confidence": (_is_number, None), "source": (_is_str, "manual"), "source_session": (_is_str, None),
+             "created_at": (_is_str, None), "access_count": (_is_int64, 0)},
+    "decision": {"content": (_is_str, None), "rationale": (_is_str, None), "source": (_is_str, "manual"),
+                 "created_at": (_is_str, None), "tags": (_is_tags, []), "informed_by": (_is_pairs, []),
+                 "revokes": (_valid_ref, None)},
+    "idea": {"content": (_is_str, None), "tags": (_is_tags, []), "source": (_is_str, "manual"),
+             "source_session": (_is_str, None), "created_at": (_is_str, None)},
+    "entity": {"name": (_is_str, None), "type": (_is_str, "unknown"), "attributes": (lambda v: isinstance(v, dict), {}),
+               "created_at": (_is_str, None)},
+    "entity_fact": {"confidence": (_is_number, 1.0)},
+    "link": {"kind": (_is_str, None), "from_ref": (_valid_ref, None), "to_ref": (_valid_ref, None),
+             "channel": (_is_str, None), "source": (_is_str, "manual")},
+    "retract": {"retracts_ref": (_valid_ref, None), "unretracts_ref": (_valid_ref, None)},
+}
+_PAYLOAD_EXTRA = {"link": None}       # type -> a check beyond the field shapes (set below)
+_PAYLOAD_REQUIRED = {"fact": ("content",), "decision": ("content",), "idea": ("content",), "entity": ("name",)}
+
+
+def _link_data_problem(p):
+    """A core link kind's `data` is an object or absent, and `data.confidence` / `data.polarity` are finite
+    numbers or absent: pass 2 binds the first and does arithmetic on the second. A module kind's `data` is its own."""
+    if p.get("kind") not in _LINK_RESOLVERS:
+        return None
+    data = p.get("data")
+    if data is None:
+        return None
+    if not isinstance(data, dict):
+        return "data is not an object"
+    for k in ("confidence", "polarity"):
+        if data.get(k) is not None and not _is_number(data[k]):
+            return f"data.{k} is not a finite number"
+    return None
+
+
+_PAYLOAD_EXTRA["link"] = _link_data_problem
+
+
+def _payload_problem(entry):
+    """Why this entry's payload cannot be projected safely, or None. Pure over the entry; the entry types
+    that produce rows or edges are checked, every other type passes."""
+    typ = entry.get("type")
+    shapes = _PAYLOAD_SHAPES.get(typ)
+    if shapes is None:
+        return None
+    p = entry.get("payload")
+    if not isinstance(p, dict):
+        return "payload is not an object"
+    for field in _PAYLOAD_REQUIRED.get(typ, ()):
+        if field not in p:
+            return f"{field} is missing"
+    for field, (check, _default) in shapes.items():
+        if p.get(field) is not None and not check(p[field]):
+            return f"{field} has the wrong shape"
+        if p.get(field) is None and field in _PAYLOAD_REQUIRED.get(typ, ()):
+            return f"{field} is missing"
+    extra = _PAYLOAD_EXTRA.get(typ)
+    return extra(p) if extra else None
+
+
+def _payload_field(entry, field):
+    """The value of a payload field for the projection: the stored value when it has the right shape,
+    else the field's default (the entry still projects). A mismatch is recorded in `_PROJECTION_NOTES`."""
+    check, default = _PAYLOAD_SHAPES[entry["type"]][field]
+    v = (entry.get("payload") or {}).get(field)
+    if v is None:
+        return default
+    if check(v):
+        return v
+    _PROJECTION_NOTES.append(f"{entry.get('node_id')}:{entry.get('seq')} {entry['type']}.{field}: defaulted")
+    return default
+
+
+def _projectable(entry):
+    """False, and the skip recorded, when the entry's payload is not an object or a required field has the
+    wrong shape: there is nothing to project."""
+    p = entry.get("payload")
+    if isinstance(p, dict) and all(isinstance(p.get(f), str) for f in _PAYLOAD_REQUIRED.get(entry.get("type"), ())):
+        return True
+    _PROJECTION_NOTES.append(f"{entry.get('node_id')}:{entry.get('seq')} {entry.get('type')}: skipped")
+    return False
+
+
+_PROJECTION_NOTES = []     # what the last projection defaulted or skipped (reset by `rebuild_db`)
+
+
+def _clean_refs(raw):
+    """The valid `[node_id, seq]` pairs in a stored `informed_by` (JSON text or a list): a reader skips a
+    malformed item or value instead of raising."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except ValueError:
+            return []
+    return [list(r) for r in raw if _valid_ref(r)] if isinstance(raw, list) else []
 
 
 def _resolve_ref(conn, ref):
@@ -2810,7 +2962,7 @@ def resolve_entity_fact(conn, entry):
         return
     conn.execute(
         "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
-        (eid, fid, p.get("confidence", 1.0)),
+        (eid, fid, p.get("confidence") if _is_number(p.get("confidence")) else 1.0),
     )
 
 
@@ -2921,11 +3073,19 @@ def _link_resolves(conn, from_kind, from_id, to_kind, to_id, p, authority):
         conn.execute("UPDATE facts SET resolves = ? WHERE id = ?", (to_id, from_id))
 
 
+def _link_data_number(p, key, default):
+    """`data[key]` of a link payload when it is a finite number, else `default`: pass 2 never binds or
+    computes on a value of the wrong shape (#205)."""
+    data = p.get("data")
+    v = data.get(key) if isinstance(data, dict) else None
+    return v if _is_number(v) else default
+
+
 def _link_entity(conn, from_kind, from_id, to_kind, to_id, p, authority):
     """entity → fact: an entity_facts row (data.confidence, default 1.0). Evidence-class: never hides."""
     if from_kind == "entity" and to_kind == "fact":
         conn.execute("INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
-                     (from_id, to_id, (p.get("data") or {}).get("confidence", 1.0)))
+                     (from_id, to_id, _link_data_number(p, "confidence", 1.0)))
 
 
 # kind -> command handler (None = edge row only). supports/contradicts move confidence in
@@ -2990,7 +3150,8 @@ def resolve_link(conn, entry, gov, by_ref):
         "INSERT OR REPLACE INTO links (kind, from_kind, from_id, to_kind, to_id, signer, authority, "
         "channel, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (kind, from_kind, from_id, to_kind, to_id, str(entry.get("node_id", "")), authority,
-         p.get("channel") or "sense", entry.get("timestamp")),
+         p.get("channel") if isinstance(p.get("channel"), str) and p.get("channel") else "sense",
+         entry.get("timestamp")),
     )
 
 
@@ -3261,8 +3422,10 @@ def _local_ids_for_refs(conn, refs):
     current rowid (rebuild-unstable, display only) and None if the target has not landed here yet."""
     out = []
     for ref in refs or []:
-        row = _index_row(conn, ref) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None
-        out.append({"ref": _ref_str(ref), "sid": _short_id(ref[0], ref[1]) if isinstance(ref, (list, tuple)) and len(ref) == 2 else None,
+        if not _valid_ref(ref):
+            continue                         # a malformed ref is skipped, not shown (#205)
+        row = _index_row(conn, ref)
+        out.append({"ref": _ref_str(ref), "sid": _short_id(ref[0], ref[1]),
                     "kind": row[0] if row else None, "id": row[1] if row else None})
     return out
 
@@ -3738,7 +3901,7 @@ def search(args):
     fsids = {k: v["sid"] for k, v in fids.items()}
     dsids = {k: v["sid"] for k, v in dids.items()}
     isids = {k: v["sid"] for k, v in iids.items()}
-    dinformed = {r["id"]: _local_ids_for_refs(conn, json.loads(r["informed_by"]) if r["informed_by"] else [])
+    dinformed = {r["id"]: _local_ids_for_refs(conn, _clean_refs(r["informed_by"]))
                  for r in dec_rows}
     # 1.22 (#115): what each fact row BUILDS ON (`extends` edges), shown in text only — JSON consumers
     # already have the `links` table. Target named by its canonical short id.
@@ -4090,7 +4253,7 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             dmatched.append({"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
                              "tags": tags, "superseded": bool(r["superseded_by"]),
                              "created": (r["created_at"] or "")[:10],
-                             "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])],
+                             "informed_by": [_ref_str(x) for x in _clean_refs(r["informed_by"])],
                              "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact), 2)
                                                if r["last_outcome_at"] else None),
                              "last_outcome_at": r["last_outcome_at"]})
@@ -4191,7 +4354,7 @@ def api_item(sid):
                 item = {"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
                         "tags": json.loads(r["tags"]) if r["tags"] else [], "superseded": bool(r["superseded_by"]),
                         "created": (r["created_at"] or "")[:10],
-                        "informed_by": [_ref_str(x) for x in (json.loads(r["informed_by"]) if r["informed_by"] else [])],
+                        "informed_by": [_ref_str(x) for x in _clean_refs(r["informed_by"])],
                         "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, _halflife(gov, "fact")), 2)
                                           if r["last_outcome_at"] else None),
                         "last_outcome_at": r["last_outcome_at"]}
@@ -4651,6 +4814,9 @@ def entity(args):
     """Register or query an entity."""
     if args.action == "add":
         attrs = json.loads(args.attr) if args.attr else {}
+        if not isinstance(attrs, dict):
+            print("Error: --attr must be a JSON object", file=sys.stderr)
+            sys.exit(2)
         payload = {"name": args.name, "type": args.type or "unknown", "attributes": attrs}
         entry = append_journal("entity", payload)
         try:
@@ -4764,6 +4930,7 @@ def _rebuild_in_transaction(conn):
         conn.execute(stmt)
 
     entries = merkle.read_all_entries(JOURNAL_DIR)
+    _PROJECTION_NOTES.clear()
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
         if entry["type"] in _PASS1:
@@ -4803,6 +4970,7 @@ def _rebuild_in_transaction(conn):
         "links": conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0],
         "edges": conn.execute("SELECT count(*) FROM links").fetchone()[0],
         "ideas": conn.execute("SELECT count(*) FROM ideas").fetchone()[0],
+        "malformed": len(_PROJECTION_NOTES),      # entries or fields projected by default or skipped (#205)
     }
     return counts
 
@@ -4812,6 +4980,9 @@ def rebuild(args):
     print(f"Rebuilt from {c['entries']} journal entries:")
     print(f"  Facts: {c['facts']}  Decisions: {c['decisions']}  "
           f"Entities: {c['entities']}  Links: {c['links']}  Edges: {c['edges']}")
+    if c["malformed"]:
+        print(f"  {c['malformed']} malformed payload field(s) projected by default or skipped; "
+              f"`hv doctor` lists the entries (payload-shape)")
 
 
 def merkle_cmd(args):
@@ -7131,6 +7302,19 @@ def _doctor_status():
                            "detail": f"{len(down)} link(s) downgraded to evidence (signer neither owner-at-"
                                      f"position nor the target's author): {', '.join(down)} — re-issue "
                                      f"owner-signed to make it hard"})
+    except Exception:
+        pass
+
+    # 3f1. Entries whose payload the projection cannot bind as written (#205): ingest refuses them now, but a
+    #      journal is permanent, so one that landed earlier is projected by default or skipped. Advisory.
+    try:
+        bad = [f"{e.get('node_id')}:{e.get('seq')} ({e.get('type')}: {_payload_problem(e)})"
+               for e in entries if _payload_problem(e) is not None]
+        if bad:
+            checks.append({"name": "payload-shape", "status": "warn",
+                           "detail": f"{len(bad)} entr{'y' if len(bad) == 1 else 'ies'} with a malformed payload "
+                                     f"field, projected by default or skipped: {', '.join(bad[:10])}"
+                                     f"{' …' if len(bad) > 10 else ''}"})
     except Exception:
         pass
 

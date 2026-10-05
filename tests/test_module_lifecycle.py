@@ -285,3 +285,25 @@ def test_the_data_plane_cannot_reach_module_management():
     assert "ownerkey" not in imports(PROJECT / "hive_modules.py")
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), "module", "list"], capture_output=True, text=True)
     assert r.returncode != 0
+
+
+def test_update_without_the_owner_key_leaves_the_installed_module_alone(hive, tmp_path):
+    pub = _publish(tmp_path / "repo")
+    _add(hive, tmp_path / "repo", pub)
+    d = tmp_path / "modules" / "demo"
+    before = (d / "run.sh").read_text()
+    _publish(tmp_path / "repo", version="9.9.9", files={"run.sh": "#!/bin/sh\necho DOWNGRADED\n", "hooks/stop": "#!/bin/sh\n"})
+    moved = [f for f in _keys.key_dir(hive).glob("owner-key*") if f.is_file()]
+    assert moved
+    for f in moved:
+        f.rename(f.with_name(f.name + ".aside"))
+    r = _run(hive, "module", "update", "demo", check=False)
+    assert r.returncode == 1 and "owner key" in r.stderr
+    assert (d / "run.sh").read_text() == before and _state(hive)["demo"]["version"] == "1.0.0"
+
+
+def test_a_signed_manifest_with_an_unknown_top_level_key_is_refused(hive, tmp_path):
+    pub = _publish(tmp_path / "repo", user="root")
+    r = _add(hive, tmp_path / "repo", pub, "demo", False)
+    assert r.returncode == 1 and "does not know" in r.stderr
+    assert not (tmp_path / "modules" / "demo").exists() and not _key_dir_has_module(hive)

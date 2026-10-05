@@ -39,6 +39,7 @@ MANIFEST, SIGNATURE = "module.json", "module.json.sig"
 STATE_FILE = ".modules.json"
 NOT_SUPPORTED = "module management is not supported on this platform yet (2.1 ships on Linux only)"
 HOOK_EVENTS = ("session-start", "user-prompt", "precompact", "sessionend", "notification", "stop")
+MANIFEST_KEYS = {"name", "version", "min_core", "publisher", "files", "service", "hooks", "config", "quota"}
 QUOTA_KEYS = ("per_hour", "per_day", "entry_bytes", "lifetime")
 QUOTA_DEFAULTS = {"per_hour": 60, "per_day": 500, "entry_bytes": 16 * 1024, "lifetime": 50000}
 MAX_FILES, MAX_FILE_BYTES, MAX_MANIFEST_BYTES = 500, 8 * 1024 * 1024, 256 * 1024
@@ -125,6 +126,9 @@ def validate_manifest(raw, core_version):
         raise ModuleError(f"manifest is not JSON: {e}")
     if not isinstance(m, dict):
         raise ModuleError("manifest is not an object")
+    extra = set(m) - MANIFEST_KEYS
+    if extra:
+        raise ModuleError(f"manifest names fields this node does not know: {', '.join(sorted(map(str, extra)))}")
     if not vocabulary.valid_module_name(m.get("name")):
         raise ModuleError(f"manifest name {m.get('name')!r} is not a valid module name")
     if not isinstance(m.get("version"), str) or not m["version"] or len(m["version"]) > 64:
@@ -405,6 +409,7 @@ def cmd_update(lib, args):
     rec = state.get(args.name)
     if rec is None:
         raise ModuleError(f"module {args.name!r} is not installed")
+    _require_owner(lib)
     source = args.source or rec["source"]
     root = modules_dir()
     with tempfile.TemporaryDirectory(prefix="hive-module-") as tmp:

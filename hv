@@ -901,12 +901,17 @@ def _quarantine(refused, gov=None):
 
 def _quarantine_index(path, idx_path, rebuild=False):
     """The quarantine's (canonical hash, line bytes) per record, oldest first, from the small index. A missing or
-    unreadable index (or `rebuild`) is rebuilt by one read of the file: a record's `entry` hashes as stored, an
-    oversize record carries its hash."""
+    unreadable index, one whose sizes no longer sum to the file's size, or `rebuild`, is rebuilt by one read of the
+    file: a record's `entry` hashes as stored, an oversize record carries its hash."""
     if not rebuild:
         try:
-            if idx_path.exists() or not path.exists():
-                return [(h, int(n)) for h, n in (l.split() for l in idx_path.read_text().splitlines())]
+            index = [(h, int(n)) for h, n in (l.split() for l in idx_path.read_text().splitlines())]
+            try:
+                size = path.stat().st_size
+            except FileNotFoundError:
+                size = 0
+            if sum(n for _h, n in index) == size:     # a cleared or edited quarantine no longer matches its index
+                return index
         except (OSError, ValueError):
             pass
     out = []

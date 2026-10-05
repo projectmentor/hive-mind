@@ -351,6 +351,31 @@ def test_a_refusal_does_not_read_the_quarantine_file(tmp_path, monkeypatch):
     assert len(_quarantined(tmp_path)) == 2
 
 
+def test_clearing_the_quarantine_file_does_not_stop_it_recording_a_re_pushed_refusal(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, _ = _owned(hv, tmp_path)
+    bad = _entry(hv, a, "fact", dict(_base("fact"), content="b0", importance=2**63), TS % 1)
+    hv.append_foreign_entries([bad])
+    (tmp_path / ".quarantine.jsonl").unlink()
+    hv.append_foreign_entries([bad])
+    assert len(_quarantined(tmp_path)) == 1
+
+
+def test_a_quarantine_edited_behind_the_index_is_re_indexed_and_still_dedupes(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    a, _ = _owned(hv, tmp_path)
+    b0 = _entry(hv, a, "fact", dict(_base("fact"), content="b0", importance=2**63), TS % 1)
+    b1 = _entry(hv, a, "fact", dict(_base("fact"), content="b1", importance=2**63), TS % 2)
+    hv.append_foreign_entries([b0, b1])
+    qf = tmp_path / ".quarantine.jsonl"
+    lines = qf.read_text().splitlines(keepends=True)
+    qf.write_text(lines[1])                          # the operator trimmed the first record: the sizes drift
+    hv.append_foreign_entries([b1])                  # still held: not written twice
+    assert len(_quarantined(tmp_path)) == 1
+    hv.append_foreign_entries([b0])                  # no longer held: recorded again
+    assert len(_quarantined(tmp_path)) == 2
+
+
 def test_doctor_names_the_signer_of_a_skipped_entry_and_reports_the_quarantine(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     _jd(tmp_path)

@@ -5304,17 +5304,27 @@ def _entity_join(conn, args, withdraw):
     if not live:
         print(f"entity unjoin: '{args.name}' is not joined to '{to_name}'", file=sys.stderr)
         sys.exit(1)
-    target = list(live[-1])
-    if getattr(args, "owner", False):
-        rentry = _owner_forget(target, "withdraw same-as")
-        if rentry is None:
-            return
-    else:
-        rentry = append_journal("retract", {"retracts_ref": target, "reason": "withdraw same-as",
-                                            "source": _write_source(args)})
+    owner = getattr(args, "owner", False)
+    if not owner:                                    # a device withdraws only the joins it wrote
+        mine = _resolve_node_id()
+        live = [r for r in live if r[0] == mine]
+        if not live:
+            print(f"entity unjoin: this device wrote no live join of '{args.name}' to '{to_name}'; "
+                  f"another device's join is withdrawn by its writer, or by the owner with --owner", file=sys.stderr)
+            sys.exit(1)
+    for r in live:                                   # one retract per entry: each join is judged on its own
+        target = list(r)
+        if owner:
+            rentry = _owner_forget(target, "withdraw same-as")
+            if rentry is None:
+                return
+        else:
+            append_journal("retract", {"retracts_ref": target, "reason": "withdraw same-as",
+                                       "source": _write_source(args)})
     rebuild_db()
-    print(f"Withdrew the join of '{args.name}' to '{to_name}' ({target[0]}:{target[1]}); "
-          f"it holds only if this device wrote that join, or the owner signed the withdrawal.")
+    refs_ = ", ".join(f"{r[0]}:{r[1]}" for r in live)
+    print(f"Withdrew {len(live)} join{'s' if len(live) != 1 else ''} of '{args.name}' to '{to_name}' ({refs_}); "
+          f"it holds only if this device wrote the join, or the owner signed the withdrawal.")
 
 
 def entity(args):

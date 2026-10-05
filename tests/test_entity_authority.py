@@ -482,13 +482,56 @@ def test_cli_join_show_no_joins_and_unjoin(tmp_path, monkeypatch, capsys):
     assert "Joined:" not in run(action="show", name="david", no_joins=True)
     assert "Joined:" not in run(action="show", name="x-hr:david")
     out = run(action="unjoin", name="x-hr:david", to="david", source="manual")
-    assert "Withdrew the join" in out and "Joined:" not in run(action="show", name="david")
+    assert "Withdrew 1 join of" in out and "Joined:" not in run(action="show", name="david")
     with pytest.raises(SystemExit):                                              # the ends must be x-<module>: → unprefixed
         run(action="join", name="david", to="x-hr:david")
     capsys.readouterr()
     with pytest.raises(SystemExit):
         run(action="unjoin", name="x-hr:david", to="david")                      # nothing live to withdraw
     capsys.readouterr()
+
+
+def _cli_runner(tmp_path, monkeypatch, capsys):
+    hv = TL._loadhv(tmp_path, monkeypatch)
+    hv.init_db()
+
+    def run(**kw):
+        ns = dict(action=None, name=None, type=None, attr=None, fact_id=None, confidence=None, source=None, to=None,
+                  no_joins=False, owner=False)
+        hv.entity(SimpleNamespace(**dict(ns, **kw)))
+        return capsys.readouterr().out
+    run(action="add", name="david", type="person")
+    run(action="add", name="x-hr:david", type="person")
+    return hv, run
+
+
+def test_unjoin_withdraws_every_join_this_device_wrote(tmp_path, monkeypatch, capsys):
+    hv, run = _cli_runner(tmp_path, monkeypatch, capsys)
+    run(action="join", name="x-hr:david", to="david", source="manual")
+    run(action="join", name="x-hr:david", to="david", source="manual")           # joined twice: two live entries
+    assert "Withdrew 2 joins" in run(action="unjoin", name="x-hr:david", to="david", source="manual")
+    assert "Joined:" not in run(action="show", name="david")
+
+
+def test_unjoin_leaves_another_devices_join_and_says_so(tmp_path, monkeypatch, capsys):
+    hv, run = _cli_runner(tmp_path, monkeypatch, capsys)
+    run(action="join", name="x-hr:david", to="david", source="manual")
+    monkeypatch.setattr(hv, "_resolve_node_id", lambda: "k1:ffffffffffffffff")   # a device that wrote no join
+    with pytest.raises(SystemExit):
+        run(action="unjoin", name="x-hr:david", to="david", source="manual")
+    assert "wrote no live join" in capsys.readouterr().err
+    assert "Joined: x-hr:david" in run(action="show", name="david")              # nothing was signed on its behalf
+
+
+def test_unjoin_owner_retracts_every_live_join(tmp_path, monkeypatch, capsys):
+    hv, run = _cli_runner(tmp_path, monkeypatch, capsys)
+    run(action="join", name="x-hr:david", to="david", source="manual")
+    run(action="join", name="x-hr:david", to="david", source="manual")
+    calls = []
+    monkeypatch.setattr(hv, "_owner_forget", lambda ref, reason: calls.append(tuple(ref)) or hv.append_journal(
+        "retract", {"retracts_ref": ref, "reason": reason, "source": "owner:owner/owner"}))
+    assert "Withdrew 2 joins" in run(action="unjoin", name="x-hr:david", to="david", owner=True)
+    assert len(calls) == 2
 
 
 def test_mutant_applying_a_module_entity_fact_puts_the_fact_on_the_shared_entity(hive, monkeypatch):

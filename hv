@@ -5551,8 +5551,9 @@ def _print_entity_facts(facts, indent):
 
 
 def _entity_join(conn, args, withdraw):
-    """`entity join|unjoin --name x-<module>:<n> --to <n>`: write a core `same-as` (2.1, #208), or withdraw the
-    live one this device wrote (`--owner`: the owner's withdrawal, on the control plane)."""
+    """`entity join|unjoin --name x-<module>:<n> --to <n>`: write a core `same-as` (2.1, #208), or withdraw it:
+    plain `unjoin` withdraws every live join this device wrote, `--owner` every live join (the owner's withdrawal,
+    on the control plane)."""
     to_name = getattr(args, "to", None)
     if not args.name or not to_name:
         print(f"entity {args.action}: --name (the `x-<module>:` entity) and --to (the unprefixed one) are required",

@@ -93,6 +93,8 @@ def test_non_canonical_point_encodings_are_rejected():
     msg = b"edge"
     assert fast.verify(msg, IDENTITY + bytes(32), IDENTITY)               # the canonical control
     assert ref.verify(msg, IDENTITY + bytes(32), IDENTITY)
+    # S = l is the boundary: an S = 0 signature re-encoded as l satisfies the equation, so only the S < l check refuses it
+    assert not fast.verify(msg, IDENTITY + L.to_bytes(32, "little"), IDENTITY)
     for name, (r_bytes, pub) in STRICT_CASES.items():
         sig = r_bytes + bytes(32)
         assert ref.verify(msg, sig, pub), f"{name}: the reference no longer accepts it, so the case is moot"

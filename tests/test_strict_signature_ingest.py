@@ -43,6 +43,20 @@ def test_malleated_entry_is_refused_and_the_original_lands(tmp_path, monkeypatch
     assert _journal(hv)[(dev["id"], 1)]["sig"] == good["sig"]
 
 
+def test_malleated_entry_does_not_block_the_rest_of_its_batch(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    hv.JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    _, (dev, *_), base = _owned_hive(hv)
+    assert hv.append_foreign_entries(base)[0] == len(base)
+    good = _fact(hv, dev, "the deploy succeeded at commit abc123", "2026-01-02T00:00:00Z")
+    bad = dict(good, sig=_malleate(good["sig"]))
+    nxt = _fact(hv, dev, "the rollback finished", "2026-01-03T00:00:00Z")
+    assert hv.append_foreign_entries([bad, good, nxt]) == (2, 0)
+    journal = _journal(hv)
+    assert journal[(dev["id"], good["seq"])]["sig"] == good["sig"]
+    assert (dev["id"], nxt["seq"]) in journal
+
+
 def test_malleated_owner_signature_does_not_verify(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     oseed, opub, oid = _owner_key(hv)

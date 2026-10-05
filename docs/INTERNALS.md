@@ -636,9 +636,11 @@ enough to run on every command:
 
 - **Ed25519** (`ed25519.py`) uses extended coordinates and a precomputed base-point table, roughly
   60–180× faster than the reference implementation it replaced, depending on the machine (on one WSL2
-  machine: 5.6 ms per verify and 1.6 ms per signature, from about 1 s each). Its accept set is
-  identical and its signatures are byte-identical (`tests/test_ed25519.py`), because every node must
-  agree on which entries are valid.
+  machine: 5.6 ms per verify and 1.6 ms per signature, from about 1 s each). Its signatures are
+  byte-identical to the reference's, and since v2.0.3 ([#213](https://github.com/projectmentor/hive-mind/issues/213))
+  its accept set is the reference's minus the encodings RFC 8032 forbids (`S >= l`, `y >= q`, `x = 0` with
+  the sign bit set); `tests/test_ed25519.py` checks both, because every node must agree on which entries
+  are valid.
 - **Each signature is verified once per process.** `_verify_sig` memoizes the cryptographic check
   only: positive results, keyed on `(sha512(message), sig, pub)`, in an LRU bounded at 16,384 entries
   (about 7 MB), in memory only. Authorization is never cached: admission, revocation, owner-as-of,

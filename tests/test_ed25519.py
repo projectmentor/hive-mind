@@ -1,8 +1,9 @@
 """The fast Ed25519 (#70) against RFC 8032 and against the frozen reference it replaced.
 
-Nodes must agree on which journal entries are validly signed, so `verify` must accept exactly what the
-reference accepted (including its permissive decoding) and `sign` must be byte-identical. The reference
-lives in tests/_ed25519_reference.py and is slow, so it is called sparingly here.
+Nodes must agree on which journal entries are validly signed, so `verify` accepts the reference's accept
+set minus the encodings RFC 8032 forbids (S >= l, y >= q, x = 0 with the sign bit set; #213), and `sign`
+must be byte-identical. The reference lives in tests/_ed25519_reference.py and is slow, so it is called
+sparingly here.
 """
 import hashlib
 import os
@@ -57,47 +58,87 @@ def test_sign_and_pub_are_byte_identical_to_the_reference():
         assert fast.sign(msg, seed) == ref.sign(msg, seed)
 
 
-def test_reference_permissive_cases_are_still_accepted():
-    """What the reference accepts although strict RFC 8032 would not: dropping any of these would make an
-    upgraded node reject entries an older node accepted."""
+def test_malleated_s_is_rejected():
+    """RFC 8032 §5.1.7: S + k*l verified for every k the 32 bytes could hold (#213). A mutant that drops the
+    S < l check accepts these, and so does the reference, which is what makes this a narrowing."""
     seed, msg = os.urandom(32), b"a journal entry"
     pub, sig = fast.pub_from_seed(seed), fast.sign(msg, seed)
+    assert fast.verify(msg, sig, pub)
     S = int.from_bytes(sig[32:], "little")
-    for k in (1, 2, 3):                                      # malleated S + k*l (no S < l check)
+    assert S < L
+    for k in range(1, 16):
         mal = sig[:32] + (S + k * L).to_bytes(32, "little")
-        assert fast.verify(msg, mal, pub) and ref.verify(msg, mal, pub), k
+        assert not fast.verify(msg, mal, pub), k
+    for k in (1, 2, 3):
+        mal = sig[:32] + (S + k * L).to_bytes(32, "little")
+        assert ref.verify(msg, mal, pub), k              # the reference accepted these
+    assert not fast.verify(msg, sig[:32] + L.to_bytes(32, "little"), pub)       # S = l exactly
+    assert not fast.verify(msg, sig[:32] + bytes([0xff]) * 32, pub)             # S = 2**256 - 1
 
 
-def test_decoding_matches_the_reference_on_edge_encodings():
-    named = {
-        "non-canonical y = q+3 decodes (y kept unreduced)": _enc(Q + 3),
-        "non-canonical identity y = q+1": _enc(Q + 1),
-        "identity with sign bit 1 (x = q)": _enc(1, 1),
+# (R, A) pairs with S = 0 that the reference verifies for any message, because R and A are the identity
+# (or [0]B == R + [h]A holds for it). Each differs from the canonical control in exactly one encoding, so a
+# mutant that removes one check fails exactly the cases that depend on it.
+IDENTITY = _enc(1)
+STRICT_CASES = {
+    "R y >= q": (_enc(Q + 1), IDENTITY),
+    "A y >= q": (IDENTITY, _enc(Q + 1)),
+    "R x = 0 with the sign bit": (_enc(1, 1), IDENTITY),
+    "A x = 0 with the sign bit": (IDENTITY, _enc(1, 1)),
+    "A order-2 point with the sign bit": (IDENTITY, _enc(Q - 1, 1)),
+}
+
+
+def test_non_canonical_point_encodings_are_rejected():
+    msg = b"edge"
+    assert fast.verify(msg, IDENTITY + bytes(32), IDENTITY)               # the canonical control
+    assert ref.verify(msg, IDENTITY + bytes(32), IDENTITY)
+    for name, (r_bytes, pub) in STRICT_CASES.items():
+        sig = r_bytes + bytes(32)
+        assert ref.verify(msg, sig, pub), f"{name}: the reference no longer accepts it, so the case is moot"
+        assert not fast.verify(msg, sig, pub), name
+
+
+def test_decoding_matches_the_reference_on_canonical_edge_encodings():
+    canonical = {
         "order-2 point y = q-1": _enc(Q - 1),
         "order-4 point y = 0": _enc(0),
-        "all ones": _enc(2 ** 255 - 1, 1),
+        "order-4 point y = 0, sign 1": _enc(0, 1),
+        "identity": _enc(1),
         "off-curve y = 2": _enc(2),
     }
-    for name, s in named.items():
-        def outcome(mod):
-            try:
-                mod._decodepoint(s)
-                return "ok"
-            except Exception:
-                return "reject"
-        assert outcome(fast) == outcome(ref), name
+    refused = {
+        "non-canonical y = q+3": _enc(Q + 3),
+        "non-canonical identity y = q+1": _enc(Q + 1),
+        "identity with sign bit 1 (x = 0)": _enc(1, 1),
+        "order-2 point with sign bit 1 (x = 0)": _enc(Q - 1, 1),
+        "all ones": _enc(2 ** 255 - 1, 1),
+        "y = q": _enc(Q),
+        "y = 2**255 - 1": _enc(2 ** 255 - 1),
+    }
+
+    def outcome(mod, s):
+        try:
+            mod._decodepoint(s)
+            return "ok"
+        except Exception:
+            return "reject"
+    for name, s in canonical.items():
+        assert outcome(fast, s) == outcome(ref, s), name
+    for name, s in refused.items():
+        assert outcome(fast, s) == "reject", name
+    assert outcome(ref, _enc(Q + 3)) == "ok"             # the reference took it; the narrowing is deliberate
 
 
 def test_raw_r_bytes_are_hashed_like_the_reference():
     """Small-order keys make [h]A depend on h mod 4 (or mod 2), so whether a signature (R, S=0) verifies
     depends on exactly which bytes of R were hashed. Each family mixes accepts and rejects over eight
-    messages; an implementation that hashed a canonical re-encoding of a non-canonical R, or of x = q with
-    the sign bit set, would give a different pattern."""
+    messages; an implementation that hashed a different encoding of R would give a different pattern. Only
+    canonical encodings are left, since the non-canonical ones are refused (see STRICT_CASES)."""
     families = {
-        "R order-4, non-canonical y = q; A order-4": (_enc(Q), _enc(0)),
-        "R order-4, y = q, sign 1; A order-4, sign 1": (_enc(Q, 1), _enc(0, 1)),
-        "R identity with sign bit 1 (x = q); A order-4": (_enc(1, 1), _enc(0)),
-        "R identity, non-canonical y = q+1; A order-2": (_enc(Q + 1), _enc(Q - 1)),
+        "R order-4; A order-4": (_enc(0), _enc(0)),
+        "R order-4, sign 1; A order-4, sign 1": (_enc(0, 1), _enc(0, 1)),
+        "R order-2; A order-4": (_enc(Q - 1), _enc(0)),
     }
     for name, (r_bytes, pub) in families.items():
         sig = r_bytes + bytes(32)

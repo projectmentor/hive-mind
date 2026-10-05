@@ -67,7 +67,7 @@ import vocabulary  # noqa: E402
 # Every module that writes or projects journal entries, and the sync modules that carry them. The sync
 # modules have no sites today; they are scanned so that a first one there is held to the registry too.
 SCANNED = ("hv", "hivemind_owner.py", "hivemind_ctl.py", "hive_sync_daemon.py", "sync_client.py",
-           "sync_common.py", "merkle.py", "ownerkey.py", "hive_module_api.py")
+           "sync_common.py", "merkle.py", "ownerkey.py", "hive_module_api.py", "hive_modules.py")
 
 REGISTRY = {key: table for key, _title, _what, table in vocabulary.CATEGORIES}
 READABLE = (vocabulary.WRITTEN, vocabulary.LEGACY, vocabulary.READ)

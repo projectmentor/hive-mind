@@ -107,8 +107,19 @@ def _module_config(gov, module):
 
 def limits_for(module):
     """The limits that bind `module`: the defaults today. A manifest may lower them and the owner may raise them
-    (PR 6, `hive-mind module quota`); both land here so no caller reads a second table."""
-    return dict(QUOTA_DEFAULTS)
+    (PR 6, `hive-mind module quota`); both land here so no caller reads a second table. They are read from
+    `.modules.json`: the defaults, then the manifest's ask, then the owner's own limits. A manifest ask is clamped
+    to the default, so a hand-edited record cannot raise a limit the way only `module quota` does."""
+    limits = dict(QUOTA_DEFAULTS)
+    try:
+        rec = json.loads((daemon.hv.HIVE_HOME / ".modules.json").read_text()).get(module) or {}
+    except (OSError, ValueError, AttributeError):
+        return limits
+    for table, ceiling in ((rec.get("quota"), True), (rec.get("owner_quota"), False)):
+        for k, v in (table.items() if isinstance(table, dict) else ()):
+            if k in limits and isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+                limits[k] = min(v, QUOTA_DEFAULTS[k]) if ceiling else v
+    return limits
 
 
 def _chain(device_id):

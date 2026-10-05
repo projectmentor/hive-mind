@@ -223,6 +223,7 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 | `.genesis-pin` | `$HIVE_HOME` | written | 1.27 | Which `owner` declaration established this hive (0600, never synced). |
 | `.key-dir` | `$HIVE_HOME` | written | 2.0 | The path of this checkout's key directory, so a renamed checkout keeps its keys. |
 | `.module-quota.json` | `$HIVE_HOME` | written | 2.1 | Each module device's hourly and daily write times, for the module API's rate limits (0600, never journaled). The lifetime count is the journal's, not this file's. |
+| `.modules.json` | `$HIVE_HOME` | written | 2.1 | The modules installed on this node: version, pinned publisher key, device id, source and quota limits (0600, never journaled). Written by `hive-mind module`. |
 | `.nudge_state` | `$HIVE_HOME` | written | 1.0 | When the save and audit nudges last fired. |
 | `.owner-key` | `$HIVE_HOME` | legacy | 1.4 | The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` moves it. |
 | `.owner-pub` | `$HIVE_HOME` | legacy | 2.0 | The owner key's public half at its first 2.0 path. `hive-mind doctor --fix` moves it. |

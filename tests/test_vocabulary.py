@@ -156,6 +156,7 @@ NOT_JOURNAL = {
     },
     "kind": {
         ("hv", "_wire_one"): "a cell's kind (`agent` or `tool`), which `hv wire` dispatches on",
+        ("hv", "_lookup_id"): "`api_item`'s result kind (`fact`, `decision`, `idea`), a display class, not an entry's kind",
     },
     "action": {},
 }

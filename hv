@@ -814,8 +814,10 @@ def _valid_timestamp(ts):
 # (what this node holds + the entries landed so far in the batch + this entry) would honour it, i.e. the bounds do not
 # skip it and, for content, its device is admitted in that projection. The projection judges a device's entries in seq
 # order and ingest sees them in arrival order, so asking the projection is what makes every order end the same.
-# Tiebreak: owner-signed governance beats device-stamped content. A fact whose future stamp would make the bounds skip
-# an owner act on its chain (an admit of its own device, a revoke, an admit relayed there) is the entry refused.
+# Tiebreak, for one case only: owner-signed governance beats device-stamped content when the owner act is the admit of
+# the fact's own device. A fact whose future stamp would make the bounds skip that admit is the entry refused. A revoke
+# or a relayed admit on the same chain is not protected: the projection skips it behind the lower-seq fact, so the fact
+# lands in every order (all nodes still agree). Closing that needs the projection to prefer owner governance (#250).
 # Arrival times and flood counts are detection only: `hv doctor` and `hv audit` report them, nothing refuses.
 # --------------------------------------------------------------------------
 

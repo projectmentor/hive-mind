@@ -5165,12 +5165,12 @@ def api_item(sid):
                         "importance": imp, "utility": util,
                         "source": r["source_agent"], "created": (r["created_at"] or "")[:10]}
         elif kind == "decision":
-            r = conn.execute("SELECT id, content, rationale, tags, created_at, superseded_by, informed_by, "
+            r = conn.execute("SELECT id, content, rationale, tags, source_agent, created_at, superseded_by, informed_by, "
                              "outcome_score, last_outcome_at FROM decisions WHERE id = ?", (row[1],)).fetchone()
             if r:
                 item = {"id": r["id"], "content": r["content"], "rationale": r["rationale"] or "",
                         "tags": json.loads(r["tags"]) if r["tags"] else [], "superseded": bool(r["superseded_by"]),
-                        "created": (r["created_at"] or "")[:10],
+                        "source": r["source_agent"], "created": (r["created_at"] or "")[:10],
                         "informed_by": [_ref_str(x) for x in _clean_refs(r["informed_by"])],
                         "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, _halflife(gov, "fact")), 2)
                                           if r["last_outcome_at"] else None),

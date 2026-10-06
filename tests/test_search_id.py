@@ -4,6 +4,7 @@ It needs no daemon (these tests start none), resolves a sid (`h:…`) and a ref 
 survives a rebuild, covers facts, decisions and ideas, and exits 1 on an id that names nothing, such as the
 invented `h:e6f0b4c1a2` behind decision h:ee71989fe5."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -15,7 +16,8 @@ def _lookup(hive, ident, *extra, check=True):
 @pytest.fixture
 def populated(hive):
     hive.run("remember", "the cache is warmed at boot", "--tags", "perf", "--source", "alice")
-    hive.run("decide", "warm the cache at boot", "--rationale", "cold starts are slow", "--tags", "perf")
+    hive.run("decide", "warm the cache at boot", "--rationale", "cold starts are slow", "--tags", "perf",
+             "--source", "carol")
     hive.run("propose", "disk io is the bottleneck", "--tags", "perf", "--source", "bob")
     return hive
 
@@ -37,6 +39,7 @@ def test_sid_and_ref_resolve_to_the_same_entry_for_each_kind(populated):
         assert by_sid["kind"] == kind and by_sid["sid"] == row["sid"] and by_sid["ref"] == row["ref"]
         assert by_sid["item"]["content"] == row["content"]
         assert by_sid["item"]["tags"] == ["perf"]
+        assert by_sid["item"]["source"] == {"fact": "alice", "decision": "carol", "idea": "bob"}[kind]
 
 
 def test_text_output_names_the_entry(populated):
@@ -63,3 +66,8 @@ def test_an_id_that_does_not_resolve_exits_nonzero(populated, ident):
 def test_search_needs_a_query_or_an_id(populated):
     r = populated.run("search", check=False)
     assert r.returncode == 2 and "--id" in r.stderr
+
+
+def test_dashboard_opens_an_idea_by_deep_link():
+    html = (Path(__file__).resolve().parent.parent / "dashboard" / "index.html").read_text()
+    assert "r.kind==='idea'" in html and "d.kind==='idea'" in html

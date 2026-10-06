@@ -115,6 +115,19 @@ def _run_hv(args: list[str], timeout: int = 30, stdin_text: str | None = None,
 
 # ── Tools ────────────────────────────────────────────────────────────────────
 @mcp.tool()
+def hive_lookup(id: str) -> dict:
+    """Look up ONE entry by its stable id, to verify an id before you cite it.
+
+    id: a short id (`h:` + 10 hex, as hive_search returns in `sid`) or a ref (`node_id:seq`).
+    Returns {kind, id, ref, sid, item}: `kind` is fact | decision | idea and `item` carries the content,
+    tags, source, confidence (or a decision's rationale, superseded flag and outcome score), contested and
+    forgotten state. Raises when the id names nothing on this node — an id you cannot look up is one you
+    must not cite. Reads the local store, so it works without the sync daemon.
+    """
+    return json.loads(_run_hv(["search", "--id", id, "--format", "json"]))
+
+
+@mcp.tool()
 def hive_search(query: str, min_confidence: float = 0.0, kind: str = "all") -> list[dict]:
     """Search the shared corpus. Returns facts WITH their confidence and provenance.
 

@@ -32,7 +32,7 @@ memory.
 | `hv propose` | Record an idea (a hypothesis) |
 | `hv remember` | Store a fact |
 | `hv retract` | Correct a fact you got wrong |
-| `hv search` | Search facts, decisions and ideas |
+| `hv search` | Search facts, decisions and ideas; `--id` looks one up by `sid` or `ref` |
 | `hv stats` | See a summary of your memory |
 | `hive-mind unforget` | Owner only: reverse an owner forget (`hive-mind retract --owner`) |
 | `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode, `auth --outbound` what a peer must prove before this node pushes to it |
@@ -1011,6 +1011,7 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,
 | `--min-confidence` | Only show facts at or above this confidence level (0.0–1.0). Good for filtering out unverified claims. (In JSON, decisions carry no confidence, so a `min_confidence > 0` consumer drops them.) |
 | `--kind` | *(1.20)* What to search: `all` (default), `fact`, `decision`, `idea`. Under `all` an **idea** appears only once it has earned confidence above 0 — a raw hypothesis is not knowledge yet; `--kind idea` lists every idea. JSON rows carry `kind: idea` with `confidence`, `effective_confidence` and `ref`. |
 | `--sort` | *(1.19 PR6)* How to rank facts and ideas: `confidence` (default — effective confidence, unchanged behaviour), `importance` (learned salience: capped self-hint + other-identity link attention), `utility` (how much recorded decisions relied on it, weighted by their outcomes), or `recency`. Decisions always list newest-first. Text rows show `Imp:` / `Util:`; JSON rows carry `importance`, `effective_importance`, `utility`, `effective_utility`, `last_link_at`. Both learned values are stored undecayed and decayed at query time under the entry's **class half-life** (`halflife_fact` / `halflife_idea` / `halflife_volatile`), which now also governs confidence decay. |
+| `--id SID\|REF` | *(2.1, [#158](https://github.com/projectmentor/hive-mind/issues/158))* Look up **one** entry by its `sid` (`h:…`) or `ref` (`node_id:seq`) instead of searching; `query` is then omitted. It covers facts, decisions and ideas, reads the local store (no sync daemon needed) and answers the same on every node and after a rebuild. Text shows kind, `sid`, `ref`, content, tags, source, confidence (a decision shows `current`/`SUPERSEDED` and its outcome) and contested/forgotten state; `--format json` prints `{kind, id, ref, sid, item}`. **Exits 1 with nothing on stdout when the id names nothing** (an invented id such as `h:e6f0b4c1a2`), so a script or agent can verify an id before citing it: `hv search --id h:… >/dev/null`. `hv search` with neither a query nor `--id` exits 2. |
 
 **Examples:**
 ```bash

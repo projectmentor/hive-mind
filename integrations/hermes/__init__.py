@@ -652,6 +652,20 @@ class HiveMindMemoryProvider(MemoryProvider):
                 },
             },
             {
+                "name": "hive_lookup",
+                "description": (
+                    "Look up ONE entry by its stable id, to verify an id before you cite it. Takes a short id "
+                    "(h:…, the `sid` hive_search returns) or a ref (node_id:seq). Returns {kind, id, ref, sid, "
+                    "item}; ok is false with the reason when the id names nothing on this node, and an id you "
+                    "cannot look up is one you must not cite."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {"id": {**s, "description": "A short id (h:…) or a ref (node_id:seq)."}},
+                    "required": ["id"],
+                },
+            },
+            {
                 "name": "hive_remember",
                 "description": (
                     "Record a durable, checkable fact: an outcome, correction, constraint or discovery. Search "
@@ -735,6 +749,12 @@ class HiveMindMemoryProvider(MemoryProvider):
             return json.dumps({"ok": False, "output": "the hive-mind provider is not initialized"})
         if tool_name == "hive_search":
             return self._tool_search(args)
+        if tool_name == "hive_lookup":
+            ident = str(args.get("id", "") or "").strip()
+            if not ident:
+                return json.dumps({"ok": False, "output": "id is required"})
+            ok, out = _hv("search", "--id", ident, "--format", "json")
+            return out if ok else json.dumps({"ok": False, "output": out})
         if tool_name in ("hive_remember", "hive_decide", "hive_propose"):
             if not str(args.get("content", "")).strip() and not (
                     tool_name == "hive_decide" and str(args.get("revoke", "") or "").strip()):

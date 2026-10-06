@@ -82,7 +82,7 @@ import threading  # noqa: E402
 import time       # noqa: E402
 
 _MCP = Path(__file__).resolve().parent.parent / "integrations" / "mcp" / "hive_mcp.py"
-_TOOLS = ("hive_search", "hive_remember", "hive_decide", "hive_propose")
+_TOOLS = ("hive_search", "hive_lookup", "hive_remember", "hive_decide", "hive_propose")
 
 
 def _provider(monkeypatch, fake_hv):
@@ -100,6 +100,15 @@ def test_tool_names_and_parameters_match_the_mcp_server():
     assert set(schemas) == set(_TOOLS) == set(mcp)
     for name in _TOOLS:
         assert set(schemas[name]["parameters"]["properties"]) == set(mcp[name]), name
+
+
+def test_hive_lookup_runs_search_id_and_reports_a_miss(monkeypatch):
+    calls = []
+    p = _provider(monkeypatch, lambda *a, **k: (calls.append(a), (True, '{"kind": "fact"}'))[1])
+    assert json.loads(p.handle_tool_call("hive_lookup", {"id": "h:0123456789"})) == {"kind": "fact"}
+    assert calls[-1] == ("search", "--id", "h:0123456789", "--format", "json")
+    p = _provider(monkeypatch, lambda *a, **k: (False, "hv: 'h:e6f0b4c1a2' does not resolve"))
+    assert json.loads(p.handle_tool_call("hive_lookup", {"id": "h:e6f0b4c1a2"}))["ok"] is False
 
 
 def test_write_tools_build_the_same_argv_as_the_cli(monkeypatch):

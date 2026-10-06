@@ -49,6 +49,7 @@ All logic lives in the `hv` CLI (`$HIVE_HOME/hv`); your adapter only *calls* it.
 | Call | Purpose |
 |---|---|
 | `hv search "<q>" [--format json] [--min-confidence N] [--kind all\|fact\|decision\|idea] [--sort confidence\|importance\|utility\|recency]` | Read the corpus (ranked by effective confidence by default) |
+| `hv search --id <h:…\|node_id:seq> [--format json]` | Verify an id before you cite it: prints that one entry, exits 1 if it names nothing (MCP: `hive_lookup`). Works without the daemon |
 | `hv remember "<fact>" --tags a,b --source <you>` | Write a fact (confidence is DERIVED, never set by you) |
 | `hv remember "<outcome>" --source <you> --outcome-of <decision sid> --polarity 1|0|-1` | Record what happened after acting on a decision *(1.19)* |
 | `hv decide "<decision>" --rationale "<why>" --informed <sid>… --source <you>` | Record a decision, naming the entries it relied on by `sid` (`h:…`) *(1.19)* |
@@ -162,7 +163,7 @@ is real, working code in this repo — **study it, then write the equivalent for
 - **Hermes:** plugin lifecycle (`initialize`, `system_prompt_block`, `prefetch`,
   `on_session_switch`, `shutdown`). No per-turn pre-prompt hook exists → wire the save-nudge into
   `prefetch`, reorient into `system_prompt_block` (it already searches the hive), and the
-  audit-nudge into `on_session_switch`/`shutdown`. Tools: `hive_search` (with `kind`), `hive_remember`,
+  audit-nudge into `on_session_switch`/`shutdown`. Tools: `hive_search` (with `kind`), `hive_lookup`, `hive_remember`,
   `hive_decide`, `hive_propose`, the same names and parameters as the MCP server (a test pins the
   parity). Every write, the `memory()` mirror and the tools alike, runs on one bounded background
   writer in order: the mirror returns at once, the tools wait for their result, and `shutdown` drains

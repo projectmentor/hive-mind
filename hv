@@ -4611,12 +4611,53 @@ def _query_ideas(conn, query, limit=200):
         (like, like, limit)).fetchall()
 
 
+def _lookup_id(args):
+    """`hv search --id <sid|ref>` (#158): one entry by its stable id, straight from the local store (the same
+    resolution as the dashboard's /api/item, with no daemon). Exit 1 when it names nothing."""
+    res = api_item(args.lookup_id)
+    if res.get("error") or not res.get("item"):
+        print(f"hv: {args.lookup_id!r} does not resolve to a fact, decision or idea on this node"
+              + (f" ({res['error']})" if res.get("error") else ""), file=sys.stderr)
+        sys.exit(1)
+    if args.format == "json":
+        print(json.dumps(res, indent=2))
+        return
+    it = res["item"]
+    print(f"{res['kind']} {res['sid']}  ref: {res['ref']}")
+    print(f"  {it['content']}")
+    if it.get("rationale"):
+        print(f"  ↳ {it['rationale']}")
+    if it.get("tags"):
+        print(f"  Tags: {', '.join(it['tags'])}")
+    bits = []
+    if it.get("source"):
+        bits.append(f"From: {it['source']}")
+    if it.get("confidence") is not None:
+        bits.append(f"Conf: {it['confidence']:.2f}")
+    if res["kind"] == "decision":
+        bits.append("SUPERSEDED" if it.get("superseded") else "current")
+        if it.get("outcome_score") is not None:
+            bits.append(f"outcome {it['outcome_score']:+.2f}")
+    if it.get("contested"):
+        bits.append("CONTESTED")
+    if it.get("forgotten"):
+        bits.append("FORGOTTEN")
+    if it.get("created"):
+        bits.append(f"created {it['created']}")
+    print("  " + "  ".join(bits))
+
+
 def search(args):
     """Search facts AND decisions. Facts rank/filter by EFFECTIVE confidence (the time-invariant base
     projection decayed by recency, computed at query time with $HIVE_NOW) and surface contested claims.
     Decisions have no confidence projection, so they match by content/rationale/tags (newest-first,
     superseded ones flagged) — finding a decision by tag/text is the stable alternative to citing its
     node-local `#id`."""
+    if getattr(args, "lookup_id", None):
+        return _lookup_id(args)
+    if args.query is None:
+        print("hv search: give a query, or --id <sid|ref> to look one entry up", file=sys.stderr)
+        sys.exit(2)
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
     kind = getattr(args, "kind", None) or "all"
@@ -10146,7 +10187,12 @@ def build_parser():
                                       "decision's outcome_score)")
 
     search_parser = subparsers.add_parser("search", help="Search facts")
-    search_parser.add_argument("query", help="Search query")
+    search_parser.add_argument("query", nargs="?", help="Search query (omit with --id)")
+    search_parser.add_argument("--id", dest="lookup_id", metavar="SID|REF",
+                               help="Look up ONE entry by its short id (h:…) or ref (node_id:seq) instead of searching: "
+                                    "prints it (kind, sid, ref, source, content, tags, confidence or outcome, superseded "
+                                    "state) and exits 1 when nothing matches, so a script or agent can verify an id "
+                                    "before citing it. Reads the local store; needs no daemon")
     search_parser.add_argument("--format", choices=["text", "json"], default="text")
     search_parser.add_argument("--min-confidence", type=float, default=0.0,
                                help="Hide facts below this confidence (default 0.0 = show all)")

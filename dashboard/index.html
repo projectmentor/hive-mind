@@ -258,18 +258,21 @@ window.closeDetail=()=>{state.detail=null; setHash(''); render();};
 // through journal_index (`/api/item`), so the link survives rebuilds and works on every node. The rowid
 // never appears in a URL.
 function setHash(sid){ try{ if(sid){ if(location.hash!=='#'+sid) history.replaceState(null,'','#'+sid); } else if(location.hash) history.replaceState(null,'',location.pathname+location.search); }catch(e){} }
-async function openHash(){
-  const h=(location.hash||'').slice(1); if(!/^h:[0-9a-f]{10}$/.test(h)) return false;
+const ID_RE=/^(h:[0-9a-f]{10}|[^\s:]+(:[^\s:]+)*:\d+)$/;
+// Resolve a short id or `node_id:seq` ref to its entry (fact, decision or idea) and open its detail view.
+async function openById(h){
+  if(!ID_RE.test(h)) return false;
   let r; try{ r=await getJSON('/api/item?sid='+encodeURIComponent(h)); }catch(e){ return false; }
-  if(!r||r.error||!r.item||!(r.kind==='fact'||r.kind==='decision')) return false;
-  if(r.kind==='fact') LAST.facts=[r.item]; else LAST.decisions=[r.item];
-  state.detail={kind:r.kind,data:r.item}; render(); return true;
+  if(!r||r.error||!r.item||!(r.kind==='fact'||r.kind==='decision'||r.kind==='idea')) return false;
+  if(r.kind==='fact') LAST.facts=[r.item]; else if(r.kind==='decision') LAST.decisions=[r.item];
+  state.detail={kind:r.kind,data:r.item}; if(r.item.sid) setHash(r.item.sid); render(); return true;
 }
+async function openHash(){ return openById((location.hash||'').slice(1)); }
 window.addEventListener('hashchange',()=>{ openHash(); });
 function kv(k,v){return `<div class="kv"><div class="k">${esc(k)}</div><div class="v">${v}</div></div>`;}
 function renderDetail(){
   const d=state.detail;
-  const crumb=`<div class="crumb"><button class="back" data-onclick="closeDetail()">‹ Back</button><span class="who">${esc({fact:'Fact',decision:'Decision',session:'Session'}[d.kind])} detail</span></div>`;
+  const crumb=`<div class="crumb"><button class="back" data-onclick="closeDetail()">‹ Back</button><span class="who">${esc({fact:'Fact',decision:'Decision',idea:'Idea',session:'Session'}[d.kind])} detail</span></div>`;
   if(d.kind==='fact'){const f=d.data;
     $('#app').innerHTML=crumb+`<div class="panel"><h2>Fact <span class="mono">${esc(f.sid||('#'+f.id))}</span> <small class="muted">#${f.id} on this node</small></h2><div class="full">${esc(f.content)}</div></div>
       <div class="panel"><h2>Details</h2>
@@ -287,6 +290,14 @@ function renderDetail(){
         ${kv('Created',esc(x.created))}
         ${x.ref?kv('Identity', '<span class="mono">'+esc(x.ref)+'</span>'+(x.sid?' · <a href="#'+esc(x.sid)+'" class="mono">#'+esc(x.sid)+'</a>':'')):''}</div>
       <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
+  } else if(d.kind==='idea'){const f=d.data;
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Idea <span class="mono">${esc(f.sid||('#'+f.id))}</span> <small class="muted">hypothesis; confidence is earned, never asserted</small></h2><div class="full">${esc(f.content)}</div></div>
+      <div class="panel"><h2>Details</h2>
+        ${kv('Confidence',`<span class="bar"><i style="width:${Math.round((f.confidence||0)*100)}%"></i></span> <span style="color:${confColor(f.confidence||0)}">${(f.confidence||0).toFixed(2)}</span>`)}
+        ${kv('State', f.contested?'<span class="pill contested">CONTESTED</span>':'live')}
+        ${kv('Tags', (f.tags||[]).map(t=>`<span class="chip" data-onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'<span class="muted">—</span>')}
+        ${kv('Source', esc(f.source))}${kv('Created', esc(f.created))}
+        ${f.ref?kv('Identity', '<span class="mono">'+esc(f.ref)+'</span>'+(f.sid?' · <a href="#'+esc(f.sid)+'" class="mono">#'+esc(f.sid)+'</a>':'')):''}</div>`;
   } else {const s=d.data;
     const models=Object.entries(s.models||{});
     $('#app').innerHTML=crumb+`<div class="panel"><h2>Session</h2>
@@ -325,7 +336,7 @@ let C={q:'',kind:'all',tag:'',sort:'confidence',status:'all',fpage:1,dpage:1,fac
 function corpus(){
   $('#app').innerHTML=`
    <div class="controls">
-     <input type="search" id="q" placeholder="Search facts & decisions…" value="${esc(C.q)}">
+     <input type="search" id="q" placeholder="Search facts &amp; decisions, or paste an id (h:… or node:seq)…" value="${esc(C.q)}">
      <select id="kind"><option value="all">All</option><option value="fact">Facts</option><option value="decision">Decisions</option></select>
      <select id="sort"><option value="confidence">Sort: confidence</option><option value="importance">Sort: importance</option><option value="utility">Sort: utility</option><option value="recency">Sort: recency</option></select>
      <select id="status"><option value="all">Status: live</option><option value="contested">Contested</option><option value="forgotten">Forgotten</option><option value="volatile">Volatile</option></select>
@@ -333,7 +344,7 @@ function corpus(){
    </div><div id="results">${spin()}</div>`;
   $('#kind').value=C.kind; $('#sort').value=C.sort; $('#status').value=C.status;
   if(!C.tagsLoaded) getJSON('/api/tags').then(r=>{C.tagsLoaded=true;const sel=$('#tag');if(sel){sel.innerHTML='<option value="">All tags</option>'+r.tags.map(t=>`<option>${esc(t)}</option>`).join('');sel.value=C.tag;}}).catch(()=>{});
-  let timer; const reload=()=>{C.q=$('#q').value;C.kind=$('#kind').value;C.sort=$('#sort').value;C.status=$('#status').value;C.tag=$('#tag').value;C.fpage=1;C.dpage=1;loadCorpus();};
+  let timer; const reload=()=>{C.q=$('#q').value; const id=C.q.trim(); if(ID_RE.test(id)){ openById(id).then(ok=>{ if(!ok) reload2(); }); return; } reload2(); }; const reload2=()=>{C.kind=$('#kind').value;C.sort=$('#sort').value;C.status=$('#status').value;C.tag=$('#tag').value;C.fpage=1;C.dpage=1;loadCorpus();};
   $('#q').oninput=()=>{clearTimeout(timer);timer=setTimeout(reload,200);};
   ['kind','sort','status','tag'].forEach(id=>$('#'+id).onchange=reload);
   loadCorpus();

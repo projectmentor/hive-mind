@@ -1,5 +1,5 @@
 {
-  "digest": "132499f04b23fd5b5047f2f66f5d3b688f2a9f6d1e3430f5cb8bbb8d32f50590",
+  "digest": "0a970b984e6b2801e63e50dd85ea436bda7bd46df124bd0397b17867984830aa",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -33,7 +33,7 @@
     "docs/HV_ARCHITECTURE.md": "fed35d46d54501a60e43283a308dcd189e18bdbaf2341330b8bb93015bafed3b",
     "docs/INTERNALS.md": "e349a542bcfd1b86d688051842f0845261b7378470522447fdccf643b8f1588b",
     "docs/MODULE_API.md": "f2fdb5fda7d8c3ea221730a8dccb6756be97fce6f1c7c62461771275e019c65f",
-    "docs/NAMESPACES.md": "db6d6bd6e94d549e63da0fae5a1063ff920cb12362322e44bf813cac664e346e",
+    "docs/NAMESPACES.md": "68e4d477feda6afbbf855bb9ea4aca7c61e37d17cdc86497c6ead723305634f0",
     "docs/SYNC_API.md": "e06d38110503db8de785cadcd632434517204030c6cbd2b9b991cd91a1082de5",
     "docs/THREAT_MODEL.md": "5a943a2822672dbcc13ea098de37a19383aa9177302674f737aba067be0398f1",
     "docs/WORKING_TOGETHER.md": "50d5f87878a9ec4513d687d64063a5dcde919424b9d9c6d1686f7f832312759b",
@@ -48,7 +48,7 @@
     "hive_sync_daemon.py": "08df1d37ae53711d7bd59412658fbc3611972f63ce50c5a78b2247fa29f17516",
     "hivemind_ctl.py": "3fd05b2c14e61e0a6ff2e22ef6db6f8154a4e2b9473d3c22308b7f411aa2abe4",
     "hivemind_owner.py": "89fd15240c283334d38d606bc28d98fd5c24295025245b837ed2a62486b849aa",
-    "hv": "d23193a2354153390d89831e472aeeb0fde969268a5022719a49dbe1e9e3e163",
+    "hv": "ec598e415751e85833dc4c1133b50a2edbfb7dac8b254ae0237f443e65241aaf",
     "integrations/claude-code/hive-memory/SKILL.md": "55c025490cd4afecce87901ade9077bada2a73b3443143f42391c2958ccf91bb",
     "integrations/claude-code/install.sh": "588f0f6894c25893d3a098f4ddd422a480e63c85b5bb48c97f2d242069a93894",
     "integrations/claude-code/wire-up/SKILL.md": "e99f90fa4feadbb8e300defd09173c73d3b82833e3dc013f0448fd1dabf28159",
@@ -160,7 +160,7 @@
     "tests/test_ownerkey_boundary.py": "a62e30d9272d2b61fcd7bd642dc8f2afbde4db7dded36dff4ae69dfd1776334d",
     "tests/test_payload_shape.py": "ab3796f348f2e20fe4adde56092a12c4cae432427c49e99c42b8bca8136e4d24",
     "tests/test_peer_address.py": "6e79f53fccf74770f822bd53665e2784c59bf39a2bfbadf38415c24fdb3451a9",
-    "tests/test_perf.py": "948b3afb9450492ae4fce1c2c2a0f92a90709626a6bfdc422620528c07769e96",
+    "tests/test_perf.py": "08939cc662d426f16989077fad73cab1d404c87db67fad951e02663ab0decf5c",
     "tests/test_projection_authz.py": "cd472af9ecc6a4a3cf5566386b657e9c2c44a03b858e09b11d617410bf898c71",
     "tests/test_read_side_malformed_refs.py": "77ea6c421dc6ccfbf701c39e322184109b3d687f4d78754a2db6b9cb6fced63f",
     "tests/test_real_home_guard.py": "24bb45d534be4e6e73f6e1984b339a1b541618ffda0c89801ed11f57a8fc8299",
@@ -191,7 +191,7 @@
     "tests/test_whoami.py": "5f709c47c4a6a2ec89e4c1975d60bac3390ad969fe08a98af9a9a961cdf60193",
     "tests/test_wire.py": "69c6f2737a3d1a2ca956e7e73d95cc45138f70a480676cf36ed04deba1871e00",
     "tests/test_x25519.py": "c63b644d960b1282eda8746cbd9ba53f8b2341e3308f72f12f894122ab391df5",
-    "vocabulary.py": "dbd1e65efd072fe56d6081f6473f413ee8bf5a282bb2a58a3d997d91f6783847",
+    "vocabulary.py": "043950df42218722dc0576a9f6649f4972987706235ca34b9c86b816cc542d42",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
   "version": "2.1"

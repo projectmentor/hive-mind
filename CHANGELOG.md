@@ -10,7 +10,7 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## 2.0.3 — unreleased
+## 2.0.3 — 2026-10-05 · `v2.0.3`
 
 No contract change.
 

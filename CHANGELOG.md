@@ -10,7 +10,7 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
-## 2.1 — unreleased
+## 2.1 — 2026-10-06 · `v2.1.0`
 
 **Upgrading from 2.0.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep
 working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.md`, under *The guarantees*.
@@ -30,6 +30,7 @@ working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.
 - **`hv doctor` checks each module** (PR 9): `modules:<name>` and `modules-contract`. `hive-mind doctor --fix`
   re-renders a unit and starts one that failed, and leaves a unit the operator stopped alone (#232). It only enables
   a unit that is running but not enabled, and with no user systemd manager it touches no unit and says so (#234).
+  Plain `hv doctor` now warns "active but not enabled" for such a unit (#237).
 - **Module entities and `same-as`** (#208). A module writes only `x-<module>:` entities and links only its own. The
   core joins one to a shared entity with `hv entity join`, and `unjoin` withdraws only the joins this device wrote
   (`--owner` withdraws any). `hv entity show` lists the joined entities (`--no-joins` hides them).
@@ -44,9 +45,13 @@ working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.
   each installed module's `hooks/<event>`: payload on stdin, output discarded, 3 seconds per hook and a 6-second event
   budget (clamped to the shim's timeout), the process group reaped after each hook. `hv wire claude`, the `agent-hooks`
   check and the doctor timer add the two new shims to a node that has the four older ones.
-- *(Pending plan PR 9d: the doctor's check of a module's hook files.)*
+- **`hv doctor` checks a module's hook files** (PR 9d, #237). `modules:<name>` inspects every file under `hooks/`. An
+  undeclared `hooks/*` file (one the manifest's `hooks` list omits) is refused at `module add` and failed by the doctor.
+  The doctor warns, naming the reason, on a hook for an event the dispatcher does not know (it never runs) and on one
+  the dispatcher would skip (not a regular file, not executable, not owned by this user, writable by group or other),
+  and on a linked `hooks/`.
 
-## 2.0.3 — unreleased
+## 2.0.3 — 2026-10-05 · `v2.0.3`
 
 No contract change.
 

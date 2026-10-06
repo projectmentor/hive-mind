@@ -14,6 +14,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import _keys  # noqa: E402
+import hive_module_doctor  # noqa: E402
 import hive_modules  # noqa: E402
 from test_module_lifecycle import hive, units, _publish, _add, _state, SERVICE, SEED, OTHER_SEED  # noqa: E402,F401
 from test_succession import _run, _gov  # noqa: E402
@@ -354,3 +355,119 @@ def test_the_data_plane_imports_the_doctor_but_neither_it_nor_hive_modules_reach
         got |= {n.module.split(".")[0] for n in ast.walk(ast.parse((PROJECT / f).read_text()))
                 if isinstance(n, ast.ImportFrom) and n.module}
         assert "ownerkey" not in got and "hivemind_owner" not in got, f
+
+
+def test_plain_doctor_warns_that_an_active_unit_is_not_enabled(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    _shim(tmp_path, monkeypatch, "active", enabled=False)
+    _r, c = _mod(home)
+    assert c["status"] == "warn" and "active but not enabled" in c["detail"]
+    _shim(tmp_path, monkeypatch, "active", enabled=True)
+    assert _mod(home)[1]["status"] == "ok"
+
+
+def test_dry_run_says_would_enable_for_a_running_unit_that_is_not_enabled(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    calls = _shim(tmp_path, monkeypatch, "active", enabled=False)
+    before = len(calls())
+    r = _run(home, "doctor", "--fix", "--dry-run", check=False)
+    assert "would enable hive-module-demo.service" in r.stdout and "would start" not in r.stdout
+    assert not _acts(calls, before)
+
+
+def test_fix_counts_an_activating_unit_as_running_and_only_enables_it(good, units, monkeypatch, tmp_path):
+    home, _ = good
+    calls = _shim(tmp_path, monkeypatch, "activating", enabled=False)
+    before = len(calls())
+    r = _run(home, "doctor", "--fix", check=False)
+    acts = _acts(calls, before)
+    assert "enable hive-module-demo.service" in acts and not [a for a in acts if a.startswith(("restart", "start"))]
+    assert "enabled (was running, not enabled)" in r.stdout
+
+
+@pytest.mark.parametrize("word,rc,expected", [("degraded", 1, True), ("running", 0, True), ("offline", 1, False)])
+def test_user_systemd_accepts_a_degraded_manager(tmp_path, monkeypatch, word, rc, expected):
+    """A failed user unit makes the manager `degraded` (exit 1), and it still manages units."""
+    sh = tmp_path / "bin" / "systemctl"
+    sh.parent.mkdir()
+    sh.write_text(f"#!/bin/sh\necho {word}\nexit {rc}\n")
+    sh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{sh.parent}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert hive_modules.user_systemd() is expected
+
+
+def _hooked(tmp_path, home, files, hook_mode=None, **kw):
+    pub = _publish(tmp_path / "repo", files=files, **kw)
+    _add(home, tmp_path / "repo", pub)
+    if hook_mode is not None:
+        (tmp_path / "modules" / "demo" / "hooks" / "stop").chmod(hook_mode)
+
+
+STOP = {"run.sh": "#!/bin/sh\nexit 0\n", "hooks/stop": "#!/bin/sh\nexit 0\n"}
+
+
+def test_a_healthy_hook_adds_no_warning(hive, tmp_path, listener):
+    _hooked(tmp_path, hive, STOP)
+    assert _mod(hive)[1]["status"] == "ok"
+
+
+@pytest.mark.parametrize("mode,why", [(0o644, "not executable"), (0o775, "writable by group or other"),
+                                      (0o757, "writable by group or other")])
+def test_a_hook_the_dispatcher_would_skip_warns_and_says_why(hive, tmp_path, listener, mode, why):
+    _hooked(tmp_path, hive, STOP, hook_mode=mode)
+    _r, c = _mod(hive)
+    assert c["status"] == "warn" and "hook stop: the dispatcher skips it" in c["detail"] and why in c["detail"], c
+
+
+def test_a_hook_that_became_a_link_fails_the_manifest_check(hive, tmp_path, listener):
+    _hooked(tmp_path, hive, STOP)
+    p = tmp_path / "modules" / "demo" / "hooks" / "stop"
+    p.unlink()
+    p.symlink_to("/bin/true")
+    c = _mod(hive)[1]
+    assert c["status"] == "fail" and "stop" in c["detail"]
+
+
+def test_a_tampered_hook_fails(hive, tmp_path, listener):
+    _hooked(tmp_path, hive, STOP)
+    (tmp_path / "modules" / "demo" / "hooks" / "stop").write_text("#!/bin/sh\necho owned\n")
+    c = _mod(hive)[1]
+    assert c["status"] == "fail" and "does not match its manifest digest" in c["detail"]
+
+
+def test_a_hook_the_manifest_does_not_list_fails(hive, tmp_path, listener):
+    _hooked(tmp_path, hive, STOP)
+    p = tmp_path / "modules" / "demo" / "hooks" / "precompact"
+    p.write_text("#!/bin/sh\nexit 0\n")
+    p.chmod(0o755)
+    c = _mod(hive)[1]
+    assert c["status"] == "fail" and "hooks/precompact" in c["detail"]
+
+
+def test_an_event_the_dispatcher_does_not_know_warns(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    p = tmp_path / "hooks" / "bogus"
+    p.write_text("#!/bin/sh\n")
+    p.chmod(0o755)
+    out = hive_module_doctor._hooks(tmp_path, {"files": {}, "hooks": []})
+    assert len(out) == 1 and out[0][0] == "warn" and "not an event the dispatcher knows" in out[0][1], out
+
+
+def test_an_installed_hook_the_manifest_hooks_list_omits_fails(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    p = tmp_path / "hooks" / "stop"
+    p.write_text("#!/bin/sh\n")
+    p.chmod(0o755)
+    out = hive_module_doctor._hooks(tmp_path, {"files": {"hooks/stop": "0" * 64}, "hooks": []})
+    assert out == [("fail", "hook stop: hook not declared in the manifest")]
+
+
+def test_hooks_behind_a_linked_directory_fail(hive, tmp_path, listener):
+    _hooked(tmp_path, hive, STOP)
+    hooks = tmp_path / "modules" / "demo" / "hooks"
+    real = tmp_path / "elsewhere"
+    hooks.rename(real)
+    hooks.symlink_to(real)
+    c = _mod(hive)[1]
+    assert c["status"] == "fail" and "manifest not trusted" in c["detail"], c

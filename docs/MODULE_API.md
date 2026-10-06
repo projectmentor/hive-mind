@@ -375,10 +375,13 @@ lists the events the module hooks, and each `hooks/<event>` file is listed in th
 - **What verifies a hook.** The dispatcher does not hash a file per event. `module add` and `module update` check the
   tree against the signed manifest, and the doctor re-checks it (`modules:<name>`).
 
-> **PENDING: plan PR 9d, the doctor's hooks check.** It re-verifies each recorded module's `hooks/<event>` files against
-> the manifest digests, applies the dispatcher's gates above, and warns, naming the reason, for a file the dispatcher
-> would skip or an event it does not know. This line is replaced when 9d merges. The `hooks` manifest field and the
-> hook events are **stable** from this PR; only the check's name and message text are provisional.
+> **The doctor's hooks check** (`modules:<name>`). It re-verifies each recorded module's `hooks/<event>` files against the
+> manifest digests and applies the dispatcher's gates above. A `hooks/*` file the manifest's `hooks` list does not declare
+> is refused by `module add` and `module update` and **fails** the doctor. A file the dispatcher would skip (not regular,
+> not executable, not owned by this user, writable by group or other), an event it does not know (it never runs), and a
+> linked `hooks/` each **warn**, naming the reason. Plain `hv doctor` also warns "active but not enabled" for a module
+> unit that runs but will not start at login; `--fix` enables it without restarting it. The `hooks` manifest field and
+> the hook events are **stable**; only the check's name and message text are provisional.
 
 ## Fleet config
 

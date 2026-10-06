@@ -183,7 +183,24 @@ def test_a_term_ignoring_hook_stays_inside_the_budget(tmp_path):
     for n in ("a", "b", "c"):
         _install(tmp_path, f"m{n}", "#!/bin/sh\ntrap '' TERM\nsleep 100\n")
     r, dt = _run(tmp_path)   # defaults: cap 3, budget 6
-    assert r.returncode == 0 and dt < 6.6, dt
+    # a: 3s (TERM at 2, KILL at 3); b: left 6-3-1 = 2, so TERM at 1, KILL at 2s; c: skipped. About 5s in all; the
+    # old whole-second `SECONDS` timing, or a grace added on top of the cap, ran past 6s.
+    assert r.returncode == 0 and 4.9 < dt < 5.6, dt
+    log = _bus(tmp_path)
+    assert log.count("hook-timeout") == 2 and log.count("hook-skipped") == 1, log
+
+
+def test_a_single_hooks_cap_includes_its_kill_grace(tmp_path):
+    _install(tmp_path, "stubborn", "#!/bin/sh\ntrap '' TERM\nsleep 100\n")
+    r, dt = _run(tmp_path, HIVE_MODULE_HOOK_TIMEOUT="3")
+    assert r.returncode == 0 and 2.9 < dt < 3.6, dt
+
+
+def test_a_cap_of_one_second_still_has_a_limit(tmp_path):
+    _install(tmp_path, "tight", "#!/bin/sh\nsleep 100\n")   # `timeout 0` would mean no limit at all
+    r, dt = _run(tmp_path, HIVE_MODULE_HOOK_TIMEOUT="1")
+    assert r.returncode == 0 and dt < 3, dt
+    assert "hook-timeout tight stop" in _bus(tmp_path)
 
 
 def test_the_budget_is_clamped_to_the_shim_timeout(tmp_path):

@@ -167,6 +167,9 @@ def validate_manifest(raw, core_version):
     for h in hooks:
         if f"hooks/{h}" not in files:
             raise ModuleError(f"manifest hook {h!r} has no hooks/{h} file in `files`")
+    for rel in files:
+        if rel.startswith("hooks/") and rel[len("hooks/"):] not in hooks:
+            raise ModuleError(f"manifest file {rel!r} is a hook the manifest's `hooks` list does not declare")
     cfg = m.get("config", {})
     if not isinstance(cfg, dict) or not all(vocabulary.split_module_name(f"x-{m['name']}:{k}") and isinstance(v, str)
                                             and len(v) <= vocabulary.MODULE_VALUE_MAX for k, v in cfg.items()):

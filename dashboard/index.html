@@ -216,7 +216,7 @@ async function openOfficialModal(){
      ${(v.lines||[]).slice(1).map(l=>`<p class="mono" style="color:var(--dim)">${esc(l)}</p>`).join('')}
      ${fix}
      <p><strong>Use only the official HiveMind from <a href="https://projectmentor.org" target="_blank" rel="noopener">ProjectMentor</a>. Trust no imitations.</strong></p>
-     <p>To confirm your copy is genuine, run <code>hv verify</code> (or <code>hive-mind verify</code>). A genuine install shows a green check and confirms it against the canonical source; a fork, mirror, or modified copy is flagged with the official URL.</p>
+     <p>To confirm your copy is genuine, run <code>hv verify</code>. A genuine install shows a green check and confirms it against the canonical source; a fork, mirror, or modified copy is flagged with the official URL.</p>
      <p>Source: <code>${esc(v.official_source||'github.com/projectmentor/hive-mind')}</code> · Site: <a href="${esc(v.site||'https://hivemind.projectmentor.org')}" target="_blank" rel="noopener">hivemind.projectmentor.org</a></p>`,
     true);
 }

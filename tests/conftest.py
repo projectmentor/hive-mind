@@ -57,6 +57,9 @@ if not os.environ.get("PYTEST_XDIST_WORKER"):
     os.environ[_realhome.REAL_HOME_VAR] = _realhome.real_home()
 # The real paths as this session started, captured at import: before any fixture redirects HOME.
 REAL = _realhome.session_paths()
+# #178: the guard above now knows the real key dir; an exported HIVE_KEY_DIR (the documented override) must
+# not also steer the suite's own key writes into it. `isolation` clears it per test; this covers import time.
+os.environ.pop("HIVE_KEY_DIR", None)
 # #160: then a sandbox HIVE_HOME for the session, still at import, so a test module that loads `hv` at its
 # own import (and a helper that never sets HIVE_HOME) resolves into this, never the exported hive.
 SANDBOX_HIVE = Path(tempfile.mkdtemp(prefix="hive-test-sandbox-"))
@@ -134,6 +137,7 @@ def isolation(tmp_path_factory, monkeypatch, _service_stub_bin):
     monkeypatch.setenv("HIVE_IDENTITY_STASH", str(ns.stash))
     monkeypatch.setenv("HIVE_TEST_SERVICE_LOG", str(ns.service_log))
     monkeypatch.setenv("HIVE_HOME", str(root / "hive"))       # #160: never the exported hive
+    monkeypatch.delenv("HIVE_KEY_DIR", raising=False)         # #178: nor an exported key directory
     monkeypatch.setenv("HIVE_OWNER_KEY_PASSPHRASE", OWNER_KEY_PASSPHRASE)     # the sealed owner key (PR 3b)
     monkeypatch.setenv("PATH", f"{_service_stub_bin}{os.pathsep}{os.environ['PATH']}")
     # A throwaway HOME hides the user's site-packages from child interpreters; keep them visible.

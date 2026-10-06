@@ -372,8 +372,18 @@ def _runs(hv, tmp_path, base, entries):
     """Every run of `entries` (one per batch and one batch, in every order, then a re-offer of the full set); the
     outcomes that differ between runs."""
     outcomes = []
-    plans = [[[e] for e in perm] for perm in itertools.permutations(entries)]
-    plans += [[list(perm)] for perm in itertools.permutations(entries)]
+    plans = []
+    for perm in itertools.permutations(entries):
+        n = len(perm)
+        # every composition of the run into batches when it is small; one per batch and one batch otherwise
+        for cuts in (range(1 << (n - 1)) if n <= 4 else (0, (1 << (n - 1)) - 1)):
+            plan, cur = [], [perm[0]]
+            for i in range(1, n):
+                if cuts >> (i - 1) & 1:
+                    plan.append(cur)
+                    cur = []
+                cur.append(perm[i])
+            plans.append(plan + [cur])
     for plan in plans:
         _journal(hv, base)
         for batch in plan:
@@ -506,6 +516,19 @@ def _case_throwaway_owner_act(hv):
     return _admitted_x(hv, owner, base, x), [forged, revoke, _fact(hv, x, "x three", ts(12, 25))], k
 
 
+def _case_throwaway_owner_admit_of_itself(hv):
+    """The verifier's #1, second form: X signs an `admit` of itself with a throwaway owner key at seq 1 (12:20). It is not
+    the owner in authority, so it admits nothing and moves nothing for the owner's revoke of X (seq 2, 12:10)."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    rogue = _owner_key(hv)
+    forged = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"},
+                    ts(12, 20), owner=(rogue[0], rogue[1]))
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [forged, revoke, _fact(hv, x, "x three", ts(12, 25))], k
+
+
 def _case_unverified_owner_sig_key(hv):
     """The verifier's #2: the owner's revoke of X is relayed on d0 (12:10) and X has a fact at 12:15 whose payload merely
     carries an `owner_sig` key. The key proves nothing, so the fact is X's content and does not project, whichever of
@@ -520,14 +543,15 @@ def _case_unverified_owner_sig_key(hv):
 
 
 _CASES = [_case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
-          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act, _case_unverified_owner_sig_key]
+          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act,
+          _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key]
 
 
 # The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
 # a fact of X that arrives after the revoke is held finds X unadmitted and is refused, and one that arrived before it
 # was stored while X was admitted. The revoke race, left to #255; every other case ends with one root.
 _JOURNALS_DIFFER = ("_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
-                    "_case_unverified_owner_sig_key")
+                    "_case_throwaway_owner_admit_of_itself", "_case_unverified_owner_sig_key")
 
 
 def _case_holds(hv, tmp_path, case):

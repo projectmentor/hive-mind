@@ -538,7 +538,7 @@ def cmd_add(lib, args):
     print(f"installed module {name} {manifest['version']} (device {device_id}, principal {principal}); "
           + (f"service {unit_names(name)[0]}" + (" with a timer" if manifest["service"].get("interval") else "")
              if manifest.get("service") else "no service")
-          + (f" ({note})" if note else "") + "; its hooks arrive with a later 2.1 change")
+          + (f" ({note})" if note else "") + "; hooks: " + (", ".join(manifest.get("hooks") or []) or "none"))
 
 
 def _undo_add(lib, name, device_id):

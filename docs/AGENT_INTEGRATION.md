@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 2.0`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 2.1`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -150,7 +150,7 @@ session-end** — and bind the §2 behaviors to them. The reference implementati
 is real, working code in this repo — **study it, then write the equivalent for your runtime:**
 
 - **Claude Code (reference):** `~/.claude/settings.json` registers ONE stable shim per lifecycle
-  event (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`) → `command` runs
+  event (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, and since 2.1 `Notification` and `Stop`) → `command` runs
   `scripts/common/hive_dispatch.sh <event>`. The shim consumes the hook's stdin once, replays it to each
   behavior for that event (session telemetry, then the nudge/digest in `scripts/common/nudge_hook.sh`), and
   passes their stdout through so context injection still works. Because the foreign config holds only
@@ -266,6 +266,23 @@ governance actions, config keys, channels and the rest) is listed in [`NAMESPACE
 generated from `vocabulary.py`, and a name anything else adds takes a prefix.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `2.1` — **modules: a signed, loopback-only module API and a module lifecycle** (private #16). **Additive: no
+  re-integration.** Nothing an adapter calls changes: no verb, flag or output format moves. New: `hv feed` (read-only
+  journal entries past a per-node cursor, with the core's `forgotten` flag on `fact` entries and `affects` on owner
+  retracts: a consumer hides what is `forgotten` and never computes its own forget state); `hv entity join|unjoin`;
+  and, on the control plane, `hive-mind module add|remove|update|list|quota` and `hive-mind owner freeze-timestamps`.
+  A module is a separate process with its own device key, under the operator's principal; it writes through `/v1`
+  on `127.0.0.1` and never reaches the owner key. The promise to module authors, with each route marked stable,
+  provisional or internal, is [`CONTRACT.md`](CONTRACT.md); the routes are [`MODULE_API.md`](MODULE_API.md). A MINOR
+  may change how the hive governs (above), and this one does in three ways: module devices are excluded from
+  election votes; a prefixed `x-<module>:` config key is accepted; and, once the owner arms them, entry timestamps are
+  bounded. **Hooks:** the Claude Code hook spec gains `Notification` and `Stop` shims, added to a node that has the
+  four older ones by `hv wire claude` and the doctor (no adapter action: your own hooks are untouched), and the
+  dispatcher runs each installed module's `hooks/<event>` after the core behaviours, with output discarded, 3 seconds
+  per hook, a 6-second event budget and the process group reaped. **Operators:** modules run on Linux only in 2.1. **Version skew:** a 2.0 node ignores the module marker
+  and still counts a module device's vote (only with `quorum_m > 0` and `quorum_by=device`), and lists a module
+  device as unreachable in `fleet-contract`; `hv doctor` on a 2.1 node warns about any node still on 2.0 in a hive
+  that has modules, but only when `quorum_m > 0`. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `2.0` — **the split: `hv` is the agent data plane, `hive-mind` the owner/operator control plane** (public
   #136). **Re-integrate (§0).** Three adapter-visible breaks, each promised for this major: (1) a bare local
   id (`118`, `d17`, `i5`) is refused on every flag and MCP or Hermes input that takes a reference; pass the

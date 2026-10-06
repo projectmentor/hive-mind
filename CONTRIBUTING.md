@@ -20,7 +20,7 @@ To keep it sustainable, the development model is intentionally lightweight:
 - **Security vulnerabilities** → **don't** open an issue; report privately as described in
   [SECURITY.md](SECURITY.md).
 - **Pull requests** → welcome for bug fixes, security fixes and documentation. The current
-  contract is 2.0. New features are not added just because a pull request shows up; for anything
+  contract is 2.1. New features are not added just because a pull request shows up; for anything
   beyond a focused fix, **open a Discussion first**. A change to the contract, to signing, to
   sync, or to the security promises waits until the maintainer says yes. Sweeping refactors will
   likely be declined to keep the project coherent.

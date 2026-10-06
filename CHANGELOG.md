@@ -10,6 +10,47 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.1 — 2026-10-06 · `v2.1.0`
+
+**Upgrading from 2.0.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep
+working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.md`, under *The guarantees*.
+
+- **The module API, `/v1`** (plan PRs 4 and 5). A loopback-only listener for modules, separate processes with their own device key. Every request is signed
+  and an unsigned one is always `401`. Routes: `GET /v1/`, `/v1/feed`, `/v1/search`, `/v1/item`, `/v1/entity`,
+  `/v1/tip`, and `POST /v1/entries` for an entry the module signed itself. Per-module quotas (60 an hour, 500 a day,
+  16 KiB an entry, 50,000 for life; the owner raises them). No governance route. `docs/MODULE_API.md` is the
+  reference and `docs/CONTRACT.md` the stability promise.
+- **`hv feed`** (PR 1): journal entries past a per-node cursor, as JSON. A `fact` entry carries `forgotten` and an owner
+  `retract` carries `affects`, both computed by the core, so a consumer never reimplements the forget rule.
+- **`hive-mind module add|remove|update|list|quota`** (PR 6): a module is a git repository with a manifest signed
+  by its publisher key, pinned on first use. It installs outside the checkout, and `remove` revokes its device and
+  keeps its entries. Linux only; elsewhere `add` refuses before it touches anything.
+- **Module units** (PR 7): a manifest `service` block becomes `hive-module-<name>.service` (and a timer), and
+  `hive-mind update` runs `hive-mind module reapply` to re-render them, restarting only the units that changed.
+- **`hv doctor` checks each module** (PR 9): `modules:<name>` and `modules-contract`. `hive-mind doctor --fix`
+  re-renders a unit and starts one that failed, and leaves a unit the operator stopped alone (#232). It only enables
+  a unit that is running but not enabled, and with no user systemd manager it touches no unit and says so (#234).
+  Plain `hv doctor` now warns "active but not enabled" for such a unit (#237).
+- **Module entities and `same-as`** (#208). A module writes only `x-<module>:` entities and links only its own. The
+  core joins one to a shared entity with `hv entity join`, and `unjoin` withdraws only the joins this device wrote
+  (`--owner` withdraws any). `hv entity show` lists the joined entities (`--no-joins` hides them).
+- **Bounded entry timestamps** (#217). After the owner runs `hive-mind owner freeze-timestamps`, every node skips an
+  entry stamped more than 5 minutes before its device's latest earlier entry, or before its first admit. `hv`
+  clamps its own entries to the latest it holds. `hv doctor` and `hv audit` report `ts-bounds`, `future-dated` and `flood`.
+- **Module devices do not vote.** The owner's `admit --module` marks a device, and the election walk skips it. A 2.0
+  node still counts it, which matters only with `quorum_m > 0` and `quorum_by=device`.
+- **A prefixed config key `x-<module>:<key>` is accepted** by `set-config` and projected as a string; a bare unknown
+  key is still refused.
+- **Module hooks, and the `Notification` and `Stop` events.** After the core behaviours for an event, the dispatcher runs
+  each installed module's `hooks/<event>`: payload on stdin, output discarded, 3 seconds per hook and a 6-second event
+  budget (clamped to the shim's timeout), the process group reaped after each hook. `hv wire claude`, the `agent-hooks`
+  check and the doctor timer add the two new shims to a node that has the four older ones.
+- **`hv doctor` checks a module's hook files** (PR 9d, #237). `modules:<name>` inspects every file under `hooks/`. An
+  undeclared `hooks/*` file (one the manifest's `hooks` list omits) is refused at `module add` and failed by the doctor.
+  The doctor warns, naming the reason, on a hook for an event the dispatcher does not know (it never runs) and on one
+  the dispatcher would skip (not a regular file, not executable, not owned by this user, writable by group or other),
+  and on a linked `hooks/`.
+
 ## 2.0.3 — 2026-10-05 · `v2.0.3`
 
 No contract change.

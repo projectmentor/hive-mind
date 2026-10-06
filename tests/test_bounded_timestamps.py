@@ -556,6 +556,18 @@ def _case_transfer_beats_a_device_fact(hv):
     return _admitted_x(hv, owner, base, x), [fact, xfer], k
 
 
+def _case_never_admitted_then_revoked(hv):
+    """The verifier's non-blocking item, from an empty base: Z was never admitted and wrote a fact stamped 2025-01-01, before
+    the genesis owner; the owner revokes Z (12:10), relayed on d0. The pre-genesis stay ends with the honoured revoke, so
+    Z's fact never projects, in every order. (Without the revoke the stay splits on arrival order: #255.)"""
+    owner, (d0, d1), base = _hive(hv)
+    z = _device(hv)
+    fact = _fact(hv, z, "bootstrap", "2025-01-01T00:00:00.000+00:00")
+    revoke = _entry(hv, d0, "governance", {"action": "revoke", "device_id": z["id"]}, ts(12, 10), owner=owner)
+    k = lambda o: (z["id"], 1) not in o[0] and z["id"] not in o[1] and not o[2]   # noqa: E731
+    return [], [fact, base[0], revoke], k
+
+
 def _case_backdated_after_revoke(hv):
     """The reviewer's #3, verifier's form: no freeze marker. X is admitted, then the owner revokes it (seq 2, 12:10); its
     fact at seq 1 is stamped 2025-01-01, which puts it before the genesis owner in the journal's order. The stamp is the
@@ -572,14 +584,14 @@ def _case_backdated_after_revoke(hv):
 
 _CASES = [_case_backdated_after_revoke, _case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
           _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act,
-          _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key, _case_transfer_beats_a_device_fact]
+          _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key, _case_transfer_beats_a_device_fact, _case_never_admitted_then_revoked]
 
 
 # The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
 # a fact of X that arrives after the revoke is held finds X unadmitted and is refused, and one that arrived before it
-# was stored while X was admitted. The revoke race, left to #255; every other case ends with one root.
+# was stored while X was admitted (the never-admitted case likewise: a refused Z fact never lands). The revoke race, left to #255; every other case ends with one root.
 _JOURNALS_DIFFER = ("_case_backdated_after_revoke", "_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
-                    "_case_throwaway_owner_admit_of_itself", "_case_unverified_owner_sig_key")
+                    "_case_throwaway_owner_admit_of_itself", "_case_unverified_owner_sig_key", "_case_never_admitted_then_revoked")
 
 
 def _case_holds(hv, tmp_path, case):

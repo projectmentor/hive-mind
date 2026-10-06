@@ -310,6 +310,44 @@ def test_concurrent_remembers_both_succeed(tmp_path):
     conn.close()
 
 
+def test_concurrent_remembers_mint_distinct_seqs_and_project_each_fact_once(tmp_path):
+    """#215: with four writers, no two entries share a (node_id, seq) and no content projects twice. Before the
+    mint lock two processes read the same tip and appended one seq twice; before the claim guard a catch-up's
+    rebuild projected a writer's entry and the writer then inserted it again."""
+    _cli(tmp_path, "stats")
+    env = dict(os.environ, HIVE_HOME=str(tmp_path))
+    for rnd in range(8):
+        procs = [subprocess.Popen([sys.executable, str(HV), "remember", f"race {rnd} fact {i}"], env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for i in range(4)]
+        outs = [p.communicate(timeout=60) for p in procs]
+        assert all(p.returncode == 0 for p in procs), outs
+    journal = [json.loads(line) for f in (tmp_path / "journal").glob("*.jsonl")
+               for line in f.read_text().splitlines() if line.strip()]
+    keys = [(e["node_id"], e["seq"]) for e in journal]
+    assert len(keys) == len(set(keys)) == 32
+    conn = sqlite3.connect(tmp_path / "store.db")
+    assert conn.execute("SELECT count(*), count(DISTINCT content) FROM facts WHERE content LIKE 'race %'").fetchone() == (32, 32)
+    conn.close()
+
+
+@pytest.mark.parametrize("kind", ["fact", "decision", "idea"])
+def test_a_writer_does_not_project_an_entry_a_catch_up_already_projected(tmp_path, monkeypatch, kind):
+    """#215: the writer appended, another process's rebuild projected that entry, then the writer projects it."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    hv.init_db()
+    entry = hv.append_journal(kind, {"content": "caught up first", "tags": [], "source": "manual"})
+    hv.rebuild_db()                                                # the other process's catch-up
+    conn = hv.get_conn()
+    res = getattr(hv, f"persist_{kind}")(conn, entry)              # the writer's own projection, late
+    conn.commit()
+    table = {"fact": "facts", "decision": "decisions", "idea": "ideas"}[kind]
+    assert conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 1
+    assert conn.execute("SELECT count(*) FROM journal_index WHERE kind = ?", (kind,)).fetchone()[0] == 1
+    if kind == "fact":
+        assert res["inserted"] is True                             # still this entry's own new fact
+    conn.close()
+
+
 def test_a_locked_store_after_the_append_is_reported_as_journaled_then_caught_up(tmp_path):
     _cli(tmp_path, "remember", "an earlier fact")                  # store exists and is current
     lock = sqlite3.connect(tmp_path / "store.db", isolation_level=None)

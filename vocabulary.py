@@ -268,6 +268,8 @@ LOCAL_FILES = {
                                                 "count, so a refusal appends without reading the quarantine; local.",
                               where="hive"),
     ".quarantine.lock":     _v(WRITTEN, "2.0", "The lock the quarantine writers take; empty, local.", where="hive"),
+    ".journal.lock":        _v(WRITTEN, "2.1", "The lock a local write holds from reading this device's tip to appending the entry "
+                                                "built on it, so two processes never mint one seq; empty, local.", where="hive"),
     ".peer_candidates.json": _v(WRITTEN, "1.21", "The addresses each admitted device verified itself from; local, never "
                                                  "journaled (see `via` values).", where="hive"),
     ".peers.json":           _v(WRITTEN, "1.0", "This node's sync settings and its peers' addresses.", where="hive"),

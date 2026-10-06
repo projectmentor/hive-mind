@@ -367,8 +367,8 @@ lists the events the module hooks, and each `hooks/<event>` file is listed in th
 - **The process group is reaped after every hook**, whether it exited, was killed at the cap or finished normally, so a
   child the hook left behind (`sleep 30 &`) does not outlive it. **A hook is a short reaction to an event. Work that
   runs longer belongs in the module's service unit** (see *The unit*).
-- **A hook runs only if** the module is recorded in `.modules.json` (a top-level entry), the modules directory and
-  `hooks/` are real directories rather than links, and the file is a regular file, not a link, executable, owned by
+- **A hook runs only if** the module is recorded in `.modules.json` (a top-level entry), the modules directory, the
+  module's directory and `hooks/` are real directories rather than links, and the file is a regular file, not a link, executable, owned by
   the user running the hive, and writable by neither group nor other. Anything else is skipped.
 - **Skips and timeouts are logged,** one line each (`<time> hook-timeout|hook-skipped <module> <event>`), to `$HIVE_HOME/.bus/modules.log`, and never shown. With no module installed the dispatcher's output, exit code and
   files are as they were in 2.0.

@@ -483,6 +483,47 @@ def test_a_dropped_fact_keeps_fencing_its_devices_governance_in_every_order(tmp_
         assert "forget_writers" not in (state.get("config") or {}), batches
 
 
+def test_a_devices_later_content_does_not_split_its_membership(tmp_path, monkeypatch):
+    """#230 review: X's own admit is at seq 10 (12:10), a fact at seq 5 (12:20) would make the bounds skip it, and X's
+    next write at seq 11 (12:12) is behind the fact by more than 5 minutes. Every order ends with the same held,
+    skipped and admitted sets and facts: the fact is dropped, the admit holds, the later write projects."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    x = _device(hv)
+    x["seq"] = 9
+    own = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
+                 owner=owner)
+    x["seq"] = 4
+    f5 = _fact(hv, x, "x five", ts(12, 20))
+    x["seq"] = 10
+    f11 = _fact(hv, x, "x eleven", ts(12, 12))
+    results = []
+    for batches in ([[f5, f11]], [[f5], [f11]], [[f11], [f5]], [[f11, f5]], [[f5], [f11], [f5, f11]]):
+        _journal(hv, base + [marker, own])
+        for b in batches:
+            hv.append_foreign_entries(b)
+        results.append(_outcome(hv, tmp_path))
+    assert all(r == results[0] for r in results), results
+    held, skipped, admitted, facts = results[0]
+    assert (x["id"], 5) not in held and (x["id"], 11) in held and x["id"] in admitted and not skipped
+    assert "x five" not in facts and "x eleven" in facts
+
+
+def test_offering_the_same_dropped_fact_again_does_not_grow_the_fence_file(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    x = _device(hv)
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    admit = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
+                   owner=owner)
+    _journal(hv, base + [marker, admit])
+    for _ in range(5):
+        hv.append_foreign_entries([fact])
+    assert len((hv.HIVE_HOME / ".ts-fences.jsonl").read_text().splitlines()) == 1
+
+
 def test_a_fact_dropped_for_its_own_admit_names_the_reason_on_stderr(tmp_path, monkeypatch, capsys):
     hv = _loadhv(tmp_path, monkeypatch)
     owner, (d0, d1), base = _hive(hv)

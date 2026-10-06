@@ -1496,6 +1496,7 @@ def append_foreign_entries(entries, advertised_chunks=None):
     refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
     gov = chain = None
     gov_top = {}                     # node_id -> highest governance seq this node holds
+    fences = {}                      # node_id -> [(seq, instant)] of dropped entries that still bound its governance (#230)
     has_owner = False
     admitted = set()
     gov_dirty = False
@@ -1511,11 +1512,12 @@ def append_foreign_entries(entries, advertised_chunks=None):
         for h in held:
             if h.get("type") == "governance" and isinstance(h.get("seq"), int):
                 gov_top[h.get("node_id")] = max(gov_top.get(h.get("node_id"), 0), h["seq"])
+        fences.clear()
         if chain is not None:
             for n, s, t in _read_fences():
                 inst = _ts_instant(t)
-                if inst is not None:
-                    chain.setdefault(n, []).append((s, inst))
+                if inst is not None and (s, inst) not in fences.get(n, ()):
+                    fences.setdefault(n, []).append((s, inst))
         # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
         # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
         # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
@@ -1547,7 +1549,12 @@ def append_foreign_entries(entries, advertised_chunks=None):
                 and (e["node_id"], e["seq"]) in _governance_state(
                     merkle.read_all_entries(JOURNAL_DIR) + [e]).get("ts_markers", ())):
             return True              # a marker the projection will honour is exempt, as in `_ts_violations`
-        why = _ts_ingest_problem(e, gov, chain)
+        # A dropped entry bounds only its device's governance: the content behind it is judged as the projection
+        # judges it, with the dropped entry absent, so a device's later write does not depend on the split.
+        against = chain
+        if e.get("type") == "governance" and e.get("node_id") in fences:
+            against = dict(chain, **{e["node_id"]: chain.get(e["node_id"], []) + fences[e["node_id"]]})
+        why = _ts_ingest_problem(e, gov, against)
         if why is not None:
             ts_refused.append(why)
             return False
@@ -1571,7 +1578,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
         for (n, s), _why in _ts_violations(held + [e], with_e).items():
             if n == nid and (n, s) not in before:
                 h = next((x for x in held if x.get("node_id") == n and x.get("seq") == s), None)
-                if h is None or h.get("type") != "governance" or (h.get("payload") or {}).get("action") != "admit" \
+                if h is not None and h.get("type") != "governance":
+                    continue            # its own later content is skipped with it, as it is when the content lands first
+                if h is None or (h.get("payload") or {}).get("action") != "admit" \
                         or (h.get("payload") or {}).get("device_id") != nid:
                     return None
         return "an admit of the device sits behind this entry and its timestamp would make the bounds skip that admit"
@@ -1582,7 +1591,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
         inst = _ts_instant(e.get("timestamp"))
         if inst is None:
             return
-        chain.setdefault(e["node_id"], []).append((e["seq"], inst))
+        if (e["seq"], inst) in fences.get(e["node_id"], ()):
+            return                      # already on file: a re-offer must not grow the file
+        fences.setdefault(e["node_id"], []).append((e["seq"], inst))
         try:
             with open(HIVE_HOME / ".ts-fences.jsonl", "a") as f:
                 f.write(json.dumps({"n": e["node_id"], "s": e["seq"], "t": e["timestamp"]}) + "\n")

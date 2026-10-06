@@ -81,6 +81,8 @@ READERS = {
         ("hive_module_api.py", "_check_entry"),    # `POST /v1/entries` (2.1): the shape each module-writable type needs
         ("hv", "_capsule_version_conflicts"),
         ("hv", "_self_signed_owner_acts"),      # genesis candidates
+        ("hv", "_ts_owner_signed"),             # the timestamp tiebreak: an owner-signed governance act
+        ("hv", "_admitted_content"),            # the projection keeps governance, drops an unadmitted device's content
         ("hv", "_governance_state"),
         ("hv", "_governance_state_uncached"),   # the governance walk
         ("hv", "_owner_declaration"),

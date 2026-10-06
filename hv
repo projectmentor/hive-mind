@@ -20,6 +20,7 @@ Cross-node identity (Phase 2):
 
 import argparse
 import base64
+import bisect
 import collections
 import copy
 import hashlib
@@ -810,14 +811,16 @@ def _valid_timestamp(ts):
 # Nothing is checked until the owner signs a `freeze-timestamps` marker: its `tips` freeze each device's chain at a
 # seq, and an entry at or below its device's tip is unchecked. Grandfathering is by seq, never by timestamp, so a
 # backdated entry cannot claim it. Without a marker nothing is skipped, so a node keeps today's projection.
-# Ingest keeps no verdict of its own (#230, #250; David's ruling of 2026-10-06): an entry lands iff the projection over
-# (what this node holds + the entries landed so far in the batch + this entry) would honour it, i.e. the bounds do not
-# skip it and, for content, its device is admitted in that projection. The projection judges a device's entries in seq
-# order and ingest sees them in arrival order, so asking the projection is what makes every order end the same.
-# Tiebreak, for one case only: owner-signed governance beats device-stamped content when the owner act is the admit of
-# the fact's own device. A fact whose future stamp would make the bounds skip that admit is the entry refused. A revoke
-# or a relayed admit on the same chain is not protected: the projection skips it behind the lower-seq fact, so the fact
-# lands in every order (all nodes still agree). Closing that needs the projection to prefer owner governance (#250).
+# The bounds apply only in the projection (#230, #250; David's rulings of 2026-10-06). Ingest checks the signature, the
+# purge, the payload and the admission of an entry and refuses nothing for its timestamp: an entry the bounds would skip
+# is stored all the same, so two nodes that are offered the same entries hold the same journal, whatever the order or
+# the batch split, and the projection judges one set.
+# Tiebreak: owner-signed governance beats a device-stamped entry. A device-stamped entry is every entry the owner did not
+# sign: content, and the authority-less `announce`, `join-request`, `propose-election` and `vote-election`. The walk of a
+# chain in seq order skips a device-stamped entry that would push the chain's latest timestamp past a higher-seq
+# owner-signed act (an admit, a revoke, a marker), and that skipped entry does not move the chain. Owner-signed entries
+# that pass still do. So a device cannot void an owner act by writing a lower seq with a later stamp, with content or with
+# the device key's own announce. Content projects only while the same projection lists its device in `admitted`.
 # Arrival times and flood counts are detection only: `hv doctor` and `hv audit` report them, nothing refuses.
 # --------------------------------------------------------------------------
 
@@ -828,6 +831,7 @@ FLOOD_PER_DAY = 2000                      # default `flood_per_day`
 _CANONICAL_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00")
 _TS_PARTS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(?:(Z)|([+-])(\d{2}):(\d{2}))?")
 _TS_RULE2_EXEMPT = ("join-request", "announce")
+_TS_DEVICE_STAMPED_GOVERNANCE = ("announce", "join-request", "propose-election", "vote-election")
 
 
 def _ts_instant(ts):
@@ -881,10 +885,24 @@ def _ts_problem(e, floor, prior_max):
     return None
 
 
+def _ts_owner_signed(e):
+    """True for a governance act that carries the owner's signature. Every other entry is device-stamped: content, and
+    the authority-less acts `announce`, `join-request`, `propose-election` and `vote-election`, which only the device
+    key signs. A forged owner act signed by some other key lands only on the chain of the device that wrote it."""
+    p = e.get("payload")
+    return (e.get("type") == "governance" and isinstance(p, dict)
+            and p.get("action") not in _TS_DEVICE_STAMPED_GOVERNANCE)
+
+
 def _ts_violations(entries, gov):
     """{(node_id, seq): reason} for every entry the bounds skip. Pure and deterministic over the journal and the
     governance projection: a device's entries are walked in seq order, and only an entry that passes (or is
-    grandfathered) moves the chain's latest timestamp. Empty until a marker is honoured."""
+    grandfathered) moves the chain's latest timestamp. Empty until a marker is honoured.
+
+    Tiebreak (#230, #250; David's ruling of 2026-10-06): owner-signed governance beats a device-stamped entry. A
+    device-stamped entry that would push the chain's latest timestamp past a higher-seq owner-signed act, so that the
+    bounds skip that act, is itself skipped and does not move the chain. An owner-signed entry that passes still
+    does. Which entries are skipped is then a function of the set held, whatever order it arrived in."""
     tips = gov.get("ts_tips") or {}
     if not tips:
         return {}
@@ -896,10 +914,26 @@ def _ts_violations(entries, gov):
     out = {}
     for nid, es in by_dev.items():
         floor = _ts_instant(first.get(nid))
+        es.sort(key=lambda x: x["seq"])
+        # The owner-signed acts the bounds check and keep unless something earlier on the chain pushes past them:
+        # the instants a device-stamped entry must not push past. Sorted; an entry leaves it as the walk reaches it.
+        ahead = sorted(i for e in es if _ts_owner_signed(e)
+                       and not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov))
+                       and _ts_problem(e, floor, None) is None
+                       for i in [_ts_instant(e.get("timestamp"))])
         prior = []
-        for e in sorted(es, key=lambda x: x["seq"]):
-            if not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov)):
+        for e in es:
+            checked = not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov))
+            owner_signed = _ts_owner_signed(e)
+            if owner_signed and checked and _ts_problem(e, floor, None) is None:
+                del ahead[bisect.bisect_left(ahead, _ts_instant(e.get("timestamp")))]
+            if checked:
                 why = _ts_problem(e, floor, _ts_chain_max(prior))
+                if why is None and not owner_signed and ahead:
+                    inst = _ts_instant(e.get("timestamp"))
+                    lo = bisect.bisect_left(ahead, max(prior) - TS_TOLERANCE) if prior else 0
+                    if lo < len(ahead) and ahead[lo] < inst - TS_TOLERANCE:
+                        why = "timestamp would make the bounds skip a later owner-signed act on the device's chain"
                 if why is not None:
                     out[(nid, e["seq"])] = why
                     continue
@@ -907,6 +941,22 @@ def _ts_violations(entries, gov):
             if inst is not None:
                 prior.append(inst)
     return out
+
+
+def _admitted_content(entries, gov):
+    """`entries` without the content of a device the same projection does not list in `admitted` once an owner exists
+    (#230, #250): ingest stores what the timestamp bounds would skip, so admission is read here, from the projection
+    that has applied the bounds, and not from what ingest saw on arrival. Governance is not content. Content that
+    precedes the genesis owner in the journal's order stays, as the pre-genesis forget does: the bootstrap hive
+    accepted every device, and the owner's first act must not unwrite what came before it."""
+    if gov.get("owner_id") is None:
+        return entries
+    ok = gov["admitted"] - gov.get("purged", set())
+    ok = ok | {str((gov.get("genesis") or {}).get("ref") or ":").rsplit(":", 1)[0]}   # the genesis device writes before any admit
+    timeline = gov.get("owner_timeline") or []
+    return [e for e in entries if e.get("type") == "governance" or e.get("node_id") in ok
+            or (isinstance(e.get("payload"), dict) and "owner_sig" in e["payload"])      # an owner act, not device-stamped
+            or _owner_at(timeline, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))) is None]
 
 
 def _ts_unskipped(entries, gov=None):
@@ -917,28 +967,6 @@ def _ts_unskipped(entries, gov=None):
     if not skipped:
         return entries
     return [e for e in entries if (e.get("node_id"), e.get("seq")) not in skipped]
-
-
-def _ts_ingest_problem(e, gov, chain):
-    """Why ingest refuses `e` against the chain it joins, or None. `chain` is {node_id: [(seq, instant)]} of the
-    entries this node holds, extended as a batch lands. Same predicate as `_ts_violations`."""
-    tips = gov.get("ts_tips") or {}
-    if not tips or _ts_grandfathered(e, tips) or _ts_is_marker(e, gov):
-        return None
-    seq = e.get("seq")
-    prior = [i for s, i in chain.get(e.get("node_id"), ()) if isinstance(seq, int) and s < seq]
-    return _ts_problem(e, _ts_instant((gov.get("first_admit") or {}).get(e.get("node_id"))), _ts_chain_max(prior))
-
-
-def _ts_chain(entries, gov):
-    """{node_id: [(seq, instant)]} over the entries `gov`'s bounds keep, for `_ts_ingest_problem`: the chain the
-    projection walks, so an entry it skips cannot raise the bar for a later one."""
-    chain = {}
-    for e in _ts_unskipped(entries, gov):
-        inst = _ts_instant(e.get("timestamp"))
-        if e.get("node_id") is not None and isinstance(e.get("seq"), int) and inst is not None:
-            chain.setdefault(e["node_id"], []).append((e["seq"], inst))
-    return chain
 
 
 def _arrivals_path():
@@ -1482,27 +1510,17 @@ def append_foreign_entries(entries, advertised_chunks=None):
 
     door = _first_pull_door(entries, tips, advertised_chunks)
     unsigned_why = []
-    ts_refused = []                  # reasons: signed, verified, refused by the timestamp bounds (#217)
     arrived = []                     # (node_id, seq) of each entry that landed, for the local arrival record
     refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
-    gov = chain = None
-    deferred_why = {}                # (node_id, seq) -> why a late entry's device is not admitted, for stderr if it stays so
-    dev_top = {}                     # node_id -> highest seq this node holds, of any type
+    gov = None
     has_owner = False
     admitted = set()
     gov_dirty = False
 
     def refresh():
-        """The governance state and the timestamp chain of what this node holds now. The chain is the one the
-        projection walks (entries the bounds skip left out), or None until a marker is honoured."""
-        nonlocal gov, chain, has_owner, admitted, gov_dirty
-        held = merkle.read_all_entries(JOURNAL_DIR)
-        gov = _governance_state(held)
-        chain = _ts_chain(held, gov) if gov.get("ts_tips") else None
-        dev_top.clear()
-        for h in held:
-            if isinstance(h.get("seq"), int):
-                dev_top[h.get("node_id")] = max(dev_top.get(h.get("node_id"), 0), h["seq"])
+        """The governance state of what this node holds now."""
+        nonlocal gov, has_owner, admitted, gov_dirty
+        gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
         # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
         # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
         # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
@@ -1512,9 +1530,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
 
     if entries:
         refresh()
-        # A device's entries are judged in seq order, whatever their type, so neither the batch order nor how
-        # the batch is split can change a verdict: ingest lands `e` iff the projection over what is held,
-        # what landed and `e` honours it (`_ts_ok`).
+        # Ingest keeps no verdict on the timestamp bounds (#230, #250; David's ruling of 2026-10-06): an entry the
+        # bounds would skip is stored all the same and the projection alone skips it (`_ts_violations`), so two
+        # nodes holding the same entries project the same set and their journals end equal in every order.
         # The device that signs a marker goes first, so a marker arms the rest of its batch as it would had it
         # arrived alone first.
         # A device carrying an owner-chain act goes first too, so nothing in a batch that carries the genesis is
@@ -1525,44 +1543,8 @@ def append_foreign_entries(entries, advertised_chunks=None):
         entries = sorted(entries, key=lambda x: (x.get("node_id") not in markers, str(x.get("node_id")),
                                                  x.get("seq") if isinstance(x.get("seq"), int) else 0))
 
-    def _is_late(e):
-        """A late arrival: its seq is below its device's top held seq, so it may flip a verdict the projection
-        reaches for a higher seq."""
-        return isinstance(e["seq"], int) and e["seq"] < dev_top.get(e["node_id"], 0)
-
-    def _projection(e):
-        """(why the bounds skip `e`, or None; whether its device is admitted) in the projection over (what this
-        node holds, which includes what landed in this batch, + `e`)."""
-        held = merkle.read_all_entries(JOURNAL_DIR)
-        with_e = _governance_state(held + [e])
-        return _ts_violations(held + [e], with_e).get((e["node_id"], e["seq"])), e["node_id"] in with_e["admitted"]
-
-    def _ts_ok(e):
-        """Whether the projection over (what this node holds + what landed in this batch + `e`) honours `e`: the
-        bounds do not skip it and, for content, its device is admitted in that projection (`judge_content`). Ingest
-        keeps no verdict of its own, so no order or split of arrivals can leave two nodes refusing different
-        entries. The full check reads the journal, so it runs only for governance (an admit or a marker changes who
-        is admitted and which bounds apply) and for a late arrival (`_is_late`). An entry above its device's top
-        keeps the incremental chain check, which is exact there: nothing the projection judges after it is held.
-        `dev_top` tracks the top seqs. Records the reason, for stderr, if refused."""
-        if chain is None:
-            return True
-        if e.get("type") != "governance" and not _is_late(e):
-            why = _ts_ingest_problem(e, gov, chain)
-        else:
-            why = _projection(e)[0]
-        if why is not None:
-            ts_refused.append(why)
-            return False
-        return True
-
     def _landed(e):
         arrived.append((e["node_id"], e["seq"]))
-        dev_top[e["node_id"]] = max(dev_top.get(e["node_id"], 0), e["seq"])
-        if chain is not None:
-            inst = _ts_instant(e.get("timestamp"))
-            if inst is not None:
-                chain.setdefault(e["node_id"], []).append((e["seq"], inst))
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
@@ -1586,9 +1568,6 @@ def append_foreign_entries(entries, advertised_chunks=None):
             return _DONE
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
-            return _DONE
-        if not _ts_ok(e):
-            rejected += 1
             return _DONE
         action = (e.get("payload") or {}).get("action")
         if pin is not None and action == "owner" and not _pin_matches(e, pin):
@@ -1649,25 +1628,10 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if has_owner and nid in gov["purged"]:
             rejected += 1               # a purged device is tombstoned: its new writes are rejected even if later re-admitted
             return _DONE
-        if has_owner and chain is not None and _is_late(e):
-            # A late arrival is judged by the projection with it in the chain: it may make the bounds skip the
-            # admit of its own device, or skip the revoke that stands against it.
-            skipped, ok = _projection(e)
-            if skipped is not None:
-                ts_refused.append(skipped)
-                rejected += 1
-                return _DONE
-            if not ok:
-                deferred_why[(nid, seq)] = "the device is not admitted in the projection with this entry, whose timestamp " \
-                                           "makes the bounds skip an admit of it"
-                return _DEFER
-        elif has_owner and nid not in admitted:
+        if has_owner and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
             return _DEFER
-        elif not _ts_ok(e):
-            rejected += 1
-            return _DONE
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
@@ -1686,7 +1650,7 @@ def append_foreign_entries(entries, advertised_chunks=None):
         return _LANDED
 
     # Sweep the batch in (device, seq) order. An entry whose device is not admitted yet waits; it does not hold back
-    # its device's later entries, because each is judged on its own by the projection over what is held (`_ts_ok`),
+    # its device's later entries, because each is judged on its own against the admitted set of what is held,
     # so the batch's order cannot change a verdict. A sweep that lands nothing first lets the waiting governance run
     # (an admit may be what the waiting content needs); only when none is waiting are the deferred entries settled as
     # refused (their device was never admitted). Every sweep lands or refuses at least one entry, so the loop is
@@ -1715,8 +1679,6 @@ def append_foreign_entries(entries, advertised_chunks=None):
                 waiting = still
             else:
                 rejected += len(waiting)
-                ts_refused.extend(deferred_why[(w["node_id"], w["seq"])] for w in waiting
-                                  if (w["node_id"], w["seq"]) in deferred_why)
                 break
         unresolved = waiting
 
@@ -1743,8 +1705,6 @@ def append_foreign_entries(entries, advertised_chunks=None):
                   "unadmitted device"
         if unsigned_why:
             reasons += "; " + "; ".join(sorted(set(unsigned_why)))
-        if ts_refused:
-            reasons += "; timestamp bounds: " + "; ".join(sorted(set(ts_refused)))
         print(f"append_foreign_entries: rejected {rejected} entr"
               f"{'y' if rejected == 1 else 'ies'} ({reasons})", file=sys.stderr)
     return accepted, duplicates
@@ -3624,7 +3584,9 @@ def _projection_entries(journal, note=False):
     """The journal entries the projection reads: those of a shaped type that project to something (#205). The
     one filter for `rebuild_db` and the live writers (`remember`, `decide`, `link`), so an incremental write
     and a full rebuild agree on a hostile entry already on disk. `note` records each skip for `rebuild_db`."""
-    journal = _ts_unskipped(journal)         # #217: the timestamp bounds skip an entry for every type
+    gov = _governance_state(journal)
+    journal = _ts_unskipped(journal, gov)    # #217: the timestamp bounds skip an entry for every type
+    journal = _admitted_content(journal, gov)
     return [e for e in journal if e["type"] not in _PAYLOAD_SHAPES
             or (_projectable(e) if note else _unprojectable(e) is None)]
 

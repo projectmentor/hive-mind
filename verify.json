@@ -1,5 +1,5 @@
 {
-  "digest": "0d4c76f0ff0f61223ca8ae81323cf4169806809e0ac965ae1544fa838d8f06f1",
+  "digest": "cde5e69f3ccfe815422ec0470de39af0f5234597ae1aa9f32c359de1bb34ece8",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -23,7 +23,7 @@
     "config/nudge.env.example": "b278edb191f6588316383f5c095f6332fc3ccaf695c595dccd9b21c4322d5cf3",
     "crypto_selftest.py": "5cfacd5a3ca4936f1d5a15c2ec088accf576b78d736365860c8163902ad98be4",
     "dashboard/favicon.svg": "d9d8eee4a31c78e940e27c77c3cb971ff1e1c4cb9d39370f82cfdedcc4746804",
-    "dashboard/index.html": "9875988ae7cc343954aa3c892bcf5e5ea123ee8436d0fb1eaff7ee555e056b14",
+    "dashboard/index.html": "16de54736e806996188d9a6432e380d250a32abe290e304f17681d9ced7c816a",
     "dashboard/logo.svg": "a7a44c7994dda2788c3f89e095b790a3429ace2642746442d41b40de9031458a",
     "docs/ADVISORIES.md": "aee9fab7f28266625d7f9d29a8636197f898ae1e117aea8d62456740892a6422",
     "docs/AGENT_INTEGRATION.md": "1457c5ef6d6f59ad4f417b5d55bcfe6510cbdf174903568c1866a32a83017a71",

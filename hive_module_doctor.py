@@ -13,7 +13,7 @@ degraded, not hostile. A record in `.modules.json` that is not an object is repo
 `fix` is `hv doctor --fix`'s part: re-render a unit that differs from the manifest (through the stop-first path
 `module add` and `update` use) and start one that is `failed` or not enabled. A unit that is enabled but `inactive`
 was stopped on purpose: it is reported and left alone, and a running unit that is only not enabled is enabled,
-never restarted. With no user systemd manager `fix` touches no unit and says so. `fix` acts only on a module whose manifest verifies, never
+never restarted just to enable it. With no user systemd manager `fix` touches no unit and says so. `fix` acts only on a module whose manifest verifies, never
 re-admits a device, and never touches governance.
 """
 
@@ -225,7 +225,7 @@ def checks(hv, gov, entries, probe=None, now=None):
 
 def fix(hv, dry=False, now=None):
     """Re-render a unit that differs from its manifest and start one that is failed or not enabled (a running one that
-    is only not enabled is enabled, never restarted). Without a user systemd manager it does nothing but say so. Returns lines
+    is only not enabled is enabled, never restarted just to enable it). Without a user systemd manager it does nothing but say so. Returns lines
     to print. A unit that is enabled but inactive was stopped on purpose: reported, never restarted. Only a module
     whose manifest verifies, whose device is admitted, on a platform with a backend. Nothing here admits, revokes
     or signs anything."""

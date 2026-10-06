@@ -337,8 +337,8 @@ the directory is shared between hives on a machine. `modules-contract` warns, on
 `quorum_m > 0`, about any node still on contract 2.0.
 
 `hive-mind doctor --fix` re-renders a unit that differs from its manifest and starts one that is `failed` or not
-enabled. **A unit that is running but not enabled is only enabled, never restarted**, so the live process keeps its
-PID. **With no user systemd manager** (no `XDG_RUNTIME_DIR`, or `is-system-running` fails; `degraded` still counts as
+enabled. **A unit that is running but not enabled is only enabled, never restarted just to enable it**, so the live process keeps its
+PID, unless its unit file has also drifted from the manifest (then it is re-rendered and restarted). **With no user systemd manager** (no `XDG_RUNTIME_DIR`, or `is-system-running` fails; `degraded` still counts as
 a manager) `--fix` and `--dry-run` touch no unit, write nothing and say "no user systemd: module units not managed
 here". **A unit that is enabled but `inactive` was stopped on purpose, and `--fix` leaves it alone**: the doctor
 reports it, with the `systemctl --user start` line that resumes it, and the 15-minute timer never restarts it. `--fix`

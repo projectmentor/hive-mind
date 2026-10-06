@@ -1,5 +1,5 @@
 {
-  "digest": "43edb529d8431c46e7d235ecd75c23aff4576e6df23d9466ae9dbbe901dc04d2",
+  "digest": "2022ecf0447a09ff10befd5158df881074a19a5d83ae1feedceda382a9419025",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -91,10 +91,11 @@
     "tests/_ed25519_reference.py": "313e3f52e74ad1f5afe3c729565e57fb9c5f9861b51497cf8fc4de00243c4460",
     "tests/_guard_probe.py": "97718cd5eec56cda59e38db28f1200f8c38a8bd9b9e572a3f04f2ed3cc16bf73",
     "tests/_ids.py": "47445c05f46367d4eb99adc97bf736463eab72cea2d3cc46f2716dc6897b816b",
+    "tests/_keydir_probe.py": "3c9fdbadc12ded4b543ff11070da7cd8dfae81a3ebf29beae1007b672669d7e5",
     "tests/_keys.py": "f90e71a282b91f3b5a2c488d5ed274eb3942370921fc818b604dbd21e4e43b44",
     "tests/_planes.py": "6fc6b2ade955de836479967f00af2fccd81971c56c6a3df01fb9745bacf62c6a",
     "tests/_realhome.py": "cf33f6e9945d14bd355c4e251b7750772a804b1f35e896660c362b7c3a7b6cfc",
-    "tests/conftest.py": "9e7828c235ae094cf284e30850f7894e0a4e7c4778aff10372948dcfe012e546",
+    "tests/conftest.py": "847d497a0a5f88867c7d6fa912d72fa70f03d4986547cab5fc3fef12ffeaa28f",
     "tests/security/poc.py": "4ee6804bfe65e4807c858b7f7bcfc3e7197d096addf4a96a13d16e5aeecc13ba",
     "tests/test_admit_peering.py": "f9caf05a9f56e04c36845d6c206351b6a8ac2bde209a1fd714a7c3b6eaf1e51b",
     "tests/test_agent_guidance.py": "f3211fb32efe143ba28fcf92d9c5f653482f211832d9d7b1ed3cc19ac055e1c9",
@@ -139,6 +140,7 @@
     "tests/test_journal_timestamps.py": "f42e14e4c39fdd62d284b2d50d2c61b16ac4b0fbd65daa6907b223fb19faabe5",
     "tests/test_keep_identity.py": "cd52f58d33e9c431221e2d3534dae26e0fcaa126f33859cc3010a9e9d0a117b4",
     "tests/test_keydir.py": "5009ce5e6d169ee5a583c69e7ada7586ca984be7da6a18b9ccf3d16dbc6cb2fa",
+    "tests/test_keydir_isolation.py": "a361c11e02cad306fba05d0b1847165ed59b89339e4c13148a301e8daea4d526",
     "tests/test_keyperm.py": "3c546d1008cb240c91afcc5aeddc1247d94b66167430541c4125b1474d7edb7f",
     "tests/test_legacy_link_authority.py": "9d7c450790751dee1f7909c226aed6f1b881d27c46efa350c143251c8233cfec",
     "tests/test_link_write_path.py": "feae109d6f608360e3a4be4fc6c69c658ec27c7bbe3a1673c5daffc03bd454ec",

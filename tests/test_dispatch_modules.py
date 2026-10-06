@@ -165,3 +165,43 @@ def test_the_two_new_events_are_in_the_spec_and_a_legacy_node_reconciles_to_them
                         for ev, cmd, _t in hv._CLAUDE_HOOK_SPEC if ev not in ("Notification", "Stop")}}
     missing, stale = hv._claude_hook_reconcile(legacy)
     assert sorted(ev for ev, _c, _t in missing) == ["Notification", "Stop"] and stale == []
+
+
+def test_a_dir_named_like_a_nested_state_key_is_not_recorded(tmp_path):
+    out = tmp_path / "out"
+    _install(tmp_path, "alpha", "#!/bin/sh\nexit 0\n")
+    st = tmp_path / "hive" / ".modules.json"
+    st.write_text(json.dumps({"alpha": {"commit": "x", "source": "y", "version": "1", "publisher": "p", "quota": 1}},
+                             indent=1, sort_keys=True))
+    for n in ("source", "commit", "version", "publisher", "quota"):
+        _install(tmp_path, n, f"#!/bin/sh\ntouch {out}.{n}\n", record=False)
+    r, _ = _run(tmp_path)
+    assert r.returncode == 0 and not list(tmp_path.glob("out.*"))
+
+
+def test_a_term_ignoring_hook_stays_inside_the_budget(tmp_path):
+    for n in ("a", "b", "c"):
+        _install(tmp_path, f"m{n}", "#!/bin/sh\ntrap '' TERM\nsleep 100\n")
+    r, dt = _run(tmp_path)   # defaults: cap 3, budget 6
+    assert r.returncode == 0 and dt < 6.6, dt
+
+
+def test_the_budget_is_clamped_to_the_shim_timeout(tmp_path):
+    _install(tmp_path, "slow", "#!/bin/sh\nsleep 100\n", event="user-prompt")
+    r, dt = _run(tmp_path, event="user-prompt", HIVE_MODULE_EVENT_BUDGET="60", HIVE_MODULE_HOOK_TIMEOUT="60")
+    assert r.returncode == 0 and dt < 9.5, dt
+
+
+def test_a_detached_child_is_reaped_after_a_normal_exit(tmp_path):
+    pidf = tmp_path / "pid"
+    _install(tmp_path, "fork", f"#!/bin/sh\nsleep 30 &\necho $! > {pidf}\nexit 0\n")
+    r, _ = _run(tmp_path)
+    pid = int(pidf.read_text())
+    time.sleep(0.3)
+    assert r.returncode == 0
+    try:
+        os.kill(pid, 0)
+        alive = Path(f"/proc/{pid}/stat").read_text().split()[2] != "Z"
+    except (ProcessLookupError, FileNotFoundError):
+        alive = False
+    assert not alive

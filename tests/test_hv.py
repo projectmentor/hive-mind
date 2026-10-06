@@ -459,7 +459,7 @@ def test_claude_hook_spec_is_a_stable_shim():
     # event, all pointing at hive_dispatch.sh — never per-behavior hooks (that set is what drifts).
     hv = _loadhv()
     events = [ev for ev, _c, _t in hv._CLAUDE_HOOK_SPEC]
-    assert events == ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreCompact"]
+    assert events == ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreCompact", "Notification", "Stop"]
     assert all("hive_dispatch.sh" in cmd for _ev, cmd, _t in hv._CLAUDE_HOOK_SPEC)
     # a config carrying exactly the shim reconciles clean (nothing missing, nothing stale)
     full = {ev: [{"hooks": [{"type": "command", "command": cmd}]}] for ev, cmd, _t in hv._CLAUDE_HOOK_SPEC}
@@ -478,7 +478,7 @@ def test_reconcile_flags_legacy_direct_hooks_as_stale():
         "SessionEnd":   [{"hooks": [{"type": "command", "command": f"{base}/session_hook.sh end"}]}],
     }}
     missing, stale = hv._claude_hook_reconcile(cfg)
-    assert len(missing) == 4                                   # all four shims absent
+    assert len(missing) == 6                                   # all six shims absent
     stale_cmds = {cmd for _ev, cmd in stale}
     assert stale_cmds == {
         f"{base}/session_hook.sh start",
@@ -504,7 +504,7 @@ def test_wiring_the_claude_cell_migrates_legacy_and_preserves(tmp_path, monkeypa
 
     res = hv._wire_agent(hv._builtin_claude_cell(), write=True)
     assert res["applicable"] and res["wrote"]
-    assert len(res["missing"]) == 4 and len(res["stale"]) == 4
+    assert len(res["missing"]) == 6 and len(res["stale"]) == 4
 
     cfg = json.loads(settings.read_text())
     all_cmds = [h["command"] for ev in cfg["hooks"].values() for g in ev for h in g["hooks"]]

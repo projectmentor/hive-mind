@@ -688,6 +688,35 @@ affect confidence.
 
 ---
 
+## Bounded entry timestamps (contract 2.1, #217)
+
+Journal order is `(timestamp, node_id, seq)`, and the writer picks the timestamp, so a device could place an entry
+anywhere in history. Two rules bound it per device, applied at ingest **and** in the projection (`_ts_problem`), so
+every node skips the same entries:
+
+1. a timestamp is no earlier than the latest timestamp among the device's lower `seq` entries, less `TS_TOLERANCE`
+   (5 minutes, one budget measured against the chain's latest, so small steps cannot walk back without limit);
+2. a timestamp is no earlier than the device's first honoured `admit`, less the same 5 minutes (`join-request` and
+   `announce`, written before any admit, are exempt).
+
+A checked entry must carry the canonical shape `YYYY-MM-DDTHH:MM:SS.mmm+00:00`, so the folds that sort the raw string
+order by instant.
+
+**The marker.** Nothing is checked until the owner signs a `freeze-timestamps` governance entry
+(`hive-mind owner freeze-timestamps`): its `tips` map freezes each device's chain at a `seq`, and an entry at or below
+its device's tip is unchecked. Grandfathering is by chain position, never by timestamp, so a backdated entry cannot
+claim it. Without a marker the projection is the one a node had before. The marker is never itself checked: it is
+what arms the rules.
+
+**The own-clock clamp.** `append_journal` stamps an automatic entry `max(now, the device's latest timestamp)`
+(`_clamp_timestamp`), so a clock that stepped back never writes an entry every peer would skip. A step past the
+tolerance is named on stderr. An explicit `timestamp` argument is used as given.
+
+**Detection only.** `future-dated` (a local, never-synced arrival record: entries stamped more than
+`FUTURE_DATED_MINUTES` = 10 ahead of this node's clock) and `flood` (more than the owner-signed `flood_per_minute`,
+default 120, or `flood_per_day`, default 2000, entries from one device) are reported by `hv doctor` and `hv audit`;
+nothing is refused for them. `ts-bounds` names the entries the projection skips.
+
 ## Testing
 
 ```bash

@@ -17,6 +17,8 @@ MUST_BE_IGNORED = [
     # keys and per-node config
     ".device-key", ".owner-key", "hive-owner-k1_0123456789abcdef.key",
     ".peers.json", "nudge.env",
+    # the module API's per-device write windows (2.1)
+    ".module-quota.json", ".modules.json",
     # verified peer addresses (#7), and the temp files an atomic rewrite leaves if interrupted
     ".peer_candidates.json", ".peer_candidates.json.a1b2c3.tmp", ".peers.json.a1b2c3.tmp",
     # local-only telemetry, including its own SQLite side files

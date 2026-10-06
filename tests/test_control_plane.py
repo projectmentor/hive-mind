@@ -176,7 +176,7 @@ def test_the_dispatcher_routes_the_control_plane_verbs():
     name `hv`, so the file holding the owner-key path would ship unsigned."""
     src = (PROJECT / "scripts" / "installer" / "dispatcher.sh").read_text()
     assert "hivemind_ctl.py" in src
-    assert "owner|group|admit|config|unforget|retract|remember|decide|entity|capsule|wire|doctor)" in src
+    assert "owner|group|admit|config|unforget|retract|remember|decide|entity|capsule|wire|doctor|module)" in src
     assert not (PROJECT / "hive-mind").exists(), "no extensionless entry point; the manifest would skip it"
 
 

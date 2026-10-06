@@ -67,6 +67,7 @@ The `kind` of a `link` entry. An unknown kind lands and projects to nothing.
 | `informed` | written | 1.19 | A decision relied on this entry; it feeds the entry's utility. |
 | `outcome-of` | written | 1.19 | This fact is an outcome of a decision; it feeds the decision's outcome score, on the `sense` channel only. |
 | `resolves` | written | 1.19 | This fact corrects another: negative evidence on the target, and provenance when the link is hard. |
+| `same-as` | written | 2.1 | Core only. Joins a module's `x-<module>:` entity (`from_ref`) to an unprefixed entity (`to_ref`); `entity show` lists the joined entity's facts. A module's is refused, and a `retract` naming it withdraws it. |
 | `supersedes` | written | 1.19 | This decision replaces another, when the link is hard. |
 | `supports` | written | 1.19 | Evidence for a fact or an idea. |
 
@@ -83,6 +84,7 @@ The `action` of a `governance` entry.
 | `change` | written | 1.5 | Re-tag an admitted device's principal. Owner-signed. |
 | `claim-succession` | written | 1.7 | A nominated successor takes ownership, signed by the new owner key. |
 | `deny` | written | 1.5 | Drop a pending join-request; a later admit overrides it. Owner-signed. |
+| `freeze-timestamps` | written | 2.1 | Arms the bounded entry timestamps: `tips` maps each device to the seq its chain is frozen at, and only later entries are checked. Owner-signed. |
 | `heartbeat` | written | 1.9 | Owner liveness: an owner-signed act with no other effect, which keeps the dead-man switch shut. |
 | `join-request` | written | 1.4 | A device asks to be admitted. Device-signed; it carries no authority. |
 | `nominate-successor` | written | 1.7 | Nominate a successor owner key. Owner-signed. |
@@ -102,7 +104,7 @@ The `action` of a `governance` entry.
 
 The keys a `set-config` act may set. An older node ignores a key it does not know.
 
-*Modules:* Yes, prefixed. An older node ignores a key it does not know.
+*Modules:* Yes, prefixed. `x-<module>:<key>` holds a string the core stores and never interprets. An older node ignores a key it does not know.
 
 | Name | Status | Since | Meaning |
 |---|---|---|---|
@@ -110,6 +112,8 @@ The keys a `set-config` act may set. An older node ignores a key it does not kno
 | `capsule_putters` | written | 1.13 | Who may write capsules: `owner` (the default) or `fertile` (any admitted device). |
 | `cell_writers` | written | 1.17 | Who may write cells and combs: `owner` (the default) or `fertile`. |
 | `dead_man_days` | written | 1.9 | Days of owner silence before a quorum election can install a new owner. |
+| `flood_per_day` | written | 2.1 | Entries one device may stamp into a day before `hv doctor` reports a flood; 2000 by default. Detection only. |
+| `flood_per_minute` | written | 2.1 | Entries one device may stamp into a minute before `hv doctor` reports a flood; 120 by default. Detection only. |
 | `forget_writers` | written | 1.25 | Whether an unsigned owner forget dated before genesis still counts: `legacy` or `owner`. |
 | `halflife_fact` | written | 1.20 | Half-life, in days, of a fact's confidence and importance. |
 | `halflife_idea` | written | 1.20 | Half-life, in days, of an idea's confidence and importance. |
@@ -193,8 +197,8 @@ The fields an entry is made of. A module never writes its own: the core builds t
 | Name | Status | Since | Meaning |
 |---|---|---|---|
 | `action` | written | 1.4 | Which act a `governance` payload records. |
-| `from` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an edge starts from. A link carries `from_ref` today. |
-| `id` | reserved | 2.0 | Reserved for the module envelope (#150): an entry's identity, today `node_id:seq` or its `h:` short id. |
+| `from` | reserved | 2.0 | Reserved for the module envelope: the ref an edge starts from. A module's own link kind carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `from_ref`. |
+| `id` | reserved | 2.0 | Reserved for the module envelope: an entry's identity, `node_id:seq` or its `h:` short id. It names the entry; it is not a field a module writes. |
 | `kind` | written | 1.13 | The discriminator inside a typed payload: a link's relationship, an announce's kind, a cell's or capsule's kind. |
 | `node_id` | written | 1.0 | The authoring device; since 1.3, `k1:` and 16 hex of its key's sha256. |
 | `payload` | written | 1.0 | The type-specific body. |
@@ -202,9 +206,9 @@ The fields an entry is made of. A module never writes its own: the core builds t
 | `pub` | written | 1.3 | The signer's Ed25519 public key. |
 | `seq` | written | 1.0 | The device's sequence number; `(node_id, seq)` identifies an entry. |
 | `sig` | written | 1.3 | The device's Ed25519 signature over the entry without `sig`. |
-| `target` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an act is about. Today `retracts_ref` or `to_ref`. |
+| `target` | reserved | 2.0 | Reserved for the module envelope: the ref an act is about, resolved like `retracts_ref` or `to_ref`. |
 | `timestamp` | written | 1.0 | When the entry was written (ISO 8601); it also names the journal's day file. |
-| `to` | reserved | 2.0 | Reserved for the module envelope (#150): the entry an edge points to. A link carries `to_ref` today. |
+| `to` | reserved | 2.0 | Reserved for the module envelope: the ref an edge points to. A module's own link kind carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `to_ref`. |
 | `type` | written | 1.0 | The entry type (see Entry types). |
 
 ## Local files
@@ -217,11 +221,14 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 
 | Name | Where | Status | Since | Meaning |
 |---|---|---|---|---|
+| `.arrivals.jsonl` | `$HIVE_HOME` | written | 2.1 | When this node first received each foreign entry, for the `future-dated` check; never synced, never read by the projection. |
 | `.bus` | `$HIVE_HOME` | written | 1.10 | Directory for the local event log, `introspect.log`; never synced. |
 | `.device-id` | `$HIVE_HOME` | written | 1.3 | This device's id, `k1:` and 16 hex of its key's sha256. |
 | `.device-key` | `$HIVE_HOME` | legacy | 1.3 | The device key's pre-2.0 path in the checkout. It still loads, with a `keyperm` warning, and `hv doctor --fix` moves it. |
 | `.genesis-pin` | `$HIVE_HOME` | written | 1.27 | Which `owner` declaration established this hive (0600, never synced). |
 | `.key-dir` | `$HIVE_HOME` | written | 2.0 | The path of this checkout's key directory, so a renamed checkout keeps its keys. |
+| `.module-quota.json` | `$HIVE_HOME` | written | 2.1 | Each module device's hourly and daily write times, for the module API's rate limits (0600, never journaled). The lifetime count is the journal's, not this file's. |
+| `.modules.json` | `$HIVE_HOME` | written | 2.1 | The modules installed on this node: version, pinned publisher key, device id, source and quota limits (0600, never journaled). Written by `hive-mind module`. |
 | `.nudge_state` | `$HIVE_HOME` | written | 1.0 | When the save and audit nudges last fired. |
 | `.owner-key` | `$HIVE_HOME` | legacy | 1.4 | The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` moves it. |
 | `.owner-pub` | `$HIVE_HOME` | legacy | 2.0 | The owner key's public half at its first 2.0 path. `hive-mind doctor --fix` moves it. |

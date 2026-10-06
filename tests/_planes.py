@@ -24,7 +24,7 @@ def entry_for(args):
     a = [str(x) for x in args]
     # `owner propose-election --mint` is NOT routed: minting is its own command, `hive-mind owner mint`,
     # and proposing the minted key is `hv owner propose-election --pub`. A test that minted inline mints first.
-    if commandmap.lookup(a) is not None or (a[:1] == ["retract"] and "--owner" in a):
+    if a[:1] == ["module"] or commandmap.lookup(a) is not None or (a[:1] == ["retract"] and "--owner" in a):
         return CTL
     return HV
 

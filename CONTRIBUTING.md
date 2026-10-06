@@ -20,7 +20,7 @@ To keep it sustainable, the development model is intentionally lightweight:
 - **Security vulnerabilities** → **don't** open an issue; report privately as described in
   [SECURITY.md](SECURITY.md).
 - **Pull requests** → welcome for bug fixes, security fixes and documentation. The current
-  contract is 2.0. New features are not added just because a pull request shows up; for anything
+  contract is 2.1. New features are not added just because a pull request shows up; for anything
   beyond a focused fix, **open a Discussion first**. A change to the contract, to signing, to
   sync, or to the security promises waits until the maintainer says yes. Sweeping refactors will
   likely be declined to keep the project coherent.
@@ -54,6 +54,9 @@ That's it — you sign once. Full text: [CLA.md](CLA.md).
 - **macOS** (`ci-macos.yml`) runs on every push to `main`. On a pull request it runs only when the diff
   touches a path that can affect macOS: `hv`, the sync daemon, the installer and launchd scripts, and the
   tests that stub them. The full list is in the workflow. A docs-only PR shows no macOS check.
+- **Release branches:** a PR into `release/*` runs no macOS check. macOS runs on each push to the release
+  branch, after the merge, without gating it, and a red run is fixed forward by an ordinary PR. The
+  release PR into `main` runs macOS and waits for it.
 - **Merge rule:** CI is green, **and the macOS jobs are green when they ran**. The macOS jobs are not
   required status checks, because a required check that the path filter skipped stays pending and blocks
   the merge.

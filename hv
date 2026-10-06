@@ -37,7 +37,7 @@ import sys
 import threading
 import time
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Make sibling modules (merkle.py) importable when run as ./hv
@@ -434,7 +434,7 @@ def _owner_unseal(env, passphrase):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "2.0"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
+CONTRACT_VERSION = "2.1"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
 
 
 # --------------------------------------------------------------------------
@@ -767,14 +767,19 @@ def _verify_governance(payload):
         return None
 
 
-def _next_seq_and_prev(node_id):
-    """Next per-node monotonic seq and the hash of this device's latest entry.
-    Derived from the journal itself (stateless, correct after a fresh start)."""
+def _next_seq_and_prev(node_id, with_timestamp=False):
+    """Next per-node monotonic seq and the hash of this device's latest entry (plus the LATEST timestamp this device
+    holds, by instant, or None, when `with_timestamp`: rule 1 measures against the chain max). Derived from the journal itself (stateless, correct after a fresh start)."""
     mine = [e for e in merkle.read_all_entries(JOURNAL_DIR) if e.get("node_id") == node_id]
     if not mine:
-        return 1, "sha256:genesis"
+        out = (1, "sha256:genesis")
+        return out + (None,) if with_timestamp else out
     last = max(mine, key=lambda e: e["seq"])
-    return last["seq"] + 1, compute_hash(last)
+    out = (last["seq"] + 1, compute_hash(last))
+    if not with_timestamp:
+        return out
+    stamped = [(i, e["timestamp"]) for e in mine for i in [_ts_instant(e.get("timestamp"))] if i is not None]
+    return out + (max(stamped)[1] if stamped else last.get("timestamp"),)
 
 
 # An entry's timestamp names its journal file, so it must be a real ISO-8601 time before anything is written
@@ -793,6 +798,213 @@ def _valid_timestamp(ts):
         return True
     except ValueError:
         return False
+
+
+# --------------------------------------------------------------------------
+# Bounded entry timestamps (#217). Journal order is (timestamp, node_id, seq) and the writer picks the timestamp,
+# so two rules bound it per device, and both apply at ingest AND in the projection (every node agrees):
+#   1. monotonic: a timestamp is no earlier than the latest timestamp of the device's lower seqs, less 5 minutes;
+#   2. no earlier than admission: no earlier than the device's first honoured `admit`, less 5 minutes (a
+#      `join-request` and an `announce`, which a device writes before any admit, are exempt).
+# A checked entry must also carry the one canonical shape, so the folds that sort the raw string order by instant.
+# Nothing is checked until the owner signs a `freeze-timestamps` marker: its `tips` freeze each device's chain at a
+# seq, and an entry at or below its device's tip is unchecked. Grandfathering is by seq, never by timestamp, so a
+# backdated entry cannot claim it. Without a marker nothing is skipped, so a node keeps today's projection.
+# Arrival times and flood counts are detection only: `hv doctor` and `hv audit` report them, nothing refuses.
+# --------------------------------------------------------------------------
+
+TS_TOLERANCE = timedelta(minutes=5)       # clock-correction slack; one budget against the chain's latest timestamp
+FUTURE_DATED_MINUTES = 10                 # a timestamp this far ahead of the receiver's clock on arrival is flagged
+FLOOD_PER_MINUTE = 120                    # default `flood_per_minute`: entries one device may stamp into a minute
+FLOOD_PER_DAY = 2000                      # default `flood_per_day`
+_CANONICAL_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00")
+_TS_PARTS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(?:(Z)|([+-])(\d{2}):(\d{2}))?")
+_TS_RULE2_EXEMPT = ("join-request", "announce")
+
+
+def _ts_instant(ts):
+    """The UTC instant of a timestamp of any shape the journal holds (naive means UTC), or None."""
+    if not _valid_timestamp(ts):
+        return None
+    m = _TS_PARTS_RE.fullmatch(ts)
+    try:
+        dt = datetime.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S").replace(
+            microsecond=int((m.group(2) or "0").ljust(6, "0")), tzinfo=timezone.utc)
+        if m.group(4):
+            off = timedelta(hours=int(m.group(5)), minutes=int(m.group(6)))
+            dt = dt - off if m.group(4) == "+" else dt + off
+        return dt
+    except (ValueError, OverflowError):
+        return None
+
+
+def _ts_is_marker(e, gov):
+    """True for a `freeze-timestamps` entry that `_governance_state` honours (signed by the owner current at its
+    position). The marker is never itself checked: it is what arms the rules, so skipping it would make the rules
+    depend on their own verdict. A marker signed by any other embedded key arms nothing and is checked like any entry."""
+    return (e.get("node_id"), e.get("seq")) in (gov.get("ts_markers") or ())
+
+
+def _ts_grandfathered(e, tips):
+    """An entry at or below its device's frozen tip is unchecked: by chain position, never by timestamp."""
+    seq = e.get("seq")
+    return isinstance(seq, int) and seq <= tips.get(e.get("node_id"), 0)
+
+
+def _ts_chain_max(prior):
+    """The latest instant among a device's lower seqs (None if there are none): the one reference rule 1 measures
+    its single 5-minute budget against, so a run of small steps cannot walk back without a limit."""
+    return max(prior) if prior else None
+
+
+def _ts_problem(e, floor, prior_max):
+    """Why this checked entry's timestamp is outside the bounds, or None. Pure over its arguments. `floor` is the
+    instant of the device's first honoured admit (None if it has none), `prior_max` is `_ts_chain_max`."""
+    ts = e.get("timestamp")
+    inst = _ts_instant(ts) if isinstance(ts, str) and _CANONICAL_TS_RE.fullmatch(ts) else None
+    if inst is None:
+        return "timestamp is not the canonical YYYY-MM-DDTHH:MM:SS.mmm+00:00 shape"
+    if prior_max is not None and inst < prior_max - TS_TOLERANCE:
+        return "timestamp is more than 5 minutes before the device's latest earlier entry"
+    if (floor is not None and not (e.get("type") == "governance"
+                                   and (e.get("payload") or {}).get("action") in _TS_RULE2_EXEMPT)
+            and inst < floor - TS_TOLERANCE):
+        return "timestamp is more than 5 minutes before the device's first admit"
+    return None
+
+
+def _ts_violations(entries, gov):
+    """{(node_id, seq): reason} for every entry the bounds skip. Pure and deterministic over the journal and the
+    governance projection: a device's entries are walked in seq order, and only an entry that passes (or is
+    grandfathered) moves the chain's latest timestamp. Empty until a marker is honoured."""
+    tips = gov.get("ts_tips") or {}
+    if not tips:
+        return {}
+    by_dev = {}
+    for e in entries:
+        if e.get("node_id") is not None and isinstance(e.get("seq"), int):
+            by_dev.setdefault(e["node_id"], []).append(e)
+    first = gov.get("first_admit") or {}
+    out = {}
+    for nid, es in by_dev.items():
+        floor = _ts_instant(first.get(nid))
+        prior = []
+        for e in sorted(es, key=lambda x: x["seq"]):
+            if not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov)):
+                why = _ts_problem(e, floor, _ts_chain_max(prior))
+                if why is not None:
+                    out[(nid, e["seq"])] = why
+                    continue
+            inst = _ts_instant(e.get("timestamp"))
+            if inst is not None:
+                prior.append(inst)
+    return out
+
+
+def _ts_unskipped(entries, gov=None):
+    """`entries` without those the timestamp bounds skip. The one filter for the projection's non-governance
+    readers; `_governance_state` applies the same verdict to governance entries itself."""
+    gov = gov if gov is not None else _governance_state(entries)
+    skipped = _ts_violations(entries, gov)
+    if not skipped:
+        return entries
+    return [e for e in entries if (e.get("node_id"), e.get("seq")) not in skipped]
+
+
+def _ts_ingest_problem(e, gov, chain):
+    """Why ingest refuses `e` against the chain it joins, or None. `chain` is {node_id: [(seq, instant)]} of the
+    entries this node holds, extended as a batch lands. Same predicate as `_ts_violations`."""
+    tips = gov.get("ts_tips") or {}
+    if not tips or _ts_grandfathered(e, tips) or _ts_is_marker(e, gov):
+        return None
+    seq = e.get("seq")
+    prior = [i for s, i in chain.get(e.get("node_id"), ()) if isinstance(seq, int) and s < seq]
+    return _ts_problem(e, _ts_instant((gov.get("first_admit") or {}).get(e.get("node_id"))), _ts_chain_max(prior))
+
+
+def _ts_chain(entries, gov):
+    """{node_id: [(seq, instant)]} over the entries `gov`'s bounds keep, for `_ts_ingest_problem`: the chain the
+    projection walks, so an entry it skips cannot raise the bar for a later one."""
+    chain = {}
+    for e in _ts_unskipped(entries, gov):
+        inst = _ts_instant(e.get("timestamp"))
+        if e.get("node_id") is not None and isinstance(e.get("seq"), int) and inst is not None:
+            chain.setdefault(e["node_id"], []).append((e["seq"], inst))
+    return chain
+
+
+def _arrivals_path():
+    return HIVE_HOME / ".arrivals.jsonl"
+
+
+def _record_arrivals(keys):
+    """Append when this node first received each entry (`keys` = [(node_id, seq)]) to `$HIVE_HOME/.arrivals.jsonl`.
+    Local evidence for the `future-dated` check: never synced, never consensus, never read by the projection."""
+    if not keys:
+        return
+    at = os.environ.get("HIVE_NOW") or _now_iso()
+    try:
+        with open(_arrivals_path(), "a") as f:
+            for nid, seq in keys:
+                f.write(json.dumps({"n": nid, "s": seq, "at": at}) + "\n")
+    except OSError:
+        pass
+
+
+def _read_arrivals():
+    """{(node_id, seq): arrival instant string}, the first record of each (a damaged line is skipped)."""
+    out = {}
+    try:
+        for line in _arrivals_path().read_text().splitlines():
+            try:
+                r = json.loads(line)
+                out.setdefault((r["n"], r["s"]), r["at"])
+            except (ValueError, KeyError, TypeError):
+                continue
+    except OSError:
+        pass
+    return out
+
+
+def _future_dated(entries):
+    """{node_id: {"count", "worst_minutes"}} for entries whose timestamp was more than FUTURE_DATED_MINUTES ahead of
+    this node's clock when they arrived. Detection only: it reads local arrival times and changes no projection."""
+    arrived = _read_arrivals()
+    out = {}
+    for e in entries:
+        at = _ts_instant(arrived.get((e.get("node_id"), e.get("seq"))))
+        inst = _ts_instant(e.get("timestamp"))
+        if at is None or inst is None:
+            continue
+        ahead = (inst - at).total_seconds() / 60.0
+        if ahead > FUTURE_DATED_MINUTES:
+            d = out.setdefault(e["node_id"], {"count": 0, "worst_minutes": 0.0})
+            d["count"] += 1
+            d["worst_minutes"] = max(d["worst_minutes"], round(ahead, 1))
+    return out
+
+
+def _floods(entries, gov):
+    """[{node_id, per, count, limit}] for each device whose busiest timestamp-minute or timestamp-day holds more
+    entries than the owner-signed `flood_per_minute` / `flood_per_day`. Detection only."""
+    cfg = gov.get("config") or {}
+    limits = {"minute": int(cfg.get("flood_per_minute", FLOOD_PER_MINUTE)),
+              "day": int(cfg.get("flood_per_day", FLOOD_PER_DAY))}
+    counts = {"minute": {}, "day": {}}
+    for e in entries:
+        inst = _ts_instant(e.get("timestamp"))
+        if inst is None or e.get("node_id") is None:
+            continue
+        for per, fmt in (("minute", "%Y-%m-%dT%H:%M"), ("day", "%Y-%m-%d")):
+            k = (e["node_id"], inst.strftime(fmt))
+            counts[per][k] = counts[per].get(k, 0) + 1
+    worst = {}
+    for per in ("minute", "day"):
+        for (nid, _bucket), n in counts[per].items():
+            if n > limits[per] and n > worst.get((nid, per), 0):
+                worst[(nid, per)] = n
+    return [{"node_id": nid, "per": per, "count": n, "limit": limits[per]}
+            for (nid, per), n in sorted(worst.items())]
 
 
 def _journal_path_for(timestamp):
@@ -947,9 +1159,24 @@ def _read_quarantine():
     return out
 
 
+def _clamp_timestamp(now, prev_ts):
+    """`max(now, the latest timestamp this device holds)` (#217; the chain max, which rule 1 measures against). A clock that stepped back would otherwise write
+    an entry the bounds skip here and every peer refuses, and a seat or hook writes unattended, so the memory would
+    be lost with nobody told. Equal timestamps are allowed. A step past the tolerance is named on stderr."""
+    prev, cur = _ts_instant(prev_ts), _ts_instant(now)
+    if prev is None or cur is None or cur >= prev:
+        return now
+    if prev - cur > TS_TOLERANCE:
+        print(f"hv: this device's clock is {int((prev - cur).total_seconds() // 60)} min behind its last journal "
+              f"entry ({prev_ts}); stamping the entry {prev.isoformat(timespec='milliseconds')} instead",
+              file=sys.stderr)
+    return prev.isoformat(timespec="milliseconds")
+
+
 def append_journal(entry_type, payload, timestamp=None):
     """Mint and append a LOCAL journal entry. This is the core append API —
     every local write goes through here. Returns the full entry dict."""
+    explicit = timestamp is not None
     timestamp = timestamp or _now_iso()
     candidate = {"type": entry_type, "payload": payload}
     problem = _hostile_problem(candidate) or _payload_problem(candidate)
@@ -960,7 +1187,9 @@ def append_journal(entry_type, payload, timestamp=None):
             gov = None
         _quarantine([({"node_id": NODE_ID, "type": entry_type, "timestamp": timestamp, "payload": payload}, problem)], gov)
         raise ValueError(f"invalid {entry_type} payload: {problem}")      # #205: nothing malformed is journaled
-    seq, prev_hash = _next_seq_and_prev(NODE_ID)
+    seq, prev_hash, prev_ts = _next_seq_and_prev(NODE_ID, with_timestamp=True)
+    if not explicit:
+        timestamp = _clamp_timestamp(timestamp, prev_ts)
     entry = {
         "node_id": NODE_ID,
         "seq": seq,
@@ -1038,6 +1267,84 @@ def _store_deferred(entry, err, word="Remembered"):
     print(f"  ref: {_ref_str([entry['node_id'], entry['seq']])}")
     print(f"  store write deferred: {err}", file=sys.stderr)
     sys.exit(0)
+
+
+def _feed_cursor_parse(text):
+    """`node:seq,node:seq` -> {node_id: seq}. Node ids contain ':' (`k1:...`), so each pair splits at the
+    LAST colon. A malformed pair is a usage error, never a silent restart from the beginning."""
+    cur = {}
+    for part in (text or "").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        node, _, seq = part.rpartition(":")
+        if not node or not seq.isdigit():
+            raise ValueError(f"bad cursor entry {part!r}: expected node_id:seq")
+        cur[node] = max(cur.get(node, 0), int(seq))
+    return cur
+
+
+def _feed_cursor_str(cur):
+    return ",".join(f"{n}:{s}" for n, s in sorted(cur.items()))
+
+
+def feed_page(after=None, limit=200):
+    """One page of the journal for a module (2.1, `hv feed`): the verified entries past a per-node cursor,
+    in `(node_id, seq)` order, each with its `ref`/`sid`. Read from the journal files, not the store. Two
+    fields are core-computed so a consumer never reimplements the forget rule: `forgotten` on a `fact`
+    entry, and `affects` on a `retract` entry (the held facts sharing the target's content when the act is
+    honoured, else empty). `sig` and `pub` pass through; an entry with no `sig` is attributed, not
+    authenticated. Returns {"entries", "cursor", "more"}."""
+    after = dict(after or {})
+    entries = merkle.read_all_entries(JOURNAL_DIR)   # verified lazily, per served entry: a cold process pays for the page, not the journal
+    ev = _content_evidence(entries, _governance_state(entries), links=False)   # links never change `forget` or `acts`
+    honoured = {}                               # (node_id, seq) of an honoured owner act -> its content
+    for c, cev in ev.items():
+        for key, ok in cev.get("acts", {}).items():
+            if ok:
+                honoured[key] = c
+    wanted = set(honoured.values())
+    held = {}                                   # content -> [refs of verified facts]; affects never names a withheld ref.
+    for e in entries:                           # Only contents under an honoured act are checked, so a caught-up poll verifies nothing.
+        c = (e.get("payload") or {}).get("content")
+        if e.get("type") == "fact" and c in wanted and _verify_entry(e):
+            held.setdefault(c, []).append(_ref_str([e["node_id"], e["seq"]]))
+    cursor = dict(after)
+    out = []
+    more = False
+    for e in entries:
+        node, seq = e.get("node_id"), e.get("seq")
+        if node is None or not isinstance(seq, int) or seq <= after.get(node, 0):
+            continue
+        if not _verify_entry(e):
+            continue
+        if len(out) >= limit:
+            more = True
+            break
+        item = {"node_id": node, "seq": seq, "ref": _ref_str([node, seq]), "sid": _short_id(node, seq),
+                "type": e.get("type"), "timestamp": e.get("timestamp"), "payload": e.get("payload")}
+        for k in ("sig", "pub"):
+            if k in e:
+                item[k] = e[k]
+        p = e.get("payload") or {}
+        if e.get("type") == "fact" and p.get("content") is not None:
+            item["forgotten"] = bool(ev.get(p["content"], {}).get("forget"))
+        elif e.get("type") == "retract":
+            app, ctx, _inst, _sess = _parse_source(p.get("source", "manual"))
+            if app in OWNER_APPS or ctx == "owner":     # an owner act carries the list (maybe empty); a peer retract omits it
+                item["affects"] = sorted(held.get(honoured.get((node, seq)), []))
+        out.append(item)
+        cursor[node] = seq
+    return {"entries": out, "cursor": _feed_cursor_str(cursor), "more": more}
+
+
+def feed(args):
+    try:
+        after = _feed_cursor_parse(args.after)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        sys.exit(2)
+    print(json.dumps(feed_page(after, max(1, args.limit)), sort_keys=True))
 
 
 def journal_keys():
@@ -1141,8 +1448,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
         journal until the owner admits it. A pre-owner (bootstrap) hive accepts everything so the
         genesis owner declaration can propagate.
 
-    Governance is processed first so an admit that arrives in the same batch takes effect before that
-    device's content is gated. Does NOT persist to SQLite — the caller runs rebuild() once afterwards
+    The batch is swept in (device, seq) order, so a device's entries are judged against its chain in order
+    whatever their type. Content waits for an admit that arrives later in the same batch, and is refused only
+    when no sweep can admit it. Does NOT persist to SQLite — the caller runs rebuild() once afterwards
     if accepted > 0. Returns (accepted, duplicates)."""
     existing = journal_keys()
     accepted = duplicates = rejected = 0
@@ -1166,38 +1474,98 @@ def append_foreign_entries(entries, advertised_chunks=None):
 
     door = _first_pull_door(entries, tips, advertised_chunks)
     unsigned_why = []
+    ts_refused = []                  # reasons: signed, verified, refused by the timestamp bounds (#217)
+    arrived = []                     # (node_id, seq) of each entry that landed, for the local arrival record
     refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
+    gov = chain = None
+    has_owner = False
+    admitted = set()
+    gov_dirty = False
+
+    def refresh():
+        """The governance state and the timestamp chain of what this node holds now. The chain is the one the
+        projection walks (entries the bounds skip left out), or None until a marker is honoured."""
+        nonlocal gov, chain, has_owner, admitted, gov_dirty
+        held = merkle.read_all_entries(JOURNAL_DIR)
+        gov = _governance_state(held)
+        chain = _ts_chain(held, gov) if gov.get("ts_tips") else None
+        # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
+        # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
+        # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
+        has_owner = gov["owner_id"] is not None or bool((gov.get("genesis") or {}).get("mismatch"))
+        admitted = gov["admitted"]
+        gov_dirty = False
+
+    if entries:
+        refresh()
+        # A device's entries are judged in seq order, whatever their type, so neither the batch order nor how
+        # the batch is split can change a verdict: ingest refuses `e` iff `_ts_violations` over what is held,
+        # what landed and `e` skips `e`.
+        # The device that signs a marker goes first, so a marker arms the rest of its batch as it would had it
+        # arrived alone first.
+        # A device carrying an owner-chain act goes first too, so nothing in a batch that carries the genesis is
+        # judged as pre-owner.
+        markers = {x.get("node_id") for x in entries if x.get("type") == "governance"
+                   and isinstance(x.get("payload"), dict)
+                   and x["payload"].get("action") in ("freeze-timestamps", "owner", "transfer", "claim-succession")}
+        entries = sorted(entries, key=lambda x: (x.get("node_id") not in markers, str(x.get("node_id")),
+                                                 x.get("seq") if isinstance(x.get("seq"), int) else 0))
+
+    def _ts_ok(e):
+        """Rules 1-2 and the canonical shape, against the chain this node holds; records the reason if refused."""
+        if chain is None:
+            return True
+        p = e.get("payload")
+        if (e.get("type") == "governance" and isinstance(p, dict) and p.get("action") == "freeze-timestamps"
+                and (e["node_id"], e["seq"]) in _governance_state(
+                    merkle.read_all_entries(JOURNAL_DIR) + [e]).get("ts_markers", ())):
+            return True              # a marker the projection will honour is exempt, as in `_ts_violations`
+        why = _ts_ingest_problem(e, gov, chain)
+        if why is not None:
+            ts_refused.append(why)
+            return False
+        return True
+
+    def _landed(e):
+        arrived.append((e["node_id"], e["seq"]))
+        if chain is not None:
+            inst = _ts_instant(e.get("timestamp"))
+            if inst is not None:
+                chain.setdefault(e["node_id"], []).append((e["seq"], inst))
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
 
-    # ── Pass 1: governance (owner-signed acts + authority-less join-requests) ────────────────────
-    for e in entries:
-        if e.get("type") != "governance":
-            continue
+    _DONE, _LANDED, _DEFER = 0, 1, 2
+
+    def judge_governance(e):
+        """Governance: owner-signed acts + authority-less join-requests. Never deferred."""
+        nonlocal rejected, accepted, duplicates, gov_dirty
         nid, seq = e.get("node_id"), e.get("seq")
-        if nid is None or seq is None:
-            continue
         refused, why = _unsigned_refused(e, pin, tips, held_hash, door)
         if refused:
             rejected += 1
             unsigned_why.append(why)
-            continue
+            return _DONE
         if (nid, seq) in existing:
             duplicates += 1
-            continue
+            return _DONE
         if not _valid_timestamp(e.get("timestamp")):
             rejected += 1               # the timestamp names the journal file: never persist one that isn't a time
-            continue
+            return _DONE
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
-            continue
-        if pin is not None and (e.get("payload") or {}).get("action") == "owner" and not _pin_matches(e, pin):
+            return _DONE
+        if not _ts_ok(e):
+            rejected += 1
+            return _DONE
+        action = (e.get("payload") or {}).get("action")
+        if pin is not None and action == "owner" and not _pin_matches(e, pin):
             rejected += 1
             # A RIVAL genesis. Its owner signature is perfectly valid — it is signed by the attacker's
             # OWN owner key — so only the pin can tell it from ours. Dropping it is deterministic, so
             # every pinned node drops the same act and the journals stay converged.
-            continue
+            return _DONE
         if (e.get("payload", {}).get("action") not in ("join-request", "propose-election", "vote-election",
                                                        "announce")
                 and _verify_governance(e.get("payload", {})) is None):
@@ -1213,64 +1581,103 @@ def append_foreign_entries(entries, advertised_chunks=None):
             # payload of an announce is never trusted. Unknown announce kinds are accepted and ignored,
             # so future kinds ride through this contract's nodes with no version-skew rejection window.
             rejected += 1
-            continue
+            return _DONE
         try:
             _persist(e)
         except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
             rejected += 1
-            continue
+            return _DONE
         existing.add((nid, seq))
         accepted += 1
+        _landed(e)
+        if action in ("freeze-timestamps", "owner", "transfer", "claim-succession"):
+            refresh()                   # arms the bounds, or changes who may sign them: the rest of the batch sees it
+        elif action not in ("join-request", "announce"):
+            gov_dirty = True            # an admit and the like: read at the next sweep
+        return _LANDED
 
-    # Recompute governance AFTER pass 1 so admits that just landed populate the admitted set.
-    gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
-    # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
-    # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
-    # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
-    has_owner = gov["owner_id"] is not None or bool((gov.get("genesis") or {}).get("mismatch"))
-    admitted = gov["admitted"]
-
-    # ── Pass 2: content, admission-gated once an owner exists ────────────────────────────────────
-    for e in entries:
-        if e.get("type") == "governance":
-            continue
+    def judge_content(e):
+        """Content, admission-gated once an owner exists. Deferred, not refused, while its device is not yet
+        admitted: an admit later in the batch may still land."""
+        nonlocal rejected, accepted, duplicates
         nid, seq = e.get("node_id"), e.get("seq")
-        if nid is None or seq is None:
-            continue
         refused, why = _unsigned_refused(e, pin, tips, held_hash, door)
         if refused:
             rejected += 1
             unsigned_why.append(why)
-            continue
+            return _DONE
         if (nid, seq) in existing:
             duplicates += 1
-            continue
+            return _DONE
         if not _valid_timestamp(e.get("timestamp")):
             rejected += 1
-            continue
+            return _DONE
         if not _verify_entry(e):
             rejected += 1
-            continue
-        if has_owner and (nid not in admitted or nid in gov["purged"]):
+            return _DONE
+        if has_owner and nid in gov["purged"]:
+            rejected += 1               # a purged device is tombstoned: its new writes are rejected even if later re-admitted
+            return _DONE
+        if has_owner and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
-            # A purged device is tombstoned — its new writes are rejected even if later re-admitted.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
+            return _DEFER
+        if not _ts_ok(e):
             rejected += 1
-            continue
+            return _DONE
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
             refused_payload.append((e, problem))
-            continue
+            return _DONE
         try:
             _persist(e)
         except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
             rejected += 1
-            continue
+            return _DONE
         existing.add((nid, seq))
         accepted += 1
+        _landed(e)
         if e.get("type") == "idea" and nid != NODE_ID:
             arrived_ideas.append(e)
+        return _LANDED
+
+    # Sweep the batch in (device, seq) order. An entry whose device is not admitted yet waits, and holds back its
+    # device's later entries, so each device's chain is judged in order. A sweep that lands nothing first lets the
+    # held-back governance run (an admit may be what the waiting content needs); only when none is waiting are the
+    # deferred entries settled as refused (their device was never admitted). Every sweep lands or refuses at least
+    # one entry, so the loop is finite.
+    unresolved = [e for e in entries if e.get("node_id") is not None and e.get("seq") is not None]
+    while unresolved:
+        landed_any, waiting, held_back = False, [], set()
+        for e in unresolved:
+            nid = e["node_id"]
+            if nid in held_back:
+                waiting.append(e)
+                continue
+            r = judge_governance(e) if e.get("type") == "governance" else judge_content(e)
+            if r == _DEFER:
+                held_back.add(nid)
+                waiting.append(e)
+            elif r == _LANDED:
+                landed_any = True
+        if gov_dirty:
+            refresh()
+        if not landed_any:
+            if any(e.get("type") == "governance" for e in waiting):
+                still = []
+                for e in waiting:
+                    if e.get("type") == "governance":
+                        judge_governance(e)          # never deferred: lands or is refused, either way it is done
+                    else:
+                        still.append(e)
+                if gov_dirty:
+                    refresh()
+                waiting = still
+            else:
+                rejected += len(waiting)
+                break
+        unresolved = waiting
 
     # 1.20: attention, not announcement — a peer's idea landing here is an `introspect`-channel event
     # on the local bus (internal state arriving, not an observation). Non-journaled, best-effort, one
@@ -1289,11 +1696,14 @@ def append_foreign_entries(entries, advertised_chunks=None):
 
     if refused_payload:
         _quarantine(refused_payload, gov)        # node-local evidence for `hv doctor`; never synced
+    _record_arrivals([k for k in arrived if k[0] != NODE_ID])
     if rejected:
         reasons = "bad signature, malformed timestamp or payload, unauthorized governance, or content from an " \
                   "unadmitted device"
         if unsigned_why:
             reasons += "; " + "; ".join(sorted(set(unsigned_why)))
+        if ts_refused:
+            reasons += "; timestamp bounds: " + "; ".join(sorted(set(ts_refused)))
         print(f"append_foreign_entries: rejected {rejected} entr"
               f"{'y' if rejected == 1 else 'ies'} ({reasons})", file=sys.stderr)
     return accepted, duplicates
@@ -1519,6 +1929,7 @@ def _projection_latest(entries, want_type, authz=None):
     signer) is declined post-owner; pre-owner and crypto-less (stripped) folds stay permissive
     (`authz=None`). See `_is_authorized_writer` and hive decisions #58/#61."""
     rows = []
+    entries = _ts_unskipped(entries)        # #217: an entry the timestamp bounds skip is not in the fold
     for e in entries:
         if e.get("type") != want_type:
             continue
@@ -1778,19 +2189,33 @@ def _governance_state(entries):
     value is the master; every caller gets a deep COPY so a caller mutating its result can never
     corrupt the cache. Output is byte-identical to the uncached projection for the same journal."""
     govs_raw = [e for e in entries if e.get("type") == "governance"]
-    sig = hashlib.sha256(
-        "\x01".join(
-            [json.dumps(_load_genesis_pin(), sort_keys=True, separators=(",", ":"))] +   # the pin decides
-            [json.dumps([e.get("node_id"), e.get("seq"), e.get("timestamp"),             # genesis (#14)
-                         e.get("sig"), e.get("payload")], sort_keys=True, separators=(",", ":"))
-             for e in govs_raw]).encode()
-    ).hexdigest()
+    parts = ([json.dumps(_load_genesis_pin(), sort_keys=True, separators=(",", ":"))] +   # the pin decides
+             [json.dumps([e.get("node_id"), e.get("seq"), e.get("timestamp"),             # genesis (#14)
+                          e.get("sig"), e.get("payload")], sort_keys=True, separators=(",", ":"))
+              for e in govs_raw])
+    if any((e.get("payload") or {}).get("action") == "freeze-timestamps" for e in govs_raw if isinstance(e.get("payload"), dict)):
+        # #217: once a marker exists a governance entry's verdict depends on its device's other timestamps
+        parts += [f"{e.get('node_id')}:{e.get('seq')}:{e.get('timestamp')}" for e in entries if e.get("type") != "governance"]
+    sig = hashlib.sha256("\x01".join(parts).encode()).hexdigest()
     master = _GOV_CACHE.get(sig)
     if master is None:
-        master = _governance_state_uncached(entries)
+        master = _governance_state_bounded(entries)
         _GOV_CACHE.clear()              # journal grows monotonically; only the latest sig is ever reused
         _GOV_CACHE[sig] = master
     return copy.deepcopy(master)
+
+
+def _governance_state_bounded(entries):
+    """The governance projection with the timestamp bounds (#217) applied to governance entries: a governance act
+    the bounds skip (a backdated admit, say) is read as absent, so every node resolves the same owner and admits."""
+    gov = _governance_state_uncached(entries)
+    if not gov["ts_tips"]:
+        return gov
+    kind = {(e.get("node_id"), e.get("seq")): e.get("type") for e in entries}
+    skipped = {k for k in _ts_violations(entries, gov) if kind.get(k) == "governance"}
+    if not skipped:
+        return gov
+    return _governance_state_uncached([e for e in entries if (e.get("node_id"), e.get("seq")) not in skipped])
 
 
 def _governance_state_uncached(entries):
@@ -1801,12 +2226,15 @@ def _governance_state_uncached(entries):
     gov = {"owner_id": None, "owner_pub": None, "owner_ts": "", "hive_id": "", "admitted": set(),
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-           "principals": {}, "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
+           "principals": {}, "modules": {}, "module_config": {},
+           "ts_tips": {}, "ts_markers": set(), "first_admit": {},
+           "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
                                         "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
                                         "trust_long_days": GOV_TRUST_LONG_DAYS, "trust_short_days": GOV_TRUST_SHORT_DAYS,
                                         "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD,
+                                        "flood_per_minute": FLOOD_PER_MINUTE, "flood_per_day": FLOOD_PER_DAY,
                                         **_PR6_KNOB_DEFAULTS}}
     govs = []
     for e in entries:
@@ -1875,6 +2303,8 @@ def _governance_state_uncached(entries):
             quorum_m = int(gov["config"].get("quorum_m", 0) or 0)
             if quorum_m <= 0 or _nid not in gov["admitted"] or _nid in gov["purged"]:
                 continue                       # elections off, or a non-admitted/purged signer
+            if _nid in gov["modules"]:
+                continue                       # 2.1: a module device neither proposes nor votes (the owner's `admit` says so)
             pid = p.get("proposal_id")
             if not pid:
                 continue
@@ -1979,9 +2409,16 @@ def _governance_state_uncached(entries):
             # A later admit re-admits a revoked device and clears a prior deny. Purge is a final
             # tombstone — admit does NOT clear it (a purged device cannot be resurrected here).
             gov["admitted"].add(p["device_id"])
+            gov["first_admit"].setdefault(p["device_id"], _ts)   # #217 rule 2's floor: a re-admit never moves it
             gov["denied"].discard(p["device_id"])
             if p.get("principal"):
                 gov["principals"][p["device_id"]] = p["principal"]
+            # 2.1: an owner `admit` carrying `module: <name>` marks a module's device; a later admit without
+            # it clears the mark. A 2.0 node ignores the field, so it still counts that device's vote (§7).
+            if vocabulary.valid_module_name(p.get("module")):
+                gov["modules"][p["device_id"]] = p["module"]
+            else:
+                gov["modules"].pop(p["device_id"], None)
         elif action == "revoke" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
         elif action == "deny" and p.get("device_id"):
@@ -2000,10 +2437,23 @@ def _governance_state_uncached(entries):
                 gov["standbys"].add(p["device_id"])
             else:
                 gov["standbys"].discard(p["device_id"])
+        elif action == "freeze-timestamps":
+            # #217: the owner-signed marker that arms the timestamp bounds. `tips` freezes each device's chain at
+            # a seq; an entry at or below it is unchecked. The per-device maximum across markers, so a marker
+            # only ever grandfathers more by seq, never by timestamp.
+            gov["ts_markers"].add((_nid, _seq))
+            tips = p.get("tips")
+            if isinstance(tips, dict):
+                for tnid, tseq in tips.items():
+                    if isinstance(tnid, str) and isinstance(tseq, int) and not isinstance(tseq, bool) and tseq >= 0:
+                        gov["ts_tips"][tnid] = max(gov["ts_tips"].get(tnid, 0), tseq)
         elif action == "set-config":
             key, raw = p.get("key"), p.get("value")
             try:
-                if key in ("same_device_lambda", "cap_self", "dead_man_days", "introspect_support_weight",
+                if key in ("flood_per_minute", "flood_per_day"):
+                    if int(raw) >= 1:
+                        gov["config"][key] = int(raw)
+                elif key in ("same_device_lambda", "cap_self", "dead_man_days", "introspect_support_weight",
                            "trust_long_days", "trust_short_days", "trust_drift_threshold") \
                         or key in _PR6_KNOB_DEFAULTS:
                     gov["config"][key] = float(raw)
@@ -2015,6 +2465,9 @@ def _governance_state_uncached(entries):
                     gov["config"][key] = raw
                 elif key == "forget_writers" and raw in ("legacy", "owner"):   # #122 step 2; else ignored
                     gov["config"][key] = raw
+                elif vocabulary.split_module_name(key) and isinstance(raw, str) \
+                        and len(raw) <= vocabulary.MODULE_VALUE_MAX:
+                    gov["module_config"][key] = raw   # 2.1 M3: `x-<module>:<key>`, a string core never interprets
             except (TypeError, ValueError):
                 pass
 
@@ -2078,7 +2531,7 @@ def _probe_hive(ip, port, timeout=3):
     return info
 
 
-def _content_evidence(entries, gov=None):
+def _content_evidence(entries, gov=None, links=True):
     """content -> {'pos': {id: weight}, 'neg': {id: weight}, 'forget': bool, 'last_ts': str,
     'evidence': [(ts, sign, identity), ...]}. `evidence` is the ORDERED sequence of every evidence
     event (sign +1/-1), sorted by timestamp — retained since 1.19 as the prerequisite for a future
@@ -2160,6 +2613,7 @@ def _content_evidence(entries, gov=None):
             else:
                 honored = not unforget   # pre-governance: legacy source-tag forget honored; no owner, no unforget
             owner_acts.setdefault(content, []).append((pos, not unforget, honored))
+            ev.setdefault("acts", {})[(e.get("node_id"), e.get("seq"))] = honored   # `hv feed` reads this (2.1)
             continue                     # governance, not evidence: never moves last_ts
         elif unforget:
             continue                     # only the owner can unforget
@@ -2187,7 +2641,7 @@ def _content_evidence(entries, gov=None):
     # hard/evidence verdict does NOT change the weight — a hard `resolves` and a downgraded one are both
     # one identity's negative evidence; authority only decides provenance/commands (see resolve_link).
     known = {(e.get("node_id"), e.get("seq")) for e in entries}     # a dangling from_ref weighs nothing
-    for e in entries:
+    for e in entries if links else ():
         if e.get("type") != "link":
             continue
         if "sig" in e and not _verify_entry(e):
@@ -2225,13 +2679,14 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {},
+                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {},
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,
                            "introspect_support_weight": CONF_INTROSPECT_SUPPORT_WEIGHT,
                                         "trust_long_days": GOV_TRUST_LONG_DAYS, "trust_short_days": GOV_TRUST_SHORT_DAYS,
                                         "trust_drift_threshold": GOV_TRUST_DRIFT_THRESHOLD,
+                           "flood_per_minute": FLOOD_PER_MINUTE, "flood_per_day": FLOOD_PER_DAY,
                            **_PR6_KNOB_DEFAULTS}}
 
 
@@ -2905,6 +3360,39 @@ def persist_entity(conn, entry):
     return {"id": eid, "name": payload["name"], "type": etype}
 
 
+def _entity_name(entry):
+    n = (entry.get("payload") or {}).get("name")
+    return n if isinstance(n, str) else None
+
+
+def _entity_declined(entries, gov):
+    """2.1 (#208, option 3): the `entity` entries the projection does not apply, as a set of (node_id, seq).
+    A module device (the `module` admit marker, `gov["modules"]`) may write only `x-<its module>:<name>` entities
+    (the gate's `entity-prefix-required`), and may update one only if it is that name's creator, the first APPLIED
+    entity entry for the name in replay order `(node_id, seq)`, the order `persist_entity`'s `ON CONFLICT(name)`
+    folds in (the gate's `not-entity-owner`). A non-module device is never declined: its entity write by name is
+    as it was. Pure over the journal and governance, so every node declines the same entries whatever order they
+    arrived in. A declined entry is skipped, not kept as evidence. The module marker is read as of the end of the
+    journal, like the election exclusion."""
+    modules = gov.get("modules") or {}
+    declined, creator = set(), {}
+    for e in entries:
+        if e.get("type") != "entity":
+            continue
+        name = _entity_name(e)
+        if name is None:
+            continue
+        node = e.get("node_id")
+        module = modules.get(node)
+        if module is not None:
+            split = vocabulary.split_module_name(name)
+            if split is None or split[0] != module or creator.get(name, node) != node:
+                declined.add((node, e.get("seq")))
+                continue
+        creator.setdefault(name, node)
+    return declined
+
+
 _PASS1 = {
     "fact": persist_fact,
     "decision": persist_decision,
@@ -3095,6 +3583,7 @@ def _projection_entries(journal, note=False):
     """The journal entries the projection reads: those of a shaped type that project to something (#205). The
     one filter for `rebuild_db` and the live writers (`remember`, `decide`, `link`), so an incremental write
     and a full rebuild agree on a hostile entry already on disk. `note` records each skip for `rebuild_db`."""
+    journal = _ts_unskipped(journal)         # #217: the timestamp bounds skip an entry for every type
     return [e for e in journal if e["type"] not in _PAYLOAD_SHAPES
             or (_projectable(e) if note else _unprojectable(e) is None)]
 
@@ -3114,7 +3603,8 @@ def _clean_refs(raw):
 
 
 def _resolve_ref(conn, ref):
-    """Map a journal-identity reference [node_id, seq] to a local row id."""
+    """Map a journal-identity reference [node_id, seq] to a local row id. A string never binds: binding an `h:`
+    short id on one node only would make two nodes project one journal two ways."""
     if not _valid_ref(ref):
         return None
     r = conn.execute(
@@ -3137,14 +3627,18 @@ def _ref_or_legacy_id(conn, p, ref_key, legacy_key, kind, table):
     return None
 
 
-def resolve_entity_fact(conn, entry):
+def resolve_entity_fact(conn, entry, gov=None):
     """Pass 2: wire an entity_fact link via journal-identity refs (falling back
     to legacy local-id fields for pre-Phase-2 journals). A pair it cannot wire
-    (a target absent, of the wrong kind, or no such local id) is skipped."""
+    (a target absent, of the wrong kind, or no such local id) is skipped. 2.1 (#208): the legacy form of a
+    link, which a module may not write, so a module-signed `entity_fact` wires nothing. It attaches a fact to
+    its own entity with a `link` of kind `entity`."""
     p = entry["payload"]
     eid = _ref_or_legacy_id(conn, p, "entity_ref", "entity_id", "entity", "entities")
     fid = _ref_or_legacy_id(conn, p, "fact_ref", "fact_id", "fact", "facts")
     if eid is None or fid is None:
+        return
+    if gov is not None and _module_of(gov, entry) is not None:
         return
     conn.execute(
         "INSERT OR REPLACE INTO entity_facts (entity_id, fact_id, confidence) VALUES (?, ?, ?)",
@@ -3286,6 +3780,7 @@ _LINK_RESOLVERS = {
     "informed": None,
     "outcome-of": None,
     "extends": None,
+    "same-as": None,     # 2.1 (#208): a core join, `x-<module>:` entity → unprefixed entity; `_same_as_live` decides which count
 }
 
 
@@ -3313,11 +3808,86 @@ def _signing_note(link_entry):
             else f"(device-signed: source {p.get('source')})")
 
 
-def resolve_link(conn, entry, gov, by_ref):
+def _same_as_pair(p, by_ref):
+    """(from_name, to_name) of a `same-as` payload when it has the join's shape: `from_ref` an `x-<module>:`
+    entity entry, `to_ref` an unprefixed entity entry. None otherwise (such a link is never a join)."""
+    ends = []
+    for k in ("from_ref", "to_ref"):
+        ref = p.get(k)
+        e = by_ref.get(tuple(ref)) if _valid_ref(ref) else None
+        ends.append(_entity_name(e) if e is not None and e.get("type") == "entity" else None)
+    frm, to = ends
+    if frm is None or to is None or vocabulary.split_module_name(frm) is None or vocabulary.split_module_name(to) is not None:
+        return None
+    return frm, to
+
+
+def _same_as_live(entries, gov, by_ref=None):
+    """2.1 (#208): the `same-as` link entries that are a join now, as a set of (node_id, seq).
+
+    A join is written by a non-module device or the owner (a module's `same-as` never counts) and withdrawn by a
+    `retract` whose `retracts_ref` names the `same-as` entry. Joins and withdrawals are judged together, in governance order `(timestamp, node_id, seq)`: a join stands until a later withdrawal of THAT entry,
+    and a later `same-as` re-joins. Honoured acts: a `same-as` by a non-module device; a withdrawal of an honoured
+    join signed by that `same-as` entry's node_id; a withdrawal the owner signed as of its position (`_owner_at`,
+    the forget rule). Pure over (entries, gov): every node reaches the same set. A withdrawal is not fact evidence: `_content_evidence`
+    reads only retracts of facts."""
+    if by_ref is None:
+        by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    modules = gov.get("modules") or {}
+    timeline = gov.get("owner_timeline") or []
+    joins = {}                                 # ref -> pos, every honoured `same-as` join
+    withdrawals = []                           # (pos, target_ref) of every honoured withdrawal
+    for e in entries:
+        t, p = e.get("type"), e.get("payload") or {}
+        if "sig" in e and not _verify_entry(e):
+            continue
+        pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
+        ref = (e.get("node_id"), e.get("seq"))
+        if t == "link" and p.get("kind") == "same-as":
+            if _same_as_pair(p, by_ref) is not None and e.get("node_id") not in modules:
+                joins[ref] = pos
+        elif t == "retract" and _valid_ref(p.get("retracts_ref")):
+            target = by_ref.get(tuple(p["retracts_ref"]))
+            if target is None or target.get("type") != "link" or (target.get("payload") or {}).get("kind") != "same-as":
+                continue
+            owner = False
+            if "owner_sig" in p:
+                oid = _verify_governance(p)
+                owner = oid is not None and oid == _owner_at(timeline, pos)
+            if e.get("node_id") == target.get("node_id") or owner:
+                withdrawals.append((pos, tuple(p["retracts_ref"])))
+    # Each join stands until a withdrawal that follows it names it: a withdrawal of a `same-as` that was never an
+    # honoured join does nothing, and one join's withdrawal never removes another writer's join of the same pair.
+    live = set(joins)
+    for wpos, target in withdrawals:
+        if target in joins and wpos > joins[target]:
+            live.discard(target)
+    return live
+
+
+def _module_of(gov, entry):
+    return (gov.get("modules") or {}).get(entry.get("node_id"))
+
+
+def _shared_entity_end(conn, module, kind, local_id):
+    """True when an end of a module's link is an entity the module may not link to: an unprefixed name, or
+    another module's `x-<other>:` name (#208). Its own `x-<module>:` entities, and every non-entity end, are fine."""
+    if kind != "entity":
+        return False
+    row = conn.execute("SELECT name FROM entities WHERE id = ?", (local_id,)).fetchone()
+    split = vocabulary.split_module_name(row["name"]) if row else None
+    return not (split is not None and split[0] == module)
+
+
+def resolve_link(conn, entry, gov, by_ref, live_joins=None):
     """Pass 2 (1.19): fold ONE `link` entry. Unknown `kind` → no row, no error. A link whose from_ref or
     to_ref does not resolve through journal_index is skipped deterministically (no dangling edges).
     Known kinds write an edge row in `links` carrying the §5 authority verdict; hard kinds also command
-    via their handler. `by_ref` maps (node_id, seq) → entry (for the author rule)."""
+    via their handler. `by_ref` maps (node_id, seq) → entry (for the author rule).
+
+    2.1 (#208): a link a MODULE signed is skipped, with no `links` row and no `entity_facts` row, when either end
+    is an entity other than its own `x-<module>:` ones (the core makes that join); and a `same-as` is written
+    only when `_same_as_live` counts it (`live_joins`, computed from `by_ref` when not passed)."""
     if "sig" in entry and not _verify_entry(entry):
         return
     p = entry.get("payload", {}) or {}
@@ -3328,6 +3898,15 @@ def resolve_link(conn, entry, gov, by_ref):
     if src is None or dst is None:
         return
     (from_kind, from_id), (to_kind, to_id) = src, dst
+    module = _module_of(gov, entry)
+    if module is not None and (_shared_entity_end(conn, module, from_kind, from_id)
+                               or _shared_entity_end(conn, module, to_kind, to_id)):
+        return
+    if kind == "same-as":
+        if live_joins is None:
+            live_joins = _same_as_live(list(by_ref.values()), gov, by_ref)
+        if (entry.get("node_id"), entry.get("seq")) not in live_joins:
+            return
     authority = _link_authority(entry, by_ref.get(tuple(p.get("to_ref"))), gov)
     handler = _LINK_RESOLVERS[kind]
     if handler is not None:
@@ -4373,7 +4952,7 @@ def api_overview():
 
 
 def api_search(query="", tag=None, kind="all", min_confidence=0.0,
-               limit=50, offset=0, sort="salience", status="all"):
+               limit=50, offset=0, sort="salience", status="all", include_forgotten=True):
     """Facts + decisions for `query`, mirroring `hv search` but PAGINATED and sortable/filterable.
     `sort`: confidence (effective confidence, default; `salience` is a legacy alias) | recency (created) |
     importance | utility (1.19 PR6, learned projections decayed at query time). `status` (facts): all (live,
@@ -4381,7 +4960,9 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
     the page slice plus `*_total` so the UI can page; empty query browses everything. `kind` is exclusive:
     fact | decision | idea return only that type, `all` returns facts, decisions and ideas above zero.
     `min_confidence` filters facts, and earned ideas under kind=all (as `hv search`); raw ideas
-    (kind=idea) come back whatever their confidence. Decisions have no confidence filter."""
+    (kind=idea) come back whatever their confidence. Decisions have no confidence filter.
+    `include_forgotten=False` drops owner-forgotten facts in every status branch (and `status=forgotten`
+    then matches nothing), so totals and paging stay right; the module API passes it (2.1 A5)."""
     conn = get_conn()
     now = os.environ.get("HIVE_NOW") or _now_iso()
     sort = "confidence" if sort in (None, "", "salience") else sort
@@ -4413,6 +4994,8 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
             if tag and tag not in tags:
                 continue
             tl = [str(t).lower() for t in tags]
+            if not include_forgotten and base <= FORGET_FLOOR:
+                continue
             if status == "contested":
                 if not r["contested"]:
                     continue
@@ -4889,8 +5472,8 @@ def _fleet_contract(gov, probed, contracts, minimum=None):
     need = _contract_tuple(minimum or _fleet_floor())
     out = {"ok": [], "behind": [], "unverified": []}
     for d in sorted(gov.get("admitted") or set()):
-        if d == NODE_ID or d in (gov.get("purged") or set()):
-            continue
+        if d == NODE_ID or d in (gov.get("purged") or set()) or d in (gov.get("modules") or {}):
+            continue                  # a module device (2.1) has no sync address: it is not a node to reach or to upgrade
         if d not in probed:
             out["unverified"].append(d)
             continue
@@ -5003,6 +5586,113 @@ def dash(args):
     print("\n  (Couldn't auto-open a browser — open the Local URL above.)")
 
 
+def _entity_facts(conn, entity_id, hide_forgotten):
+    rows = conn.execute("""
+        SELECT f.id, f.content, ef.confidence AS link_confidence, f.confidence AS fact_confidence
+        FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
+        WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
+    """, (entity_id,)).fetchall()
+    if hide_forgotten:
+        rows = [r for r in rows if r["fact_confidence"] > FORGET_FLOOR]
+    sids = _ids_for(conn, "fact", [r["id"] for r in rows]) if rows else {}
+    return [{"id": r["id"], "sid": (sids.get(r["id"]) or {}).get("sid"), "content": r["content"],
+             "confidence": r["link_confidence"]} for r in rows]
+
+
+def entity_view(conn, name, joins=True, hide_forgotten=False):
+    """One entity and its linked facts, and (2.1, #208) with `joins` each `x-<module>:` entity a core `same-as`
+    joins to it, under its own name with the join's ref (`node_id:seq`) and signer and that entity's own facts.
+    Only a join `_same_as_live` counts is listed, so a withdrawn or module-written one is absent on every node.
+    None when there is no such entity."""
+    row = conn.execute("SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?",
+                       (name,)).fetchone()
+    if not row:
+        return None
+    view = {"id": row["id"], "name": row["name"], "type": row["type"], "attributes": row["attributes"],
+            "first_seen": row["first_seen"], "last_updated": row["last_updated"],
+            "facts": _entity_facts(conn, row["id"], hide_forgotten), "joined": []}
+    if not joins:
+        return view
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    for ref in sorted(_same_as_live(entries, _governance_state(entries), by_ref)):
+        p = by_ref[ref]["payload"]
+        src, dst = _index_row(conn, p.get("from_ref")), _index_row(conn, p.get("to_ref"))
+        if not src or not dst or src[0] != "entity" or dst != ("entity", row["id"]):
+            continue
+        if not conn.execute("SELECT 1 FROM links WHERE kind = 'same-as' AND from_id = ? AND to_id = ? AND signer = ?",
+                            (src[1], row["id"], str(ref[0]))).fetchone():
+            continue
+        other = conn.execute("SELECT name, type, attributes FROM entities WHERE id = ?", (src[1],)).fetchone()
+        view["joined"].append({"name": other["name"], "type": other["type"], "attributes": other["attributes"],
+                               "ref": f"{ref[0]}:{ref[1]}", "signer": ref[0],
+                               "facts": _entity_facts(conn, src[1], hide_forgotten)})
+    view["joined"].sort(key=lambda j: (j["name"], j["ref"]))
+    return view
+
+
+def _print_entity_facts(facts, indent):
+    print(f"{indent}Linked facts ({len(facts)}):")
+    for lf in facts:
+        print(f"{indent}  [{lf['sid']} · {lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+
+
+def _entity_join(conn, args, withdraw):
+    """`entity join|unjoin --name x-<module>:<n> --to <n>`: write a core `same-as` (2.1, #208), or withdraw it:
+    plain `unjoin` withdraws every live join this device wrote, `--owner` every live join (the owner's withdrawal,
+    on the control plane)."""
+    to_name = getattr(args, "to", None)
+    if not args.name or not to_name:
+        print(f"entity {args.action}: --name (the `x-<module>:` entity) and --to (the unprefixed one) are required",
+              file=sys.stderr)
+        sys.exit(1)
+    refs = []
+    for n in (args.name, to_name):
+        erow = conn.execute("SELECT id FROM entities WHERE name = ?", (n,)).fetchone()
+        refs.append(_index_lookup(conn, "entity", erow["id"]) if erow else None)
+        if erow is None:
+            print(f"entity {args.action}: no entity named '{n}'", file=sys.stderr)
+            sys.exit(1)
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    if _same_as_pair({"from_ref": refs[0], "to_ref": refs[1]}, by_ref) is None:
+        print(f"entity {args.action}: --name must be an `x-<module>:` entity and --to an unprefixed one",
+              file=sys.stderr)
+        sys.exit(1)
+    if not withdraw:
+        entry = append_journal("link", _link_payload("same-as", refs[0], refs[1], _write_source(args)))
+        print(f"Joined '{args.name}' to '{to_name}' {_signing_note(entry)}")
+        rebuild_db()
+        return
+    gov = _governance_state(entries)
+    live = [r for r in sorted(_same_as_live(entries, gov, by_ref))
+            if _same_as_pair(by_ref[r]["payload"], by_ref) == (args.name, to_name)]
+    if not live:
+        print(f"entity unjoin: '{args.name}' is not joined to '{to_name}'", file=sys.stderr)
+        sys.exit(1)
+    owner = getattr(args, "owner", False)
+    if not owner:                                    # a device withdraws only the joins it wrote
+        mine = _resolve_node_id()
+        live = [r for r in live if r[0] == mine]
+        if not live:
+            print(f"entity unjoin: this device wrote no live join of '{args.name}' to '{to_name}'; "
+                  f"another device's join is withdrawn by its writer, or by the owner with --owner", file=sys.stderr)
+            sys.exit(1)
+    for r in live:                                   # one retract per entry: each join is judged on its own
+        target = list(r)
+        if owner:
+            rentry = _owner_forget(target, "withdraw same-as")
+            if rentry is None:
+                return
+        else:
+            append_journal("retract", {"retracts_ref": target, "reason": "withdraw same-as",
+                                       "source": _write_source(args)})
+    rebuild_db()
+    refs_ = ", ".join(f"{r[0]}:{r[1]}" for r in live)
+    print(f"Withdrew {len(live)} join{'s' if len(live) != 1 else ''} of '{args.name}' to '{to_name}' ({refs_}); "
+          f"it holds only if this device wrote the join, or the owner signed the withdrawal.")
+
+
 def entity(args):
     """Register or query an entity."""
     if args.action == "add":
@@ -5021,6 +5711,14 @@ def entity(args):
         except sqlite3.OperationalError as e:            # after the append: never report failure (#70)
             _store_deferred(entry, e, "Entity")
         print(f"Entity #{res['id']}: {res['name']} ({res['type']})")
+        return
+
+    if args.action in ("join", "unjoin"):
+        conn = get_conn()
+        try:
+            _entity_join(conn, args, args.action == "unjoin")
+        finally:
+            conn.close()
         return
 
     if args.action == "link":
@@ -5070,27 +5768,21 @@ def entity(args):
         conn.close()
 
     elif args.action == "show":
-        row = conn.execute(
-            "SELECT id, name, type, attributes, first_seen, last_updated FROM entities WHERE name = ?",
-            (args.name,),
-        ).fetchone()
-        if not row:
+        view = entity_view(conn, args.name, joins=not getattr(args, "no_joins", False))
+        if not view:
             print(f"No entity named '{args.name}'")
             conn.close()
             return
-        print(f"Entity #{row['id']}: {row['name']} ({row['type']})")
-        print(f"  Attributes: {row['attributes']}")
-        print(f"  First seen: {row['first_seen']}  Last updated: {row['last_updated']}")
-        linked = conn.execute("""
-            SELECT f.id, f.content, ef.confidence
-            FROM entity_facts ef JOIN facts f ON f.id = ef.fact_id
-            WHERE ef.entity_id = ? ORDER BY ef.confidence DESC
-        """, (row["id"],)).fetchall()
-        if linked:
-            lsids = _ids_for(conn, "fact", [lf["id"] for lf in linked])
-            print(f"  Linked facts ({len(linked)}):")
-            for lf in linked:
-                print(f"    [{(lsids.get(lf['id']) or {}).get('sid')} · {lf['id']}] {lf['content'][:60]} (conf={lf['confidence']:.2f})")
+        print(f"Entity #{view['id']}: {view['name']} ({view['type']})")
+        print(f"  Attributes: {view['attributes']}")
+        print(f"  First seen: {view['first_seen']}  Last updated: {view['last_updated']}")
+        if view["facts"]:
+            _print_entity_facts(view["facts"], "  ")
+        for j in view["joined"]:
+            print(f"  Joined: {j['name']} ({j['type']})  same-as {j['ref']}, signed by {j['signer']}")
+            print(f"    Attributes: {j['attributes']}")
+            if j["facts"]:
+                _print_entity_facts(j["facts"], "    ")
         conn.close()
 
 
@@ -5128,17 +5820,21 @@ def _rebuild_in_transaction(conn):
     # One filter for every pass and reader: an entry of a shaped type with no object payload, a non-string
     # required field or a hostile number projects to nothing, so no later pass sees it (#205). The marker still covers the journal.
     entries = _projection_entries(journal, note=True)
+    # Governance is pure over the entries, so it is read before pass 1: an entity write by a module is judged
+    # against the module marker and the name's creator (#208).
+    gov = _governance_state(entries)
+    declined = _entity_declined(entries, gov)
     # Pass 1: row-producing entries (records journal_index).
     for entry in entries:
-        if entry["type"] in _PASS1:
+        if entry["type"] in _PASS1 and (entry["node_id"], entry["seq"]) not in declined:
             persist_entry(conn, entry)
     # Pass 2: cross-row links. The three legacy mechanisms keep their resolvers forever (append-only
     # journal, nothing is migrated); 1.19 `link` entries go through the one generic resolver.
-    gov = _governance_state(entries)
     by_ref = {(e.get("node_id"), e.get("seq")): e for e in entries}
+    live_joins = _same_as_live(entries, gov, by_ref)
     for entry in entries:
         if entry["type"] == "entity_fact":
-            resolve_entity_fact(conn, entry)
+            resolve_entity_fact(conn, entry, gov)
         elif entry["type"] == "decision" and (
             entry["payload"].get("supersedes_ref") or entry["payload"].get("supersedes")
         ):
@@ -5146,7 +5842,7 @@ def _rebuild_in_transaction(conn):
         elif entry["type"] == "fact" and entry["payload"].get("resolves_ref"):
             resolve_resolves(conn, entry, gov, by_ref)
         elif entry["type"] == "link":
-            resolve_link(conn, entry, gov, by_ref)
+            resolve_link(conn, entry, gov, by_ref, live_joins)
 
     # Phase A: confidence is a derived projection over the journal — recompute it
     # here so every node converges to identical values over the same journal.
@@ -5673,6 +6369,28 @@ def nudge(args):
         return  # never break the session
 
 
+def _timestamp_findings(entries, gov):
+    """The detection-only timestamp findings (#217) as [(kind, node_id, principal, count, detail)], for `hv doctor`
+    and `hv audit`: `future-dated` from this node's local arrival record, `flood` from the owner-signed
+    thresholds. Neither refuses or skips anything."""
+    out = []
+    for nid, d in sorted(_future_dated(entries).items()):
+        out.append(("future-dated", nid, _signer(nid, gov)["principal"], d["count"],
+                    f"worst {d['worst_minutes']:g} min ahead of this node's clock on arrival "
+                    f"(flagged past {FUTURE_DATED_MINUTES} min)"))
+    for f in _floods(entries, gov):
+        out.append(("flood", f["node_id"], _signer(f["node_id"], gov)["principal"], f["count"],
+                    f"{f['count']} entries in one timestamp-{f['per']}, over the owner-signed "
+                    f"flood_per_{f['per']} of {f['limit']}"))
+    return out
+
+
+def _timestamp_finding_text(f):
+    kind, nid, prin, n, detail = f
+    who = nid if not prin else f"{nid}, principal {prin}"
+    return f"{who}: {n} entr{'y' if n == 1 else 'ies'} flagged, {detail}" if kind == "future-dated" else f"{who}: {detail}"
+
+
 def _compute_audit(depth=None, session=""):
     """Compute the audit buckets (read-only). One implementation shared by `hv audit` and the
     session-start boot summary. Returns lists + counts; callers format them."""
@@ -5815,6 +6533,7 @@ def _compute_audit(depth=None, session=""):
     return {"depth": depth, "cap": cap, "redundant": redundant, "paraphrase": paraphrase,
             "corroborated": corroborated, "forgotten": forgotten, "contested": contested,
             "decayed": decayed, "recheck": recheck, "contravened": contravened,
+            "timestamps": _timestamp_findings(entries, _governance_state(entries)),
             "missing_note": missing_note}
 
 
@@ -5827,6 +6546,7 @@ def audit(args):
     forgotten, contested, decayed, recheck = a["forgotten"], a["contested"], a["decayed"], a["recheck"]
     contravened = a["contravened"]
     missing_note = a["missing_note"]
+    ts_findings = a["timestamps"]
 
     # 1.19 PR3b: every id in the audit is shown with its `h:` short id (stable) beside the rowid.
     conn = get_conn()
@@ -5854,6 +6574,8 @@ def audit(args):
                              "references_sid": asids.get(ref_id), "exact": exact}
                             for r, ref_id, exact in contravened[:cap]],
             "well_corroborated": len(corroborated),
+            "timestamps": [{"kind": k, "node_id": n, "principal": p, "count": c, "detail": d}
+                           for k, n, p, c, d in ts_findings[:cap]],
             "missing": missing_note,
         }, indent=2))
         return
@@ -5888,6 +6610,10 @@ def audit(args):
             how = "" if exact else " (a prose #N is a local id — best-effort match)"
             print(f"  {hid(r['id'])} {short(r['content'])} → names fact {hid(ref_id)}, still live{how}; "
                   f"reconcile (`hv remember ... --resolves {asids.get(ref_id)}` or `hv retract {asids.get(ref_id)}`)")
+    if ts_findings:
+        print(f"\nTIMESTAMPS (detected, nothing refused) — {len(ts_findings)}")
+        for f in ts_findings[:cap]:
+            print(f"  {f[0]}: {_timestamp_finding_text(f)}")
     if missing_note:
         print(f"\nMISSING (session proxy)\n  {missing_note}")
     print(f"\nwell-corroborated (good, no action): {len(corroborated)} fact(s) with >=2 independent sources")
@@ -6378,6 +7104,8 @@ _CLAUDE_HOOK_SPEC = [
     ("SessionEnd",       f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh sessionend",    20),
     ("UserPromptSubmit", f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh user-prompt",   10),
     ("PreCompact",       f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh precompact",     10),
+    ("Notification",     f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh notification",   10),   # 2.1: modules only
+    ("Stop",             f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh stop",           10),   # 2.1: modules only
 ]
 
 
@@ -7523,6 +8251,26 @@ def _doctor_status():
     except Exception:
         pass
 
+    # 3f1a. Bounded timestamps (#217): `ts-bounds` reports what the projection skips; `future-dated` and `flood` are
+    #       detection only (local arrival times, owner-signed thresholds) and change nothing. Advisory.
+    try:
+        skipped = _ts_violations(entries, gov)
+        if skipped:
+            checks.append({"name": "ts-bounds", "status": "warn",
+                           "detail": f"{len(skipped)} entr{'y' if len(skipped) == 1 else 'ies'} outside the timestamp "
+                                     f"bounds, skipped by the projection: "
+                                     + ", ".join(f"{n}:{q} ({why})" for (n, q), why in sorted(skipped.items())[:5])
+                                     + (" …" if len(skipped) > 5 else "")})
+        by_kind = {}
+        for f in _timestamp_findings(entries, gov):
+            by_kind.setdefault(f[0], []).append(f)
+        for kind, fs in by_kind.items():
+            checks.append({"name": kind, "status": "warn",
+                           "detail": f"{len(fs)} device(s): " + "; ".join(_timestamp_finding_text(f) for f in fs[:5])
+                                     + (" …" if len(fs) > 5 else "")})
+    except Exception:
+        pass
+
     # 3f1b. The local quarantine (#205): entries ingest refused for their payload, kept verbatim on this node
     #       only (the newest QUARANTINE_MAX). Advisory.
     try:
@@ -7580,6 +8328,15 @@ def _doctor_status():
                                          f"(`hive-mind update`), or `hive-mind group purge` a dead device"})
     except Exception:
         pass
+
+    # 3i. Modules (2.1, M7): one result per installed module, none on a node without any.
+    try:
+        import hive_module_doctor
+        checks.extend(hive_module_doctor.checks(
+            _hv_namespace(), gov, entries,
+            probe=lambda: (_probe_peer_map_cached(), _PEER_CONTRACTS)))
+    except Exception as e:
+        checks.append({"name": "modules", "status": "warn", "detail": f"check error: {e}"})
 
     # 4. Hygiene — duplicates / obsolete / re-check, as surfaced by the audit. Advisory only.
     try:
@@ -8154,6 +8911,13 @@ def _repoint_peers(path, moves):
     return done
 
 
+def _hv_namespace():
+    """This file's globals as an object, for a helper module that reads `hv`'s paths and functions. It is not
+    `sys.modules[__name__]`: a test (or a tool) may load `hv` under a name nothing registered."""
+    import types
+    return types.SimpleNamespace(**globals())
+
+
 def doctor_cmd(args):
     """Aggregate local health check: authenticity, journal integrity, the derived DB, corpus
     hygiene, the sync daemon, peer reachability, and the Claude Code agent integration. Read-only by
@@ -8354,6 +9118,17 @@ def doctor_cmd(args):
                 print("\n--fix: Claude Code integration already wired.")
         except Exception as e:
             print(f"\n--fix: agent-hooks heal error: {e}")
+
+        # Modules (2.1, M7): re-render a unit that differs from its verified manifest, start a stopped one.
+        # Never admits, revokes or signs anything.
+        try:
+            import hive_module_doctor
+            fixes = hive_module_doctor.fix(_hv_namespace(), dry)
+            if fixes:
+                print("\n--fix: modules")
+                print("\n".join(fixes))
+        except Exception as e:
+            print(f"\n--fix: modules heal error: {e}")
 
         # The forget grandfather is the one failing check `--fix` can settle in place (on the control plane,
         # 4c), so re-read it: a hive closed just now exits clean instead of on the pre-fix verdict.
@@ -9423,12 +10198,18 @@ def build_parser():
                                 help="Owner forget — governance, decisive (drives to the forget floor)")
 
     entity_parser = subparsers.add_parser("entity", help="Manage entities")
-    entity_parser.add_argument("action", choices=["add", "list", "show", "link"], help="Sub-command")
+    entity_parser.add_argument("action", choices=["add", "list", "show", "link", "join", "unjoin"], help="Sub-command")
     entity_parser.add_argument("--name", help="Entity name")
     entity_parser.add_argument("--type", help="Entity type (person, project, concept)")
     entity_parser.add_argument("--attr", help="JSON attributes")
     entity_parser.add_argument("--fact-id", metavar="FACT", help="Fact to link: its `h:` short id or `ref` (2.0 refuses local ids)")
     entity_parser.add_argument("--confidence", type=float, help="Link confidence")
+    entity_parser.add_argument("--to", help="`join`/`unjoin`: the unprefixed entity a module's `x-<module>:` "
+                                           "entity (`--name`) is the same as (2.1, #208)")
+    entity_parser.add_argument("--no-joins", action="store_true",
+                               help="`show`: the core entity only, without the module entities joined to it")
+    entity_parser.add_argument("--owner", action="store_true",
+                               help="`unjoin`: an owner withdrawal (control plane, owner key)")
     entity_parser.add_argument("--source", help="Source agent for `link` (e.g. claude-code). Omitted: "
                                                "`manual`, the only source that is owner-signed on the owner "
                                                "device (#114)")
@@ -9436,6 +10217,10 @@ def build_parser():
     subparsers.add_parser("version", help="Print the hv contract version (SemVer)")
     subparsers.add_parser("verify", help="Verify this is the official, untampered HiveMind")
     subparsers.add_parser("stats", help="Show memory usage stats")
+    feed_parser = subparsers.add_parser("feed", help="Read-only: journal entries past a per-node cursor, as JSON")
+    feed_parser.add_argument("--after", default="", help="cursor: node_id:seq,node_id:seq (default: from the start)")
+    feed_parser.add_argument("--limit", type=int, default=200, help="entries per page (default 200)")
+    feed_parser.add_argument("--format", choices=["json"], default="json")
     subparsers.add_parser("whoami", help="Show this device's identity + membership status (sterile/fertile/owner)")
     subparsers.add_parser("peers", help="List hive members by device + principal + address + reachability")
 
@@ -9518,6 +10303,8 @@ def build_parser():
     owner_revoke_escrow = owner_sub.add_parser("revoke-escrow", help="Tombstone an escrowed key so `restore` skips it")
     owner_revoke_escrow.add_argument("ref", help="Escrow ref `node_id:seq`, or `all`")
     owner_sub.add_parser("heartbeat", help="Refresh owner liveness (resets the dead-man timer; owner key holder)")
+    owner_sub.add_parser("freeze-timestamps", help="Arm the bounded entry timestamps (#217): freeze every device's "
+                                                   "chain at its tip, so only later entries are checked (owner key holder)")
     owner_mint = owner_sub.add_parser("mint", help="[hive-mind] Mint a prospective owner key on this device, "
                                                   "to propose with `hv owner propose-election --pub`")
     owner_mint.add_argument("--force", action="store_true", help="Replace an owner key already on this device")
@@ -9532,12 +10319,14 @@ def build_parser():
     admit_parser = subparsers.add_parser("admit", help="[alias of `hive-mind group admit`] Admit a device; no arg lists pending")
     admit_parser.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list devices awaiting admission")
     admit_parser.add_argument("--principal", help="Tag the person or agent who owns this device")
+    admit_parser.add_argument("--module", help="Mark the device as module NAME's (2.1): it never votes in an election")
 
     group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list")
     group_sub = group_parser.add_subparsers(dest="group_action")
     g_admit = group_sub.add_parser("admit", help="Admit a device; no arg lists pending requests")
     g_admit.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list pending")
     g_admit.add_argument("--principal", help="Tag the person or agent who owns this device")
+    g_admit.add_argument("--module", help="Mark the device as module NAME's (2.1): it never votes in an election")
     g_revoke = group_sub.add_parser("revoke", help="Un-admit a device (reversible) → returns to STERILE")
     g_revoke.add_argument("device_id")
     g_deny = group_sub.add_parser("deny", help="Reject a pending join-request (a later admit overrides)")
@@ -9728,6 +10517,8 @@ def _dispatch(args):
         entity(args)
     elif args.command == "stats":
         stats(args)
+    elif args.command == "feed":
+        feed(args)
     elif args.command == "version":
         version_cmd(args)
     elif args.command == "verify":

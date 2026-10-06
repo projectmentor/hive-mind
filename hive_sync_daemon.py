@@ -734,6 +734,12 @@ def _extra_servers(primary_bind, port):
     return extra
 
 
+def _start_module_api():
+    """2.1: the loopback module API (`hive_module_api`, `/v1`), imported here because it imports this file."""
+    import hive_module_api
+    return hive_module_api.start_module_api()
+
+
 def serve_forever(bind=None, port=None):
     """Run the HTTP server(s) in the foreground (blocks). Serves the primary bind plus a loopback
     alias so local access works when the primary is a specific (tailnet) address."""
@@ -748,10 +754,11 @@ def serve_forever(bind=None, port=None):
         threading.Thread(target=s.serve_forever, daemon=True).start()
     also = " (+127.0.0.1)" if extra else ""
     print(f"sync daemon: serving on {bind}:{port}{also} as {hv.NODE_ID}")
+    modules = _start_module_api()
     try:
         server.serve_forever()
     finally:
-        for s in extra:
+        for s in extra + ([modules] if modules else []):
             s.shutdown()
 
 
@@ -841,6 +848,8 @@ def run_daemon(interval=300):
     how = "automatic, rebinds to the tailnet when it appears" if auto and sync_common.is_loopback(bind) \
         else ("automatic" if auto else "fixed by HIVE_BIND or .peers.json")
     print(f"sync daemon: serving on {bind}:{port}{also} as {hv.NODE_ID} (bind {how}); outbound every {interval}s")
+    modules = _start_module_api()
+    extra = extra + ([modules] if modules else [])     # shut down with the rest, but never counted in the bind message
     try:
         while True:
             _run_round(server, extra, bind, auto, interval, sync_client.sync_now)

@@ -201,7 +201,7 @@ def _will_owner_sign_links(args):
     and the write's source is `manual`, by `hv`'s own `_write_source`."""
     cmd = getattr(args, "command", None)
     if cmd == "entity":
-        wants = getattr(args, "action", None) == "link"
+        wants = getattr(args, "action", None) in ("link", "join")
     else:
         wants = any(getattr(args, f, None) for f in _LINK_FLAGS.get(cmd, ()))
     return bool(wants) and _write_source(args) == "manual"
@@ -507,7 +507,7 @@ def _heal_forget_authz(entries, dry):
 
 # The `owner` actions this plane implements. Every other action is `hv`'s and runs there unchanged.
 _OWNER_ACTIONS_HERE = {"pin", "export", "import", "standby", "escrow", "restore", "nominate", "unnominate",
-                       "claim", "transfer", "revoke-escrow", "heartbeat", "init", "mint", "seal"}
+                       "claim", "transfer", "revoke-escrow", "heartbeat", "freeze-timestamps", "init", "mint", "seal"}
 
 
 def owner_cmd(args):
@@ -873,6 +873,20 @@ def owner_cmd(args):
         if _append_governance({"action": "heartbeat"}):
             print("Heartbeat recorded — owner liveness refreshed (resets the dead-man timer).")
         return
+    if action == "freeze-timestamps":
+        if _owner_seed() is None:
+            print("This device does not hold the owner key — freeze-timestamps must run on a key holder.")
+            return
+        tips = {}
+        for e in merkle.read_all_entries(JOURNAL_DIR):
+            if e.get("node_id") is not None and isinstance(e.get("seq"), int):
+                tips[e["node_id"]] = max(tips.get(e["node_id"], 0), e["seq"])
+        if _append_governance({"action": "freeze-timestamps", "tips": tips}):
+            print(f"Timestamp bounds armed (#217): {len(tips)} device chain(s) frozen at their tips. Entries up to "
+                  f"those seqs are unchecked; every later entry must carry the canonical timestamp, be no more "
+                  f"than 5 minutes before its device's latest earlier entry, and be no earlier than its device's "
+                  f"first admit.")
+        return
     if action == "init":
         if _ed25519 is None:
             print("ed25519 unavailable; cannot create an owner key.")
@@ -938,14 +952,54 @@ def admit_cmd(args):
     if args.device_id in _governance_state(merkle.read_all_entries(JOURNAL_DIR))["purged"]:
         print(f"{args.device_id} is purged (tombstoned) — purge is permanent; it cannot be re-admitted.")
         return
+    module = getattr(args, "module", None)
+    if module is not None and not vocabulary.valid_module_name(module):
+        print(f"{module!r} is not a valid module name ({vocabulary.valid_module_name.__doc__.strip()})")
+        return
+    if module and not args.principal:
+        print("--module needs --principal: give the module's device the operator's principal, so `cap_self` bounds it "
+              "and it is not its own voting unit under quorum_by=principal.", file=sys.stderr)
+        sys.exit(1)
     payload = {"action": "admit", "device_id": args.device_id}
     if args.principal:
         payload["principal"] = args.principal
+    if module:
+        payload["module"] = module
     if _append_governance(payload):
-        print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else ""))
+        print(f"Admitted {args.device_id}" + (f" (principal: {args.principal})" if args.principal else "")
+              + (f" (module: {module}; it does not vote)" if module else ""))
+        if module:
+            return          # a module has no join-request and no sync address: no reciprocal peer
         if _add_peer(_join_request_url(args.device_id), args.principal or args.device_id):
             print("  + reciprocal peer added from its join-request URL — the owner now syncs to "
                   "this device too (daemon picks it up next cycle, or `hv sync now`).")
+
+
+def mint_module_key(name):
+    """Mint module `name`'s own device key (2.1, plan PR 3) at `<key dir>/modules/<name>/device-key` (0600, in a
+    0700 directory) and return `(device_id, pubkey_b64)`. It is a device key, not owner material: the module
+    signs its own entries with it, and the owner then admits it with `admit --module <name>`. Refuses a bad
+    name, and refuses to replace a key already there (a module's identity is its key; re-minting one would
+    orphan every entry it signed)."""
+    if not vocabulary.valid_module_name(name):
+        raise ValueError(f"{name!r} is not a valid module name")
+    if _ed25519 is None:
+        raise RuntimeError("ed25519 module unavailable; cannot create a module key")
+    d = _ensure_key_dir() / "modules" / name
+    path = d / "device-key"
+    if path.exists():
+        raise FileExistsError(f"module {name!r} already has a key at {path}")
+    d.parent.mkdir(exist_ok=True)
+    d.mkdir(exist_ok=True)
+    for p in (d.parent, d):
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass
+    seed = os.urandom(32)
+    _write_private(path, base64.b64encode(seed).decode() + "\n")
+    pub = _ed25519.pub_from_seed(seed)
+    return _device_id_for_pub(pub), base64.b64encode(pub).decode()
 
 
 def _group_change(action, device_id, principal=None):
@@ -972,15 +1026,23 @@ def _config_set(key, value):
     (same_device_lambda, cap_self, introspect_support_weight), the salience/decay knobs
     (importance_self_cap, w_links, w_volatile, halflife_fact/idea/volatile), the trust-velocity knobs
     (trust_long_days, trust_short_days, trust_drift_threshold), the quorum-election knobs (quorum_m,
-    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers, forget_writers)."""
+    quorum_by, dead_man_days) and the write policies (capsule_putters, cell_writers, forget_writers). A key
+    `x-<module>:<key>` is a module's fleet-wide config (2.1): a string, stored and never interpreted."""
+    if vocabulary.split_module_name(key):      # 2.1 M3: a module's fleet-wide config, `x-<module>:<key>`, a string
+        if not isinstance(value, str) or len(value) > vocabulary.MODULE_VALUE_MAX:
+            print(f"bad value for {key}: a string of at most {vocabulary.MODULE_VALUE_MAX} characters")
+            return
+        if _append_governance({"action": "set-config", "key": key, "value": value}):
+            print(f"set {key} = {value}")
+        return
     coercers = {"same_device_lambda": float, "cap_self": float,
                 "quorum_m": int, "quorum_by": str, "dead_man_days": float,
                 "capsule_putters": str, "cell_writers": str, "forget_writers": str,
-                "introspect_support_weight": float,
+                "introspect_support_weight": float, "flood_per_minute": int, "flood_per_day": int,
                 "trust_long_days": float, "trust_short_days": float, "trust_drift_threshold": float,
                 **{k: float for k in _PR6_KNOB_DEFAULTS}}
     if key not in coercers:
-        print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))})")
+        print(f"unknown config key {key!r} (known: {', '.join(sorted(coercers))}, or a module's x-<module>:<key>)")
         return
     try:
         val = coercers[key](value)
@@ -1013,6 +1075,9 @@ def _config_set(key, value):
         if val == "legacy" and hides and (gov.get("config") or {}).get("forget_writers", "legacy") == "owner":
             print(f"Note: reopening the grandfather hides {len(hides)} fact(s) again (listed by `hv doctor`, "
                   f"forget-authz).")
+    if key in ("flood_per_minute", "flood_per_day") and val < 1:
+        print(f"{key} must be >= 1 entries")
+        return
     if key == "quorum_m" and val < 0:
         print("quorum_m must be >= 0 (0 disables elections)")
         return

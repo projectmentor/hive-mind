@@ -193,6 +193,15 @@ for _ in $(seq 1 "${HIVE_DAEMON_WAIT_S:-15}"); do
 done
 if [ "$_up" = 1 ]; then ok "Daemon responding"; else echo "  Daemon may still be starting — check the daemon logs."; fi
 
+# 2.1 (M2): the core's unit renderer may have changed, so installed modules' units are rendered again too. Only the
+# files that changed are written and only their units restarted. It never fails the update: a module that cannot
+# be re-applied is a warning that names it.
+if [ -f "$HIVE_DIR/hivemind_ctl.py" ]; then
+  _mod_out="$(python3 "$HIVE_DIR/hivemind_ctl.py" module reapply 2>&1)" \
+    || _mod_out="${_mod_out:+$_mod_out$'\n'}hive-mind module: warning: module units could not be re-applied"
+  while IFS= read -r _l; do [ -n "$_l" ] && warn "${_l#hive-mind module: warning: }"; done <<<"$_mod_out"
+fi
+
 info "Rebuilding database..."
 if cd "$HIVE_DIR" && ./hv doctor rebuild; then
   ok "DB rebuilt"

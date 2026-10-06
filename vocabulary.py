@@ -5,7 +5,7 @@ projects to nothing: that is how an older node stays converged with a newer one.
 so the same rule has a cost. If a module wrote a name that a later core feature then reused, every entry
 the module had written would be read with the new meaning, on every node, forever. So core reserves the
 bare names listed here, and a module's names take a prefix, `x-<module>:<name>` (decision h:af137f9421).
-The 2.1 module API enforces the prefix. 2.0 reserves and documents.
+The 2.1 module API enforces the prefix (`check_module_name`, below). 2.0 reserves and documents.
 
 This file is the registry the code is checked against, not a description of it. `tests/test_vocabulary.py`
 reads `hv`, `hivemind_owner.py` and the sync modules with `ast`, at enumerated sites, and fails both ways: a
@@ -17,7 +17,8 @@ It also lists what a module may add per category (rule 4), and, apart from the j
 per-node files and the `via` values of a peer sighting (#150, decision h:a1e3e7cd73). Those are not journal
 vocabulary; the same test holds them to the code's path literals, both ways.
 
-Deliberately importable by `hv`: it holds no secret, reads no configuration, and imports nothing, like
+Deliberately importable by `hv`: it holds no secret, reads no configuration, and imports nothing (the
+validators below use no `re`), like
 `commandmap.py`, so `hv`'s import graph (S2) is unchanged. It is a `.py`, so the signed manifest covers it.
 
 Each entry maps a name to:
@@ -83,6 +84,9 @@ LINK_KINDS = {
                                        "outcome score, on the `sense` channel only."),
     "resolves":    _v(WRITTEN, "1.19", "This fact corrects another: negative evidence on the target, and "
                                        "provenance when the link is hard.", evidence="neg"),
+    "same-as":     _v(WRITTEN, "2.1", "Core only. Joins a module's `x-<module>:` entity (`from_ref`) to an "
+                                       "unprefixed entity (`to_ref`); `entity show` lists the joined entity's "
+                                       "facts. A module's is refused, and a `retract` naming it withdraws it."),
     "supersedes":  _v(WRITTEN, "1.19", "This decision replaces another, when the link is hard."),
     "supports":    _v(WRITTEN, "1.19", "Evidence for a fact or an idea.", evidence="pos"),
 }
@@ -98,6 +102,9 @@ GOVERNANCE_ACTIONS = {
                                              "key."),
     "deny":               _v(WRITTEN, "1.5", "Drop a pending join-request; a later admit overrides it. "
                                              "Owner-signed."),
+    "freeze-timestamps":  _v(WRITTEN, "2.1", "Arms the bounded entry timestamps: `tips` maps each device to the seq "
+                                              "its chain is frozen at, and only later entries are checked. "
+                                              "Owner-signed."),
     "heartbeat":          _v(WRITTEN, "1.9", "Owner liveness: an owner-signed act with no other effect, which "
                                              "keeps the dead-man switch shut."),
     "join-request":       _v(WRITTEN, "1.4", "A device asks to be admitted. Device-signed; it carries no "
@@ -131,6 +138,10 @@ CONFIG_KEYS = {
                                                      "`fertile`."),
     "dead_man_days":             _v(WRITTEN, "1.9", "Days of owner silence before a quorum election can "
                                                     "install a new owner."),
+    "flood_per_day":             _v(WRITTEN, "2.1", "Entries one device may stamp into a day before `hv doctor` "
+                                                    "reports a flood; 2000 by default. Detection only."),
+    "flood_per_minute":          _v(WRITTEN, "2.1", "Entries one device may stamp into a minute before `hv doctor` "
+                                                    "reports a flood; 120 by default. Detection only."),
     "forget_writers":            _v(WRITTEN, "1.25", "Whether an unsigned owner forget dated before genesis "
                                                      "still counts: `legacy` or `owner`."),
     "halflife_fact":             _v(WRITTEN, "1.20", "Half-life, in days, of a fact's confidence and "
@@ -200,10 +211,10 @@ SOURCE_CONTEXTS = {
 # ── envelope fields: the structure every entry is made of. A module never writes its own ────────────
 ENVELOPE_FIELDS = {
     "action":    _v(WRITTEN, "1.4", "Which act a `governance` payload records."),
-    "from":      _v(RESERVED, "2.0", "Reserved for the module envelope (#150): the entry an edge starts from. "
-                                     "A link carries `from_ref` today."),
-    "id":        _v(RESERVED, "2.0", "Reserved for the module envelope (#150): an entry's identity, today "
-                                     "`node_id:seq` or its `h:` short id."),
+    "from":      _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge starts from. A module's own link kind "
+                                     "carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `from_ref`."),
+    "id":        _v(RESERVED, "2.0", "Reserved for the module envelope: an entry's identity, `node_id:seq` or its "
+                                     "`h:` short id. It names the entry; it is not a field a module writes."),
     "kind":      _v(WRITTEN, "1.13", "The discriminator inside a typed payload: a link's relationship, an "
                                      "announce's kind, a cell's or capsule's kind."),
     "node_id":   _v(WRITTEN, "1.0", "The authoring device; since 1.3, `k1:` and 16 hex of its key's "
@@ -213,12 +224,12 @@ ENVELOPE_FIELDS = {
     "pub":       _v(WRITTEN, "1.3", "The signer's Ed25519 public key."),
     "seq":       _v(WRITTEN, "1.0", "The device's sequence number; `(node_id, seq)` identifies an entry."),
     "sig":       _v(WRITTEN, "1.3", "The device's Ed25519 signature over the entry without `sig`."),
-    "target":    _v(RESERVED, "2.0", "Reserved for the module envelope (#150): the entry an act is about. "
-                                     "Today `retracts_ref` or `to_ref`."),
+    "target":    _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an act is about, resolved like "
+                                     "`retracts_ref` or `to_ref`."),
     "timestamp": _v(WRITTEN, "1.0", "When the entry was written (ISO 8601); it also names the journal's day "
                                     "file."),
-    "to":        _v(RESERVED, "2.0", "Reserved for the module envelope (#150): the entry an edge points to. A "
-                                     "link carries `to_ref` today."),
+    "to":        _v(RESERVED, "2.0", "Reserved for the module envelope: the ref an edge points to. A module's own link kind "
+                                     "carries it as a pair or an `h:` short id, shape-checked as an `h:` id and resolved when a projection first reads a module link kind; a core kind carries `to_ref`."),
     "type":      _v(WRITTEN, "1.0", "The entry type (see Entry types)."),
 }
 
@@ -228,6 +239,8 @@ ENVELOPE_FIELDS = {
 # h:a1e3e7cd73). `where`: "hive" is $HIVE_HOME, the checkout; "keys" is the 0700 key directory (2.0 PR 3a).
 # tests/test_vocabulary.py holds this table to the path literals in the code, both ways.
 LOCAL_FILES = {
+    ".arrivals.jsonl":       _v(WRITTEN, "2.1", "When this node first received each foreign entry, for the `future-dated` "
+                                                "check; never synced, never read by the projection.", where="hive"),
     ".bus":                  _v(WRITTEN, "1.10", "Directory for the local event log, `introspect.log`; never synced.",
                                 where="hive"),
     ".device-id":            _v(WRITTEN, "1.3", "This device's id, `k1:` and 16 hex of its key's sha256.", where="hive"),
@@ -237,6 +250,11 @@ LOCAL_FILES = {
                                                  "synced).", where="hive"),
     ".key-dir":              _v(WRITTEN, "2.0", "The path of this checkout's key directory, so a renamed checkout keeps "
                                                 "its keys.", where="hive"),
+    ".module-quota.json":    _v(WRITTEN, "2.1", "Each module device's hourly and daily write times, for the module API's rate "
+                                                "limits (0600, never journaled). The lifetime count is the journal's, not this "
+                                                "file's.", where="hive"),
+    ".modules.json":         _v(WRITTEN, "2.1", "The modules installed on this node: version, pinned publisher key, device id, source and "
+                                                "quota limits (0600, never journaled). Written by `hive-mind module`.", where="hive"),
     ".nudge_state":          _v(WRITTEN, "1.0", "When the save and audit nudges last fired.", where="hive"),
     ".owner-key":            _v(LEGACY, "1.4", "The owner key's pre-2.0 path in the checkout. `hive-mind doctor --fix` "
                                                "moves it.", where="hive"),
@@ -287,7 +305,8 @@ MODULE_RULES = {
     "entry_types":        "No. A new entry type needs a core projection.",
     "link_kinds":         "Yes, prefixed. It lands, and projects to nothing on a node without a resolver for it.",
     "governance_actions": "No. An action needs the core governance projection.",
-    "config_keys":        "Yes, prefixed. An older node ignores a key it does not know.",
+    "config_keys":        "Yes, prefixed. `x-<module>:<key>` holds a string the core stores and never interprets. An "
+                          "older node ignores a key it does not know.",
     "channels":           "No. Closed: an unrecognised channel counts as `introspect`.",
     "behaviour_tags":     "Only prefixed, like every module name.",
     "announce_kinds":     "Only prefixed. A node accepts an unknown kind and ignores it.",
@@ -322,3 +341,129 @@ CATEGORIES = (
 # ── what `hv` derives from the registry (the values it had before, unchanged) ───────────────────────
 CHANNEL_NAMES = tuple(CHANNELS)                                  # hv: _CHANNELS
 LINK_EVIDENCE_SIDES = {k: r["evidence"] for k, r in LINK_KINDS.items() if "evidence" in r}  # hv: _LINK_EVIDENCE_KINDS
+
+
+# ── the module prefix (2.1, plan PR 2; decisions h:af137f9421, h:2294779aaf) ──────────────────────────
+# A module adds a name only as `x-<module>:<name>`; a bare name that is not in the registry is refused, so core
+# can adopt it later without reinterpreting a module's old entries. Pure functions over the tables above,
+# importing nothing: the module API (plan PR 4, 5) and `hv doctor` call them, and `hv` reads a config key's
+# prefix in the `set-config` projection.
+MODULE_PREFIX = "x-"
+MODULE_NAME_MAX = 32
+MODULE_KEY_MAX = 64
+MODULE_VALUE_MAX = 4096          # the longest value `set-config` stores under a module's config key
+
+_LOWER, _DIGIT = "abcdefghijklmnopqrstuvwxyz", "0123456789"
+
+
+def valid_module_name(module):
+    """A module's name: 1 to 32 characters of `a-z`, `0-9` and `-`, starting with a letter, not ending in `-`."""
+    return (isinstance(module, str) and 0 < len(module) <= MODULE_NAME_MAX and module[0] in _LOWER
+            and module[-1] != "-" and all(c in _LOWER + _DIGIT + "-" for c in module))
+
+
+def _valid_local_name(name):
+    """The part after `x-<module>:`: 1 to 64 characters of letters, digits, `_`, `.` and `-`, starting alphanumeric."""
+    return (isinstance(name, str) and 0 < len(name) <= MODULE_KEY_MAX and name[0].isascii() and name[0].isalnum()
+            and all(c.isascii() and (c.isalnum() or c in "_.-") for c in name))
+
+
+def module_prefix(module):
+    return f"{MODULE_PREFIX}{module}:"
+
+
+def split_module_name(name):
+    """`x-<module>:<name>` -> (module, name), or None if `name` is not a well-formed prefixed name."""
+    if not isinstance(name, str) or not name.startswith(MODULE_PREFIX) or ":" not in name:
+        return None
+    module, _, local = name[len(MODULE_PREFIX):].partition(":")
+    return (module, local) if valid_module_name(module) and _valid_local_name(local) else None
+
+
+def _core_has(table, name):
+    return name in table or any(k.endswith("*") and name.startswith(k[:-1]) for k in table)
+
+
+# category -> (core names a module may USE bare, or None when it may use none). A module may use a core link
+# kind, tag or source context (they carry no new meaning); it may never write `manual` or `owner` as its source
+# app, nor the `owner` context (a retract from either is a forget). `source_apps` is checked on its own below.
+# Any other category a module may extend (announce kinds, config keys) takes a prefixed name only.
+_BARE_OK = {"link_kinds": LINK_KINDS, "behaviour_tags": BEHAVIOUR_TAGS,
+            "source_contexts": {k: v for k, v in SOURCE_CONTEXTS.items() if k != "owner"}}
+_NEVER = ("entry_types", "governance_actions", "channels", "envelope_fields")
+
+
+def check_module_name(module, category, name):
+    """None if `module` may introduce `name` in `category` (a key of `CATEGORIES`), else the reason, one line.
+    Core names are allowed only where `_BARE_OK` says so; anything else must be `x-<module>:<name>` for this
+    module (a module cannot write `x-other:` names). A source app is `x-<module>` with no colon part."""
+    if not valid_module_name(module):
+        return f"{module!r} is not a valid module name"
+    if not isinstance(name, str):
+        return f"a name must be a string, not {type(name).__name__}"
+    if category in _NEVER:
+        return f"a module may not add {category.replace('_', ' ')}: {MODULE_RULES[category]}"
+    if category not in MODULE_RULES:
+        return f"unknown category {category!r}"
+    if category == "source_apps":
+        if name == f"{MODULE_PREFIX}{module}":
+            return None
+        return (f"source app {name!r} must be `{MODULE_PREFIX}{module}`" if name not in SOURCE_APPS else
+                f"source app {name!r} is core's: a module's source is `{MODULE_PREFIX}{module}`")
+    if category in _BARE_OK and _core_has(_BARE_OK[category], name):
+        return None
+    parts = split_module_name(name)
+    if parts is None:
+        return (f"{name!r} is not a core {category.replace('_', ' ')[:-1]} a module may use; a module's own name is "
+                f"`{module_prefix(module)}<name>`")
+    if parts[0] != module:
+        return f"{name!r} belongs to module {parts[0]!r}, not {module!r}"
+    return None
+
+
+# ── ref-bearing payload fields (2.1, plan PR 2; the list #150 deferred) ───────────────────────────────
+# Every payload field the code reads as a reference to another entry. `shape`: `pair` is `[node_id, seq]`,
+# `pairs` a list of them, `ref` a pair or its `node_id:seq` or `h:` string form, `local_id` a pre-Phase-2 local row id. A ref-walking check (a rebuild, a doctor pass, the module
+# API) covers this table, and `tests/test_ref_fields.py` fails when the code reads a ref field that is not listed,
+# or a row nothing reads.
+# `legacy` rows are read for old journals and never written by core any more. The module envelope's
+# `from`, `to` and `target` (see ENVELOPE_FIELDS) are `reserved`: the module API (`POST /v1/entries`) reads and
+# shape-checks `from` and `to` on a module's own link kind; `target` has no writer, because a module may not
+# retract. They say `ref`: a pair or an `h:` short id, shape-checked as an `h:` id and
+# resolved when a projection first reads a module link kind.
+REF_FIELDS = {
+    "retracts_ref":   {"types": ("retract",), "shape": "pair", "status": WRITTEN,
+                       "meaning": "The fact a retract acts on (a forget, when from an owner)."},
+    "unretracts_ref": {"types": ("retract",), "shape": "pair", "status": WRITTEN,
+                       "meaning": "The fact an owner unforget reverses; a retract carries this or `retracts_ref`."},
+    "from_ref":       {"types": ("link",), "shape": "pair", "status": WRITTEN,
+                       "meaning": "The entry a link starts from."},
+    "to_ref":         {"types": ("link",), "shape": "pair", "status": WRITTEN,
+                       "meaning": "The entry a link points to."},
+    "informed_by":    {"types": ("decision",), "shape": "pairs", "status": WRITTEN,
+                       "meaning": "The entries a decision relied on; a record, not evidence."},
+    "revokes":        {"types": ("decision",), "shape": "pair", "status": WRITTEN,
+                       "meaning": "The decision a revocation withdraws (the `supersedes` link carries the effect)."},
+    "supersedes_ref": {"types": ("decision",), "shape": "pair", "status": LEGACY,
+                       "meaning": "The decision a pre-1.19 decision replaced; a `supersedes` link does it now."},
+    "resolves_ref":   {"types": ("fact",), "shape": "pair", "status": LEGACY,
+                       "meaning": "The fact a pre-1.19 fact resolved; a `resolves` link does it now."},
+    "entity_ref":     {"types": ("entity_fact",), "shape": "pair", "status": LEGACY,
+                       "meaning": "The entity a pre-1.19 `entity_fact` entry attaches a fact to."},
+    "fact_ref":       {"types": ("entity_fact",), "shape": "pair", "status": LEGACY,
+                       "meaning": "The fact a pre-1.19 `entity_fact` entry attaches."},
+    "entity_id":      {"types": ("entity_fact",), "shape": "local_id", "status": LEGACY,
+                       "meaning": "A pre-Phase-2 `entity_fact` entry's entity, as a local id; read when `entity_ref` is absent."},
+    "fact_id":        {"types": ("entity_fact",), "shape": "local_id", "status": LEGACY,
+                       "meaning": "A pre-Phase-2 `entity_fact` entry's fact, as a local id; read when `fact_ref` is absent."},
+    "supersedes":     {"types": ("decision",), "shape": "local_id", "status": LEGACY,
+                       "meaning": "A pre-Phase-2 decision's replaced decision, as a local id; read when `supersedes_ref` is absent."},
+    "escrow_ref":     {"types": ("governance",), "shape": "ref", "status": WRITTEN,
+                       "meaning": "The escrow a `revoke-escrow` act tombstones: `all`, a pair or `node_id:seq`."},
+    "from":           {"types": ("link",), "shape": "ref", "status": RESERVED,
+                       "meaning": "A module link's start: a pair or an `h:` short id."},
+    "to":             {"types": ("link",), "shape": "ref", "status": RESERVED,
+                       "meaning": "A module link's end: a pair or an `h:` short id."},
+    "target":         {"types": ("retract",), "shape": "ref", "status": RESERVED,
+                       "meaning": "What a module act is about: a pair or an `h:` short id."},
+}

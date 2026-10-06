@@ -20,7 +20,8 @@ memory.
 | `hv decide` | Record a decision |
 | `hv discover` | Find hives on your tailnet |
 | `hv doctor` | Check that your device is healthy; `--fix` self-heals (orphan daemons + Claude Code hooks/skill); subcommands `merkle`, `rebuild` |
-| `hv entity` | Track named things (people, projects, concepts) |
+| `hv entity` | Track named things (people, projects, concepts); `join`/`unjoin` a module's entity to a shared one *(2.1)* |
+| `hv feed` | Read-only journal feed for modules and operators: entries past a per-node cursor, as JSON *(2.1)* |
 | `hv group` | The membership roster (`list`); the lifecycle (admit/revoke/deny/change/purge) is `hive-mind group …` (owner) |
 | `hv wire` | Self-wire a tool/agent from a cell or comb; `--list`/`--show`/`--add` manage cell definitions |
 | `hv capsule` | Seal a secret to the authorized device set: `put`/`get`/`ls`/`rm`/`rotate` |
@@ -276,6 +277,14 @@ needs attention. It looks at:
   too; another program on the port gets no verdict. `--fix` restarts the managed daemon, at most once
   per run whichever check asks, and the 15-minute `hive-doctor.timer` therefore heals a bare pull.
   `hive-mind update` avoids the state altogether ([#112](https://github.com/projectmentor/hive-mind/issues/112))
+- **modules:\<name\>** *(2.1)* — one result per installed module, none on a node with no modules: manifest and
+  signature against the pinned publisher key (a failure **fails**, because a module runs code), then unit, device,
+  config, listener and quota (**warn**). **modules-contract** warns about a node still on contract 2.0 in a hive
+  that has modules and `quorum_m > 0`. `--fix` re-renders a unit and starts one that failed or is not enabled, and
+  leaves a unit the operator stopped on purpose alone ([`MODULE_API.md`](MODULE_API.md))
+- **ts-bounds**, **future-dated**, **flood** *(2.1, #217)* — advisory: entries the projection skips for a timestamp
+  outside the bounds, devices whose entries arrived stamped over 10 minutes ahead of this node's clock, and devices that
+  stamped more than `flood_per_minute` (120) or `flood_per_day` (2000) entries (`hv audit` reports the last two too)
 - **peers** — whether your peer nodes are reachable and in sync
 - **peer-address** — for a peer whose stored address did not answer: whether its device has since
   reached this node from another address with a verified signed request, or answered one of this
@@ -491,7 +500,7 @@ attach facts to. Instead of hunting through search results, you can ask
 "what do we know about X?" and get everything linked to it in one place.
 
 ```
-hv entity {add,list,show,link} [options]
+hv entity {add,list,show,link,join,unjoin} [options]
 ```
 
 **Sub-commands:**
@@ -500,8 +509,10 @@ hv entity {add,list,show,link} [options]
 |---|---|
 | `add` | Create a new entity. Needs `--name` and `--type` (e.g. `person`, `project`, `concept`). Optionally add metadata with `--attr` as a JSON object. |
 | `list` | List all entities. |
-| `show` | Show an entity and all facts linked to it. Needs `--name`. |
+| `show` | Show an entity and all facts linked to it. Needs `--name`. *(2.1)* Also lists each module entity (`x-<module>:…`) a core `same-as` joins to it, with its facts; `--no-joins` prints the core entity only. |
 | `link` | Attach a fact to an entity. Needs `--name` and `--fact-id` (the fact's `sid` `h:…` or `ref`; a bare local id is refused). *(1.23)* `--source` names the writer, as on `hv remember`; omitted it is `manual`, and a `manual` link is owner-signed only through `hive-mind` (#114). Optionally set `--confidence` to indicate how strongly the fact relates. *(1.19 PR2b)* Journaled as one `entity` **link** (evidence-class: it never hides anything, so it needs no authority). |
+| `join` | *(2.1, #208)* Join a module's entity to a shared one: `--name x-<module>:<n> --to <n>` writes a core `same-as` link. `--name` must be a module-prefixed entity and `--to` an unprefixed one. A module cannot write this itself. |
+| `unjoin` | *(2.1)* Withdraw a join: the same flags. Plain `unjoin` withdraws **only the joins this device wrote** (one `retract` per join; another device's join stays live) and exits 1 if this device wrote none. `--owner` is the owner's withdrawal of every live join of the pair, and runs as `hive-mind entity unjoin --owner`. |
 
 **Examples:**
 ```bash
@@ -524,6 +535,26 @@ hv entity {add,list,show,link} [options]
 # link — with confidence score
 ./hv entity link --name "HiveMind" --fact-id h:3f9a1c0b2d --confidence 0.9
 ```
+
+---
+
+### `hv feed` — The journal feed for modules *(2.1)*
+
+```
+hv feed [--after node_id:seq,node_id:seq] [--limit N] [--format json]
+```
+
+Read-only. For each node, the journal entries whose `seq` is past your cursor for that node, as JSON, in
+`(node_id, seq)` order: `{"entries": [...], "cursor": "...", "more": false}`. Each entry has `node_id`, `seq`, `ref`
+(`node_id:seq`), `sid` (`h:…`), `type`, `timestamp`, `payload`, and `sig` and `pub` when it has them. `--after` is a
+comma-separated cursor (an empty one starts at the beginning, a malformed pair is an error); send the returned
+`cursor` next. `--limit` defaults to 200 and `more` is true when it cut the page short. An entry whose signature
+fails is absent; one with no `sig` is attributed, not authenticated.
+
+The core computes two fields so a consumer never reimplements the forget rule: `forgotten` (true or false) on every
+`fact` entry, and `affects` (a list of refs) on every owner `retract`. Every other type omits `forgotten`: a missing
+flag means the type cannot be forgotten. The same result is served to a module at `GET /v1/feed`
+([`MODULE_API.md`](MODULE_API.md), and the consumer's obligations in [`CONTRACT.md`](CONTRACT.md)).
 
 ---
 
@@ -557,6 +588,7 @@ hv group                                       # roster (admitted/pending/denied
 hv group list                                  # same as above
 hive-mind group admit                                 # list devices awaiting admission
 hive-mind group admit k1:597b3e0f5fb92d37 --principal david
+hive-mind group admit k1:… --principal david --module hwatch   # a module's own device (2.1): it never votes
 hive-mind group revoke k1:…                           # un-admit (reversible) → device goes STERILE
 hive-mind group deny k1:…                             # reject a pending join-request (admit overrides)
 hive-mind group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
@@ -568,7 +600,10 @@ in your session-start digest, so your agent can prompt you.) `--principal` tags 
 owns the device; when every device behind a fact belongs to the same principal, its
 confidence is capped. Admitting a device also **seeds a reciprocal peer** from the URL its
 join-request advertised, so the owner syncs *to* the member too — connectivity is seeded by
-admission but stays editable in `.peers.json`. Admission grants only write/fertility, never
+admission but stays editable in `.peers.json`. `--module NAME` *(2.1)* marks the device as module NAME's: it is admitted like any other
+(give it the operator's `--principal`, so `cap_self` still bounds it), but it neither proposes nor votes in a quorum
+election, and no peer is seeded for it (a module has no sync address). A later `admit` without `--module` clears
+the mark. `--module` requires `--principal`. A 2.0 node ignores the mark and still counts that device's vote. Until the 2.1 doctor lands, `hv doctor` reports the module device as unreachable under `fleet-contract`; a 2.0 node always will. Admission grants only write/fertility, never
 governance. Get a device's id with `hv config identity show` on it. A device that isn't
 admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
 are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.
@@ -671,6 +706,7 @@ each of these names the `hive-mind` form and exits 2, acting on nothing:
 hive-mind owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
 hive-mind owner escrow                               # store the key (passphrase-encrypted) IN the hive
 hive-mind owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
+hive-mind owner freeze-timestamps                    # arm the bounded entry timestamps (2.1, #217)
 hive-mind owner heartbeat                            # refresh owner liveness (resets the dead-man timer)
 hive-mind owner import FILE [--force]                # restore it from a file on another device
 hive-mind owner init                                 # mint the owner key and claim ownership (once)
@@ -1191,7 +1227,7 @@ checks, strongest last:
    `https://hivemind.projectmentor.org/.well-known/hivemind.pub`, a different origin from the code
    host. Catches a fork that ships its own key and a self-signed manifest.
 
-A healthy install prints `✓ Official HiveMind v2.0 from ProjectMentor — verified.` If you edited
+A healthy install prints `✓ Official HiveMind v2.1 from ProjectMentor — verified.` If you edited
 files yourself it says the install was modified locally.
 
 **Exit codes** (a script or CI step can rely on them):
@@ -1214,7 +1250,7 @@ rather than failed while it is pending (see `hv doctor` above).
 ### `hv version` — Agent contract version
 
 ```
-hv version        # → hv contract-version 2.0
+hv version        # → hv contract-version 2.1
 ```
 
 The version of the agent contract (`docs/AGENT_INTEGRATION.md`). Adapters compare it with the
@@ -1263,7 +1299,32 @@ hive-mind <subcommand> [options]
 | `reset` | Recover a **wedged** install in one command: force-align the code to `origin` (even after a rewrite, even with local edits), rebuild the DB from the journal, refresh the supervisor units + Claude Code hooks, restart the daemon, and verify authenticity. **Your Hive (journal, keys, device identity) is preserved** — this is not `uninstall`. Use it when `hv doctor`/`hv verify` is unhappy after a breaking change. `-y` skips the prompt. |
 | `status` | Show device health and peer sync state. |
 | `invite` | Print the one-line address to paste on a new device so it can join this hive. |
+| `module` | *(2.1, Linux)* Install and manage modules: `add <name> --from <repo>`, `remove`, `update`, `list`, `quota` (see below). |
 | `uninstall` | Remove HiveMind from this device (see flags below). |
+
+### `hive-mind module` — Install and manage modules *(2.1, Linux only)*
+
+```
+hive-mind module add <name> --from <repo> [--publisher KEY] [--principal P]
+hive-mind module remove <name>
+hive-mind module update <name> [--from <repo>] [--publisher KEY]
+hive-mind module list
+hive-mind module quota <name> [--per-hour N] [--per-day N] [--entry-bytes N] [--lifetime N]
+```
+
+Owner and operator only; there is no `hv module`. A module is a git repository whose `module.json` is signed by its
+publisher key. `add` shows the key and pins it once you confirm (or pass `--publisher` to pin it without a prompt), mints the module's
+own device key, has the owner admit it under your principal, and installs its files, config and unit outside the
+checkout. `remove` revokes the device and keeps the module's journal entries. `update` re-verifies and swaps
+atomically, and refuses a different publisher key. `quota` is the only way a limit goes above the default. Where the
+platform has no module backend, `add` says so and exits non-zero before it touches anything. The manifest, the unit and
+the limits are in [`MODULE_API.md`](MODULE_API.md). `hive-mind update` re-renders every module's unit afterwards.
+
+`hv doctor` reports each installed module as `modules:<name>` (a missing, tampered or wrongly signed manifest **fails**;
+an absent or stopped unit, a revoked device, missing config, a down listener and quota past 80% **warn**) and
+`modules-contract` (a node still on contract 2.0 in a hive that has modules and `quorum_m > 0`). `hive-mind doctor --fix`
+re-renders a unit that differs from its manifest and starts one that failed or is not enabled; a unit you stopped on
+purpose is reported and left alone.
 
 ### `hive-mind invite` — add another device
 

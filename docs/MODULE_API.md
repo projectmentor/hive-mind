@@ -211,7 +211,9 @@ window of at most a day, and can never reset `lifetime`, which is counted from t
 never share a bucket.
 
 A module's manifest may ask for less than a default and never more. Only the owner raises or lowers a limit, with
-`hive-mind module quota <name> --per-hour N …`. Over quota is `429` and nothing is written:
+`hive-mind module quota <name> --per-hour N …`. A module's record in `.modules.json` that is not an object (a hand
+edit or a corrupted file) is read as absent, so that module gets the defaults and no other module is affected. Over
+quota is `429` and nothing is written:
 
 ```json
 {"error": "over quota: per_hour", "limit": "per_hour", "quota": {…}, "retry_after": 1200}

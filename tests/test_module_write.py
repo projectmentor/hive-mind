@@ -388,6 +388,18 @@ def test_an_oversize_or_unbounded_post_is_refused_before_it_is_read(hive):
     conn.close()
 
 
+@pytest.mark.parametrize("bad", ["oops", ["a"], 7], ids=["string", "list", "number"])
+def test_a_module_record_that_is_not_an_object_reads_as_absent_and_breaks_no_other_module(hive, bad):
+    raise_to = api.QUOTA_DEFAULTS["entry_bytes"] * 2
+    (hive.home / ".modules.json").write_text(json.dumps(
+        {"hwatch": {"owner_quota": {"entry_bytes": raise_to}}, "other": bad}))
+    assert api.limits_for("other") == api.QUOTA_DEFAULTS
+    assert api.limits_for("hwatch")["entry_bytes"] == raise_to
+    assert api.max_entry_bytes() == raise_to
+    assert post(hive, "mod", "fact", fact("still works"))[0][0] == 200
+    assert post(hive, "other", "fact", fact("defaults", source="x-other"))[0][0] == 200
+
+
 # ── the reference signer ────────────────────────────────────────────────────────────────────────────────────
 
 def test_the_reference_signer_matches_the_cores_bytes_and_imports_no_core_code(hive):

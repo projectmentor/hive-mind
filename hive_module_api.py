@@ -110,11 +110,14 @@ def limits_for(module):
     """The limits that bind `module`: the defaults today. A manifest may lower them and the owner may raise them
     (PR 6, `hive-mind module quota`); both land here so no caller reads a second table. They are read from
     `.modules.json`: the defaults, then the manifest's ask, then the owner's own limits. A manifest ask is clamped
-    to the default, so a hand-edited record cannot raise a limit the way only `module quota` does."""
+    to the default, so a hand-edited record cannot raise a limit the way only `module quota` does. A record that is not an object
+    (a string, a list, a number) is read as absent, like invalid JSON, so one bad record cannot fail every POST."""
     limits = dict(QUOTA_DEFAULTS)
     try:
-        rec = json.loads((daemon.hv.HIVE_HOME / ".modules.json").read_text()).get(module) or {}
+        rec = json.loads((daemon.hv.HIVE_HOME / ".modules.json").read_text()).get(module)
     except (OSError, ValueError, AttributeError):
+        return limits
+    if not isinstance(rec, dict):
         return limits
     for table, ceiling in ((rec.get("quota"), True), (rec.get("owner_quota"), False)):
         for k, v in (table.items() if isinstance(table, dict) else ()):

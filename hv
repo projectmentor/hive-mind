@@ -894,8 +894,11 @@ def _ts_owner_signed(e, gov):
     if e.get("type") != "governance" or not isinstance(p, dict):
         return False
     oid = _verify_governance(p)
-    return oid is not None and oid == _owner_at(gov.get("owner_timeline") or [],
-                                                (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)))
+    tl = gov.get("owner_timeline") or []
+    pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
+    # The owner at the act's position, or the one just before it: the outgoing owner signs a `transfer`, and the walk
+    # records the successor at that same position.
+    return oid is not None and oid in (_owner_at(tl, pos), _owner_at([t for t in tl if t[:3] < pos], pos))
 
 
 def _ts_violations(entries, gov):

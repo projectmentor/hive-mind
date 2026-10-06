@@ -12,6 +12,7 @@ claim it. Without a marker nothing is skipped. Arrival times (`future-dated`) an
 detection only. The mutants at the end each drop one rule or weaken one anchor, and each is caught.
 """
 
+import base64
 import itertools
 import json
 import sys
@@ -365,7 +366,7 @@ def _outcome(hv, tmp_path):
     gov = hv._governance_state(j)
     root = hv.merkle.hash_entries(sorted(j, key=lambda e: (e["node_id"], e["seq"])))
     honoured = frozenset((e["node_id"], e["seq"]) for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov))
-    return (honoured, frozenset(gov["admitted"]), frozenset(_contents(_project(hv, tmp_path, j))), root)
+    return (honoured, frozenset(gov["admitted"]), frozenset(_contents(_project(hv, tmp_path, j))), root, gov["owner_id"])
 
 
 def _runs(hv, tmp_path, base, entries):
@@ -542,6 +543,19 @@ def _case_unverified_owner_sig_key(hv):
     return _admitted_x(hv, owner, base, x), [fact, revoke], k
 
 
+def _case_transfer_beats_a_device_fact(hv):
+    """The verifier's transfer probe: X is admitted and holds a fact at seq 1 (12:20); owner A signs a `transfer` to B on
+    X at seq 2 (12:10). The old owner signs it and the walk records B at that position, so it is owner-signed: it wins
+    the tiebreak, B owns the hive and the fact does not project."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    b = _owner_key(hv)
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    xfer = _entry(hv, x, "governance", {"action": "transfer", "new_owner_pub": base64.b64encode(b[1]).decode()}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and not o[2] and o[4] == b[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [fact, xfer], k
+
+
 def _case_backdated_after_revoke(hv):
     """The reviewer's #3, verifier's form: no freeze marker. X is admitted, then the owner revokes it (seq 2, 12:10); its
     fact at seq 1 is stamped 2025-01-01, which puts it before the genesis owner in the journal's order. The stamp is the
@@ -558,7 +572,7 @@ def _case_backdated_after_revoke(hv):
 
 _CASES = [_case_backdated_after_revoke, _case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
           _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act,
-          _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key]
+          _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key, _case_transfer_beats_a_device_fact]
 
 
 # The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
@@ -574,8 +588,9 @@ def _case_holds(hv, tmp_path, case):
     base, entries, wins = case(hv)
     outcomes = _runs(hv, tmp_path, base, entries)
     if case.__name__ in _JOURNALS_DIFFER:
-        outcomes = {o[:3] for o in outcomes}
-        return len(outcomes) == 1 and wins(next(iter(outcomes)) + (None,))
+        outcomes = {o[:3] + o[4:] for o in outcomes}
+        o = next(iter(outcomes))
+        return len(outcomes) == 1 and wins(o[:3] + (None,) + o[3:])
     return len(outcomes) == 1 and wins(outcomes[0])
 
 
@@ -667,9 +682,11 @@ _REFUSE_ON_THE_BOUNDS = ("held = merkle.read_all_entries(JOURNAL_DIR)\n"
 
 _MUTANTS = {
     "owner_signed_without_checking_the_owner": (
-        "    return oid is not None and oid == _owner_at(gov.get(\"owner_timeline\") or [],\n"
-        "                                                (e.get(\"timestamp\", \"\"), str(e.get(\"node_id\", \"\")), e.get(\"seq\", 0)))\n",
+        "    return oid is not None and oid in (_owner_at(tl, pos), _owner_at([t for t in tl if t[:3] < pos], pos))\n",
         "    return oid is not None\n"),
+    "owner_signed_ignores_the_owner_before_a_transfer": (
+        "    return oid is not None and oid in (_owner_at(tl, pos), _owner_at([t for t in tl if t[:3] < pos], pos))\n",
+        "    return oid is not None and oid == _owner_at(tl, pos)\n"),
     "owner_sig_key_exempts_content": (
         '''                and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
                                           e["payload"], gov, "owner"))                  # verified, as of its position''',

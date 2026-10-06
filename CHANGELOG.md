@@ -37,9 +37,6 @@ working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.
 - **Bounded entry timestamps** (#217). After the owner runs `hive-mind owner freeze-timestamps`, every node skips an
   entry stamped more than 5 minutes before its device's latest earlier entry, or before its first admit. `hv`
   clamps its own entries to the latest it holds. `hv doctor` and `hv audit` report `ts-bounds`, `future-dated` and `flood`.
-- **`hv search --id <sid|ref>`** (#158): looks one fact, decision or idea up by its stable id from the local store, with no
-  daemon. A sid and a ref give the same entry; an id that names nothing exits 1 with empty stdout. MCP `hive_lookup` and the
-  Hermes tool use it, and the dashboard opens ideas by `/#h:…` and opens an id typed in the search box.
 - **Module devices do not vote.** The owner's `admit --module` marks a device, and the election walk skips it. A 2.0
   node still counts it, which matters only with `quorum_m > 0` and `quorum_by=device`.
 - **A prefixed config key `x-<module>:<key>` is accepted** by `set-config` and projected as a string; a bare unknown

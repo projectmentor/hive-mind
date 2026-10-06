@@ -542,7 +542,21 @@ def _case_unverified_owner_sig_key(hv):
     return _admitted_x(hv, owner, base, x), [fact, revoke], k
 
 
-_CASES = [_case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
+def _case_backdated_after_revoke(hv):
+    """The reviewer's #3, verifier's form: no freeze marker. X is admitted, then the owner revokes it (seq 2, 12:10); its
+    fact at seq 1 is stamped 2025-01-01, which puts it before the genesis owner in the journal's order. The stamp is the
+    writer's, so the pre-genesis stay does not apply to a device with an honoured revoke: the fact does not project,
+    whichever of the two a node held first."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    entries = [_fact(hv, x, "x old", "2025-01-01T00:00:00.000+00:00"),
+               _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)]
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    admit = _gov(hv, {"action": "admit", "device_id": x["id"], "principal": "px"}, owner[0], owner[1], ts(1, 1), 4)
+    return base + [admit], entries, k
+
+
+_CASES = [_case_backdated_after_revoke, _case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
           _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act,
           _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key]
 
@@ -550,7 +564,7 @@ _CASES = [_case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_
 # The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
 # a fact of X that arrives after the revoke is held finds X unadmitted and is refused, and one that arrived before it
 # was stored while X was admitted. The revoke race, left to #255; every other case ends with one root.
-_JOURNALS_DIFFER = ("_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
+_JOURNALS_DIFFER = ("_case_backdated_after_revoke", "_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
                     "_case_throwaway_owner_admit_of_itself", "_case_unverified_owner_sig_key")
 
 
@@ -568,6 +582,54 @@ def _case_holds(hv, tmp_path, case):
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c.__name__.strip("_"))
 def test_every_order_ends_the_same_and_the_owner_act_wins(tmp_path, monkeypatch, case):
     assert _case_holds(_loadhv(tmp_path, monkeypatch), tmp_path, case)
+
+
+def _bootstrap_fact_journal(hv, z, extra):
+    """A bootstrap hive: Z wrote a fact before any owner existed (stamped 2025, so before the genesis owner), then the
+    owner declared genesis. Z was never admitted."""
+    owner, (d0, d1), base = _hive(hv)
+    fact = _fact(hv, z, "bootstrap", "2025-01-01T00:00:00.000+00:00")
+    _journal(hv, [fact] + base + extra(owner))
+    gov = hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    return z["id"] in {e["node_id"] for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov)}, owner
+
+
+def test_a_bootstrap_writer_stays_until_the_owner_revokes_it(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    z = _device(hv)
+    assert _bootstrap_fact_journal(hv, z, lambda owner: [])[0]
+    revoke = lambda owner: [_entry(hv, _device(hv), "governance", {"action": "revoke", "device_id": z["id"]},   # noqa: E731
+                                   ts(12, 10), owner=owner)]
+    assert not _bootstrap_fact_journal(hv, z, revoke)[0]       # revoked, never admitted: the exemption ends
+    purge = lambda owner: [_entry(hv, _device(hv), "governance", {"action": "purge", "device_id": z["id"]},     # noqa: E731
+                                  ts(12, 10), owner=owner)]
+    assert not _bootstrap_fact_journal(hv, z, purge)[0]
+
+
+def _genesis_device_projects(hv, *acts):
+    """Whether a fact of the genesis device projects after the owner's `acts` (purge, revoke) against it."""
+    owner, (d0, d1), base = _hive(hv)
+    fact = {"node_id": "ownerdev", "seq": 9, "type": "fact", "timestamp": ts(12),
+            "payload": {"content": "owner device", "tags": [], "importance": 0.5, "source": "manual"}}
+    _journal(hv, base + [fact] + [_entry(hv, d0, "governance", {"action": a, "device_id": "ownerdev"}, ts(12, 10),
+                                          owner=owner) for a in acts])
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    gov = hv._governance_state(j)
+    return ("ownerdev", 9) in {(e["node_id"], e["seq"]) for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov)}
+
+
+def test_the_genesis_device_is_removed_by_a_purge_or_a_revoke(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert _genesis_device_projects(hv)
+    assert not _genesis_device_projects(hv, "purge")
+    assert not _genesis_device_projects(hv, "revoke")
+
+
+def test_a_genesis_device_that_survives_a_purge_is_caught(tmp_path, monkeypatch):
+    hv = _mutated_hv(tmp_path, monkeypatch, '    ok = ok - gov.get("purged", set())          # the genesis device',
+                     '    ok = ok | ({gen} if gen is not None else set())          # the genesis device')
+    assert _genesis_device_projects(hv, "purge")
 
 
 def test_a_second_marker_stamped_behind_the_first_is_exempt(tmp_path, monkeypatch):
@@ -612,9 +674,12 @@ _MUTANTS = {
         '''                and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
                                           e["payload"], gov, "owner"))                  # verified, as of its position''',
         '''                and "owner_sig" in e["payload"])'''),
+    "pre_genesis_stay_ignores_a_revoke": (
+        '            or (e.get("node_id") not in ended\n                and _owner_at(',
+        '            or (True\n                and _owner_at('),
     "admitted_gate_removed_from_content_projection": (
-        '    if gov.get("owner_id") is None:\n        return entries\n    ok = gov["admitted"]',
-        '    if True:\n        return entries\n    ok = gov["admitted"]'),
+        '    if gov.get("owner_id") is None:\n        return entries\n    gen = ',
+        '    if True:\n        return entries\n    gen = '),
     "ingest_still_refuses_on_the_bounds": (
         '_append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes',
         _REFUSE_ON_THE_BOUNDS),

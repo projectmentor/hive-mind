@@ -951,18 +951,23 @@ def _admitted_content(entries, gov):
     """`entries` without the content of a device the same projection does not list in `admitted` once an owner exists
     (#230, #250): ingest stores what the timestamp bounds would skip, so admission is read here, from the projection
     that has applied the bounds, and not from what ingest saw on arrival. Governance is not content. Content that
-    precedes the genesis owner in the journal's order stays, as the pre-genesis forget does: the bootstrap hive
-    accepted every device, and the owner's first act must not unwrite what came before it."""
+    precedes the genesis owner in the journal's order stays, as the pre-genesis forget does, unless its device has an
+    honoured revoke or a purge: the bootstrap hive accepted every device, and the owner's first act must not unwrite
+    what came before it, but a writer-chosen stamp must not outlive the owner's revoke. The genesis device is a member
+    from genesis without an admit, until an honoured revoke or purge of it (a later admit restores it)."""
     if gov.get("owner_id") is None:
         return entries
-    ok = gov["admitted"] - gov.get("purged", set())
-    ok = ok | {str((gov.get("genesis") or {}).get("ref") or ":").rsplit(":", 1)[0]}   # the genesis device writes before any admit
+    gen = gov.get("genesis_device")
+    ok = gov["admitted"] | ({gen} if gen is not None and gen not in gov.get("revoked", set()) else set())
+    ok = ok - gov.get("purged", set())          # the genesis device is a member until an honoured revoke or purge
+    ended = gov.get("purged", set()) | gov.get("revoked", set())   # an honoured revoke or purge ends the pre-genesis stay
     timeline = gov.get("owner_timeline") or []
     return [e for e in entries if e.get("type") == "governance" or e.get("node_id") in ok
             or (isinstance(e.get("payload"), dict)                                      # an owner act, not device-stamped:
                 and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
                                           e["payload"], gov, "owner"))                  # verified, as of its position
-            or _owner_at(timeline, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))) is None]
+            or (e.get("node_id") not in ended
+                and _owner_at(timeline, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))) is None)]
 
 
 def _ts_unskipped(entries, gov=None):
@@ -2234,7 +2239,7 @@ def _governance_state_uncached(entries):
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
            "principals": {}, "modules": {}, "module_config": {},
-           "ts_tips": {}, "ts_markers": set(), "first_admit": {},
+           "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2283,6 +2288,7 @@ def _governance_state_uncached(entries):
     gov["hive_id"] = cp.get("hive_id", "")
     gen_pos = (gov["owner_ts"], str(chosen.get("node_id", "")), chosen.get("seq", 0))
     gov["genesis"]["ref"] = f"{chosen.get('node_id')}:{chosen.get('seq')}"
+    gov["genesis_device"] = chosen.get("node_id")   # a member from genesis (`owner init` writes no admit); see `_admitted_content`
 
     # 2) Single deterministic walk: the OWNER SUCCESSION CHAIN (Stage B) and the QUORUM ELECTION
     #    OVERRIDE (Stage C) interleaved with the membership/config/escrow acts. `current` is the owner
@@ -2428,6 +2434,7 @@ def _governance_state_uncached(entries):
                 gov["modules"].pop(p["device_id"], None)
         elif action == "revoke" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
+            gov["revoked"].add(p["device_id"])        # honoured: ends the pre-genesis exemption (#230)
         elif action == "deny" and p.get("device_id"):
             gov["denied"].add(p["device_id"])          # drop a pending join-request (admit overrides)
         elif action == "change" and p.get("device_id") and p.get("principal"):
@@ -2686,7 +2693,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {},
+                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,

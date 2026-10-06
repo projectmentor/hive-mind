@@ -205,3 +205,15 @@ def test_a_detached_child_is_reaped_after_a_normal_exit(tmp_path):
     except (ProcessLookupError, FileNotFoundError):
         alive = False
     assert not alive
+
+
+def test_a_slow_core_behaviour_shrinks_the_module_budget(tmp_path):
+    out = tmp_path / "ran"
+    nudge = tmp_path / "hive" / "scripts" / "common" / "nudge_hook.sh"
+    nudge.parent.mkdir(parents=True, exist_ok=True)
+    nudge.write_text("#!/bin/sh\nsleep 8\necho context\n")
+    nudge.chmod(0o755)
+    _install(tmp_path, "late", f"#!/bin/sh\ntouch {out}\nsleep 100\n", event="user-prompt")
+    r, dt = _run(tmp_path, event="user-prompt")
+    assert r.returncode == 0 and r.stdout == "context\n"
+    assert dt < 9.6, dt   # 10s shim cap less 1s: the core's output is never cut off

@@ -13,13 +13,14 @@ degraded, not hostile. A record in `.modules.json` that is not an object is repo
 `fix` is `hv doctor --fix`'s part: re-render a unit that differs from the manifest (through the stop-first path
 `module add` and `update` use) and start one that is `failed` or not enabled. A unit that is enabled but `inactive`
 was stopped on purpose: it is reported and left alone, and a running unit that is only not enabled is enabled,
-never restarted. With no user systemd manager `fix` touches no unit and says so. `fix` acts only on a module whose manifest verifies, never
-re-admits a device, and never touches governance.
+never restarted. With no user systemd manager `fix` touches no unit and says so. `fix` acts only on a module whose
+manifest verifies, never re-admits a device, and never touches governance.
 """
 
 import json
 import os
 import socket
+import stat
 import time
 from pathlib import Path
 
@@ -108,9 +109,56 @@ def _units(name, manifest, key_dir):
         elif state == "inactive" and hive_modules.unit_enabled(name):
             out.append(("warn", f"service is stopped; `systemctl --user start {hive_modules.main_unit(name)}` to resume "
                                 f"(`hive-mind doctor --fix` leaves a stopped module alone)"))
-        elif state != "active":
+        elif state == "active":
+            if not hive_modules.unit_enabled(name):
+                out.append(("warn", f"service is active but not enabled, so it will not start at login "
+                                    f"(`hive-mind doctor --fix` enables it, without restarting it)"))
+        else:
             why = state if hive_modules.unit_enabled(name) else f"{state} and not enabled"
             out.append(("warn", f"service is {why} (`hive-mind doctor --fix` starts it)"))
+    return out
+
+
+def _hooks(moddir, manifest):
+    """Warnings for every file under `hooks/`: the dispatcher (`hive_dispatch.sh`) runs `hooks/<event>` only for a known
+    event, and only a regular, non-link, executable, own-user file with no group or other write bit, in real
+    directories. A file it would skip, or one the signed manifest does not list, is named with the reason. Digests are
+    `check_tree`'s part, which has already passed."""
+    hdir = moddir / "hooks"
+    if moddir.is_symlink() or hdir.is_symlink():
+        return [("warn", "hooks/ is reached through a link, so the dispatcher skips every hook")]
+    try:
+        names = sorted(p.name for p in hdir.iterdir())
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        return [("warn", f"hooks/ cannot be read ({e})")]
+    out, uid = [], os.getuid()
+    for n in names:
+        gate = []                                               # what makes the dispatcher skip it
+        try:
+            st = os.lstat(hdir / n)
+        except OSError as e:
+            out.append(("warn", f"hook {n} cannot be examined ({e})"))
+            continue
+        if not stat.S_ISREG(st.st_mode):
+            gate.append("not a regular file")
+        else:
+            if not st.st_mode & stat.S_IXUSR:
+                gate.append("not executable")
+            if st.st_uid != uid:
+                gate.append("not owned by this user")
+            if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+                gate.append("writable by group or other")
+        why = []
+        if n not in hive_modules.HOOK_EVENTS:
+            why.append("not an event the dispatcher knows, so it never runs")
+        elif gate:
+            why.append(f"the dispatcher skips it: {', '.join(gate)}")
+        if f"hooks/{n}" not in manifest["files"]:
+            why.append("not listed in the signed manifest")
+        if why:
+            out.append(("warn", f"hook {n}: {'; '.join(why)}"))
     return out
 
 
@@ -164,6 +212,7 @@ def _module(hv, gov, name, rec, entries, listener, now):
         problems.append(("warn", "its device key directory is missing"))
     if manifest is not None and manifest["name"] == name:
         problems += _units(name, manifest, key_dir)
+        problems += _hooks(moddir, manifest)
         problems += _config(moddir, manifest)
     if not listener[0]:
         problems.append(("warn", f"the module API is not listening on 127.0.0.1:{listener[1]} (the sync daemon serves it)"))
@@ -224,11 +273,11 @@ def checks(hv, gov, entries, probe=None, now=None):
 
 
 def fix(hv, dry=False, now=None):
-    """Re-render a unit that differs from its manifest and start one that is failed or not enabled (a running one that
-    is only not enabled is enabled, never restarted). Without a user systemd manager it does nothing but say so. Returns lines
-    to print. A unit that is enabled but inactive was stopped on purpose: reported, never restarted. Only a module
-    whose manifest verifies, whose device is admitted, on a platform with a backend. Nothing here admits, revokes
-    or signs anything."""
+    """Re-render a unit that differs from its manifest and start one that is failed or not enabled (a running one
+    that is only not enabled is enabled, never restarted). Without a user systemd manager it does nothing but say so.
+    Returns lines to print. A unit that is enabled but inactive was stopped on purpose: reported, never restarted.
+    Only a module whose manifest verifies, whose device is admitted, on a platform with a backend. Nothing here
+    admits, revokes or signs anything."""
     state, _problem = _load(hv)
     if not state or not hive_modules.platform_supported()[0]:
         return []

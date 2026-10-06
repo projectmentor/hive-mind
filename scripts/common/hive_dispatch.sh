@@ -71,6 +71,11 @@ hook_ok() {
   [ "${m:5:1}${m:8:1}" = "--" ]   # no group or other write bit
 }
 
+# 2.1: module hooks run only where module management does (Linux, not Termux; `platform_supported` in
+# hive_modules.py). Elsewhere this loop is skipped silently: no .bus line, no output, exit 0. (BSD `stat`, no GNU
+# `timeout` and bash 3.2 without EPOCHREALTIME would otherwise skip every hook only by accident.)
+[ "$(uname -s 2>/dev/null)" = "Linux" ] && [ -z "${TERMUX_VERSION:-}" ] || exit 0
+
 STATE="${HIVE_HOME:-$HOME/projects/hive-mind}/.modules.json"
 if [ -d "$MODULES_DIR" ] && [ ! -L "$MODULES_DIR" ] && [ -f "$STATE" ]; then
   case "$event" in session-start|sessionend) shim=20 ;; *) shim=10 ;; esac

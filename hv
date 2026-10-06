@@ -831,7 +831,6 @@ FLOOD_PER_DAY = 2000                      # default `flood_per_day`
 _CANONICAL_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+00:00")
 _TS_PARTS_RE = re.compile(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,6}))?(?:(Z)|([+-])(\d{2}):(\d{2}))?")
 _TS_RULE2_EXEMPT = ("join-request", "announce")
-_TS_DEVICE_STAMPED_GOVERNANCE = ("announce", "join-request", "propose-election", "vote-election")
 
 
 def _ts_instant(ts):
@@ -885,13 +884,18 @@ def _ts_problem(e, floor, prior_max):
     return None
 
 
-def _ts_owner_signed(e):
-    """True for a governance act that carries the owner's signature. Every other entry is device-stamped: content, and
-    the authority-less acts `announce`, `join-request`, `propose-election` and `vote-election`, which only the device
-    key signs. A forged owner act signed by some other key lands only on the chain of the device that wrote it."""
+def _ts_owner_signed(e, gov):
+    """True for a governance act whose owner signature verifies as the owner in authority at the act's position
+    (`_owner_at`, as `_is_authorized_writer` reads it). Every other entry is device-stamped: content, the acts only the
+    device key signs (`announce`, `join-request`, `propose-election`, `vote-election`), and an act signed by a key that
+    is not that owner, such as a throwaway key embedded in its own payload. Those land only on the chain of the
+    device that wrote them and never shield or move anything for the owner."""
     p = e.get("payload")
-    return (e.get("type") == "governance" and isinstance(p, dict)
-            and p.get("action") not in _TS_DEVICE_STAMPED_GOVERNANCE)
+    if e.get("type") != "governance" or not isinstance(p, dict):
+        return False
+    oid = _verify_governance(p)
+    return oid is not None and oid == _owner_at(gov.get("owner_timeline") or [],
+                                                (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)))
 
 
 def _ts_violations(entries, gov):
@@ -917,14 +921,14 @@ def _ts_violations(entries, gov):
         es.sort(key=lambda x: x["seq"])
         # The owner-signed acts the bounds check and keep unless something earlier on the chain pushes past them:
         # the instants a device-stamped entry must not push past. Sorted; an entry leaves it as the walk reaches it.
-        ahead = sorted(i for e in es if _ts_owner_signed(e)
+        ahead = sorted(i for e in es if _ts_owner_signed(e, gov)
                        and not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov))
                        and _ts_problem(e, floor, None) is None
                        for i in [_ts_instant(e.get("timestamp"))])
         prior = []
         for e in es:
             checked = not (_ts_grandfathered(e, tips) or _ts_is_marker(e, gov))
-            owner_signed = _ts_owner_signed(e)
+            owner_signed = _ts_owner_signed(e, gov)
             if owner_signed and checked and _ts_problem(e, floor, None) is None:
                 del ahead[bisect.bisect_left(ahead, _ts_instant(e.get("timestamp")))]
             if checked:
@@ -955,7 +959,9 @@ def _admitted_content(entries, gov):
     ok = ok | {str((gov.get("genesis") or {}).get("ref") or ":").rsplit(":", 1)[0]}   # the genesis device writes before any admit
     timeline = gov.get("owner_timeline") or []
     return [e for e in entries if e.get("type") == "governance" or e.get("node_id") in ok
-            or (isinstance(e.get("payload"), dict) and "owner_sig" in e["payload"])      # an owner act, not device-stamped
+            or (isinstance(e.get("payload"), dict)                                      # an owner act, not device-stamped:
+                and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
+                                          e["payload"], gov, "owner"))                  # verified, as of its position
             or _owner_at(timeline, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))) is None]
 
 

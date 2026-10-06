@@ -492,14 +492,42 @@ def _case_announce_and_join_request(hv):
     return base + [_marker(hv, owner, {"ownerdev": 3})], [ann, jr, admit], k
 
 
+def _case_throwaway_owner_act(hv):
+    """The verifier's #1: X signs a `set-config` with a throwaway owner key embedded in its own payload at seq 1 (12:20).
+    It is not the owner in authority, so it is device-stamped: it does not shield itself, and the real owner's revoke of X
+    at seq 2 (12:10) is honoured, so X is not admitted and neither of its facts projects."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    rogue = _owner_key(hv)
+    forged = _entry(hv, x, "governance", {"action": "set-config", "key": "forget_writers", "value": "owner"},
+                    ts(12, 20), owner=(rogue[0], rogue[1]))
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [forged, revoke, _fact(hv, x, "x three", ts(12, 25))], k
+
+
+def _case_unverified_owner_sig_key(hv):
+    """The verifier's #2: the owner's revoke of X is relayed on d0 (12:10) and X has a fact at 12:15 whose payload merely
+    carries an `owner_sig` key. The key proves nothing, so the fact is X's content and does not project, whichever of
+    the two a node held first."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    revoke = _entry(hv, d0, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    fact = _entry(hv, x, "fact", {"content": "x content", "tags": [], "importance": 0.5, "source": "manual",
+                                  "owner_sig": "AAAA"}, ts(12, 15))
+    k = lambda o: (d0["id"], 1) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [fact, revoke], k
+
+
 _CASES = [_case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
-          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request]
+          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act, _case_unverified_owner_sig_key]
 
 
 # The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
 # a fact of X that arrives after the revoke is held finds X unadmitted and is refused, and one that arrived before it
 # was stored while X was admitted. The revoke race, left to #255; every other case ends with one root.
-_JOURNALS_DIFFER = ("_case_250_own_revoke", "_case_250_own_revoke_three")
+_JOURNALS_DIFFER = ("_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
+                    "_case_unverified_owner_sig_key")
 
 
 def _case_holds(hv, tmp_path, case):
@@ -552,9 +580,14 @@ _REFUSE_ON_THE_BOUNDS = ("held = merkle.read_all_entries(JOURNAL_DIR)\n"
                          "        _append_line(_journal_path_for(e[\"timestamp\"]), json.dumps(e))")
 
 _MUTANTS = {
-    "announce_left_out_of_device_stamped": (
-        '_TS_DEVICE_STAMPED_GOVERNANCE = ("announce", "join-request", "propose-election", "vote-election")',
-        '_TS_DEVICE_STAMPED_GOVERNANCE = ("join-request", "propose-election", "vote-election")'),
+    "owner_signed_without_checking_the_owner": (
+        "    return oid is not None and oid == _owner_at(gov.get(\"owner_timeline\") or [],\n"
+        "                                                (e.get(\"timestamp\", \"\"), str(e.get(\"node_id\", \"\")), e.get(\"seq\", 0)))\n",
+        "    return oid is not None\n"),
+    "owner_sig_key_exempts_content": (
+        '''                and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
+                                          e["payload"], gov, "owner"))                  # verified, as of its position''',
+        '''                and "owner_sig" in e["payload"])'''),
     "admitted_gate_removed_from_content_projection": (
         '    if gov.get("owner_id") is None:\n        return entries\n    ok = gov["admitted"]',
         '    if True:\n        return entries\n    ok = gov["admitted"]'),

@@ -271,8 +271,6 @@ LOCAL_FILES = {
     ".peer_candidates.json": _v(WRITTEN, "1.21", "The addresses each admitted device verified itself from; local, never "
                                                  "journaled (see `via` values).", where="hive"),
     ".peers.json":           _v(WRITTEN, "1.0", "This node's sync settings and its peers' addresses.", where="hive"),
-    ".ts-fences.jsonl":      _v(WRITTEN, "2.1", "Entries ingest dropped so a held admit of their device survives, kept so the governance "
-                                                "they would have fenced stays fenced; never synced.", where="hive"),
     ".telemetry":            _v(WRITTEN, "1.1", "Directory for the local-only session telemetry store; never synced.",
                                 where="hive"),
     "journal":               _v(WRITTEN, "1.0", "The journal's day files: the source of truth, and all that sync "

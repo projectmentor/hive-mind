@@ -12,8 +12,10 @@ claim it. Without a marker nothing is skipped. Arrival times (`future-dated`) an
 detection only. The mutants at the end each drop one rule or weaken one anchor, and each is caught.
 """
 
+import itertools
 import json
 import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,6 +24,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import _loadhv, _owner_key, _device, _gov, _entry, _fact, _project  # noqa: E402
+from test_links import _planes  # noqa: E402
 
 DAY = "2026-01-01T"
 
@@ -35,7 +38,6 @@ def _journal(hv, entries):
     jd.mkdir(parents=True, exist_ok=True)
     for f in jd.glob("*.jsonl"):
         f.unlink()
-    (hv.HIVE_HOME / ".ts-fences.jsonl").unlink(missing_ok=True)      # a rewritten journal forgets what it dropped
     (jd / "2026-01-01.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
 
@@ -421,120 +423,186 @@ def test_ingest_agrees_with_the_projection_for_every_split_of_a_batch(tmp_path, 
         assert _held(hv) == expect, bin(cuts)
 
 
+# ── ingest keeps no verdict of its own: it asks the projection (#230, #250; David's ruling of 2026-10-06) ──────
+
 def _outcome(hv, tmp_path):
+    """What the projection makes of what a node holds: the entries it honours, who is admitted, the facts."""
     j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
     gov = hv._governance_state(j)
-    return (_held(hv), _skipped(hv), set(gov["admitted"]), _contents(_project(hv, tmp_path, j)))
+    return (_held(hv) - _skipped(hv), set(gov["admitted"]), _contents(_project(hv, tmp_path, j)))
 
 
-def test_a_devices_own_governance_behind_its_own_content_is_independent_of_the_split(tmp_path, monkeypatch):
-    """#230: X (not admitted) holds a fact at 12:20 (seq 1) and an owner-signed admit of itself at 12:10 (seq 2).
-    One batch, [fact][admit] and [admit][fact] must end with the same held, skipped and admitted sets and facts."""
-    hv = _loadhv(tmp_path, monkeypatch)
+def _ends_the_same(hv, tmp_path, base, entries, mutated=None):
+    """Offer `entries` one per batch in every order, and as one batch in every order, each followed by a re-offer of
+    the full set. Returns the distinct outcomes: one means every order ended the same."""
+    outcomes = []
+    plans = [[[e] for e in perm] for perm in itertools.permutations(entries)]
+    plans += [[list(perm)] for perm in itertools.permutations(entries)]
+    for plan in plans:
+        _journal(hv, base)
+        for batch in plan:
+            hv.append_foreign_entries(batch)
+        hv.append_foreign_entries(list(entries))
+        outcomes.append(_outcome(hv, tmp_path))
+    return [o for i, o in enumerate(outcomes) if o not in outcomes[:i]]
+
+
+def _own_admit(hv, x, owner, at):
+    return _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, at, owner=owner)
+
+
+def _admitted_x(hv, owner, base, x):
+    return base + [_gov(hv, {"action": "admit", "device_id": x["id"], "principal": "px"}, owner[0], owner[1], ts(1, 1), 4),
+                   _marker(hv, owner, {"ownerdev": 4}, seq=5)]
+
+
+def _case_pair(hv):
+    """#230: X, not admitted, holds a fact at 12:20 (seq 1) and an owner-signed admit of itself at 12:10 (seq 2)."""
     owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
     x = _device(hv)
-    fact = _fact(hv, x, "x content", ts(12, 20))
-    admit = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
-                   owner=owner)
-    results = []
-    for batches in ([[fact, admit]], [[fact], [admit]], [[admit], [fact]], [[admit, fact]]):
-        _journal(hv, base + [marker])
-        for b in batches:
-            hv.append_foreign_entries(b)
-        results.append(_outcome(hv, tmp_path))
-    assert all(r == results[0] for r in results), results
-    held, skipped, admitted, facts = results[0]
-    assert (x["id"], 1) not in held and (x["id"], 2) in held and x["id"] in admitted and not skipped
-    assert "x content" not in facts
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [_fact(hv, x, "x content", ts(12, 20)),
+                                                          _own_admit(hv, x, owner, ts(12, 10))]
 
 
-def test_a_dropped_fact_keeps_fencing_its_devices_governance_in_every_order(tmp_path, monkeypatch):
-    """#230 review: X is admitted by its own owner-signed admit (seq 10, 12:10). Its fact at seq 5 (12:20) would make the
-    bounds skip that admit, so ingest drops the fact; it must still fence X's governance at seqs 6-8 (12:08), as it did
-    before: Y is not admitted and `forget_writers` stays unset, however the entries are offered."""
-    hv = _loadhv(tmp_path, monkeypatch)
+def _case_reviewers_probe(hv):
+    """X is admitted by its own owner-signed admit (seq 10, 12:10); its fact at seq 5 (12:20) would make the bounds skip
+    it, and X's announce, admit of Y and set-config sit at seqs 6-8 (12:08). Y has content too."""
     owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
     x, y = _device(hv), _device(hv)
-
-    def at(seq):
-        x["seq"] = seq - 1
-    at(10)
-    own = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
-                 owner=owner)
-    at(5)
+    x["seq"] = 9
+    own = _own_admit(hv, x, owner, ts(12, 10))
+    x["seq"] = 4
     fact = _fact(hv, x, "x content", ts(12, 20))
-    at(6)
     ann = _entry(hv, x, "governance", {"action": "announce", "kind": "key", "pub": x["pub"].hex()}, ts(12, 8))
     admit_y = _entry(hv, x, "governance", {"action": "admit", "device_id": y["id"], "principal": "py"}, ts(12, 8),
                      owner=owner)
     cfg = _entry(hv, x, "governance", {"action": "set-config", "key": "forget_writers", "value": "owner"},
                  ts(12, 8), owner=owner)
-    three = [ann, admit_y, cfg]
-    for batches in ([[fact] + three], [[fact], three], [three, [fact]], [[fact], [ann], [admit_y], [cfg]],
-                    [three + [fact]]):
-        _journal(hv, base + [marker, own])
-        for b in batches:
-            hv.append_foreign_entries(b)
-        j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
-        state = hv._governance_state(j)
-        assert y["id"] not in state["admitted"], batches
-        assert "forget_writers" not in (state.get("config") or {}), batches
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [own, fact, ann, admit_y, cfg, _fact(hv, y, "y content", ts(12, 30))]
 
 
-def test_a_devices_later_content_does_not_split_its_membership(tmp_path, monkeypatch):
-    """#230 review: X's own admit is at seq 10 (12:10), a fact at seq 5 (12:20) would make the bounds skip it, and X's
-    next write at seq 11 (12:12) is behind the fact by more than 5 minutes. Every order ends with the same held,
-    skipped and admitted sets and facts: the fact is dropped, the admit holds, the later write projects."""
-    hv = _loadhv(tmp_path, monkeypatch)
+def _case_verifiers_probe_1(hv):
+    """X's own admit at seq 10 (12:10), a fact at seq 5 (12:20), and a fact at seq 11 (12:12) behind the admit."""
     owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
     x = _device(hv)
     x["seq"] = 9
-    own = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
-                 owner=owner)
+    own = _own_admit(hv, x, owner, ts(12, 10))
     x["seq"] = 4
     f5 = _fact(hv, x, "x five", ts(12, 20))
     x["seq"] = 10
-    f11 = _fact(hv, x, "x eleven", ts(12, 12))
-    results = []
-    for batches in ([[f5, f11]], [[f5], [f11]], [[f11], [f5]], [[f11, f5]], [[f5], [f11], [f5, f11]]):
-        _journal(hv, base + [marker, own])
-        for b in batches:
-            hv.append_foreign_entries(b)
-        results.append(_outcome(hv, tmp_path))
-    assert all(r == results[0] for r in results), results
-    held, skipped, admitted, facts = results[0]
-    assert (x["id"], 5) not in held and (x["id"], 11) in held and x["id"] in admitted and not skipped
-    assert "x five" not in facts and "x eleven" in facts
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [own, f5, _fact(hv, x, "x eleven", ts(12, 12))]
 
 
-def test_offering_the_same_dropped_fact_again_does_not_grow_the_fence_file(tmp_path, monkeypatch):
-    hv = _loadhv(tmp_path, monkeypatch)
+def _case_250_own_revoke(hv):
+    """#250 case 1: X is admitted. Its fact at seq 1 (12:20) and an owner-signed revoke of X at seq 2 (12:10)."""
     owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
     x = _device(hv)
-    fact = _fact(hv, x, "x content", ts(12, 20))
-    admit = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
-                   owner=owner)
-    _journal(hv, base + [marker, admit])
-    for _ in range(5):
-        hv.append_foreign_entries([fact])
-    assert len((hv.HIVE_HOME / ".ts-fences.jsonl").read_text().splitlines()) == 1
+    return _admitted_x(hv, owner, base, x), [
+        _fact(hv, x, "x content", ts(12, 20)),
+        _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)]
 
 
-def test_a_fact_dropped_for_its_own_admit_names_the_reason_on_stderr(tmp_path, monkeypatch, capsys):
-    hv = _loadhv(tmp_path, monkeypatch)
+def _case_250_admit_of_y(hv, with_y_content=False):
+    """#250 case 2: X is admitted. Its fact at seq 1 (12:20) and an owner-signed admit of Y on its chain at seq 2
+    (12:10); with Y's content when asked."""
     owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
-    x = _device(hv)
-    fact = _fact(hv, x, "x content", ts(12, 20))
-    admit = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
-                   owner=owner)
-    _journal(hv, base + [marker, admit])
+    x, y = _device(hv), _device(hv)
+    entries = [_fact(hv, x, "x content", ts(12, 20)),
+               _entry(hv, x, "governance", {"action": "admit", "device_id": y["id"], "principal": "py"}, ts(12, 10),
+                      owner=owner)]
+    if with_y_content:
+        entries.append(_fact(hv, y, "y content", ts(12, 30)))
+    return _admitted_x(hv, owner, base, x), entries
+
+
+def _case_250_admit_of_y_with_content(hv):
+    return _case_250_admit_of_y(hv, with_y_content=True)
+
+
+_CASES = [_case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_admit_of_y]
+
+
+@pytest.mark.parametrize("case", _CASES + [pytest.param(_case_250_admit_of_y_with_content, marks=pytest.mark.xfail(
+    strict=True, reason="#250 case 2 with Y's content: the projection does not gate content on admission, so Y's fact "
+                        "held while its admit still counted stays projected when X's late fact later skips that admit"))],
+                         ids=lambda c: c.__name__.strip("_"))
+def test_every_order_ends_the_same(tmp_path, monkeypatch, case):
+    """One entry per batch and one batch, in every order, then a re-offer of the full set: the held set the projection
+    honours, the admitted set and the projected facts are the same in all of them."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    base, entries = case(hv)
+    assert len(_ends_the_same(hv, tmp_path, base, entries)) == 1
+
+
+def _tiebreak(hv, tmp_path):
+    """The owner's admit of X is honoured and X's future-stamped pre-admit fact is the entry refused."""
+    base, (fact, admit) = _case_pair(hv)
+    x = fact["node_id"]
+    for order in ([fact, admit], [admit, fact]):
+        _journal(hv, base)
+        for e in order:
+            hv.append_foreign_entries([e])
+        hv.append_foreign_entries([fact, admit])
+        held, admitted, facts = _outcome(hv, tmp_path)
+        if not ((x, 2) in held and (x, 1) not in held and x in admitted and "x content" not in facts):
+            return False
+    return True
+
+
+def _second_marker_lands(hv):
+    """A second owner-signed marker stamped well behind the first is exempt, as the projection exempts it: ingest asks
+    the projection with the marker in it, so the incremental chain check does not apply to governance."""
+    owner, (d0, d1), base = _hive(hv)
+    _journal(hv, base + [_marker(hv, owner, {"ownerdev": 3})])
+    hv.append_foreign_entries([_marker(hv, owner, {"ownerdev": 5}, seq=5, at=ts(1, 40))])
+    return ("ownerdev", 5) in _held(hv)
+
+
+def test_a_second_marker_stamped_behind_the_first_lands(tmp_path, monkeypatch):
+    assert _second_marker_lands(_loadhv(tmp_path, monkeypatch))
+
+
+def test_the_owners_admit_beats_the_devices_future_stamped_fact(tmp_path, monkeypatch):
+    assert _tiebreak(_loadhv(tmp_path, monkeypatch), tmp_path)
+
+
+def test_a_refusal_names_its_reason_on_stderr(tmp_path, monkeypatch, capsys):
+    hv = _loadhv(tmp_path, monkeypatch)
+    base, (fact, admit) = _case_pair(hv)
+    _journal(hv, base + [admit])
     hv.append_foreign_entries([fact])
-    assert "would make the bounds skip that admit" in capsys.readouterr().err
+    assert "timestamp bounds" in capsys.readouterr().err
+
+
+def _mutated_hv(tmp_path, monkeypatch, old, new):
+    src = (PROJECT / "hv").read_text()
+    assert src.count(old) == 1, old
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.setenv("HIVE_NOW", "2026-01-10T00:00:00Z")
+    m = types.ModuleType("hvmod_mutant")
+    m.__file__ = str(PROJECT / "hv")
+    exec(compile(src.replace(old, new), str(PROJECT / "hv"), "exec"), m.__dict__)
+    _planes.install_control_plane(m)
+    return m
+
+
+_INGEST_MUTANTS = {
+    "full_check_skipped_for_late_arrivals": ('return isinstance(e["seq"], int) and e["seq"] < dev_top.get(e["node_id"], 0)',
+                                             "return False"),
+    "admitted_set_check_dropped": ("            if not ok:\n", "            if False:\n"),
+    "incremental_path_used_for_governance": ('if e.get("type") != "governance" and not _is_late(e):',
+                                             "if not _is_late(e):"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_INGEST_MUTANTS))
+def test_each_ingest_mutant_is_caught(tmp_path, monkeypatch, name):
+    hv = _mutated_hv(tmp_path, monkeypatch, *_INGEST_MUTANTS[name])
+    caught = not _tiebreak(hv, tmp_path) or not _second_marker_lands(hv)
+    for case in _CASES:
+        base, entries = case(hv)
+        caught = caught or len(_ends_the_same(hv, tmp_path, base, entries)) != 1
+    assert caught, name
 
 
 def test_a_marker_the_projection_does_not_honour_is_checked_like_any_entry(tmp_path, monkeypatch):

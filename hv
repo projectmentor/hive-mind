@@ -810,6 +810,12 @@ def _valid_timestamp(ts):
 # Nothing is checked until the owner signs a `freeze-timestamps` marker: its `tips` freeze each device's chain at a
 # seq, and an entry at or below its device's tip is unchecked. Grandfathering is by seq, never by timestamp, so a
 # backdated entry cannot claim it. Without a marker nothing is skipped, so a node keeps today's projection.
+# Ingest keeps no verdict of its own (#230, #250; David's ruling of 2026-10-06): an entry lands iff the projection over
+# (what this node holds + the entries landed so far in the batch + this entry) would honour it, i.e. the bounds do not
+# skip it and, for content, its device is admitted in that projection. The projection judges a device's entries in seq
+# order and ingest sees them in arrival order, so asking the projection is what makes every order end the same.
+# Tiebreak: owner-signed governance beats device-stamped content. A fact whose future stamp would make the bounds skip
+# an owner act on its chain (an admit of its own device, a revoke, an admit relayed there) is the entry refused.
 # Arrival times and flood counts are detection only: `hv doctor` and `hv audit` report them, nothing refuses.
 # --------------------------------------------------------------------------
 
@@ -931,23 +937,6 @@ def _ts_chain(entries, gov):
         if e.get("node_id") is not None and isinstance(e.get("seq"), int) and inst is not None:
             chain.setdefault(e["node_id"], []).append((e["seq"], inst))
     return chain
-
-
-def _read_fences():
-    """[(node_id, seq, timestamp)] of the entries ingest dropped to keep a held admit (#230), from
-    `$HIVE_HOME/.ts-fences.jsonl`. Local to this node, never synced (a damaged line is skipped)."""
-    out = []
-    try:
-        for line in (HIVE_HOME / ".ts-fences.jsonl").read_text().splitlines():
-            try:
-                r = json.loads(line)
-                if isinstance(r["s"], int) and isinstance(r["t"], str):
-                    out.append((r["n"], r["s"], r["t"]))
-            except (ValueError, KeyError, TypeError):
-                continue
-    except OSError:
-        pass
-    return out
 
 
 def _arrivals_path():
@@ -1495,8 +1484,8 @@ def append_foreign_entries(entries, advertised_chunks=None):
     arrived = []                     # (node_id, seq) of each entry that landed, for the local arrival record
     refused_payload = []             # (entry, reason): signed, verified, refused for its payload (#205)
     gov = chain = None
-    gov_top = {}                     # node_id -> highest governance seq this node holds
-    fences = {}                      # node_id -> [(seq, instant)] of dropped entries that still bound its governance (#230)
+    deferred_why = {}                # (node_id, seq) -> why a late entry's device is not admitted, for stderr if it stays so
+    dev_top = {}                     # node_id -> highest seq this node holds, of any type
     has_owner = False
     admitted = set()
     gov_dirty = False
@@ -1508,16 +1497,10 @@ def append_foreign_entries(entries, advertised_chunks=None):
         held = merkle.read_all_entries(JOURNAL_DIR)
         gov = _governance_state(held)
         chain = _ts_chain(held, gov) if gov.get("ts_tips") else None
-        gov_top.clear()
+        dev_top.clear()
         for h in held:
-            if h.get("type") == "governance" and isinstance(h.get("seq"), int):
-                gov_top[h.get("node_id")] = max(gov_top.get(h.get("node_id"), 0), h["seq"])
-        fences.clear()
-        if chain is not None:
-            for n, s, t in _read_fences():
-                inst = _ts_instant(t)
-                if inst is not None and (s, inst) not in fences.get(n, ()):
-                    fences.setdefault(n, []).append((s, inst))
+            if isinstance(h.get("seq"), int):
+                dev_top[h.get("node_id")] = max(dev_top.get(h.get("node_id"), 0), h["seq"])
         # FAIL CLOSED on a pin whose genesis has not synced yet (a joiner that pinned from an invite
         # fingerprint before its first pull). The projection reports no owner there, and the pre-owner rule
         # accepts ANY device's content — so a pinned-but-not-yet-synced node must be gated, not open.
@@ -1528,8 +1511,8 @@ def append_foreign_entries(entries, advertised_chunks=None):
     if entries:
         refresh()
         # A device's entries are judged in seq order, whatever their type, so neither the batch order nor how
-        # the batch is split can change a verdict: ingest refuses `e` iff `_ts_violations` over what is held,
-        # what landed and `e` skips `e`.
+        # the batch is split can change a verdict: ingest lands `e` iff the projection over what is held,
+        # what landed and `e` honours it (`_ts_ok`).
         # The device that signs a marker goes first, so a marker arms the rest of its batch as it would had it
         # arrived alone first.
         # A device carrying an owner-chain act goes first too, so nothing in a batch that carries the genesis is
@@ -1540,70 +1523,40 @@ def append_foreign_entries(entries, advertised_chunks=None):
         entries = sorted(entries, key=lambda x: (x.get("node_id") not in markers, str(x.get("node_id")),
                                                  x.get("seq") if isinstance(x.get("seq"), int) else 0))
 
+    def _is_late(e):
+        """A late arrival: its seq is below its device's top held seq, so it may flip a verdict the projection
+        reaches for a higher seq."""
+        return isinstance(e["seq"], int) and e["seq"] < dev_top.get(e["node_id"], 0)
+
+    def _projection(e):
+        """(why the bounds skip `e`, or None; whether its device is admitted) in the projection over (what this
+        node holds, which includes what landed in this batch, + `e`)."""
+        held = merkle.read_all_entries(JOURNAL_DIR)
+        with_e = _governance_state(held + [e])
+        return _ts_violations(held + [e], with_e).get((e["node_id"], e["seq"])), e["node_id"] in with_e["admitted"]
+
     def _ts_ok(e):
-        """Rules 1-2 and the canonical shape, against the chain this node holds; records the reason if refused."""
+        """Whether the projection over (what this node holds + what landed in this batch + `e`) honours `e`: the
+        bounds do not skip it and, for content, its device is admitted in that projection (`judge_content`). Ingest
+        keeps no verdict of its own, so no order or split of arrivals can leave two nodes refusing different
+        entries. The full check reads the journal, so it runs only for governance (an admit or a marker changes who
+        is admitted and which bounds apply) and for a late arrival (`_is_late`). An entry above its device's top
+        keeps the incremental chain check, which is exact there: nothing the projection judges after it is held.
+        `dev_top` tracks the top seqs. Records the reason, for stderr, if refused."""
         if chain is None:
             return True
-        p = e.get("payload")
-        if (e.get("type") == "governance" and isinstance(p, dict) and p.get("action") == "freeze-timestamps"
-                and (e["node_id"], e["seq"]) in _governance_state(
-                    merkle.read_all_entries(JOURNAL_DIR) + [e]).get("ts_markers", ())):
-            return True              # a marker the projection will honour is exempt, as in `_ts_violations`
-        # A dropped entry bounds only its device's governance: the content behind it is judged as the projection
-        # judges it, with the dropped entry absent, so a device's later write does not depend on the split.
-        against = chain
-        if e.get("type") == "governance" and e.get("node_id") in fences:
-            against = dict(chain, **{e["node_id"]: chain.get(e["node_id"], []) + fences[e["node_id"]]})
-        why = _ts_ingest_problem(e, gov, against)
+        if e.get("type") != "governance" and not _is_late(e):
+            why = _ts_ingest_problem(e, gov, chain)
+        else:
+            why = _projection(e)[0]
         if why is not None:
             ts_refused.append(why)
             return False
         return True
 
-    def _own_admit_fence(e):
-        """Why `e` must be dropped so a held admit of its own device survives, or None (#230). An admit at a higher
-        seq than `e` is judged by the projection with `e` in the chain, so `e` can make the bounds skip it. A
-        dropped `e` still fences the device's governance as it would have, here and on later batches (`_fence`),
-        so nothing the parent refused is accepted. If `e` would also skip other governance of the device, it
-        lands, as it always did: dropping it would honour acts the projection skipped. Reads the journal only
-        when the device holds governance above `e`."""
-        nid, seq = e["node_id"], e["seq"]
-        if gov_top.get(nid, 0) <= seq:
-            return None
-        held = merkle.read_all_entries(JOURNAL_DIR)
-        with_e = _governance_state(held + [e])
-        if nid in with_e["admitted"]:
-            return None
-        before = _ts_violations(held, gov)
-        for (n, s), _why in _ts_violations(held + [e], with_e).items():
-            if n == nid and (n, s) not in before:
-                h = next((x for x in held if x.get("node_id") == n and x.get("seq") == s), None)
-                if h is not None and h.get("type") != "governance":
-                    continue            # its own later content is skipped with it, as it is when the content lands first
-                if h is None or (h.get("payload") or {}).get("action") != "admit" \
-                        or (h.get("payload") or {}).get("device_id") != nid:
-                    return None
-        return "an admit of the device sits behind this entry and its timestamp would make the bounds skip that admit"
-
-    def _fence(e):
-        """Remember a dropped entry's place in its device's chain, on this node, so the governance it would have
-        fenced stays fenced: in this batch's chain and in `.ts-fences.jsonl` for later batches."""
-        inst = _ts_instant(e.get("timestamp"))
-        if inst is None:
-            return
-        if (e["seq"], inst) in fences.get(e["node_id"], ()):
-            return                      # already on file: a re-offer must not grow the file
-        fences.setdefault(e["node_id"], []).append((e["seq"], inst))
-        try:
-            with open(HIVE_HOME / ".ts-fences.jsonl", "a") as f:
-                f.write(json.dumps({"n": e["node_id"], "s": e["seq"], "t": e["timestamp"]}) + "\n")
-        except OSError:
-            pass
-
     def _landed(e):
         arrived.append((e["node_id"], e["seq"]))
-        if e.get("type") == "governance":
-            gov_top[e["node_id"]] = max(gov_top.get(e["node_id"], 0), e["seq"])
+        dev_top[e["node_id"]] = max(dev_top.get(e["node_id"], 0), e["seq"])
         if chain is not None:
             inst = _ts_instant(e.get("timestamp"))
             if inst is not None:
@@ -1694,11 +1647,23 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if has_owner and nid in gov["purged"]:
             rejected += 1               # a purged device is tombstoned: its new writes are rejected even if later re-admitted
             return _DONE
-        if has_owner and nid not in admitted:
+        if has_owner and chain is not None and _is_late(e):
+            # A late arrival is judged by the projection with it in the chain: it may make the bounds skip the
+            # admit of its own device, or skip the revoke that stands against it.
+            skipped, ok = _projection(e)
+            if skipped is not None:
+                ts_refused.append(skipped)
+                rejected += 1
+                return _DONE
+            if not ok:
+                deferred_why[(nid, seq)] = "the device is not admitted in the projection with this entry, whose timestamp " \
+                                           "makes the bounds skip an admit of it"
+                return _DEFER
+        elif has_owner and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
             return _DEFER
-        if not _ts_ok(e):
+        elif not _ts_ok(e):
             rejected += 1
             return _DONE
         problem = _hostile_problem(e) or _payload_problem(e)
@@ -1706,13 +1671,6 @@ def append_foreign_entries(entries, advertised_chunks=None):
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
             refused_payload.append((e, problem))
             return _DONE
-        if has_owner and chain is not None:
-            why = _own_admit_fence(e)
-            if why is not None:
-                rejected += 1           # #230
-                ts_refused.append(why)
-                _fence(e)
-                return _DONE
         try:
             _persist(e)
         except ValueError:              # _journal_path_for refused it: never let one entry abort the batch
@@ -1725,22 +1683,18 @@ def append_foreign_entries(entries, advertised_chunks=None):
             arrived_ideas.append(e)
         return _LANDED
 
-    # Sweep the batch in (device, seq) order. An entry whose device is not admitted yet waits, and holds back its
-    # device's later entries, so each device's chain is judged in order. A sweep that lands nothing first lets the
-    # held-back governance run (an admit may be what the waiting content needs); only when none is waiting are the
-    # deferred entries settled as refused (their device was never admitted). Every sweep lands or refuses at least
-    # one entry, so the loop is finite.
+    # Sweep the batch in (device, seq) order. An entry whose device is not admitted yet waits; it does not hold back
+    # its device's later entries, because each is judged on its own by the projection over what is held (`_ts_ok`),
+    # so the batch's order cannot change a verdict. A sweep that lands nothing first lets the waiting governance run
+    # (an admit may be what the waiting content needs); only when none is waiting are the deferred entries settled as
+    # refused (their device was never admitted). Every sweep lands or refuses at least one entry, so the loop is
+    # finite.
     unresolved = [e for e in entries if e.get("node_id") is not None and e.get("seq") is not None]
     while unresolved:
-        landed_any, waiting, held_back = False, [], set()
+        landed_any, waiting = False, []
         for e in unresolved:
-            nid = e["node_id"]
-            if nid in held_back:
-                waiting.append(e)
-                continue
             r = judge_governance(e) if e.get("type") == "governance" else judge_content(e)
             if r == _DEFER:
-                held_back.add(nid)
                 waiting.append(e)
             elif r == _LANDED:
                 landed_any = True
@@ -1759,6 +1713,8 @@ def append_foreign_entries(entries, advertised_chunks=None):
                 waiting = still
             else:
                 rejected += len(waiting)
+                ts_refused.extend(deferred_why[(w["node_id"], w["seq"])] for w in waiting
+                                  if (w["node_id"], w["seq"]) in deferred_why)
                 break
         unresolved = waiting
 

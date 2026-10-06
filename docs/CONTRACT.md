@@ -134,11 +134,11 @@ The feed carries what the core computes. A consumer **must not** compute its own
 - **The cursor** is a set of `(node_id, seq)` pairs, the journal's own identity. Local ids are renumbered and a synced
   entry keeps its author's timestamp, so neither is a safe cursor.
 
-## Pending until plan PR 9d merges
+## Provisional
 
-> **PENDING.** One thing is not final: the doctor's hooks check (plan PR 9d), the re-verification of an installed
-> module's `hooks/<event>` files. Its check name and message text are provisional. The `hooks` manifest field, the six
-> events and the dispatcher's caps and gates (`MODULE_API.md`, *Hooks and events*) are stable.
+The doctor's `modules:<name>` hooks check (the re-verification of an installed module's `hooks/<event>` files) has
+shipped, but its check name and message text are provisional. The `hooks` manifest field, the six events and the
+dispatcher's caps and gates (`MODULE_API.md`, *Hooks and events*) are stable.
 
 ## Deferred
 

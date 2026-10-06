@@ -1343,6 +1343,13 @@ You only ever need **one** node of the hive to join; the rest syncs from there. 
 `hive-mind install` on the owner device prints the invite line automatically once the hive is
 created.)
 
+### Help on the installer subcommands
+
+`hive-mind install`, `update`, `status`, `invite`, `reset` and `uninstall` each print their usage and exit 0 on
+`-h` or `--help` without doing anything (no pull, no restart, no write). `install`, `update`, `status` and `invite`
+take no arguments and refuse any other one with exit 2, before they do anything. Before this fix (#224),
+`hive-mind update --help` ran the update.
+
 ### `hive-mind uninstall`
 
 ```bash

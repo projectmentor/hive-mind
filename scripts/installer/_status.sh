@@ -2,6 +2,15 @@
 # hive-mind status  —  scripts/installer/_status.sh
 set -euo pipefail
 
+# `-h`/`--help` prints usage and changes nothing; any other argument is refused (exit 2) BEFORE the
+# command does anything (#224). Keep this ahead of every side effect.
+for _a in "$@"; do
+  case "$_a" in
+    -h|--help) echo "Usage: hive-mind status"; echo "  Show device health and peer sync state (read-only)."; exit 0 ;;
+    *) echo "hive-mind status: unknown argument '$_a' (try --help)" >&2; exit 2 ;;
+  esac
+done
+
 HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE="hive-sync"
 

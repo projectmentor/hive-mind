@@ -10,6 +10,11 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## Unreleased
+
+- **Fixed: `hive-mind update --help` ran the update** (#224). `install`, `update`, `status` and `invite` now print usage
+  and exit 0 on `-h` / `--help` without changing anything, and refuse an unknown argument with exit 2.
+
 ## 2.1 — 2026-10-06 · `v2.1.0`
 
 **Upgrading from 2.0.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep

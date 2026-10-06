@@ -27,6 +27,15 @@
 
 set -euo pipefail
 
+# `-h`/`--help` prints usage and changes nothing; any other argument is refused (exit 2) BEFORE the
+# command does anything (#224). Keep this ahead of every side effect.
+for _a in "$@"; do
+  case "$_a" in
+    -h|--help) echo "Usage: hive-mind install"; echo "  Set up this device from scratch."; exit 0 ;;
+    *) echo "hive-mind install: unknown argument '$_a' (try --help)" >&2; exit 2 ;;
+  esac
+done
+
 REPO_URL="https://github.com/projectmentor/hive-mind.git"
 HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE_NAME="hive-sync"

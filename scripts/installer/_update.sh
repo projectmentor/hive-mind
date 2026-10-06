@@ -2,6 +2,15 @@
 # hive-mind update  —  scripts/installer/_update.sh
 set -euo pipefail
 
+# `-h`/`--help` prints usage and changes nothing; any other argument is refused (exit 2) BEFORE the
+# command does anything (#224). Keep this ahead of every side effect.
+for _a in "$@"; do
+  case "$_a" in
+    -h|--help) echo "Usage: hive-mind update"; echo "  Pull the latest code, restart the daemon and re-verify (auto-heals after a force-push/rewrite)."; exit 0 ;;
+    *) echo "hive-mind update: unknown argument '$_a' (try --help)" >&2; exit 2 ;;
+  esac
+done
+
 HIVE_DIR="${HIVE_DIR:-$HOME/projects/hive-mind}"
 SERVICE="hive-sync"
 

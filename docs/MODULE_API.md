@@ -285,7 +285,7 @@ A module is a git repository with a signed manifest. `hive-mind module add` chec
 | `publisher` | The publisher's Ed25519 public key, base64. Required. |
 | `files` | `{relative path: sha256 hex}` for every file, 1 to 500 of them. The fetched tree must hold exactly these files and no others. Required. |
 | `service` | Optional. `{"command": [argv…], "restart": "no" \| "on-failure" \| "always", "interval": seconds ≥ 60}`. `interval` makes it a timer. |
-| `hooks` | Optional list of events the module hooks. **Provisional; see below.** |
+| `hooks` | Optional list of events the module hooks; each needs a `hooks/<event>` file in the manifest. See *Hooks and events*. |
 | `config` | Optional `{key: default string}`, per-node defaults under the module's own prefix. |
 | `quota` | Optional `{per_hour, per_day, entry_bytes, lifetime}`: at most the defaults. |
 
@@ -346,8 +346,39 @@ acts only on a module whose manifest verifies, never re-admits a revoked device 
 
 ### Hooks and events
 
-> **PENDING: plan PR 8, then the hooks check that follows it.** This section is a placeholder and is filled after PR 8 merges. The
-> `hooks` manifest field is *provisional* until then. See [`CONTRACT.md`](CONTRACT.md#pending-until-plan-pr-8-merges).
+A module reacts to a Claude Code lifecycle event by shipping an executable file at `hooks/<event>` in its tree. The
+event is one of `session-start`, `user-prompt`, `precompact`, `sessionend`, `notification` or `stop` (the last two are
+new in 2.1: `hv wire claude`, the `agent-hooks` check and the 15-minute doctor timer add the `Notification` and `Stop`
+shims to a node that has only the four older ones, and touch nothing else in `~/.claude`). The manifest `hooks` field
+lists the events the module hooks, and each `hooks/<event>` file is listed in the manifest with its digest, so
+`module add` and `module update` verify it like any other file of the tree.
+
+`scripts/common/hive_dispatch.sh` runs the core behaviours for an event first, then each installed module's
+`$HIVE_MODULES_DIR/<name>/hooks/<event>` in name order, with the event's JSON payload on stdin.
+
+- **Output is discarded.** A hook's stdout and stderr go nowhere, and the dispatcher exits 0 on every path, so a hook
+  cannot add to the session's context or change its outcome. A hook that wants to say something writes through `/v1`.
+- **Caps.** **3 seconds per hook, with the 1-second kill grace counted inside it** (`HIVE_MODULE_HOOK_TIMEOUT`), and **a
+  6-second budget per event**, shared by the event's modules (`HIVE_MODULE_EVENT_BUDGET`). The budget is clamped to the
+  shim's own `timeout` in `settings.json` (20 seconds for `session-start` and `sessionend`, else 10) less one second,
+  measured from the dispatcher's start, so a slow core behaviour leaves modules less time or none, and Claude Code
+  never kills the dispatcher and loses the core's output. A hook that ignores `TERM` is killed with `KILL`. A hook the
+  budget has no room for is skipped.
+- **The process group is reaped after every hook**, whether it exited, was killed at the cap or finished normally, so a
+  child the hook left behind (`sleep 30 &`) does not outlive it. **A hook is a short reaction to an event. Work that
+  runs longer belongs in the module's service unit** (see *The unit*).
+- **A hook runs only if** the module is recorded in `.modules.json` (a top-level entry), the modules directory and
+  `hooks/` are real directories rather than links, and the file is a regular file, not a link, executable, owned by
+  the user running the hive, and writable by neither group nor other. Anything else is skipped.
+- **Skips and timeouts are logged,** one line each (`<time> hook-timeout|hook-skipped <module> <event>`), to `$HIVE_HOME/.bus/modules.log`, and never shown. With no module installed the dispatcher's output, exit code and
+  files are as they were in 2.0.
+- **What verifies a hook.** The dispatcher does not hash a file per event. `module add` and `module update` check the
+  tree against the signed manifest, and the doctor re-checks it (`modules:<name>`).
+
+> **PENDING: plan PR 9d, the doctor's hooks check.** It re-verifies each recorded module's `hooks/<event>` files against
+> the manifest digests, applies the dispatcher's gates above, and warns, naming the reason, for a file the dispatcher
+> would skip or an event it does not know. This line is replaced when 9d merges. The `hooks` manifest field and the
+> hook events are **stable** from this PR; only the check's name and message text are provisional.
 
 ## Fleet config
 

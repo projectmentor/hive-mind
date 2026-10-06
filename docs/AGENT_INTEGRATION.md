@@ -150,7 +150,7 @@ session-end** — and bind the §2 behaviors to them. The reference implementati
 is real, working code in this repo — **study it, then write the equivalent for your runtime:**
 
 - **Claude Code (reference):** `~/.claude/settings.json` registers ONE stable shim per lifecycle
-  event (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`) → `command` runs
+  event (`SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, and since 2.1 `Notification` and `Stop`) → `command` runs
   `scripts/common/hive_dispatch.sh <event>`. The shim consumes the hook's stdin once, replays it to each
   behavior for that event (session telemetry, then the nudge/digest in `scripts/common/nudge_hook.sh`), and
   passes their stdout through so context injection still works. Because the foreign config holds only
@@ -276,7 +276,10 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   provisional or internal, is [`CONTRACT.md`](CONTRACT.md); the routes are [`MODULE_API.md`](MODULE_API.md). A MINOR
   may change how the hive governs (above), and this one does in three ways: module devices are excluded from
   election votes; a prefixed `x-<module>:` config key is accepted; and, once the owner arms them, entry timestamps are
-  bounded. **Operators:** modules run on Linux only in 2.1. **Version skew:** a 2.0 node ignores the module marker
+  bounded. **Hooks:** the Claude Code hook spec gains `Notification` and `Stop` shims, added to a node that has the
+  four older ones by `hv wire claude` and the doctor (no adapter action: your own hooks are untouched), and the
+  dispatcher runs each installed module's `hooks/<event>` after the core behaviours, with output discarded, 3 seconds
+  per hook, a 6-second event budget and the process group reaped. **Operators:** modules run on Linux only in 2.1. **Version skew:** a 2.0 node ignores the module marker
   and still counts a module device's vote (only with `quorum_m > 0` and `quorum_by=device`), and lists a module
   device as unreachable in `fleet-contract`; `hv doctor` on a 2.1 node warns about any node still on 2.0 in a hive
   that has modules, but only when `quorum_m > 0`. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).

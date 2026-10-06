@@ -38,12 +38,13 @@ Everything a module can reach is marked with one of three tiers.
 - **The quota defaults and their meaning**: 60 an hour, 500 a day, 16 KiB an entry, 50,000 for life; a manifest may
   lower and never raise; only the owner raises.
 - **Local-only**: the listener binds `127.0.0.1` and refuses any other peer.
+- **The hook contract**: the `hooks` manifest field, the six events, `hooks/<event>` with the payload on stdin, output
+  discarded, the 3-second per-hook cap and 6-second event budget, and the gates a hook must pass (`MODULE_API.md`).
 - **The `x-<module>:` rule** and the **manifest format** (the fields in `MODULE_API.md`; an unknown field is
   refused, so adding one is a MINOR and raises `min_core`).
 
 ### What is provisional
 
-- **The manifest `hooks` field and the hook events** — see [the pending section](#pending-until-plan-pr-8-merges).
 - **`GET /v1/` `quota` object's exact keys** beyond `limits`, `used` and `remaining`.
 - **The text of `detail` and `error` strings.** The status code and the machine-readable keys (`limit`,
   `retry_after`, `tip`, `supported`, `field`) are stable; the English is not.
@@ -133,15 +134,11 @@ The feed carries what the core computes. A consumer **must not** compute its own
 - **The cursor** is a set of `(node_id, seq)` pairs, the journal's own identity. Local ids are renumbered and a synced
   entry keeps its author's timestamp, so neither is a safe cursor.
 
-## Pending until plan PR 8 merges
+## Pending until plan PR 9d merges
 
-> **PENDING.** Two things are not final. They are filled in this PR after plan PR 8 (module hooks, and the
-> `Notification` and `Stop` events) merges, and this PR stays a draft until then.
->
-> - **Hooks and events (PR 8).** The `hooks` manifest field names the events a module hooks. The manifest checker
->   already accepts the six it names (`session-start`, `user-prompt`, `precompact`, `sessionend`, `notification`,
->   `stop`), but the dispatcher that runs them is PR 8's. Until then `hooks` is **provisional**.
-> - **The hooks check (follows PR 8).** The doctor's re-verification of an installed module's hook scripts.
+> **PENDING.** One thing is not final: the doctor's hooks check (plan PR 9d), the re-verification of an installed
+> module's `hooks/<event>` files. Its check name and message text are provisional. The `hooks` manifest field, the six
+> events and the dispatcher's caps and gates (`MODULE_API.md`, *Hooks and events*) are stable.
 
 ## Deferred
 

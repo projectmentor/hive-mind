@@ -40,7 +40,11 @@ working. A mixed 2.0 and 2.1 fleet converges; the one skew is in `docs/CONTRACT.
   node still counts it, which matters only with `quorum_m > 0` and `quorum_by=device`.
 - **A prefixed config key `x-<module>:<key>` is accepted** by `set-config` and projected as a string; a bare unknown
   key is still refused.
-- *(Pending plan PR 8: module hooks and the `Notification` and `Stop` events.)*
+- **Module hooks, and the `Notification` and `Stop` events.** After the core behaviours for an event, the dispatcher runs
+  each installed module's `hooks/<event>`: payload on stdin, output discarded, 3 seconds per hook and a 6-second event
+  budget (clamped to the shim's timeout), the process group reaped after each hook. `hv wire claude`, the `agent-hooks`
+  check and the doctor timer add the two new shims to a node that has the four older ones.
+- *(Pending plan PR 9d: the doctor's check of a module's hook files.)*
 
 ## 2.0.3 — unreleased
 

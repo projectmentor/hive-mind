@@ -20,6 +20,8 @@ import ed25519  # noqa: E402
 import hive_modules  # noqa: E402
 from test_succession import _run, _gov, _device_id  # noqa: E402
 
+LINUX_ONLY = pytest.mark.skipif(not sys.platform.startswith("linux"), reason="2.1 module management is Linux-only")
+
 SEED = bytes(range(1, 33))
 OTHER_SEED = bytes(range(101, 133))
 
@@ -81,6 +83,7 @@ def _key_dir_has_module(home, name="demo"):
     return (_keys.key_dir(home) / "modules" / name).exists()
 
 
+@LINUX_ONLY
 def test_add_installs_verified_files_mints_a_key_and_admits_it_as_a_module(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     r = _add(hive, tmp_path / "repo", pub)
@@ -98,6 +101,7 @@ def test_add_installs_verified_files_mints_a_key_and_admits_it_as_a_module(hive,
     assert _key_dir_has_module(hive)
 
 
+@LINUX_ONLY
 @pytest.mark.parametrize("how", ["tamper", "unlisted", "symlink", "badsig"])
 def test_a_module_that_fails_the_check_installs_nothing(hive, tmp_path, how):
     kw = {"tamper": dict(tamper="run.sh"), "unlisted": dict(unlisted="extra.sh"),
@@ -113,6 +117,7 @@ def test_a_module_that_fails_the_check_installs_nothing(hive, tmp_path, how):
     assert _gov(hive)[1]["modules"] == {}
 
 
+@LINUX_ONLY
 def test_the_publisher_must_be_named_or_confirmed(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     r = _run(hive, "module", "add", "demo", "--from", str(tmp_path / "repo"), check=False)    # no tty, no --publisher
@@ -123,24 +128,28 @@ def test_the_publisher_must_be_named_or_confirmed(hive, tmp_path):
     assert not (tmp_path / "modules" / "demo").exists() and not _key_dir_has_module(hive)
 
 
+@LINUX_ONLY
 def test_a_hook_file_the_manifest_does_not_declare_is_refused(hive, tmp_path):
     pub = _publish(tmp_path / "repo", hooks=[])
     r = _add(hive, tmp_path / "repo", pub, check=False)
     assert r.returncode == 1 and "does not declare" in r.stderr and not _key_dir_has_module(hive)
 
 
+@LINUX_ONLY
 def test_a_manifest_for_another_name_is_refused(hive, tmp_path):
     pub = _publish(tmp_path / "repo", name="other")
     r = _add(hive, tmp_path / "repo", pub, check=False)
     assert r.returncode == 1 and "not 'demo'" in r.stderr and not _key_dir_has_module(hive)
 
 
+@LINUX_ONLY
 def test_a_module_that_needs_a_newer_core_is_refused(hive, tmp_path):
     pub = _publish(tmp_path / "repo", min_core="9.0")
     r = _add(hive, tmp_path / "repo", pub, check=False)
     assert r.returncode == 1 and "9.0" in r.stderr and not (tmp_path / "modules" / "demo").exists()
 
 
+@LINUX_ONLY
 def test_a_manifest_may_ask_for_less_quota_but_never_more(hive, tmp_path):
     pub = _publish(tmp_path / "repo", quota={"per_hour": 600})
     r = _add(hive, tmp_path / "repo", pub, check=False)
@@ -168,6 +177,7 @@ def test_the_cli_says_not_supported_and_leaves_nothing_behind(hive, tmp_path, mo
     assert "no-such-repo" not in r.stderr                         # it never tried to fetch
 
 
+@LINUX_ONLY
 def test_remove_revokes_the_device_and_leaves_the_journal(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -182,6 +192,7 @@ def test_remove_revokes_the_device_and_leaves_the_journal(hive, tmp_path):
     assert r.returncode == 1 and "not installed" in r.stderr
 
 
+@LINUX_ONLY
 def test_update_swaps_atomically_keeps_the_key_the_device_and_local_config(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -199,6 +210,7 @@ def test_update_swaps_atomically_keeps_the_key_the_device_and_local_config(hive,
     assert _state(hive)["demo"]["device_id"] == dev and dev in _gov(hive)[1]["admitted"]
 
 
+@LINUX_ONLY
 def test_an_update_signed_by_a_different_publisher_is_refused(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -209,6 +221,7 @@ def test_an_update_signed_by_a_different_publisher_is_refused(hive, tmp_path):
     assert "v2" not in (tmp_path / "modules" / "demo" / "run.sh").read_text()
 
 
+@LINUX_ONLY
 def test_a_tampered_update_leaves_the_installed_copy_alone(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -218,6 +231,7 @@ def test_a_tampered_update_leaves_the_installed_copy_alone(hive, tmp_path):
     assert (tmp_path / "modules" / "demo" / "run.sh").read_text() == before
 
 
+@LINUX_ONLY
 def test_reset_and_update_leave_the_modules_directory_outside_the_checkout(hive, tmp_path):
     """`hive-mind reset` force-aligns the checkout and `hv verify` reads git-tracked files only: the modules
     directory is in neither. The default is under the home directory, never under HIVE_HOME."""
@@ -230,6 +244,7 @@ def test_reset_and_update_leave_the_modules_directory_outside_the_checkout(hive,
         os.environ["HIVE_MODULES_DIR"] = str(tmp_path / "modules")
 
 
+@LINUX_ONLY
 def test_list_shows_the_fields_and_flags_a_tampered_install(hive, tmp_path):
     assert "No modules installed" in _run(hive, "module", "list").stdout
     pub = _publish(tmp_path / "repo")
@@ -242,6 +257,7 @@ def test_list_shows_the_fields_and_flags_a_tampered_install(hive, tmp_path):
     assert "INVALID" in out and "run.sh" in out
 
 
+@LINUX_ONLY
 def test_quota_raises_a_limit_and_the_api_reads_it(hive, tmp_path, monkeypatch):
     pub = _publish(tmp_path / "repo", quota={"per_hour": 5})
     _add(hive, tmp_path / "repo", pub)
@@ -252,6 +268,7 @@ def test_quota_raises_a_limit_and_the_api_reads_it(hive, tmp_path, monkeypatch):
     assert api.limits_for("other") == api.QUOTA_DEFAULTS
 
 
+@LINUX_ONLY
 def test_a_hand_edited_manifest_ask_cannot_raise_a_limit(hive, tmp_path, monkeypatch):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -264,6 +281,7 @@ def test_a_hand_edited_manifest_ask_cannot_raise_a_limit(hive, tmp_path, monkeyp
     assert lim["per_hour"] == api.QUOTA_DEFAULTS["per_hour"] and lim["per_day"] == 7
 
 
+@LINUX_ONLY
 def test_a_device_without_the_owner_key_refuses_before_touching_anything(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     b = tmp_path / "B"
@@ -293,6 +311,7 @@ def test_the_data_plane_cannot_reach_module_management():
     assert r.returncode != 0
 
 
+@LINUX_ONLY
 def test_update_without_the_owner_key_leaves_the_installed_module_alone(hive, tmp_path):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -308,6 +327,7 @@ def test_update_without_the_owner_key_leaves_the_installed_module_alone(hive, tm
     assert (d / "run.sh").read_text() == before and _state(hive)["demo"]["version"] == "1.0.0"
 
 
+@LINUX_ONLY
 def test_a_signed_manifest_with_an_unknown_top_level_key_is_refused(hive, tmp_path):
     pub = _publish(tmp_path / "repo", user="root")
     r = _add(hive, tmp_path / "repo", pub, "demo", False)
@@ -315,6 +335,7 @@ def test_a_signed_manifest_with_an_unknown_top_level_key_is_refused(hive, tmp_pa
     assert not (tmp_path / "modules" / "demo").exists() and not _key_dir_has_module(hive)
 
 
+@LINUX_ONLY
 def test_an_owner_raise_of_entry_bytes_reaches_the_route_but_only_for_that_module(hive, tmp_path, monkeypatch):
     import io
     import hive_module_api as api
@@ -369,6 +390,7 @@ def units(tmp_path, monkeypatch):
     return unit_dir, (lambda: [l.removeprefix("--user ") for l in log.read_text().splitlines()] if log.exists() else [])
 
 
+@LINUX_ONLY
 def test_a_service_block_is_rendered_as_a_user_unit_and_installed(hive, tmp_path, units):
     unit_dir, calls = units
     pub = _publish(tmp_path / "repo", service=SERVICE)
@@ -387,6 +409,7 @@ def test_a_service_block_is_rendered_as_a_user_unit_and_installed(hive, tmp_path
     assert "enable hive-module-demo.service" in calls() and "restart hive-module-demo.service" in calls()
 
 
+@LINUX_ONLY
 def test_an_interval_makes_a_oneshot_service_and_a_timer(hive, tmp_path, units):
     unit_dir, calls = units
     pub = _publish(tmp_path / "repo", service={"command": ["python3", "run.sh"], "interval": 300})
@@ -398,6 +421,7 @@ def test_an_interval_makes_a_oneshot_service_and_a_timer(hive, tmp_path, units):
     assert "enable hive-module-demo.timer" in calls()          # the timer is what is enabled and started
 
 
+@LINUX_ONLY
 def test_a_module_without_a_service_gets_no_unit(hive, tmp_path, units):
     unit_dir, calls = units
     _add(hive, tmp_path / "repo", _publish(tmp_path / "repo"))
@@ -406,6 +430,7 @@ def test_a_module_without_a_service_gets_no_unit(hive, tmp_path, units):
     assert " none " in row
 
 
+@LINUX_ONLY
 def test_remove_stops_and_deletes_the_units(hive, tmp_path, units):
     unit_dir, calls = units
     _add(hive, tmp_path / "repo", _publish(tmp_path / "repo", service={"command": ["run.sh"], "interval": 60}))
@@ -415,6 +440,7 @@ def test_remove_stops_and_deletes_the_units(hive, tmp_path, units):
     assert "disable --now hive-module-demo.timer" in calls() and "disable --now hive-module-demo.service" in calls()
 
 
+@LINUX_ONLY
 def test_update_reapplies_the_unit_and_drops_a_timer_it_no_longer_declares(hive, tmp_path, units):
     unit_dir, calls = units
     repo = tmp_path / "repo"
@@ -430,6 +456,7 @@ def test_update_reapplies_the_unit_and_drops_a_timer_it_no_longer_declares(hive,
     assert not list(unit_dir.glob("hive-module-*"))
 
 
+@LINUX_ONLY
 def test_without_a_user_systemd_the_unit_is_written_and_not_started(hive, tmp_path):
     # the suite's stub `systemctl` always fails: no user manager
     pub = _publish(tmp_path / "repo", service=SERVICE)
@@ -438,6 +465,7 @@ def test_without_a_user_systemd_the_unit_is_written_and_not_started(hive, tmp_pa
     assert (Path(os.environ["HOME"]) / ".config/systemd/user/hive-module-demo.service").exists()
 
 
+@LINUX_ONLY
 def test_uninstall_removes_module_units(tmp_path, units):
     unit_dir, calls = units
     unit_dir.mkdir(parents=True)
@@ -454,6 +482,7 @@ def test_uninstall_removes_module_units(tmp_path, units):
     assert "disable --now hive-module-demo.timer" in calls()
 
 
+@LINUX_ONLY
 def test_a_service_command_cannot_leave_the_module_directory(hive, tmp_path, units):
     unit_dir, _ = units
     pub = _publish(tmp_path / "repo", service={"command": ["../other/run.sh"]})
@@ -462,6 +491,7 @@ def test_a_service_command_cannot_leave_the_module_directory(hive, tmp_path, uni
     assert not list(unit_dir.glob("hive-module-*")) and not _key_dir_has_module(hive)
 
 
+@LINUX_ONLY
 def test_update_from_a_daemon_to_a_timer_stops_the_daemon(hive, tmp_path, units):
     unit_dir, calls = units
     repo = tmp_path / "repo"
@@ -472,6 +502,7 @@ def test_update_from_a_daemon_to_a_timer_stops_the_daemon(hive, tmp_path, units)
     assert "enable hive-module-demo.timer" in calls() and "Type=oneshot" in (unit_dir / "hive-module-demo.service").read_text()
 
 
+@LINUX_ONLY
 def test_a_control_character_in_a_service_argument_is_refused(hive, tmp_path, units):
     unit_dir, _ = units
     pub = _publish(tmp_path / "repo", service={"command": ["run.sh", "x\nEnvironment=HIVE_HOME=/elsewhere"]})
@@ -480,6 +511,7 @@ def test_a_control_character_in_a_service_argument_is_refused(hive, tmp_path, un
     assert not list(unit_dir.glob("hive-module-*"))
 
 
+@LINUX_ONLY
 def test_a_stale_old_copy_is_not_rolled_back_over_a_good_install(hive, tmp_path, units):
     """A crash after the swap leaves `.old` beside a good live copy; a later update that fails before its own swap
     must not put that older copy back."""
@@ -494,6 +526,7 @@ def test_a_stale_old_copy_is_not_rolled_back_over_a_good_install(hive, tmp_path,
     assert "STALE" not in (live / "run.sh").read_text() and (live / "module.json").exists()
 
 
+@LINUX_ONLY
 def test_a_unit_that_will_not_start_is_reported(hive, tmp_path, units, monkeypatch):
     monkeypatch.setenv("FAIL_SYSTEMCTL", "restart")
     repo = tmp_path / "repo"
@@ -501,6 +534,7 @@ def test_a_unit_that_will_not_start_is_reported(hive, tmp_path, units, monkeypat
     assert "would not start" in r.stdout
 
 
+@LINUX_ONLY
 def test_list_shows_the_state_of_a_module_with_a_service(hive, tmp_path, units):
     repo = tmp_path / "repo"
     _add(hive, repo, _publish(repo, service=SERVICE))
@@ -508,6 +542,7 @@ def test_list_shows_the_state_of_a_module_with_a_service(hive, tmp_path, units):
     assert " active " in row
 
 
+@LINUX_ONLY
 def test_reapply_carries_a_renderer_change_to_an_installed_module_and_restarts_only_that_unit(hive, tmp_path, units):
     unit_dir, calls = units
     repo = tmp_path / "repo"
@@ -526,6 +561,7 @@ def test_reapply_carries_a_renderer_change_to_an_installed_module_and_restarts_o
     assert calls() == []
 
 
+@LINUX_ONLY
 def test_reapply_warns_about_a_module_it_cannot_re_apply_and_still_succeeds(hive, tmp_path, units):
     repo = tmp_path / "repo"
     _add(hive, repo, _publish(repo, service=SERVICE))
@@ -534,18 +570,21 @@ def test_reapply_warns_about_a_module_it_cannot_re_apply_and_still_succeeds(hive
     assert r.returncode == 0 and "warning: demo" in r.stderr
 
 
+@LINUX_ONLY
 def test_a_timer_unit_writes_no_persistent_stamp():
     units = hive_modules.render_units("demo", {"service": {"command": ["run.sh"], "interval": 60}}, Path("/m"), Path("/k"))
     assert "OnUnitActiveSec=60" in units["hive-module-demo.timer"]
     assert "Persistent=" not in units["hive-module-demo.timer"]
 
 
+@LINUX_ONLY
 def test_a_percent_in_a_module_path_is_doubled_in_the_environment_and_working_directory():
     text = hive_modules.render_units("demo", {"service": {"command": ["run.sh"]}}, Path("/m 50%dir"), Path("/k 5%"))["hive-module-demo.service"]
     assert "WorkingDirectory=/m 50%%dir" in text
     assert 'Environment="HIVE_MODULE_DIR=/m 50%%dir"' in text and 'Environment="HIVE_MODULE_KEY_DIR=/k 5%%"' in text
 
 
+@LINUX_ONLY
 def test_remove_deletes_the_stamp_an_older_timer_left(hive, tmp_path, units):
     repo = tmp_path / "repo"
     _add(hive, repo, _publish(repo, service={"command": ["run.sh"], "interval": 60}))
@@ -556,6 +595,7 @@ def test_remove_deletes_the_stamp_an_older_timer_left(hive, tmp_path, units):
     assert not stamp.exists()
 
 
+@LINUX_ONLY
 def test_reapply_warns_when_a_restart_fails(hive, tmp_path, units, monkeypatch):
     unit_dir, _ = units
     repo = tmp_path / "repo"

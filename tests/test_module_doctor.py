@@ -16,7 +16,7 @@ sys.path.insert(0, str(PROJECT))
 import _keys  # noqa: E402
 import hive_module_doctor  # noqa: E402
 import hive_modules  # noqa: E402
-from test_module_lifecycle import hive, units, _publish, _add, _state, SERVICE, SEED, OTHER_SEED  # noqa: E402,F401
+from test_module_lifecycle import LINUX_ONLY, hive, units, _publish, _add, _state, SERVICE, SEED, OTHER_SEED  # noqa: E402,F401
 from test_succession import _run, _gov  # noqa: E402
 
 
@@ -48,6 +48,7 @@ def good(hive, tmp_path, units, listener):
     return hive, pub
 
 
+@LINUX_ONLY
 def test_a_healthy_module_is_ok(good):
     home, _ = good
     r, c = _mod(home)
@@ -55,11 +56,13 @@ def test_a_healthy_module_is_ok(good):
     assert "signed by the pinned publisher" in c["detail"] and "device admitted" in c["detail"]
 
 
+@LINUX_ONLY
 def test_a_node_without_modules_has_no_module_checks(hive, tmp_path):
     _r, checks = _doctor(hive)
     assert not [n for n in checks if n.startswith("modules")]
 
 
+@LINUX_ONLY
 def test_a_tampered_file_fails_the_check_and_the_exit_code(good, tmp_path):
     home, _ = good
     (tmp_path / "modules" / "demo" / "run.sh").write_text("#!/bin/sh\necho owned\n")
@@ -68,6 +71,7 @@ def test_a_tampered_file_fails_the_check_and_the_exit_code(good, tmp_path):
     assert r.returncode == 1
 
 
+@LINUX_ONLY
 def test_a_bad_signature_fails(good, tmp_path):
     home, _ = good
     (tmp_path / "modules" / "demo" / "module.json.sig").write_text("AAAA")
@@ -75,6 +79,7 @@ def test_a_bad_signature_fails(good, tmp_path):
     assert c["status"] == "fail"
 
 
+@LINUX_ONLY
 def test_a_manifest_signed_by_another_publisher_than_the_pin_fails(good, tmp_path):
     home, _ = good
     rec = _state(home)
@@ -99,6 +104,7 @@ def _shim(tmp_path, monkeypatch, active, enabled=True):
     return lambda: [l.removeprefix("--user ") for l in log.read_text().splitlines()] if log.exists() else []
 
 
+@LINUX_ONLY
 def test_a_stopped_module_warns_and_fix_leaves_it_alone(good, units, monkeypatch, tmp_path):
     home, _ = good
     calls = _shim(tmp_path, monkeypatch, "inactive")
@@ -110,6 +116,7 @@ def test_a_stopped_module_warns_and_fix_leaves_it_alone(good, units, monkeypatch
     assert "stopped; `systemctl --user start hive-module-demo.service` to resume (left alone)" in r.stdout
 
 
+@LINUX_ONLY
 def test_fix_starts_a_failed_unit(good, units, monkeypatch, tmp_path):
     home, _ = good
     calls = _shim(tmp_path, monkeypatch, "failed")
@@ -120,6 +127,7 @@ def test_fix_starts_a_failed_unit(good, units, monkeypatch, tmp_path):
     assert "restart hive-module-demo.service" in calls()[before:] and "--fix: modules" in r.stdout
 
 
+@LINUX_ONLY
 def test_fix_starts_an_inactive_unit_that_is_not_enabled(good, units, monkeypatch, tmp_path):
     home, _ = good
     calls = _shim(tmp_path, monkeypatch, "inactive", enabled=False)
@@ -134,6 +142,7 @@ def _acts(calls, before):
     return [l for l in calls()[before:] if l.startswith(("restart", "start", "stop", "enable", "disable", "kill"))]
 
 
+@LINUX_ONLY
 def test_fix_re_renders_a_drifted_stopped_unit_and_enables_it_without_starting(good, units, monkeypatch, tmp_path):
     home, _ = good
     unit_dir, _c = units
@@ -149,6 +158,7 @@ def test_fix_re_renders_a_drifted_stopped_unit_and_enables_it_without_starting(g
     assert "unit enabled, left stopped" in r.stdout and "unit started" not in r.stdout
 
 
+@LINUX_ONLY
 def test_fix_only_enables_a_running_unit_that_is_not_enabled(good, units, monkeypatch, tmp_path):
     home, _ = good
     calls = _shim(tmp_path, monkeypatch, "active", enabled=False)
@@ -168,6 +178,7 @@ def test_fix_only_enables_a_running_unit_that_is_not_enabled(good, units, monkey
     assert "enabled (was running, not enabled)" in r.stdout
 
 
+@LINUX_ONLY
 @pytest.mark.parametrize("how", ["no-runtime-dir", "manager-offline"])
 @pytest.mark.parametrize("dry", [False, True])
 def test_without_a_user_systemd_manager_fix_skips_every_unit_action_and_says_so_once(
@@ -191,6 +202,7 @@ def test_without_a_user_systemd_manager_fix_skips_every_unit_action_and_says_so_
     assert not any(w in r.stdout for w in ("re-rendered", "would re-render", "would start", "would enable", "unit started"))
 
 
+@LINUX_ONLY
 def test_fix_writes_through_the_stop_first_path_when_a_daemon_becomes_a_timer(good, units, tmp_path):
     home, _ = good
     unit_dir, calls = units
@@ -206,6 +218,7 @@ def test_fix_writes_through_the_stop_first_path_when_a_daemon_becomes_a_timer(go
     assert log.index("disable --now hive-module-demo.service") < log.index("restart hive-module-demo.timer")
 
 
+@LINUX_ONLY
 def test_a_drifted_unit_warns_and_fix_re_renders_it_only_when_the_manifest_verifies(good, units, tmp_path):
     home, _ = good
     unit_dir, _calls = units
@@ -225,6 +238,7 @@ def test_a_drifted_unit_warns_and_fix_re_renders_it_only_when_the_manifest_verif
     assert f.read_text() == "[Service]\nExecStart=/bin/true\n"
 
 
+@LINUX_ONLY
 def test_a_missing_unit_warns(good, units):
     home, _ = good
     unit_dir, _ = units
@@ -233,6 +247,7 @@ def test_a_missing_unit_warns(good, units):
     assert c["status"] == "warn" and "is not installed" in c["detail"]
 
 
+@LINUX_ONLY
 def test_a_revoked_device_warns_and_fix_never_readmits_it(good, units):
     home, _ = good
     dev = _state(home)["demo"]["device_id"]
@@ -244,6 +259,7 @@ def test_a_revoked_device_warns_and_fix_never_readmits_it(good, units):
     assert dev not in gov["admitted"]
 
 
+@LINUX_ONLY
 def test_missing_and_ill_typed_config_warn(good, tmp_path):
     home, _ = good
     cfg = tmp_path / "modules" / "demo" / "config"
@@ -261,6 +277,7 @@ def test_missing_and_ill_typed_config_warn(good, tmp_path):
     assert "config file is missing" in c["detail"]
 
 
+@LINUX_ONLY
 def test_a_listener_that_is_down_warns(good, listener):
     home, _ = good
     listener.close()
@@ -268,6 +285,7 @@ def test_a_listener_that_is_down_warns(good, listener):
     assert c["status"] == "warn" and "module API is not listening" in c["detail"]
 
 
+@LINUX_ONLY
 def test_quota_near_a_limit_warns(good):
     home, _ = good
     dev = _state(home)["demo"]["device_id"]
@@ -278,6 +296,7 @@ def test_quota_near_a_limit_warns(good):
     assert c["status"] == "warn" and "per_hour 50/60" in c["detail"]
 
 
+@LINUX_ONLY
 def test_a_record_that_is_not_an_object_is_reported_not_a_crash(good):
     home, _ = good
     rec = _state(home)
@@ -290,6 +309,7 @@ def test_a_record_that_is_not_an_object_is_reported_not_a_crash(good):
     assert "check error" not in json.dumps(checks)
 
 
+@LINUX_ONLY
 def test_a_state_file_that_is_not_an_object_or_not_json_warns(good):
     home, _ = good
     for text in ("[1]", "{nope"):
@@ -298,6 +318,7 @@ def test_a_state_file_that_is_not_an_object_or_not_json_warns(good):
         assert checks["modules"]["status"] == "warn" and ".modules.json" in checks["modules"]["detail"]
 
 
+@LINUX_ONLY
 def test_a_directory_the_state_does_not_know_warns(good, tmp_path):
     home, _ = good
     (tmp_path / "modules" / "stray").mkdir()
@@ -306,13 +327,24 @@ def test_a_directory_the_state_does_not_know_warns(good, tmp_path):
     assert "stray" in d and "not managed by this hive" in d and "delete" not in d
 
 
-def test_a_platform_without_a_backend_says_so(good, monkeypatch):
+def test_a_platform_without_a_backend_says_so(hive, monkeypatch):
+    """Runs everywhere: a recorded module and no backend, so it needs no install and no systemd."""
     monkeypatch.setenv("TERMUX_VERSION", "1")
-    home, _ = good
-    _r, checks = _doctor(home)
+    (hive / ".modules.json").write_text(json.dumps({"demo": {}}))
+    _r, checks = _doctor(hive)
     assert checks["modules"]["detail"] == hive_modules.NOT_SUPPORTED
 
 
+def test_doctor_on_a_platform_without_a_backend_and_no_modules_reports_modules_cleanly(hive, monkeypatch):
+    """Runs everywhere (on macOS CI it is the real thing): no modules means no `modules` result, no crash, no error."""
+    monkeypatch.setenv("TERMUX_VERSION", "1")                     # a Linux kernel with no backend, on any host
+    r, checks = _doctor(hive)
+    assert r.returncode in (0, 1)
+    assert not [n for n in checks if n.startswith("modules")]
+    assert not any("check error" in c.get("detail", "") for c in checks.values())
+
+
+@LINUX_ONLY
 def test_a_module_without_a_service_is_not_asked_for_a_unit(hive, tmp_path, units, listener):
     pub = _publish(tmp_path / "repo")
     _add(hive, tmp_path / "repo", pub)
@@ -322,6 +354,7 @@ def test_a_module_without_a_service_is_not_asked_for_a_unit(hive, tmp_path, unit
 
 # ── the fleet-contract check ────────────────────────────────────────────────────────────────────────
 
+@LINUX_ONLY
 def test_fleet_contract_does_not_count_a_module_device_as_unreachable(good):
     home, _ = good
     m, gov = _gov(home)
@@ -333,6 +366,7 @@ def test_fleet_contract_does_not_count_a_module_device_as_unreachable(good):
     assert dev in m._fleet_contract(gov, {}, {})["unverified"]
 
 
+@LINUX_ONLY
 def test_a_node_on_an_old_contract_is_warned_about_when_elections_are_on(good, monkeypatch):
     home, _ = good
     m, gov = _gov(home)
@@ -347,6 +381,7 @@ def test_a_node_on_an_old_contract_is_warned_about_when_elections_are_on(good, m
     assert not [c for c in out if c["name"] == "modules-contract"]
 
 
+@LINUX_ONLY
 def test_the_data_plane_imports_the_doctor_but_neither_it_nor_hive_modules_reach_the_owner_key():
     import ast
     for f in ("hive_module_doctor.py", "hive_modules.py"):
@@ -357,6 +392,7 @@ def test_the_data_plane_imports_the_doctor_but_neither_it_nor_hive_modules_reach
         assert "ownerkey" not in got and "hivemind_owner" not in got, f
 
 
+@LINUX_ONLY
 def test_plain_doctor_warns_that_an_active_unit_is_not_enabled(good, units, monkeypatch, tmp_path):
     home, _ = good
     _shim(tmp_path, monkeypatch, "active", enabled=False)
@@ -366,6 +402,7 @@ def test_plain_doctor_warns_that_an_active_unit_is_not_enabled(good, units, monk
     assert _mod(home)[1]["status"] == "ok"
 
 
+@LINUX_ONLY
 def test_dry_run_says_would_enable_for_a_running_unit_that_is_not_enabled(good, units, monkeypatch, tmp_path):
     home, _ = good
     calls = _shim(tmp_path, monkeypatch, "active", enabled=False)
@@ -375,6 +412,7 @@ def test_dry_run_says_would_enable_for_a_running_unit_that_is_not_enabled(good, 
     assert not _acts(calls, before)
 
 
+@LINUX_ONLY
 def test_fix_counts_an_activating_unit_as_running_and_only_enables_it(good, units, monkeypatch, tmp_path):
     home, _ = good
     calls = _shim(tmp_path, monkeypatch, "activating", enabled=False)
@@ -385,6 +423,7 @@ def test_fix_counts_an_activating_unit_as_running_and_only_enables_it(good, unit
     assert "enabled (was running, not enabled)" in r.stdout
 
 
+@LINUX_ONLY
 @pytest.mark.parametrize("word,rc,expected", [("degraded", 1, True), ("running", 0, True), ("offline", 1, False)])
 def test_user_systemd_accepts_a_degraded_manager(tmp_path, monkeypatch, word, rc, expected):
     """A failed user unit makes the manager `degraded` (exit 1), and it still manages units."""
@@ -407,6 +446,7 @@ def _hooked(tmp_path, home, files, hook_mode=None, **kw):
 STOP = {"run.sh": "#!/bin/sh\nexit 0\n", "hooks/stop": "#!/bin/sh\nexit 0\n"}
 
 
+@LINUX_ONLY
 def test_a_healthy_hook_adds_no_warning(hive, tmp_path, listener):
     _hooked(tmp_path, hive, STOP)
     assert _mod(hive)[1]["status"] == "ok"
@@ -414,12 +454,14 @@ def test_a_healthy_hook_adds_no_warning(hive, tmp_path, listener):
 
 @pytest.mark.parametrize("mode,why", [(0o644, "not executable"), (0o775, "writable by group or other"),
                                       (0o757, "writable by group or other")])
+@LINUX_ONLY
 def test_a_hook_the_dispatcher_would_skip_warns_and_says_why(hive, tmp_path, listener, mode, why):
     _hooked(tmp_path, hive, STOP, hook_mode=mode)
     _r, c = _mod(hive)
     assert c["status"] == "warn" and "hook stop: the dispatcher skips it" in c["detail"] and why in c["detail"], c
 
 
+@LINUX_ONLY
 def test_a_hook_that_became_a_link_fails_the_manifest_check(hive, tmp_path, listener):
     _hooked(tmp_path, hive, STOP)
     p = tmp_path / "modules" / "demo" / "hooks" / "stop"
@@ -429,6 +471,7 @@ def test_a_hook_that_became_a_link_fails_the_manifest_check(hive, tmp_path, list
     assert c["status"] == "fail" and "stop" in c["detail"]
 
 
+@LINUX_ONLY
 def test_a_tampered_hook_fails(hive, tmp_path, listener):
     _hooked(tmp_path, hive, STOP)
     (tmp_path / "modules" / "demo" / "hooks" / "stop").write_text("#!/bin/sh\necho owned\n")
@@ -436,6 +479,7 @@ def test_a_tampered_hook_fails(hive, tmp_path, listener):
     assert c["status"] == "fail" and "does not match its manifest digest" in c["detail"]
 
 
+@LINUX_ONLY
 def test_a_hook_the_manifest_does_not_list_fails(hive, tmp_path, listener):
     _hooked(tmp_path, hive, STOP)
     p = tmp_path / "modules" / "demo" / "hooks" / "precompact"
@@ -445,6 +489,7 @@ def test_a_hook_the_manifest_does_not_list_fails(hive, tmp_path, listener):
     assert c["status"] == "fail" and "hooks/precompact" in c["detail"]
 
 
+@LINUX_ONLY
 def test_an_event_the_dispatcher_does_not_know_warns(tmp_path):
     (tmp_path / "hooks").mkdir()
     p = tmp_path / "hooks" / "bogus"
@@ -454,6 +499,7 @@ def test_an_event_the_dispatcher_does_not_know_warns(tmp_path):
     assert len(out) == 1 and out[0][0] == "warn" and "not an event the dispatcher knows" in out[0][1], out
 
 
+@LINUX_ONLY
 def test_an_installed_hook_the_manifest_hooks_list_omits_fails(tmp_path):
     (tmp_path / "hooks").mkdir()
     p = tmp_path / "hooks" / "stop"
@@ -463,6 +509,7 @@ def test_an_installed_hook_the_manifest_hooks_list_omits_fails(tmp_path):
     assert out == [("fail", "hook stop: hook not declared in the manifest")]
 
 
+@LINUX_ONLY
 def test_hooks_behind_a_linked_directory_fail(hive, tmp_path, listener):
     _hooked(tmp_path, hive, STOP)
     hooks = tmp_path / "modules" / "demo" / "hooks"

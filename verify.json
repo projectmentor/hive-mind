@@ -1,5 +1,5 @@
 {
-  "digest": "d30da136b646d7a89566f3daa233d0cd14a120316546dc4f1fdc289de6b668c3",
+  "digest": "0344b98ae9390417bc25aa6be1a42cb5646c57e2dc038f2c1860438a4800ecb1",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -159,7 +159,7 @@
     "tests/test_onboarding.py": "3ddaeed8b02dbccc7b2e6e4a934e49301a34eb8d9da39dbf792c9f7fb8b292e5",
     "tests/test_one_canonical.py": "e2210054de0702c00acb5f0293cd8889de7438f6c15e2206f6c40390d6aeb6db",
     "tests/test_outcomes.py": "16072f73a3d07030d02ff58bd1075d0a21ae4541f51c2c1982fe155ca2f48365",
-    "tests/test_owner_init_closes.py": "7a20fe5af4dd32143e9da1b0fa2adb72f813d52704ff8a284b0f66eb94cf2ff4",
+    "tests/test_owner_init_closes.py": "657be17288db6b784a7524d79c64e1988f99028628cf1561d01046d524b81932",
     "tests/test_ownerkey_boundary.py": "a62e30d9272d2b61fcd7bd642dc8f2afbde4db7dded36dff4ae69dfd1776334d",
     "tests/test_payload_shape.py": "ab3796f348f2e20fe4adde56092a12c4cae432427c49e99c42b8bca8136e4d24",
     "tests/test_peer_address.py": "6e79f53fccf74770f822bd53665e2784c59bf39a2bfbadf38415c24fdb3451a9",

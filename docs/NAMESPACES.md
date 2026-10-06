@@ -226,6 +226,7 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 | `.device-id` | `$HIVE_HOME` | written | 1.3 | This device's id, `k1:` and 16 hex of its key's sha256. |
 | `.device-key` | `$HIVE_HOME` | legacy | 1.3 | The device key's pre-2.0 path in the checkout. It still loads, with a `keyperm` warning, and `hv doctor --fix` moves it. |
 | `.genesis-pin` | `$HIVE_HOME` | written | 1.27 | Which `owner` declaration established this hive (0600, never synced). |
+| `.journal.lock` | `$HIVE_HOME` | written | 2.1 | The lock a local write holds from reading this device's tip to appending the entry built on it, so two processes never mint one seq; empty, local. |
 | `.key-dir` | `$HIVE_HOME` | written | 2.0 | The path of this checkout's key directory, so a renamed checkout keeps its keys. |
 | `.module-quota.json` | `$HIVE_HOME` | written | 2.1 | Each module device's hourly and daily write times, for the module API's rate limits (0600, never journaled). The lifetime count is the journal's, not this file's. |
 | `.modules.json` | `$HIVE_HOME` | written | 2.1 | The modules installed on this node: version, pinned publisher key, device id, source and quota limits (0600, never journaled). Written by `hive-mind module`. |

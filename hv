@@ -22,6 +22,7 @@ import argparse
 import base64
 import collections
 import copy
+import contextlib
 import hashlib
 import hmac
 import json
@@ -1173,6 +1174,18 @@ def _clamp_timestamp(now, prev_ts):
     return prev.isoformat(timespec="milliseconds")
 
 
+@contextlib.contextmanager
+def _journal_mint_lock():
+    """An exclusive advisory lock (`.journal.lock`) held from reading this device's tip to appending the entry
+    built on it, across processes. Without flock (non-POSIX) it is a no-op, as `_append_line` is."""
+    if _fcntl is None:
+        yield
+        return
+    with open(HIVE_HOME / ".journal.lock", "a") as lock:
+        _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
+        yield
+
+
 def append_journal(entry_type, payload, timestamp=None):
     """Mint and append a LOCAL journal entry. This is the core append API —
     every local write goes through here. Returns the full entry dict."""
@@ -1187,21 +1200,24 @@ def append_journal(entry_type, payload, timestamp=None):
             gov = None
         _quarantine([({"node_id": NODE_ID, "type": entry_type, "timestamp": timestamp, "payload": payload}, problem)], gov)
         raise ValueError(f"invalid {entry_type} payload: {problem}")      # #205: nothing malformed is journaled
-    seq, prev_hash, prev_ts = _next_seq_and_prev(NODE_ID, with_timestamp=True)
-    if not explicit:
-        timestamp = _clamp_timestamp(timestamp, prev_ts)
-    entry = {
-        "node_id": NODE_ID,
-        "seq": seq,
-        "type": entry_type,          # one of vocabulary.ENTRY_TYPES (tests/test_vocabulary.py checks every call)
-        "timestamp": timestamp,
-        "payload": payload,
-        "prev_hash": prev_hash,
-    }
-    seed = _device_seed()
-    if seed is not None:
-        _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
-    _append_line(_journal_path_for(timestamp), json.dumps(entry))
+    # The next seq is read from the journal, so the read and the append are ONE critical section (#215): two
+    # processes that each read the tip before either appended would mint the same (node_id, seq).
+    with _journal_mint_lock():
+        seq, prev_hash, prev_ts = _next_seq_and_prev(NODE_ID, with_timestamp=True)
+        if not explicit:
+            timestamp = _clamp_timestamp(timestamp, prev_ts)
+        entry = {
+            "node_id": NODE_ID,
+            "seq": seq,
+            "type": entry_type,          # one of vocabulary.ENTRY_TYPES (tests/test_vocabulary.py checks every call)
+            "timestamp": timestamp,
+            "payload": payload,
+            "prev_hash": prev_hash,
+        }
+        seed = _device_seed()
+        if seed is not None:
+            _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
+        _append_line(_journal_path_for(timestamp), json.dumps(entry))
     return entry
 
 
@@ -1739,9 +1755,26 @@ def _short_id(node_id, seq):
     return "h:" + hashlib.sha256(f"{node_id}:{seq}".encode()).hexdigest()[:10]
 
 
+def _claim_write(conn, entry, kind):
+    """Take the store's write lock, then return the local id this entry already has (or None). A live writer
+    appends to the journal, then projects; between the two another process's catch-up (`rebuild_db`) can read
+    the journal and project this very entry. The writer must then neither insert it again nor, for a fact,
+    take the content check on a read made before that rebuild committed (#215), so the lock comes first and the
+    `(node_id, seq)` guard a rebuild has comes with it. Inside a rebuild's own transaction this is a lookup
+    that finds nothing, because the rebuild emptied `journal_index`."""
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    row = conn.execute("SELECT local_id FROM journal_index WHERE node_id = ? AND seq = ? AND kind = ?",
+                       (entry.get("node_id"), entry.get("seq"), kind)).fetchone()
+    return row[0] if row else None
+
+
 def persist_fact(conn, entry):
     if not _projectable(entry):
         return None
+    held = _claim_write(conn, entry, "fact")
+    if held is not None:                       # a catch-up already projected this entry
+        return {"id": held, "inserted": _sid_of(conn, "fact", held) == _short_id(entry["node_id"], entry["seq"])}
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
@@ -3285,6 +3318,9 @@ def _effective_salience(base, last_link_at, now, halflife, floor=0.0):
 def persist_decision(conn, entry):
     if not _projectable(entry):
         return None
+    held = _claim_write(conn, entry, "decision")
+    if held is not None:
+        return {"id": held}
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()
@@ -3310,6 +3346,9 @@ def persist_idea(conn, entry):
     at 0.0 and is written only by `_recompute_idea_confidence`."""
     if not _projectable(entry):
         return None
+    held = _claim_write(conn, entry, "idea")
+    if held is not None:
+        return {"id": held}
     payload = entry["payload"]
     ts = entry.get("timestamp", _now_iso())
     cur = conn.cursor()

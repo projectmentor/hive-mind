@@ -164,6 +164,38 @@ def test_an_in_effect_grandfathered_forget_is_re_issued_and_the_hive_closes(tmp_
     assert fa["status"] == "ok" and fa["detail"].startswith("closed (forget_writers=owner)")
 
 
+def test_a_member_sources_retract_is_never_promoted_into_an_owner_act(tmp_path, monkeypatch, capsys):
+    """#148: a member's `retract` is negative evidence, not governance. `owner init` re-issues only the
+    owner-source forgets `_forgets_grandfathered` returns; widening it to every forget would mint owner
+    authority over a peer's opinion at genesis, silently."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    refs = _preowner(hv, forgotten=["the backup runs at 02:00"])
+    e = hv.append_journal("fact", {"content": "the vpn uses wireguard", "tags": [], "importance": 0.5,
+                                   "source": "manual"}, timestamp="2026-01-02T00:00:09Z")
+    member = [e["node_id"], e["seq"]]
+    member_retract = hv.append_journal("retract", {"retracts_ref": member, "reason": "",
+                                                   "source": "claude-code"}, timestamp=PRE)
+    hv.rebuild_db()
+    before_conf = _conf(hv, "the vpn uses wireguard")
+    before_entries = [x for x in _entries(hv) if x.get("type") == "retract"]
+    assert len(before_entries) == 2
+
+    _init(hv)
+    capsys.readouterr()
+
+    acts = _signed_forgets(hv)
+    assert len(acts) == 1                                                 # exactly one re-issue
+    assert acts[0][1]["retracts_ref"] == refs["the backup runs at 02:00"]  # of the OWNER-source fact
+    assert acts[0][1]["retracts_ref"] != member
+    assert _conf(hv, "the backup runs at 02:00") == FORGET_FLOOR
+    assert _conf(hv, "the vpn uses wireguard") == before_conf             # the member's fact state unchanged
+    # the member retract is still in the journal, untouched, and still unsigned
+    kept = [x for x in _entries(hv) if x.get("type") == "retract"
+            and (x["payload"] or {}).get("source") == "claude-code"]
+    assert len(kept) == 1 and kept[0]["seq"] == member_retract["seq"]
+    assert "owner_sig" not in kept[0]["payload"]
+
+
 def test_a_dangling_grandfathered_forget_closes_the_hive_and_is_not_re_issued(tmp_path, monkeypatch, capsys):
     """A forget whose target is not a fact here hides nothing; re-issuing it would mint owner authority
     over a target that does not exist."""

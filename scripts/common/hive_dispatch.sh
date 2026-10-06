@@ -21,7 +21,8 @@
 # not group/world-writable file in a real directory. A hook's stdout and stderr are discarded (adding to the
 # digest is M6); it is capped (HIVE_MODULE_HOOK_TIMEOUT, default 3s) and the event's modules share a budget
 # (HIVE_MODULE_EVENT_BUDGET, default 6s); an overrun or a skipped hook is logged to $HIVE_HOME/.bus/modules.log.
-# The 1s kill grace (`timeout -k 1`) is counted INSIDE the cap and the budget, and the budget is also clamped to
+# The 1s kill grace (`timeout -k 1`) is counted INSIDE the cap (TERM at cap-1, never below 1s) and the budget,
+# and the budget is also clamped to
 # the shim's own timeout (20s session events, else 10s) minus 1s, measured from the dispatcher's start, so the
 # core behaviors (e.g. the nudge) are never cut off by Claude Code. A hook's detached children are killed with
 # its process group when the hook exits.
@@ -87,7 +88,8 @@ if [ -d "$MODULES_DIR" ] && [ ! -L "$MODULES_DIR" ] && [ -f "$STATE" ]; then
     left=$(( (end_ms - $(now_ms)) / 1000 - 1 ))   # whole seconds, less the 1s kill grace
     [ "$left" -ge 1 ] || { bus_log hook-skipped "$name"; continue; }
     cap=$(( HOOK_CAP < left ? HOOK_CAP : left ))
-    printf '%s' "$payload" | timeout -k 1 "$cap" "$hook" >/dev/null 2>&1 &
+    term=$(( cap > 1 ? cap - 1 : 1 ))   # TERM at cap-1, KILL 1s later; never 0, which would mean no limit
+    printf '%s' "$payload" | timeout -k 1 "$term" "$hook" >/dev/null 2>&1 &
     tpid=$!
     wait "$tpid"
     rc=$?

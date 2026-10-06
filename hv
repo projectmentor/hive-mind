@@ -1174,16 +1174,43 @@ def _clamp_timestamp(now, prev_ts):
     return prev.isoformat(timespec="milliseconds")
 
 
+class JournalLockError(OSError):
+    """The journal directory's filesystem would not grant the mint lock. Raised before anything is read or
+    written, so no seq is consumed and no line is journaled (#253)."""
+
+
+def _journal_lock_message(err):
+    return (f"hv: cannot lock the journal ({err}). The filesystem under {HIVE_HOME} does not support file locking "
+            f"(for example NFS without lockd, ENOLCK). Writing without the lock could mint duplicate seqs and "
+            f"break the hash chain, so nothing was written. Move HIVE_HOME to a local filesystem.")
+
+
 @contextlib.contextmanager
 def _journal_mint_lock():
     """An exclusive advisory lock (`.journal.lock`) held from reading this device's tip to appending the entry
-    built on it, across processes. Without flock (non-POSIX) it is a no-op, as `_append_line` is."""
+    built on it, across processes. Without flock (non-POSIX) it is a no-op, as `_append_line` is. If the
+    filesystem refuses the lock it FAILS LOUDLY (`JournalLockError`) and never writes unlocked (#253)."""
     if _fcntl is None:
         yield
         return
     with open(HIVE_HOME / ".journal.lock", "a") as lock:
-        _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
+        try:
+            _fcntl.flock(lock.fileno(), _fcntl.LOCK_EX)
+        except OSError as e:
+            raise JournalLockError(_journal_lock_message(e)) from e
         yield
+
+
+def _journal_lock_problem():
+    """None if the journal directory grants the mint lock, else the remedy message (used by `hv doctor`)."""
+    try:
+        with _journal_mint_lock():
+            pass
+    except JournalLockError as e:
+        return str(e)
+    except OSError as e:
+        return f"cannot open the lock file under {HIVE_HOME}: {e}"
+    return None
 
 
 def append_journal(entry_type, payload, timestamp=None):
@@ -8094,6 +8121,9 @@ def _doctor_status():
                                      f"(in {', '.join(where)}) — possible truncated write; the rest is intact"})
     except Exception as e:
         checks.append({"name": "journal", "status": "fail", "detail": f"unreadable: {e}"})
+    lock_problem = _journal_lock_problem()
+    checks.append({"name": "journal-lock", "status": "fail" if lock_problem else "ok",
+                   "detail": lock_problem or "the journal directory grants the write lock"})
 
     # 3. Database — store.db (the derived index) is readable and in step with the journal.
     #    Content-duplicate facts collapse to one row, so rows <= journal fact-entries; the red flag
@@ -10573,6 +10603,9 @@ def dispatch(args):
         return _dispatch(args)
     except NotOnDataPlane as e:            # an owner step reached on the data plane (2.0 S2)
         return _point(sys.argv[1:], e.key)
+    except JournalLockError as e:          # #253: one line naming cause and remedy, not a traceback
+        print(str(e), file=sys.stderr)
+        return 1
 
 
 def _dispatch(args):

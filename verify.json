@@ -1,5 +1,5 @@
 {
-  "digest": "2022ecf0447a09ff10befd5158df881074a19a5d83ae1feedceda382a9419025",
+  "digest": "d30da136b646d7a89566f3daa233d0cd14a120316546dc4f1fdc289de6b668c3",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -95,7 +95,7 @@
     "tests/_keys.py": "f90e71a282b91f3b5a2c488d5ed274eb3942370921fc818b604dbd21e4e43b44",
     "tests/_planes.py": "6fc6b2ade955de836479967f00af2fccd81971c56c6a3df01fb9745bacf62c6a",
     "tests/_realhome.py": "cf33f6e9945d14bd355c4e251b7750772a804b1f35e896660c362b7c3a7b6cfc",
-    "tests/conftest.py": "847d497a0a5f88867c7d6fa912d72fa70f03d4986547cab5fc3fef12ffeaa28f",
+    "tests/conftest.py": "4f57d7937c82118093007be3dd5bde7fafdf5ecc994d0b5c7c04950aaf962411",
     "tests/security/poc.py": "4ee6804bfe65e4807c858b7f7bcfc3e7197d096addf4a96a13d16e5aeecc13ba",
     "tests/test_admit_peering.py": "f9caf05a9f56e04c36845d6c206351b6a8ac2bde209a1fd714a7c3b6eaf1e51b",
     "tests/test_agent_guidance.py": "f3211fb32efe143ba28fcf92d9c5f653482f211832d9d7b1ed3cc19ac055e1c9",
@@ -163,6 +163,7 @@
     "tests/test_ownerkey_boundary.py": "a62e30d9272d2b61fcd7bd642dc8f2afbde4db7dded36dff4ae69dfd1776334d",
     "tests/test_payload_shape.py": "ab3796f348f2e20fe4adde56092a12c4cae432427c49e99c42b8bca8136e4d24",
     "tests/test_peer_address.py": "6e79f53fccf74770f822bd53665e2784c59bf39a2bfbadf38415c24fdb3451a9",
+    "tests/test_peers_isolation.py": "002bd72d3769a096dea25c976e3d0018cc04be9078550e131f08f2e3cfb5dfe1",
     "tests/test_perf.py": "08939cc662d426f16989077fad73cab1d404c87db67fad951e02663ab0decf5c",
     "tests/test_projection_authz.py": "cd472af9ecc6a4a3cf5566386b657e9c2c44a03b858e09b11d617410bf898c71",
     "tests/test_read_side_malformed_refs.py": "77ea6c421dc6ccfbf701c39e322184109b3d687f4d78754a2db6b9cb6fced63f",

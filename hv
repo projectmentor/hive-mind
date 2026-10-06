@@ -1526,6 +1526,17 @@ def append_foreign_entries(entries, advertised_chunks=None):
             return False
         return True
 
+    def _stays_admitted(e):
+        """Whether the device is still admitted once `e` joins its chain. An admit of the device that sits at a
+        higher seq than `e` is judged by the projection with `e` in the chain, so `e` may make the bounds skip it
+        (#230). Checked only when the device holds such governance, so the common case reads nothing."""
+        nid, seq = e["node_id"], e["seq"]
+        held = merkle.read_all_entries(JOURNAL_DIR)
+        if not any(h.get("node_id") == nid and h.get("type") == "governance"
+                   and isinstance(h.get("seq"), int) and h["seq"] > seq for h in held):
+            return True
+        return nid in _governance_state(held + [e])["admitted"]
+
     def _landed(e):
         arrived.append((e["node_id"], e["seq"]))
         if chain is not None:
@@ -1624,6 +1635,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
             return _DEFER
         if not _ts_ok(e):
             rejected += 1
+            return _DONE
+        if has_owner and chain is not None and not _stays_admitted(e):
+            rejected += 1               # #230: its own admit sits behind it, and this entry makes the bounds skip that admit
             return _DONE
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:

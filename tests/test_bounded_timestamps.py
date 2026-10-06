@@ -420,6 +420,34 @@ def test_ingest_agrees_with_the_projection_for_every_split_of_a_batch(tmp_path, 
         assert _held(hv) == expect, bin(cuts)
 
 
+def _outcome(hv, tmp_path):
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    gov = hv._governance_state(j)
+    return (_held(hv), _skipped(hv), set(gov["admitted"]), _contents(_project(hv, tmp_path, j)))
+
+
+def test_a_devices_own_governance_behind_its_own_content_is_independent_of_the_split(tmp_path, monkeypatch):
+    """#230: X (not admitted) holds a fact at 12:20 (seq 1) and an owner-signed admit of itself at 12:10 (seq 2).
+    One batch, [fact][admit] and [admit][fact] must end with the same held, skipped and admitted sets and facts."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    x = _device(hv)
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    admit = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
+                   owner=owner)
+    results = []
+    for batches in ([[fact, admit]], [[fact], [admit]], [[admit], [fact]], [[admit, fact]]):
+        _journal(hv, base + [marker])
+        for b in batches:
+            hv.append_foreign_entries(b)
+        results.append(_outcome(hv, tmp_path))
+    assert all(r == results[0] for r in results), results
+    held, skipped, admitted, facts = results[0]
+    assert (x["id"], 1) not in held and (x["id"], 2) in held and x["id"] in admitted and not skipped
+    assert "x content" not in facts
+
+
 def test_a_marker_the_projection_does_not_honour_is_checked_like_any_entry(tmp_path, monkeypatch):
     """A `freeze-timestamps` signed by a key that is not the current owner arms nothing and is not exempt."""
     hv = _loadhv(tmp_path, monkeypatch)

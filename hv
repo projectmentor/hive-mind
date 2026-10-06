@@ -7104,6 +7104,8 @@ _CLAUDE_HOOK_SPEC = [
     ("SessionEnd",       f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh sessionend",    20),
     ("UserPromptSubmit", f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh user-prompt",   10),
     ("PreCompact",       f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh precompact",     10),
+    ("Notification",     f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh notification",   10),   # 2.1: modules only
+    ("Stop",             f"{_CLAUDE_HOOKS_BASE}/hive_dispatch.sh stop",           10),   # 2.1: modules only
 ]
 
 

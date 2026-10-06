@@ -35,6 +35,8 @@ def test_wire_claude_lands_and_the_old_alias_writes_nothing(tmp_path):
     c_new.mkdir(parents=True); c_old.mkdir(parents=True)
     run(tmp_path / "h1", "wire", "claude", claude_dir=c_new)
     assert "hive_dispatch.sh session-start" in (c_new / "settings.json").read_text()   # the real shim landed
+    for ev in ("notification", "stop"):                                               # 2.1: the module events
+        assert f"hive_dispatch.sh {ev}" in (c_new / "settings.json").read_text()
     for argv in (["doctor", "wire-agent"], ["doctor", "--fix", "wire-agent"]):
         r = run(tmp_path / "h2", *argv, claude_dir=c_old, check=False)
         assert r.returncode == 2 and r.stdout == "", (argv, r.stdout)

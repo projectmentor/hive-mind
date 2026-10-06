@@ -35,6 +35,7 @@ def _journal(hv, entries):
     jd.mkdir(parents=True, exist_ok=True)
     for f in jd.glob("*.jsonl"):
         f.unlink()
+    (hv.HIVE_HOME / ".ts-fences.jsonl").unlink(missing_ok=True)      # a rewritten journal forgets what it dropped
     (jd / "2026-01-01.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n")
 
 
@@ -446,6 +447,53 @@ def test_a_devices_own_governance_behind_its_own_content_is_independent_of_the_s
     held, skipped, admitted, facts = results[0]
     assert (x["id"], 1) not in held and (x["id"], 2) in held and x["id"] in admitted and not skipped
     assert "x content" not in facts
+
+
+def test_a_dropped_fact_keeps_fencing_its_devices_governance_in_every_order(tmp_path, monkeypatch):
+    """#230 review: X is admitted by its own owner-signed admit (seq 10, 12:10). Its fact at seq 5 (12:20) would make the
+    bounds skip that admit, so ingest drops the fact; it must still fence X's governance at seqs 6-8 (12:08), as it did
+    before: Y is not admitted and `forget_writers` stays unset, however the entries are offered."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    x, y = _device(hv), _device(hv)
+
+    def at(seq):
+        x["seq"] = seq - 1
+    at(10)
+    own = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
+                 owner=owner)
+    at(5)
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    at(6)
+    ann = _entry(hv, x, "governance", {"action": "announce", "kind": "key", "pub": x["pub"].hex()}, ts(12, 8))
+    admit_y = _entry(hv, x, "governance", {"action": "admit", "device_id": y["id"], "principal": "py"}, ts(12, 8),
+                     owner=owner)
+    cfg = _entry(hv, x, "governance", {"action": "set-config", "key": "forget_writers", "value": "owner"},
+                 ts(12, 8), owner=owner)
+    three = [ann, admit_y, cfg]
+    for batches in ([[fact] + three], [[fact], three], [three, [fact]], [[fact], [ann], [admit_y], [cfg]],
+                    [three + [fact]]):
+        _journal(hv, base + [marker, own])
+        for b in batches:
+            hv.append_foreign_entries(b)
+        j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+        state = hv._governance_state(j)
+        assert y["id"] not in state["admitted"], batches
+        assert "forget_writers" not in (state.get("config") or {}), batches
+
+
+def test_a_fact_dropped_for_its_own_admit_names_the_reason_on_stderr(tmp_path, monkeypatch, capsys):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    marker = _marker(hv, owner, {"ownerdev": 3})
+    x = _device(hv)
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    admit = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, ts(12, 10),
+                   owner=owner)
+    _journal(hv, base + [marker, admit])
+    hv.append_foreign_entries([fact])
+    assert "would make the bounds skip that admit" in capsys.readouterr().err
 
 
 def test_a_marker_the_projection_does_not_honour_is_checked_like_any_entry(tmp_path, monkeypatch):

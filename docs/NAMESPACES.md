@@ -238,6 +238,7 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 | `.quarantine.jsonl` | `$HIVE_HOME` | written | 2.0 | The entries ingest refused for a malformed or hostile payload, verbatim, with the reason, the signer and the time (an entry over 64 KB as its hash, size and first 4 KB); only admitted signers, the newest 200 records within 16 MB, local, never synced (`hv doctor` reports it). |
 | `.quarantine.lock` | `$HIVE_HOME` | written | 2.0 | The lock the quarantine writers take; empty, local. |
 | `.telemetry` | `$HIVE_HOME` | written | 1.1 | Directory for the local-only session telemetry store; never synced. |
+| `.ts-fences.jsonl` | `$HIVE_HOME` | written | 2.1 | Entries ingest dropped so a held admit of their device survives, kept so the governance they would have fenced stays fenced; never synced. |
 | `journal` | `$HIVE_HOME` | written | 1.0 | The journal's day files: the source of truth, and all that sync carries. |
 | `nudge.env` | `$HIVE_HOME` | read | 1.0 | Optional nudge settings (`KEY=value`), read here or at the repository root. |
 | `store.db` | `$HIVE_HOME` | written | 1.0 | The SQLite index derived from the journal; `hv doctor rebuild` recreates it. |

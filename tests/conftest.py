@@ -123,6 +123,21 @@ def _sealed_owner_key_passphrase():
     mp.undo()
 
 
+def _isolate_peers_path(monkeypatch):
+    """#142: `sync_common.peers_path()` falls back to the repo-root `.peers.json`, the operator's own
+    (`sync_auth: enforce` on a real node), so an in-process daemon under test came up in enforce. Look
+    only in the test's HIVE_HOME; production code is unchanged."""
+    if str(PROJECT) not in sys.path:
+        sys.path.insert(0, str(PROJECT))
+    import sync_common
+
+    def peers_path():
+        p = sync_common.hive_home() / ".peers.json"
+        return p if p.exists() else None
+
+    monkeypatch.setattr(sync_common, "peers_path", peers_path)
+
+
 @pytest.fixture(autouse=True)
 def isolation(tmp_path_factory, monkeypatch, _service_stub_bin):
     """#109: every test runs against a throwaway HOME, Claude config dir and owner-key stash, with
@@ -140,6 +155,7 @@ def isolation(tmp_path_factory, monkeypatch, _service_stub_bin):
     monkeypatch.delenv("HIVE_KEY_DIR", raising=False)         # #178: nor an exported key directory
     monkeypatch.setenv("HIVE_OWNER_KEY_PASSPHRASE", OWNER_KEY_PASSPHRASE)     # the sealed owner key (PR 3b)
     monkeypatch.setenv("PATH", f"{_service_stub_bin}{os.pathsep}{os.environ['PATH']}")
+    _isolate_peers_path(monkeypatch)
     # A throwaway HOME hides the user's site-packages from child interpreters; keep them visible.
     if "PYTHONUSERBASE" not in os.environ:
         monkeypatch.setenv("PYTHONUSERBASE", REAL["userbase"])

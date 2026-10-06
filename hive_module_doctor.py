@@ -120,7 +120,7 @@ def _units(name, manifest, key_dir):
 
 
 def _hooks(moddir, manifest):
-    """Warnings for every file under `hooks/`: the dispatcher (`hive_dispatch.sh`) runs `hooks/<event>` only for a known
+    """Warnings (a hook the manifest's `hooks` list does not declare is a fail) for every file under `hooks/`: the dispatcher (`hive_dispatch.sh`) runs `hooks/<event>` only for a known
     event, and only a regular, non-link, executable, own-user file with no group or other write bit, in real
     directories. A file it would skip, or one the signed manifest does not list, is named with the reason. Digests are
     `check_tree`'s part, which has already passed."""
@@ -157,7 +157,9 @@ def _hooks(moddir, manifest):
             why.append(f"the dispatcher skips it: {', '.join(gate)}")
         if f"hooks/{n}" not in manifest["files"]:
             why.append("not listed in the signed manifest")
-        if why:
+        if f"hooks/{n}" in manifest["files"] and n not in manifest.get("hooks", []):
+            out.append(("fail", f"hook {n}: hook not declared in the manifest"))
+        elif why:
             out.append(("warn", f"hook {n}: {'; '.join(why)}"))
     return out
 

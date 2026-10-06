@@ -14,6 +14,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 import _keys  # noqa: E402
+import hive_module_doctor  # noqa: E402
 import hive_modules  # noqa: E402
 from test_module_lifecycle import hive, units, _publish, _add, _state, SERVICE, SEED, OTHER_SEED  # noqa: E402,F401
 from test_succession import _run, _gov  # noqa: E402
@@ -444,10 +445,22 @@ def test_a_hook_the_manifest_does_not_list_fails(hive, tmp_path, listener):
     assert c["status"] == "fail" and "hooks/precompact" in c["detail"]
 
 
-def test_an_event_the_dispatcher_does_not_know_warns(hive, tmp_path, listener):
-    _hooked(tmp_path, hive, {**STOP, "hooks/bogus": "#!/bin/sh\nexit 0\n"})
-    c = _mod(hive)[1]
-    assert c["status"] == "warn" and "hook bogus: not an event the dispatcher knows" in c["detail"], c
+def test_an_event_the_dispatcher_does_not_know_warns(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    p = tmp_path / "hooks" / "bogus"
+    p.write_text("#!/bin/sh\n")
+    p.chmod(0o755)
+    out = hive_module_doctor._hooks(tmp_path, {"files": {}, "hooks": []})
+    assert len(out) == 1 and out[0][0] == "warn" and "not an event the dispatcher knows" in out[0][1], out
+
+
+def test_an_installed_hook_the_manifest_hooks_list_omits_fails(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    p = tmp_path / "hooks" / "stop"
+    p.write_text("#!/bin/sh\n")
+    p.chmod(0o755)
+    out = hive_module_doctor._hooks(tmp_path, {"files": {"hooks/stop": "0" * 64}, "hooks": []})
+    assert out == [("fail", "hook stop: hook not declared in the manifest")]
 
 
 def test_hooks_behind_a_linked_directory_fail(hive, tmp_path, listener):

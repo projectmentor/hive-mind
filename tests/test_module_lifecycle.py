@@ -123,6 +123,12 @@ def test_the_publisher_must_be_named_or_confirmed(hive, tmp_path):
     assert not (tmp_path / "modules" / "demo").exists() and not _key_dir_has_module(hive)
 
 
+def test_a_hook_file_the_manifest_does_not_declare_is_refused(hive, tmp_path):
+    pub = _publish(tmp_path / "repo", hooks=[])
+    r = _add(hive, tmp_path / "repo", pub, check=False)
+    assert r.returncode == 1 and "does not declare" in r.stderr and not _key_dir_has_module(hive)
+
+
 def test_a_manifest_for_another_name_is_refused(hive, tmp_path):
     pub = _publish(tmp_path / "repo", name="other")
     r = _add(hive, tmp_path / "repo", pub, check=False)

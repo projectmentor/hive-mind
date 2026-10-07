@@ -443,7 +443,10 @@ def _complete_add(lib, args, name, root, rec):
                        "quota": dict(manifest.get("quota") or {}), "owner_quota": {}}
         save_state(lib, state)
     except BaseException:
-        remove_units(name)
+        try:
+            remove_units(name)
+        except ModuleError:                          # still draining: the add's own error is the one to show
+            pass
         if renamed and not staging.exists():
             os.rename(root / name, staging)          # the pending add stays whole, so it can be run again
             (staging / "config").unlink(missing_ok=True)       # staging is again exactly the tree that was verified
@@ -465,10 +468,40 @@ def unit_names(name):
     return f"hive-module-{name}.service", f"hive-module-{name}.timer"
 
 
-def _systemctl(*args):
-    """Run `systemctl --user ...`; False when there is no user manager or the call fails. Never raises."""
+def _base_timeout():
+    """Seconds a quick `systemctl` call may take (30; HIVE_SYSTEMCTL_TIMEOUT lets a test shrink it)."""
     try:
-        return subprocess.run(["systemctl", "--user", *args], capture_output=True, timeout=30).returncode == 0
+        return float(os.environ.get("HIVE_SYSTEMCTL_TIMEOUT") or 30)
+    except ValueError:
+        return 30
+
+
+def _stop_timeout(grace):
+    """A call that stops a unit waits out its `stop_grace` drain, plus the usual allowance."""
+    return (grace or 0) + _base_timeout()
+
+
+def _unit_grace(path):
+    """The TimeoutStopSec a rendered unit file declares, or 0 (the file is missing, unreadable or has none)."""
+    try:
+        for line in Path(path).read_text().splitlines():
+            if line.startswith("TimeoutStopSec="):
+                return int(line.split("=", 1)[1])
+    except (OSError, ValueError):
+        pass
+    return 0
+
+
+def _systemctl(*args, timeout=None, timed_out=None):
+    """Run `systemctl --user ...`; False when there is no user manager or the call fails. Never raises. A call
+    that outlives `timeout` fails too, and sets `timed_out[0]` when the caller passed a list to say so."""
+    try:
+        return subprocess.run(["systemctl", "--user", *args], capture_output=True,
+                              timeout=timeout or _base_timeout()).returncode == 0
+    except subprocess.TimeoutExpired:
+        if timed_out is not None:
+            timed_out[:] = [True]
+        return False
     except (OSError, subprocess.SubprocessError):
         return False
 
@@ -549,7 +582,9 @@ def _write_units(lib, name, manifest, only_changed=False):
     d.mkdir(parents=True, exist_ok=True)
     for fname in unit_names(name)[::-1]:                    # a daemon that becomes a timer must not keep running
         if (d / fname).exists():
-            _systemctl("disable", "--now", fname)
+            late = [False]
+            if not _systemctl("disable", "--now", fname, timeout=_stop_timeout(_unit_grace(d / fname)), timed_out=late) and late[0]:
+                raise ModuleError(f"{fname} did not stop in time: it is still draining. Wait for it, then run this again")
             if fname not in keep:
                 (d / fname).unlink()
     for fname, text in keep.items():
@@ -561,7 +596,10 @@ def _start_unit(unit):
     """Enable and (re)start `unit`; a note for the operator when systemd would not."""
     if not _systemctl("enable", unit):
         return "the unit is written, but systemd would not enable it"
-    if not _systemctl("restart", unit):
+    late = [False]
+    if not _systemctl("restart", unit, timeout=_stop_timeout(_unit_grace(unit_dir() / unit)), timed_out=late):
+        if late[0]:
+            return f"the unit is enabled, but systemd had not finished restarting it in time (is it still draining?): check `systemctl --user status {unit}`"
         return "the unit is enabled, but systemd would not start it"
     return ""
 
@@ -579,13 +617,17 @@ def install_units(lib, name, manifest):
 
 
 def remove_units(name):
-    """Stop, disable and delete the module's units. Safe when there are none."""
+    """Stop, disable and delete the module's units. Safe when there are none. Waits out a `stop_grace` drain; a
+    unit still draining after that raises ModuleError with its unit file kept, so nothing of the module is
+    deleted under it."""
     service, timer = unit_names(name)
     d = unit_dir()
     if not any((d / f).exists() for f in (service, timer)):
         return
     for f in (timer, service):
-        _systemctl("disable", "--now", f)
+        late = [False]
+        if not _systemctl("disable", "--now", f, timeout=_stop_timeout(_unit_grace(d / f)), timed_out=late) and late[0]:
+            raise ModuleError(f"{f} did not stop in time: it is still draining, so nothing was deleted. Wait for it, then run this again")
         (d / f).unlink(missing_ok=True)
     # an older renderer wrote Persistent=true, which left this stamp: it marks OnBootSec as elapsed, so a re-added timer never fires
     (Path.home() / ".local" / "share" / "systemd" / "timers" / f"stamp-{timer}").unlink(missing_ok=True)
@@ -764,7 +806,10 @@ def _undo_add(lib, name, device_id):
         pass
     shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / name, ignore_errors=True)
     shutil.rmtree(modules_dir() / name, ignore_errors=True)
-    remove_units(name)
+    try:
+        remove_units(name)
+    except ModuleError:
+        pass
 
 
 def cmd_remove(lib, args):

@@ -1036,6 +1036,12 @@ def _ts_unskipped(entries, gov=None):
     return [e for e in entries if (e.get("node_id"), e.get("seq")) not in skipped]
 
 
+def _ts_skips(e, held, gov):
+    """True when the timestamp bounds skip `e` among the `held` entries: the verdict a node that holds `e` too would
+    reach. Pure over the held journal and the governance projection."""
+    return (e.get("node_id"), e.get("seq")) in _ts_violations(held + [e], gov)
+
+
 def _arrivals_path():
     return HIVE_HOME / ".arrivals.jsonl"
 
@@ -1747,7 +1753,11 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if has_owner and not retired and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
-            return _DEFER
+            # A device the owner admitted once and then revoked (#258) may land an entry the timestamp projection
+            # skips, as a node that held the entry before the revoke does: a stranger never lands, and an entry of
+            # a revoked device that would project does not.
+            if not (nid in gov["first_admit"] and _ts_skips(e, merkle.read_all_entries(JOURNAL_DIR), gov)):
+                return _DEFER
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands

@@ -587,10 +587,12 @@ _CASES = [_case_backdated_after_revoke, _case_pair, _case_reviewers_probe, _case
           _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key, _case_transfer_beats_a_device_fact, _case_never_admitted_then_revoked]
 
 
-# The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
-# a fact of X that arrives after the revoke is held finds X unadmitted and is refused, and one that arrived before it
-# was stored while X was admitted (the never-admitted case likewise: a refused Z fact never lands). The revoke race, left to #255; every other case ends with one root.
-_JOURNALS_DIFFER = ("_case_backdated_after_revoke", "_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
+# These cases end with the same projection but not the same journal, by the admission gate. Ingest lands the entry of a
+# device that was admitted and then revoked only when the timestamp projection skips it (#258), so a fact the bounds skip
+# (the revoke's lower-seq stamp is later) ends with one root. A revoked device's fact the bounds do not skip, such as the
+# one at seq 3 of the verifier's variant, is refused once the revoke is held and was stored if it came first; the
+# never-admitted case likewise: a refused Z fact never lands. The revoke race, left to #255; every other case ends with one root.
+_JOURNALS_DIFFER = ("_case_backdated_after_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
                     "_case_throwaway_owner_admit_of_itself", "_case_unverified_owner_sig_key", "_case_never_admitted_then_revoked")
 
 
@@ -609,6 +611,25 @@ def _case_holds(hv, tmp_path, case):
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c.__name__.strip("_"))
 def test_every_order_ends_the_same_and_the_owner_act_wins(tmp_path, monkeypatch, case):
     assert _case_holds(_loadhv(tmp_path, monkeypatch), tmp_path, case)
+
+
+def test_a_revoked_devices_entry_lands_only_when_the_bounds_skip_it_and_a_stranger_never_lands(tmp_path, monkeypatch):
+    """#258: the owner has revoked X (seq 2, 12:10). X's fact at seq 1 stamped 12:20 is skipped by the bounds, so it lands
+    after the revoke; X's fact at seq 3 stamped 12:25 would project but for the revoke's admission and does not land; a
+    never-admitted Z lands nothing, whatever it stamps."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    x, z = _device(hv), _device(hv)
+    skipped = _fact(hv, x, "x skipped", ts(12, 20))
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    later = _fact(hv, x, "x later", ts(12, 25))
+    stranger = [_fact(hv, z, "z old", ts(12, 20)), _fact(hv, z, "z", "2026-01-01T13:00:00.000+00:00")]
+    _journal(hv, _admitted_x(hv, owner, base, x) + [revoke])
+    assert hv.append_foreign_entries([skipped]) == (1, 0)
+    assert hv.append_foreign_entries([later] + stranger) == (0, 0)
+    held = {(e["node_id"], e["seq"]) for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
+    assert (x["id"], 1) in held and (x["id"], 3) not in held
+    assert not any(k[0] == z["id"] for k in held)
 
 
 def _bootstrap_fact_journal(hv, z, extra):

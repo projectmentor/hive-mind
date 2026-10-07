@@ -671,6 +671,13 @@ def test_config_refuses_unknown_module_missing_key_bad_key_and_corrupt_file(hive
     assert _run(hive, "module", "config", "demo", "unset", "absent", check=False).returncode == 1
     assert _run(hive, "module", "config", "demo", "set", "bad key", "x", check=False).returncode == 1
     assert _run(hive, "module", "config", "demo", "set", "k", check=False).returncode == 1
+    for bad in ("a:b", ".lead", "_lead", "k" * 65):
+        assert _run(hive, "module", "config", "demo", "set", bad, "x", check=False).returncode == 1
+    assert _run(hive, "module", "config", "demo", "set", "big", "v" * 4097, check=False).returncode == 1
+    assert _run(hive, "module", "config", "demo", "set", "ok", "v" * 4096, check=False).returncode == 0
+    assert _run(hive, "module", "config", "demo", "list", "junk", check=False).returncode == 2
+    assert _run(hive, "module", "config", "demo", "unset", "ok", "junk", check=False).returncode == 2
+    assert not list((tmp_path / "modules" / "demo").glob(".config.*"))
     assert _run(hive, "module", "config", "demo", "set", check=False).returncode == 2
     (tmp_path / "modules" / "demo" / "config").write_text("not json")
     r = _run(hive, "module", "config", "demo", "set", "k", "v", check=False)

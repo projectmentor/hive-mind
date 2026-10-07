@@ -53,9 +53,6 @@ class ModuleError(Exception):
 
 # ── places ──────────────────────────────────────────────────────────────────────────────────────────
 
-CONFIG_KEY = re.compile(r"[A-Za-z0-9_.:-]+\Z")
-
-
 def modules_dir():
     return Path(os.environ.get("HIVE_MODULES_DIR") or Path.home() / ".hive" / "modules")
 
@@ -524,10 +521,14 @@ def _read_config(path):
 
 
 def _save_config(path, have):
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(have, indent=1, sort_keys=True) + "\n")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config.")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(have, indent=1, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
 
 
 def cmd_config(lib, args):
@@ -539,11 +540,14 @@ def cmd_config(lib, args):
         for k in sorted(have):
             print(f"{k}={have[k]}")
         return
-    if not CONFIG_KEY.match(args.key):
-        raise ModuleError(f"bad config key {args.key!r}: letters, digits and . _ : - only")
+    if not vocabulary.split_module_name(f"x-{args.name}:{args.key}"):
+        raise ModuleError(f"bad config key {args.key!r}: 1 to {vocabulary.MODULE_KEY_MAX} letters, digits, . _ - "
+                          "starting with a letter or digit")
     if args.action == "set":
         if args.value is None:
             raise ModuleError("config set needs a value")
+        if len(args.value) > vocabulary.MODULE_VALUE_MAX:
+            raise ModuleError(f"config value is longer than {vocabulary.MODULE_VALUE_MAX} characters")
         have[args.key] = args.value
         print(f"{args.name}: set {args.key}={args.value}")
     else:
@@ -807,9 +811,11 @@ VERBS = {"add": cmd_add, "remove": cmd_remove, "update": cmd_update, "list": cmd
 def main(lib, argv):
     """Run `hive-mind module <argv>` against the control-plane library `lib`. Returns an exit status."""
     args = build_parser().parse_args(argv)
-    if args.verb == "config" and args.action != "list" and args.key is None:
-        print(f"hive-mind module: config {args.action} needs a key", file=sys.stderr)
-        return 2
+    if args.verb == "config":
+        extra = args.key if args.action == "list" else args.value if args.action == "unset" else None
+        if extra is not None or (args.action != "list" and args.key is None):
+            print(f"hive-mind module: config {args.action} takes the wrong arguments", file=sys.stderr)
+            return 2
     try:
         VERBS[args.verb](lib, args)
     except ModuleError as e:

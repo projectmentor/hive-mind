@@ -286,7 +286,7 @@ A module is a git repository with a signed manifest. `hive-mind module add` chec
 | `min_core` | The oldest core contract it runs on, a dotted version; refused on an older node. Default `0`. |
 | `publisher` | The publisher's Ed25519 public key, base64. Required. |
 | `files` | `{relative path: sha256 hex}` for every file, 1 to 500 of them. The fetched tree must hold exactly these files and no others. Required. |
-| `service` | Optional. `{"command": [argv…], "restart": "no" \| "on-failure" \| "always", "interval": seconds ≥ 60}`. `interval` makes it a timer. |
+| `service` | Optional. `{"command": [argv…], "restart": "no" \| "on-failure" \| "always", "interval": seconds ≥ 60, "stop_grace": seconds 1–3600}`. `interval` makes it a timer. `stop_grace` renders `TimeoutStopSec` and `KillMode=mixed`: on stop only the main process gets SIGTERM and may drain a long one-shot for that many seconds; systemd then SIGKILLs the whole group. Without it systemd's default stop timeout applies. |
 | `hooks` | Optional list of events the module hooks; each needs a `hooks/<event>` file in the manifest. See *Hooks and events*. |
 | `config` | Optional `{key: default string}`, per-node defaults under the module's own prefix. |
 | `quota` | Optional `{per_hour, per_day, entry_bytes, lifetime}`: at most the defaults. |

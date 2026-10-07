@@ -605,3 +605,42 @@ def test_reapply_warns_when_a_restart_fails(hive, tmp_path, units, monkeypatch):
     monkeypatch.setenv("FAIL_SYSTEMCTL", "restart")
     r = _run(hive, "module", "reapply")
     assert r.returncode == 0 and "warning: demo" in r.stderr and "would not start" in r.stderr
+
+
+def _svc_manifest(**svc):
+    return json.dumps({"name": "demo", "version": "1", "publisher": _b64(ed25519.pub_from_seed(SEED)),
+                       "files": {"run.sh": "0" * 64}, "service": {"command": ["run.sh"], **svc}}).encode()
+
+
+@LINUX_ONLY
+def test_stop_grace_renders_timeout_stop_sec_and_kill_mode_mixed():
+    for svc in ({"command": ["run.sh"], "stop_grace": 300}, {"command": ["run.sh"], "interval": 60, "stop_grace": 300}):
+        text = hive_modules.render_units("demo", {"service": svc}, Path("/m"), Path("/k"))["hive-module-demo.service"]
+        assert "TimeoutStopSec=300\n" in text and text.count("KillMode=") == 1 and "KillMode=mixed\n" in text
+
+
+@LINUX_ONLY
+def test_a_manifest_without_stop_grace_renders_as_before():
+    daemon = hive_modules.render_units("demo", {"service": {"command": ["run.sh"]}}, Path("/m"), Path("/k"))["hive-module-demo.service"]
+    assert "TimeoutStopSec" not in daemon and "KillMode=control-group\n" in daemon and "mixed" not in daemon
+    timer = hive_modules.render_units("demo", {"service": {"command": ["run.sh"], "interval": 60}}, Path("/m"), Path("/k"))
+    assert "TimeoutStopSec" not in timer["hive-module-demo.service"] and "KillMode" not in timer["hive-module-demo.service"]
+
+
+def test_validate_manifest_accepts_a_good_stop_grace_and_refuses_a_bad_one():
+    assert hive_modules.validate_manifest(_svc_manifest(stop_grace=90), "2.3")["service"]["stop_grace"] == 90
+    for bad in (0, -5, 3601, 1.5, "30", True, [1]):
+        with pytest.raises(hive_modules.ModuleError):
+            hive_modules.validate_manifest(_svc_manifest(stop_grace=bad), "2.3")
+
+
+@LINUX_ONLY
+def test_reapply_re_renders_a_unit_to_carry_stop_grace(hive, tmp_path, units):
+    unit_dir, calls = units
+    repo = tmp_path / "repo"
+    _add(hive, repo, _publish(repo, service={**SERVICE, "stop_grace": 120}))
+    unit = unit_dir / "hive-module-demo.service"
+    good = unit.read_text()
+    assert "TimeoutStopSec=120" in good
+    unit.write_text(good.replace("TimeoutStopSec=120\nKillMode=mixed\n", ""))
+    assert _run(hive, "module", "reapply").returncode == 0 and unit.read_text() == good

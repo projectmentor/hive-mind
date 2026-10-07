@@ -608,7 +608,7 @@ join-request advertised, so the owner syncs *to* the member too — connectivity
 admission but stays editable in `.peers.json`. `--module NAME` *(2.1)* marks the device as module NAME's: it is admitted like any other
 (give it the operator's `--principal`, so `cap_self` still bounds it), but it neither proposes nor votes in a quorum
 election, and no peer is seeded for it (a module has no sync address). A later `admit` without `--module` clears
-the mark. `--module` requires `--principal`. A 2.0 node ignores the mark and still counts that device's vote. Until the 2.1 doctor lands, `hv doctor` reports the module device as unreachable under `fleet-contract`; a 2.0 node always will. Admission grants only write/fertility, never
+the mark. `--module` requires `--principal`. A 2.0 node ignores the mark and still counts that device's vote. A 2.0 node lists a module device as unreachable under `fleet-contract` for as long as it is admitted. A 2.1 or newer node does not, and `modules-contract` warns about a 2.0 node when the hive has modules and `quorum_m > 0`. Admission grants only write/fertility, never
 governance. Get a device's id with `hv config identity show` on it. A device that isn't
 admitted is a **read-only ("sterile") member**: it reads the whole hive, but its content writes
 are **not accepted** until you admit it. Run `hv whoami` on any device to see sterile/fertile/owner.
@@ -641,10 +641,10 @@ that hive's owner to admit you.
 hv join --principal carol
 ```
 
-This is **non-blocking**: you're already reading the hive, and you can write, but
-your writes don't count toward confidence until you're admitted. The request shows
-up for the owner to approve; you don't wait. It prints your `device_id` so you can
-pass it along.
+This is **non-blocking**: you are already reading the hive. Once an owner exists,
+a computer that is not admitted cannot add facts. The owner stores those facts
+only after `hive-mind group admit`. The request shows up for the owner to approve.
+You do not wait. It prints your `device_id` so you can pass it along.
 
 On a brand-new device that has no key yet, `hv join` **mints the device key for you**
 first (you need one to be admitted and to open capsules), so there's no separate
@@ -1017,9 +1017,9 @@ hv search <query> [--format {text,json}] [--min-confidence N] [--kind {all,fact,
 | `--kind` | *(1.20)* What to search: `all` (default), `fact`, `decision`, `idea`. Under `all` an **idea** appears only once it has earned confidence above 0 — a raw hypothesis is not knowledge yet; `--kind idea` lists every idea. JSON rows carry `kind: idea` with `confidence`, `effective_confidence` and `ref`. |
 | `--sort` | *(1.19 PR6)* How to rank facts and ideas: `confidence` (default — effective confidence, unchanged behaviour), `importance` (learned salience: capped self-hint + other-identity link attention), `utility` (how much recorded decisions relied on it, weighted by their outcomes), or `recency`. Decisions always list newest-first. Text rows show `Imp:` / `Util:`; JSON rows carry `importance`, `effective_importance`, `utility`, `effective_utility`, `last_link_at`. Both learned values are stored undecayed and decayed at query time under the entry's **class half-life** (`halflife_fact` / `halflife_idea` / `halflife_volatile`), which now also governs confidence decay. |
 | `--id SID\|REF` | *(2.2, [#158](https://github.com/projectmentor/hive-mind/issues/158))* Look up **one** entry by its `sid` (`h:…`) or `ref` (`node_id:seq`) instead of searching; `query` is then omitted. It covers facts, decisions and ideas, reads the local store (no sync daemon needed) and answers the same on every node and after a rebuild. Text shows kind, `sid`, `ref`, content, tags, source, confidence (a decision shows `current`/`SUPERSEDED` and its outcome) and contested/forgotten state; `--format json` prints `{kind, id, ref, sid, item}`. **Exits 1 with nothing on stdout when the id names nothing** (an invented id such as `h:e6f0b4c1a2`), so a script or agent can verify an id before citing it: `hv search --id h:… >/dev/null`. `hv search` with neither a query nor `--id` exits 2. |
-| `--chain SID\|REF` | *(2.4, [#157](https://github.com/projectmentor/hive-mind/issues/157))* Follow **one decision's** supersede chain instead of searching: one hop per line, each naming the superseding entry by `sid` and the link's authority, to the live entry. A `supersedes` link recorded only as evidence is listed as **not in effect** and the walk stops there. `--format json` prints `{chain: [{sid, ref, content, superseded_by_sid, superseded_by_ref, authority, supersede_evidence}], live}`. Exits 1 when the id names no decision. Reads the local store. |
+| `--chain SID\|REF` | *(after v2.3.0, [#157](https://github.com/projectmentor/hive-mind/issues/157))* Follow **one decision's** supersede chain instead of searching: one hop per line, each naming the superseding entry by `sid` and the link's authority, to the live entry. A `supersedes` link recorded only as evidence is listed as **not in effect** and the walk stops there. `--format json` prints `{chain: [{sid, ref, content, superseded_by_sid, superseded_by_ref, authority, supersede_evidence}], live}`. Exits 1 when the id names no decision. Reads the local store. The contract number is still 2.3 until the next contract note. |
 
-**Who superseded a decision** *(2.4, #157)*. A superseded decision now names its superseder by stable id on every surface, as additive fields beside the unchanged node-local `superseded_by` rowid: text `⚠ SUPERSEDED by h:… (hard)`; JSON in `hv search`, `hv search --id` and the daemon's `/api/item` and `/api/search`: `superseded_by_sid`, `superseded_by_ref`, `superseded_by_authority` (`hard`, the only authority that supersedes; `null` when not superseded) and `supersede_evidence` (a list of `{sid, ref, authority: "evidence"}` for `supersedes` links that are recorded but **not in effect**, which text shows as `(supersede by h:… is evidence only, not in effect)`). The dashboard's `SUPERSEDED` pill links to the superseding entry. The MCP `hive_search` and `hive_lookup` return the same fields.
+**Who superseded a decision** *(after v2.3.0, #157)*. A superseded decision now names its superseder by stable id on every surface, as additive fields beside the unchanged node-local `superseded_by` rowid: text `⚠ SUPERSEDED by h:… (hard)`; JSON in `hv search`, `hv search --id` and the daemon's `/api/item` and `/api/search`: `superseded_by_sid`, `superseded_by_ref`, `superseded_by_authority` (`hard`, the only authority that supersedes; `null` when not superseded) and `supersede_evidence` (a list of `{sid, ref, authority: "evidence"}` for `supersedes` links that are recorded but **not in effect**, which text shows as `(supersede by h:… is evidence only, not in effect)`). The dashboard's `SUPERSEDED` pill links to the superseding entry. The MCP `hive_search` and `hive_lookup` return the same fields.
 
 **Examples:**
 ```bash

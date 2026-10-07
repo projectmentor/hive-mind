@@ -22,45 +22,45 @@ Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md
   <a href="https://hivemind.projectmentor.org">intro video</a> on the site.</em>
 </p>
 
-HiveMind is a shared, append-only memory that your AI agents read and write as they work.
-Facts, decisions, and outcomes accumulate over time. A fact earns **confidence** only through
-**independent corroboration**, never because an agent asserts it, and a decision is scored by the
-**outcomes** recorded against it. Each machine holds the full memory and syncs directly with its
-peers over your private Tailscale network. There is no server to operate and
-nothing leaves your hardware.
+HiveMind is a shared notebook. Your AI helpers read it and write in it.
+Old lines stay. A fact earns **confidence**, which means trust, when different helpers
+agree on their own. A helper cannot raise that trust by repeating itself.
+A decision can later get a score from what happened after you made it.
+Each computer keeps the whole notebook. The computers copy new lines to each other
+over Tailscale, a private network between your computers. Your notes stay on your computers.
 
-It is not a vector database or a RAG framework. It is the memory-and-trust layer your agents
-share so they work together, instead of each starting from a blank slate. That is what sets it
-apart from Pinecone, Weaviate, LlamaIndex, LangGraph, and friends.
+Pinecone, Weaviate, LlamaIndex, and LangGraph help one program search a pile of text.
+HiveMind keeps the notes your helpers share, and a record of who agreed.
 
 ---
 
 ## What you get
 
-- **Syncs automatically** — when one agent learns something, every other agent on every machine
-  gets it, over Tailscale, with only the differences transferred (a Merkle delta).
-- **Trust earned, not assumed** — confidence in a fact rises only when *distinct, independent*
-  agents agree. A single agent cannot inflate its own credibility, agents on one machine count
-  for less than agents on separate machines, and only devices you have admitted count at all, so
-  no one can mint a crowd of keys to fake agreement. Conflicts are surfaced, not silently overwritten.
-- **Coordinate without a coordinator** — no leader, no Raft, no lock server. A conflict-free
-  set (G-Set CRDT) over an append-only journal, so every device is equal and converges.
-  Ownership is a governance role, not a coordinator: if the owner is ever lost, the admitted
-  devices can elect a new one.
-- **Learns from outcomes** — a decision records which facts it relied on; when you record how it
-  turned out, the decision gains an outcome score and the facts behind it gain *utility*.
-  Importance is learned the same way: a writer can only hint at it, and it rises when *other*
-  agents link to an entry. Hypotheses are recorded separately as *ideas*, so a guess never counts
-  as a fact.
-- **Works offline** — agents keep working with no connection; entries merge cleanly on reconnect.
-- **Local search** — full-text search runs on your machine, ranked by effective confidence
-  (independent agreement, decayed by age) or by learned importance, utility, or recency. No round
-  trips, no data leaving your network.
-- **Nothing to operate** — no servers to provision, no database to manage, no cloud accounts.
-  Once in sync, any single device's journal is the complete memory; a backup is just files.
-- **Auditable** — every fact records who wrote it and when; nothing is silently overwritten.
-- **Works with your agents today** — Claude Code, Hermes, Claude Desktop (via MCP), and any
-  agent that can run a shell command.
+- **Copies itself.** When one helper learns something, the other computers get a copy.
+  They talk over Tailscale, a private network. They send only the new notes.
+- **Trust is earned.** A fact becomes more trusted when different helpers agree on their own.
+  Saying it again does not help. Helpers on one computer count for less than helpers on
+  different computers. A new computer can read. It can add notes after you admit it.
+  You admit it with `hive-mind group admit`. If two notes disagree, you see both.
+- **No boss computer.** Every computer keeps the full notebook. The notes only grow.
+  They fit together when the computers meet again. The owner is the person who says
+  who may write. If that owner key is lost, the computers you already admitted can
+  pick a new owner.
+- **Learns from what happened.** A decision can name the facts it used. When you write
+  down how that decision turned out, the decision gets an outcome score. Those facts
+  get a utility score. A helper can hint that a note is important. The score rises when
+  other helpers point at it. A guess is an idea. An idea is not a fact until other
+  helpers agree.
+- **Works offline.** A helper keeps going with no network. The new notes join the rest
+  when the computer is online again.
+- **Search stays on your computer.** `hv search` looks through the notes on that machine.
+  You can sort by trust, by importance, by utility, or by how new the note is.
+  The search does not call out to the internet.
+- **Little to run.** You do not set up a database or a cloud account. After the computers
+  are in sync, one computer's notebook is the whole memory. A backup is a copy of the files.
+- **You can look back.** Every fact says who wrote it and when. Old lines stay in the notebook.
+- **Works with helpers you already have.** Claude Code, Hermes, and Claude Desktop
+  (through a local MCP server). Any helper that can run a command can use `hv`.
 
 ---
 

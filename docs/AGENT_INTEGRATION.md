@@ -543,8 +543,8 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   They project deterministically
   (`_cell_state`/`_comb_state`/`_capsule_state`) rather than indexing into `store.db`. Wiring is
   unified under **`hv wire <name>|--comb <name>|--list|--show <name>|--add`**: `kind:agent` dispatches
-  to the generalized `_wire_agent` (the old `hv doctor wire-agent` is now a deprecated alias
-  with byte-identical output), `kind:tool` runs the platform-aware executor (credentials from a
+  to the generalized `_wire_agent` (in 1.13 the old `hv doctor wire-agent` was a deprecated alias
+  with byte-identical output; in 2.0 it names `hv wire claude` and exits 2), `kind:tool` runs the platform-aware executor (credentials from a
   capsule, falling back to `--env-file`). New **`hv capsule put|get|ls|rm|rotate`** seals secrets with
   **secure ingestion only** (`--env-file`/`--file`/`--stdin`/interactive `getpass` — never via chat or
   argv). Owner-signed **`capsule_putters`** config gates who may publish. `hv doctor` gains a hard-fail
@@ -562,7 +562,8 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   spec; `hv doctor` adds an `agent-hooks` check and `hv doctor --fix` (the 15-min self-heal timer)
   reconciles — adds the shim, **migrates** any older inline hooks to it (so behaviors never
   double-fire), relinks the `hive-memory` skill — surgically (your own hooks untouched, `.bak.doctor`
-  backup first). `hv doctor wire-agent` exposes it; the installer/update delegate to it, no second
+  backup first). In 1.12 `hv doctor wire-agent` exposed it. In 2.0 that name writes nothing, names
+  `hv wire claude`, and exits 2. The installer and update delegate to `hv wire claude`, no second
   definition to drift. This applies to foreign-config integrations only (Claude Code today; any other
   foreign-config agent can reuse the same dispatcher); plugin agents (Hermes, the MCP server) carry
   their wiring in our signed code and need no shim. Additive, no wire change — adapters unaffected, but a foreign-config adapter
@@ -592,8 +593,9 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   elections` lists tallies. Additive, governance-only — adapters never act as owner, so they are
   unaffected.
 - `1.8` — footprint trim. `hv rebuild` is folded into **`hv doctor rebuild`** (joining `hv doctor
-  merkle`/`migrate-identity`); the top-level `hv rebuild` keeps working as a hidden deprecated alias,
-  so installer/update scripts and existing automation are unaffected. No new capability — purely a
+  merkle`/`migrate-identity`); the top-level `hv rebuild` kept working as a hidden deprecated alias
+  through 1.x. In 2.0 that alias names `hv doctor rebuild` and exits 2, having rebuilt nothing.
+  No new capability in 1.8 — purely a
   surface change; adapters that call `hv rebuild` need no edit.
 - `1.7` — owner resilience (pt.2): **succession**. `hv owner nominate <pub>` + the successor's
   `hv owner claim [--mint]` hand ownership to a NEW key; `hv owner transfer <pub>` is the immediate
@@ -620,8 +622,8 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   highest seq this node holds, takes `--through SEQ` for a lower held one, and needs `--confirm` for a device that is
   already purged, or *(2.3)* for a revoked former member (in `first_admit`, or the genesis device after an honoured
   revoke); an id that was only revoked or denied, never a member, is still refused. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
-  `confidence` (the params) sub-namespaces. `hv key`, `hv admit`, and `hv config set …` are kept
-  as silent aliases. Additive: adapters still only *read* derived confidence; nothing to re-wire.
+  `confidence` (the params) sub-namespaces. Through 1.x, `hv key`, `hv admit`, and `hv config set …` were
+  silent aliases. In 2.0 those names print the `hive-mind` form and exit 2. Additive for 1.5: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,
   same-source discount) are owner-signed and journaled via the new `hv config` verb, and owner-forget
   (`hv retract --owner`) is cryptographically authorized once an owner exists. Additive: adapters

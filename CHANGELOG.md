@@ -12,18 +12,33 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
-- **Added: `GET /v1/` reports `node_id` and `node_devices`** (hwatch C1, M3b). `node_id` is this node's own device id
+## 2.3 — 2026-10-07 · `v2.3.0`
+
+**Upgrading from 2.2.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep
+working, and a mixed 2.2 and 2.3 fleet converges. A node on 2.2 sends no `node_id` or `node_devices` from `GET /v1/`, and
+a module reads an absent `node_devices` as unknown. The new non-owner install changes no governance entry: the owner
+admits the device with the `group admit --module` line it prints, as before.
+
+- **Added: `GET /v1/` reports `node_id` and `node_devices`** (hwatch C1, M3b, #267, #270). `node_id` is this node's own device id
   and `node_devices` the number of node devices in the hive (the admitted devices and the genesis device, not revoked, not purged, not a module device). Two read-only
   fields, a string and an integer: no device list, address or principal, and no new route. A module can tell a one-node
-  hive from a fleet; it reads an absent `node_devices` as unknown on a node without this. The contract bump and its
-  `CONTRACT_HISTORY.md` entry come with the release that ships it.
-- **Added: install a module on a device without the owner key** (hwatch C6, M1b). `hive-mind module add <name> --from
+  hive from a fleet; it reads an absent `node_devices` as unknown on a node without this.
+- **Added: install a module on a device without the owner key** (hwatch C6, M1b, #268, #272). `hive-mind module add <name> --from
   <repo>` there stages the verified tree, mints the module's key and prints the owner's `group admit <device> --module
   <name> --principal <p>` line with the publisher fingerprint and the verified commit, and installs nothing. A second
   `add` after the owner's admit has synced installs the staged tree; `add --abort <name>` drops it. `module update`
-  no longer needs the owner key (same checks, no membership or quota change), and `module remove` there deletes the
+  no longer needs the owner key (same checks, no membership change; only the owner's `quota` raises a limit above the defaults), and `module remove` there deletes the
   tree and key and prints the owner's `group revoke` line (the device stays admitted until then). `quota` stays
   owner-only. No governance route or entry changes.
+- **Added: `service.stop_grace` in a module manifest** (#273, #274). Seconds, 1 to 3600; it renders `TimeoutStopSec`
+  and `KillMode=mixed` for a daemon or timer unit, so a long one-shot can drain on stop. Without it nothing changes.
+- **Added: `hive-mind module config <name> set|unset|list`** (hwatch C3, #275, #277). Edits the module's per-node
+  config file: local, never journaled, no owner key, written atomically with mode 0600. `update` keeps what you set.
+- **Added: `hive-mind group retire` accepts a revoked former member** (#271, #278), with `--confirm`: the retire brings
+  back the prefix the signed head names. An id that was only revoked or denied, never a member, is refused as before.
+- **Fixed: a stop, disable or restart waits out a `stop_grace` drain** (#276, #279). The `systemctl` calls wait the
+  unit's `TimeoutStopSec` plus 30 s; `module remove` deletes nothing while the unit is still draining, and a restart that
+  timed out says so instead of reporting that the unit would not start.
 
 ## 2.2 — 2026-10-07 · `v2.2.0`
 

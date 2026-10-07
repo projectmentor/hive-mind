@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 2.2`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 2.3`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -267,6 +267,13 @@ governance actions, config keys, channels and the rest) is listed in [`NAMESPACE
 generated from `vocabulary.py`, and a name anything else adds takes a prefix.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `2.3` — **module-author additions: `/v1/` node fields, `stop_grace`, `module config`, a non-owner install**
+  (#270, #274, #277, #272, #278, #279). **Additive: no re-integration.** Nothing an adapter calls changes. New for
+  modules: `GET /v1/` reports `node_id` and `node_devices`; a manifest's `service.stop_grace` gives a long one-shot time
+  to drain on stop; `hive-mind module config` edits a module's per-node config; and `hive-mind module add`, `update` and
+  `remove` run on a device without the owner key, where `add` stages and prints the owner's `group admit --module` line
+  and installs nothing until that admit has synced. `hive-mind group retire` also accepts a revoked former member with
+  `--confirm`. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `2.2` — **a revoked device's content leaves search; `hv search --id`** (#246, #249). **Additive: no re-integration.**
   Nothing an adapter calls changes. New: `hv search --id SID|REF` looks one entry up by `sid` or `ref` and exits 1 with
   nothing on stdout when the id names nothing, so an agent can verify an id before citing it. The hive's governance
@@ -611,7 +618,8 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   replacing: it signs `keep_through` and `keep_hash` on the purge, and the chain up to that seq still counts, with
   its corroboration weight, while later seqs do not and the device still cannot be re-admitted. It defaults to the
   highest seq this node holds, takes `--through SEQ` for a lower held one, and needs `--confirm` for a device that is
-  already purged. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
+  already purged, or *(2.3)* for a revoked former member (in `first_admit`, or the genesis device after an honoured
+  revoke); an id that was only revoked or denied, never a member, is still refused. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
   `confidence` (the params) sub-namespaces. `hv key`, `hv admit`, and `hv config set …` are kept
   as silent aliases. Additive: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,

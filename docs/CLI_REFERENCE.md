@@ -597,7 +597,7 @@ hive-mind group revoke k1:…                           # un-admit (reversible) 
 hive-mind group deny k1:…                             # reject a pending join-request (admit overrides)
 hive-mind group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
 hive-mind group purge k1:…                            # tombstone: permanent; its entries stop counting
-hive-mind group retire k1:… [--through SEQ] [--confirm]   # tombstone an honest device; its chain through SEQ (default: highest held) keeps counting
+hive-mind group retire k1:… [--through SEQ] [--confirm]   # tombstone an honest device (*2.3:* or a revoked former member, with --confirm); its chain through SEQ (default: highest held) keeps counting
 ```
 
 With no device_id, `hive-mind group admit` lists the pending join-requests. (Those also surface
@@ -1233,7 +1233,7 @@ checks, strongest last:
    `https://hivemind.projectmentor.org/.well-known/hivemind.pub`, a different origin from the code
    host. Catches a fork that ships its own key and a self-signed manifest.
 
-A healthy install prints `✓ Official HiveMind v2.2 from ProjectMentor — verified.` If you edited
+A healthy install prints `✓ Official HiveMind v2.3 from ProjectMentor — verified.` If you edited
 files yourself it says the install was modified locally.
 
 **Exit codes** (a script or CI step can rely on them):
@@ -1256,7 +1256,7 @@ rather than failed while it is pending (see `hv doctor` above).
 ### `hv version` — Agent contract version
 
 ```
-hv version        # → hv contract-version 2.2
+hv version        # → hv contract-version 2.3
 ```
 
 The version of the agent contract (`docs/AGENT_INTEGRATION.md`). Adapters compare it with the
@@ -1305,21 +1305,22 @@ hive-mind <subcommand> [options]
 | `reset` | Recover a **wedged** install in one command: force-align the code to `origin` (even after a rewrite, even with local edits), rebuild the DB from the journal, refresh the supervisor units + Claude Code hooks, restart the daemon, and verify authenticity. **Your Hive (journal, keys, device identity) is preserved** — this is not `uninstall`. Use it when `hv doctor`/`hv verify` is unhappy after a breaking change. `-y` skips the prompt. |
 | `status` | Show device health and peer sync state. |
 | `invite` | Print the one-line address to paste on a new device so it can join this hive. |
-| `module` | *(2.1, Linux)* Install and manage modules: `add <name> --from <repo>`, `remove`, `update`, `list`, `quota` (see below). |
+| `module` | *(2.1, Linux)* Install and manage modules: `add <name> --from <repo>`, `remove`, `update`, `list`, `config` *(2.3)*, `quota` (see below). |
 | `uninstall` | Remove HiveMind from this device (see flags below). |
 
 ### `hive-mind module` — Install and manage modules *(2.1, Linux only)*
 
 ```
 hive-mind module add <name> --from <repo> [--publisher KEY] [--principal P]
-hive-mind module add --abort <name>
+hive-mind module add --abort <name>          # (2.3)
 hive-mind module remove <name>
 hive-mind module update <name> [--from <repo>] [--publisher KEY]
 hive-mind module list
+hive-mind module config <name> set <key> <value> | unset <key> | list
 hive-mind module quota <name> [--per-hour N] [--per-day N] [--entry-bytes N] [--lifetime N]
 ```
 
-Owner and operator; there is no `hv module`. `quota` needs the owner key; the other verbs also run on a device without it (below). A module is a git repository whose `module.json` is signed by its
+Owner and operator; there is no `hv module`. `quota` needs the owner key; the other verbs also run on a device without it (below) *(2.3)*. A module is a git repository whose `module.json` is signed by its
 publisher key. `add` shows the key and pins it once you confirm (or pass `--publisher` to pin it without a prompt), mints the module's
 own device key, has the owner admit it under your principal, and installs its files, config and unit outside the
 checkout. `remove` revokes the device and keeps the module's journal entries. `update` re-verifies and swaps
@@ -1327,7 +1328,7 @@ atomically, and refuses a different publisher key. `quota` is the only way a lim
 platform has no module backend, `add` says so and exits non-zero before it touches anything. The manifest, the unit and
 the limits are in [`MODULE_API.md`](MODULE_API.md). `hive-mind update` re-renders every module's unit afterwards.
 
-**On a device without the owner key** (the owner key lives on another machine). `add` fetches, verifies, stages and mints
+**On a device without the owner key** *(2.3)* (the owner key lives on another machine). `add` fetches, verifies, stages and mints
 the module's key, then prints the owner's line, `hive-mind group admit <device> --module <name> --principal <p>`, with
 the publisher fingerprint and the commit it verified, and **installs nothing**: no unit, no `.modules.json` row, no
 admit. The owner checks that commit and runs the line. When the admit has synced to this device, run the same
@@ -1336,6 +1337,10 @@ recorded at the first run. `add --abort <name>` removes the staging and the key;
 the key (same tree check, same pinned publisher; it admits, revokes and re-limits nothing). `remove` stops the unit and
 deletes the tree and the key, then prints the owner's `hive-mind group revoke <device>` line: **the device id stays
 admitted until the owner runs it.** `quota` stays owner-only.
+
+`config` *(2.3)* edits the module's per-node config file: `set` and `unset` change one key, `list` prints `key=value`, sorted. It is local to this
+node and never journaled, and needs no owner key. An `update` keeps what you set. A manifest's `service.stop_grace` *(2.3)* gives a long
+one-shot that many seconds to drain on stop; a stop, disable or restart waits for it, and `remove` deletes nothing while the unit is still draining.
 
 `hv doctor` reports each installed module as `modules:<name>` (a missing, tampered or wrongly signed manifest **fails**;
 an absent or stopped unit, a revoked device, missing config, a down listener and quota past 80% **warn**) and

@@ -120,7 +120,7 @@ def hive_lookup(id: str) -> dict:
 
     id: a short id (`h:` + 10 hex, as hive_search returns in `sid`) or a ref (`node_id:seq`).
     Returns {kind, id, ref, sid, item}: `kind` is fact | decision | idea and `item` carries the content,
-    tags, source, confidence (or a decision's rationale, superseded flag and outcome score), contested and
+    tags, source, confidence (or a decision's rationale, superseded flag, the superseding entry's `superseded_by_sid` / `superseded_by_ref` and its authority, and outcome score), contested and
     forgotten state. Raises when the id names nothing on this node — an id you cannot look up is one you
     must not cite. Reads the local store, so it works without the sync daemon.
     """

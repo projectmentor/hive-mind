@@ -231,9 +231,18 @@ function factRow(f){
      ${(f.tags||[]).map(t=>`<span class="chip" data-onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
      <span style="margin-left:auto">${esc(f.source)} · ${esc(f.created)}</span></div></div>`;
 }
+function supPill(d){
+  if(!d.superseded) return '';
+  return d.superseded_by_sid
+    ? `<a class="pill superseded" href="#${esc(d.superseded_by_sid)}" title="superseded by ${esc(d.superseded_by_sid)} (${esc(d.superseded_by_authority||'hard')})" data-onclick="event.stopPropagation()">SUPERSEDED by ${esc(d.superseded_by_sid)}</a>`
+    : '<span class="pill superseded">SUPERSEDED</span>';
+}
+function supEvidence(d){
+  return (d.supersede_evidence||[]).map(e=>` <span class="muted">supersede by <a href="#${esc(e.sid)}" class="mono">${esc(e.sid)}</a> is evidence only, not in effect</span>`).join('');
+}
 function decRow(d){
   return `<div class="row link" data-onclick="openDecision(${d.id})"><div class="content"><span class="mono muted">${esc(d.sid||('#'+d.id))}</span> ${esc((d.content||'').slice(0,240))}
-     ${d.superseded?'<span class="pill superseded">SUPERSEDED</span>':''}</div>
+     ${supPill(d)}${supEvidence(d)}</div>
    ${d.rationale?`<div class="rationale">${esc(d.rationale.slice(0,300))}</div>`:''}
    <div class="meta">${(d.tags||[]).map(t=>`<span class="chip proj" data-onclick="event.stopPropagation();filterTag('${esc(t)}')">${esc(t)}</span>`).join('')}
      <span style="margin-left:auto">${esc(d.created)}</span></div></div>`;
@@ -283,7 +292,7 @@ function renderDetail(){
         ${f.ref?kv('Identity', '<span class="mono">'+esc(f.ref)+'</span>'+(f.sid?' · <a href="#'+esc(f.sid)+'" class="mono">#'+esc(f.sid)+'</a>':'')):''}</div>
       <div class="panel"><h2>Related facts</h2><div id="related">${spin()}</div></div>`;
   } else if(d.kind==='decision'){const x=d.data;
-    $('#app').innerHTML=crumb+`<div class="panel"><h2>Decision <span class="mono">${esc(x.sid||('#'+x.id))}</span> <small class="muted">#${x.id} on this node</small>${x.superseded?' <span class="pill superseded">SUPERSEDED</span>':''}</h2><div class="full">${esc(x.content)}</div></div>
+    $('#app').innerHTML=crumb+`<div class="panel"><h2>Decision <span class="mono">${esc(x.sid||('#'+x.id))}</span> <small class="muted">#${x.id} on this node</small>${x.superseded?' '+supPill(x):''}${supEvidence(x)}</h2><div class="full">${esc(x.content)}</div></div>
       ${x.rationale?`<div class="panel"><h2>Rationale</h2><div class="full" style="color:var(--dim)">${esc(x.rationale)}</div></div>`:''}
       <div class="panel"><h2>Details</h2>
         ${kv('Tags',(x.tags||[]).map(t=>`<span class="chip proj" data-onclick="filterTag('${esc(t)}')">${esc(t)}</span>`).join(' ')||'—')}

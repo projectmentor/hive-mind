@@ -4334,6 +4334,55 @@ def _ids_for(conn, kind, local_ids):
     return out
 
 
+def _supersede_info(conn, decision_ids):
+    """#157: {decision rowid: {...}} naming WHO superseded each decision, by stable identity (additive to the
+    node-local `superseded_by` rowid, which stays). `superseded_by_sid` / `superseded_by_ref` / `superseded_by_authority`
+    are set only when the supersede is IN EFFECT (`decisions.superseded_by`, which only a `hard` link writes);
+    `supersede_evidence` lists `supersedes` links recorded as evidence only, which do NOT supersede (`hv doctor`
+    link-authz), each `{sid, ref, authority: "evidence"}`. Rows with neither get no entry."""
+    ids = [int(i) for i in decision_ids if i is not None]
+    if not ids:
+        return {}
+    q = ",".join("?" * len(ids))
+    out = {}
+    by = {r["id"]: r["superseded_by"] for r in conn.execute(
+        f"SELECT id, superseded_by FROM decisions WHERE id IN ({q}) AND superseded_by IS NOT NULL", ids)}
+    links = conn.execute(f"SELECT from_id, to_id, authority FROM links WHERE kind = 'supersedes' "
+                         f"AND from_kind = 'decision' AND to_kind = 'decision' AND to_id IN ({q}) "
+                         f"ORDER BY from_id", ids).fetchall()
+    names = _ids_for(conn, "decision", list(by.values()) + [r["from_id"] for r in links])
+    for did, sup in by.items():
+        n = names.get(sup) or {}
+        auth = next((r["authority"] for r in links if r["to_id"] == did and r["from_id"] == sup), "hard")
+        out[did] = {"superseded_by_sid": n.get("sid"), "superseded_by_ref": n.get("ref"),
+                    "superseded_by_authority": auth, "supersede_evidence": []}
+    for r in links:
+        if r["authority"] != "evidence" or by.get(r["to_id"]) == r["from_id"]:
+            continue
+        n = names.get(r["from_id"]) or {}
+        e = out.setdefault(r["to_id"], {"superseded_by_sid": None, "superseded_by_ref": None,
+                                        "superseded_by_authority": None, "supersede_evidence": []})
+        e["supersede_evidence"].append({"sid": n.get("sid"), "ref": n.get("ref"), "authority": "evidence"})
+    return out
+
+
+_NOT_SUPERSEDED = {"superseded_by_sid": None, "superseded_by_ref": None, "superseded_by_authority": None,
+                   "supersede_evidence": []}
+
+
+def _supersede_text(info):
+    """The text-output suffix for one decision's `_supersede_info` entry ('' when it has none)."""
+    if not info:
+        return ""
+    ev = ", ".join(e["sid"] or "?" for e in info["supersede_evidence"])
+    s = ""
+    if info["superseded_by_sid"]:
+        s = f"  ⚠ SUPERSEDED by {info['superseded_by_sid']} ({info['superseded_by_authority']})"
+    if ev:
+        s += f"  (supersede by {ev} is evidence only, not in effect)"
+    return s
+
+
 def _refs_for(conn, kind, local_ids):
     """{local_id: 'node_id:seq'} — see _ids_for."""
     return {k: v["ref"] for k, v in _ids_for(conn, kind, local_ids).items()}
@@ -4772,6 +4821,50 @@ def _query_ideas(conn, query, limit=200):
         (like, like, limit)).fetchall()
 
 
+def _chain(args):
+    """`hv search --chain <sid|ref>` (#157): follow a decision's supersede chain, one hop per line, to the
+    live entry. Each hop names the superseding entry by sid and the link's authority; a `supersedes` link
+    recorded as evidence only is shown as not in effect, and the walk stops there (that entry is live). Reads
+    the local store. Exit 1 when the id names no decision."""
+    conn = get_conn()
+    try:
+        try:
+            kind, ref = _parse_ref_arg(conn, args.chain_id)
+        except ValueError as e:
+            kind, ref, err = None, None, str(e)
+        else:
+            err = f"{args.chain_id!r} is a {kind}, not a decision" if kind != "decision" else None
+        row = _index_row(conn, ref) if ref and not err else None
+        if err or row is None:
+            print(f"hv search --chain: {err or repr(args.chain_id) + ' names no decision on this node'}", file=sys.stderr)
+            sys.exit(1)
+        hops, seen, cur = [], set(), row[1]
+        while cur is not None and cur not in seen:
+            seen.add(cur)
+            me = _ids_for(conn, "decision", [cur]).get(cur) or {}
+            r = conn.execute("SELECT content FROM decisions WHERE id = ?", (cur,)).fetchone()
+            info = _supersede_info(conn, [cur]).get(cur) or _NOT_SUPERSEDED
+            hops.append({"sid": me.get("sid"), "ref": me.get("ref"), "content": r["content"] if r else None,
+                         "superseded_by_sid": info["superseded_by_sid"], "superseded_by_ref": info["superseded_by_ref"],
+                         "authority": info["superseded_by_authority"], "supersede_evidence": info["supersede_evidence"]})
+            nxt = conn.execute("SELECT superseded_by FROM decisions WHERE id = ?", (cur,)).fetchone()
+            cur = nxt["superseded_by"] if nxt else None
+        live = hops[-1] if hops and not hops[-1]["superseded_by_sid"] else None
+    finally:
+        conn.close()
+    if args.format == "json":
+        print(json.dumps({"chain": hops, "live": live["sid"] if live else None}, indent=2))
+        return
+    for i, h in enumerate(hops):
+        step = (f"superseded by {h['superseded_by_sid']} ({h['authority']})" if h["superseded_by_sid"]
+                else "LIVE (not superseded)")
+        print(f"{'  ' * i}{h['sid']}  {step}  {(h['content'] or '')[:80]}")
+        for e in h["supersede_evidence"]:
+            print(f"{'  ' * i}  evidence only, not in effect: {e['sid']}")
+    if live is None:
+        print("  (chain does not end at a live entry: a supersede cycle)")
+
+
 def _lookup_id(args):
     """`hv search --id <sid|ref>` (#158): one entry by its stable id, straight from the local store (the same
     resolution as the dashboard's /api/item, with no daemon). Exit 1 when it names nothing."""
@@ -4796,7 +4889,13 @@ def _lookup_id(args):
     if it.get("confidence") is not None:
         bits.append(f"Conf: {it['confidence']:.2f}")
     if res["kind"] == "decision":
-        bits.append("SUPERSEDED" if it.get("superseded") else "current")
+        sup = _supersede_text(it)
+        if it.get("superseded_by_sid"):
+            bits.append(sup.strip().replace("⚠ ", "").split("  (supersede")[0])
+        else:
+            bits.append("SUPERSEDED" if it.get("superseded") else "current")
+        if it.get("supersede_evidence"):
+            bits.append(sup.strip().split("  ")[-1] if it.get("superseded_by_sid") else sup.strip())
         if it.get("outcome_score") is not None:
             bits.append(f"outcome {it['outcome_score']:+.2f}")
     if it.get("contested"):
@@ -4816,6 +4915,8 @@ def search(args):
     node-local `#id`."""
     if getattr(args, "lookup_id", None):
         return _lookup_id(args)
+    if getattr(args, "chain_id", None):
+        return _chain(args)
     if args.query is None:
         print("hv search: give a query, or --id <sid|ref> to look one entry up", file=sys.stderr)
         sys.exit(2)
@@ -4870,6 +4971,7 @@ def search(args):
     irefs = {k: v["ref"] for k, v in iids.items()}
     fsids = {k: v["sid"] for k, v in fids.items()}
     dsids = {k: v["sid"] for k, v in dids.items()}
+    dsup = _supersede_info(conn, [r["id"] for r in dec_rows])
     isids = {k: v["sid"] for k, v in iids.items()}
     dinformed = {r["id"]: _local_ids_for_refs(conn, _clean_refs(r["informed_by"]))
                  for r in dec_rows}
@@ -4907,6 +5009,7 @@ def search(args):
         # consumers still drop decisions. `last_outcome_at` NULL = no outcome yet.
         out += [{**{k: v for k, v in dict(r).items() if k != "informed_by"}, "kind": "decision",
                  "ref": drefs.get(r["id"]), "sid": dsids.get(r["id"]), "informed_by": dinformed.get(r["id"], []),
+                 **(dsup.get(r["id"]) or _NOT_SUPERSEDED),
                  "tags": _tag_list(r), "tag_list": _tag_list(r),
                  "effective_outcome_score": (_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact)
                                              if r["last_outcome_at"] else None)} for r in dec_rows]
@@ -4931,7 +5034,9 @@ def search(args):
             for r in dec_rows:
                 dtags = json.loads(r["tags"]) if r["tags"] else []
                 tagstr = f"  [{', '.join(dtags)}]" if dtags else ""
-                sup = "  ⚠ SUPERSEDED" if r["superseded_by"] else ""
+                sup = _supersede_text(dsup.get(r["id"]))
+                if r["superseded_by"] and not sup:
+                    sup = "  ⚠ SUPERSEDED"
                 outc = ""
                 if r["last_outcome_at"]:
                     eff_o = _effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, hl_fact)
@@ -5239,6 +5344,9 @@ def api_search(query="", tag=None, kind="all", min_confidence=0.0,
         for m in dmatched:
             m["ref"] = (dids.get(m["id"]) or {}).get("ref")
             m["sid"] = (dids.get(m["id"]) or {}).get("sid")
+        dsup = _supersede_info(conn, [m["id"] for m in dmatched])
+        for m in dmatched:
+            m.update(dsup.get(m["id"]) or _NOT_SUPERSEDED)
         dec_total = len(dmatched)
         decisions = dmatched[offset:offset + limit]
     ideas, ideas_total = [], 0
@@ -5335,7 +5443,8 @@ def api_item(sid):
                         "informed_by": [_ref_str(x) for x in _clean_refs(r["informed_by"])],
                         "outcome_score": (round(_effective_confidence(r["outcome_score"] or 0.0, r["last_outcome_at"], now, _halflife(gov, "fact")), 2)
                                           if r["last_outcome_at"] else None),
-                        "last_outcome_at": r["last_outcome_at"]}
+                        "last_outcome_at": r["last_outcome_at"],
+                        **(_supersede_info(conn, [r["id"]]).get(r["id"]) or _NOT_SUPERSEDED)}
         else:
             r = conn.execute("SELECT id, content, tags, source_agent, created_at, confidence, contested, "
                              "last_evidence_at, importance, utility, last_link_at FROM ideas WHERE id = ?", (row[1],)).fetchone()
@@ -10370,6 +10479,12 @@ def build_parser():
                                     "prints it (kind, sid, ref, source, content, tags, confidence or outcome, superseded "
                                     "state) and exits 1 when nothing matches, so a script or agent can verify an id "
                                     "before citing it. Reads the local store; needs no daemon")
+    search_parser.add_argument("--chain", dest="chain_id", metavar="SID|REF",
+                               help="Follow ONE decision's supersede chain instead of searching: one hop per line, "
+                                    "each naming the superseding entry by sid and the link's authority (hard = in "
+                                    "effect; an evidence-only supersedes link is shown as not in effect), to the live "
+                                    "entry. With --format json: {chain: [...], live: sid}. Exits 1 when the id names "
+                                    "no decision. Reads the local store; needs no daemon")
     search_parser.add_argument("--format", choices=["text", "json"], default="text")
     search_parser.add_argument("--min-confidence", type=float, default=0.0,
                                help="Hide facts below this confidence (default 0.0 = show all)")

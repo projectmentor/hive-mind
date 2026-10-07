@@ -21,8 +21,9 @@ from test_vocabulary import _sources  # noqa: E402
 
 # Fields that are refs but are not named `*_ref`. The scan finds `*_ref` itself, so a new one cannot hide.
 NAMED_REFS = {"informed_by", "revokes", "entity_id", "fact_id", "supersedes"}
-# `*_ref` names that are not journal payload fields: a key of the local `.genesis-pin` file (LOCAL_FILES).
-NOT_PAYLOAD = {"genesis_ref"}
+# `*_ref` names that are not journal payload fields: a key of the local `.genesis-pin` file (LOCAL_FILES), and
+# `superseded_by_ref`, a computed output field of `hv search` / `/api/item` (#157).
+NOT_PAYLOAD = {"genesis_ref", "superseded_by_ref"}
 
 
 def _constants(src):

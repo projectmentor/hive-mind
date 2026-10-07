@@ -338,6 +338,42 @@ def test_a_plain_purge_still_drops_everything(tmp_path):
     assert conn.execute("SELECT count(*) FROM facts").fetchone()[0] == 0
 
 
+# ── a revoked former member (#271) ───────────────────────────────────────────────────────────────────────────────
+
+def _cli_contents(tmp_path):
+    import sqlite3
+    conn = sqlite3.connect(tmp_path / "store.db")
+    return {r[0] for r in conn.execute("SELECT content FROM facts")}
+
+
+def test_a_revoked_former_member_retired_with_confirm_projects_its_prefix(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    _run(tmp_path, "group", "revoke", "dev-a")
+    assert _cli_contents(tmp_path) == set()
+    r = _run(tmp_path, "group", "retire", "dev-a", "--confirm")
+    assert "Retired dev-a" in r.stdout
+    act = _purge_acts(tmp_path)[0]
+    assert act["keep_through"] == 3 and act["keep_hash"].startswith("sha256:")
+    assert _cli_contents(tmp_path) == {"one", "two", "three"}
+
+
+def test_a_revoked_former_member_without_confirm_is_refused(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    _run(tmp_path, "group", "revoke", "dev-a")
+    out = _run(tmp_path, "group", "retire", "dev-a").stdout
+    assert "--confirm" in out and "revoke dropped" in out
+    assert _purge_acts(tmp_path) == []
+    assert _cli_contents(tmp_path) == set()
+
+
+def test_a_never_admitted_revoked_id_is_refused_even_with_confirm(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    _run(tmp_path, "group", "revoke", "dev-x")
+    out = _run(tmp_path, "group", "retire", "dev-x", "--confirm").stdout
+    assert "not an admitted or purged device" in out
+    assert _purge_acts(tmp_path) == []
+
+
 # ── gaps the verifier found in #264 (#266) ───────────────────────────────────────────────────────────────────────
 
 def _raw_confidence(hv, with_x_tail):

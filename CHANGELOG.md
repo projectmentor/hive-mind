@@ -12,6 +12,12 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
+- **Added: `GET /v1/` reports `node_id` and `node_devices`** (hwatch C1, M3b). `node_id` is this node's own device id
+  and `node_devices` the number of node devices in the hive (the admitted devices and the genesis device, not revoked, not purged, not a module device). Two read-only
+  fields, a string and an integer: no device list, address or principal, and no new route. A module can tell a one-node
+  hive from a fleet; it reads an absent `node_devices` as unknown on a node without this. The contract bump and its
+  `CONTRACT_HISTORY.md` entry come with the release that ships it.
+
 ## 2.2 — 2026-10-07 · `v2.2.0`
 
 **Upgrading from 2.1.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep

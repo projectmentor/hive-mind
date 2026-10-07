@@ -116,6 +116,9 @@ def _core_tuple(v):
         raise ModuleError(f"min_core {v!r} is not a dotted version")
 
 
+MAX_STOP_GRACE = 3600       # seconds a service may take to drain on stop before systemd kills it
+
+
 def validate_manifest(raw, core_version):
     """Parse and check a manifest's shape; returns the dict. Refuses anything it does not understand rather than
     ignoring it, because this is the text that decides what code gets installed."""
@@ -155,8 +158,11 @@ def validate_manifest(raw, core_version):
         if (not isinstance(cmd, list) or not cmd or not all(isinstance(a, str) and a for a in cmd)
                 or svc.get("restart", "on-failure") not in ("no", "on-failure", "always")
                 or not (svc.get("interval") is None or (isinstance(svc["interval"], int) and svc["interval"] >= 60))
-                or set(svc) - {"command", "restart", "interval"}):
-            raise ModuleError("manifest service needs a command list, restart no|on-failure|always, optional interval >= 60")
+                or not (svc.get("stop_grace") is None or (isinstance(svc["stop_grace"], int) and not isinstance(svc["stop_grace"], bool)
+                                                         and 1 <= svc["stop_grace"] <= MAX_STOP_GRACE))
+                or set(svc) - {"command", "restart", "interval", "stop_grace"}):
+            raise ModuleError("manifest service needs a command list, restart no|on-failure|always, optional interval >= 60, "
+                              f"optional stop_grace 1 to {MAX_STOP_GRACE} seconds")
         if not cmd[0].startswith("/") and ".." in Path(cmd[0]).parts:
             raise ModuleError("manifest service command may not leave the module's directory")
         if any(ord(c) < 0x20 for a in cmd for c in a):
@@ -380,8 +386,11 @@ def render_units(name, manifest, module_dir, key_dir):
               _env("HIVE_MODULE_NAME", name), _env("HIVE_MODULE_DIR", module_dir),
               _env("HIVE_MODULE_KEY_DIR", key_dir), "NoNewPrivileges=yes",
               "StandardOutput=journal", "StandardError=journal"]
+    grace = svc.get("stop_grace")
+    if grace:                           # SIGTERM the main process only, let it drain, SIGKILL the group after `grace`
+        lines += [f"TimeoutStopSec={grace}", "KillMode=mixed"]
     if not interval:                    # a timer re-fires a oneshot; a daemon is kept up by its restart policy
-        lines += [f"Restart={restart}", "RestartSec=5", "KillMode=control-group"]
+        lines += [f"Restart={restart}", "RestartSec=5"] + ([] if grace else ["KillMode=control-group"])
         lines += ["", "[Install]", "WantedBy=default.target"]
     out = {service: "\n".join(lines) + "\n"}
     if interval:

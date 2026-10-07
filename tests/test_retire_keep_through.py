@@ -381,6 +381,22 @@ def test_a_never_admitted_revoked_id_is_refused_even_with_confirm(tmp_path):
     assert "stranger" not in _cli_contents(tmp_path)
 
 
+def test_a_revoked_genesis_device_needs_confirm_and_projects_its_prefix(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    m, gov = _govstate(tmp_path)
+    gen = gov["genesis_device"]
+    _run(tmp_path, "remember", "from genesis", "--source", "agent", node_id=gen)
+    # an unrevoked genesis device is still refused
+    assert "not an admitted or purged device" in _run(tmp_path, "group", "retire", gen, "--confirm").stdout
+    m._group_change("revoke", gen)  # `group revoke` refuses it: owner init never admits the genesis device
+    _m, gov = _govstate(tmp_path)
+    assert gen in gov["revoked"] and gen not in gov["first_admit"] and gen not in gov["admitted"]
+    assert "from genesis" not in _cli_contents(tmp_path)
+    assert "revoke dropped" in _run(tmp_path, "group", "retire", gen).stdout
+    assert _purge_acts(tmp_path) == []
+    assert f"Retired {gen}" in _run(tmp_path, "group", "retire", gen, "--confirm").stdout
+    assert "from genesis" in _cli_contents(tmp_path)
+
 # ── gaps the verifier found in #264 (#266) ───────────────────────────────────────────────────────────────────────
 
 def _raw_confidence(hv, with_x_tail):

@@ -12,11 +12,6 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
-- **CI: macOS runs on a pull request into `release/*` (#242).** The same path filter as a pull request into
-  `main`, so a docs-only pull request still shows no macOS check, and one that touches `hv`, the daemon, or
-  the installer waits for macOS before it merges. A push to a release branch still runs macOS after the
-  merge. No contract change.
-
 ## 2.3 — 2026-10-07 · `v2.3.0`
 
 **Upgrading from 2.2.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep

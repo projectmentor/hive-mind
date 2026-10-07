@@ -1,4 +1,4 @@
-"""verifier probe, #229 @1d5969f: admission across the single sweep (throwaway)."""
+"""Admission across the single ingest sweep: a device's content waits for an admit later in its batch (#229)."""
 import sys
 from pathlib import Path
 PROJECT = Path(__file__).resolve().parent.parent

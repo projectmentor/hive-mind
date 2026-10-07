@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from test_links import _loadhv, _device, _entry, _fact, _link, _project
+from test_links import _loadhv, _device, _entry, _fact, _gov, _link, _project
 
 BAD = [[1], {"a": 1}]
 TS = "2026-01-01T00:00:0%dZ"
@@ -446,7 +446,9 @@ def test_remember_agrees_with_rebuild_on_a_hostile_entry_already_on_disk(tmp_pat
 
 def test_decide_and_outcome_of_agree_with_rebuild_on_a_hostile_polarity(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
-    _, (a, b, c), base = _owned_hive(hv)
+    owner, (a, b, c), base = _owned_hive(hv)
+    base = base + [_gov(hv, {"action": "admit", "device_id": hv.NODE_ID, "principal": "pcli"}, owner[0], owner[1],
+                        "2026-01-01T00:00:09Z", 9)]      # the CLI node writes live: it is admitted, as a writer is
     dec = _entry(hv, a, "decision", _base("decision"), TS % 1)
     good = _fact(hv, a, "it worked", TS % 2)
     seen_c, seen_b = _fact(hv, c, "seen too", TS % 5), _fact(hv, b, "seen", TS % 3)
@@ -479,10 +481,12 @@ def test_the_quarantine_record_of_a_local_refusal_carries_the_principal_when_adm
 
 def _hostile_hive(hv, tmp_path, extra=()):
     """An owned hive whose journal holds an honest `shared` fact at 0.1 and a second device's `shared` at 2**63."""
-    _, (a, b, _c), base = _owned_hive(hv)
+    owner, (a, b, _c), base = _owned_hive(hv)
+    cli = _gov(hv, {"action": "admit", "device_id": hv.NODE_ID, "principal": "pcli"}, owner[0], owner[1],
+               "2026-01-01T00:00:09Z", 9)                 # the CLI node writes live: it is admitted, as a writer is
     honest = _entry(hv, a, "fact", dict(_base("fact"), content="shared", importance=0.1), TS % 1)
     hostile = _entry(hv, b, "fact", dict(_base("fact"), content="shared", importance=2**63), TS % 2)
-    _write_journal(tmp_path, base + [honest, hostile, *extra])
+    _write_journal(tmp_path, base + [cli, honest, hostile, *extra])
     _cli(tmp_path, "doctor", "rebuild")
     return honest
 

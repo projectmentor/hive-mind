@@ -1,7 +1,7 @@
 """#217: bounded entry timestamps.
 
 Journal order is (timestamp, node_id, seq) and the writer picks the timestamp, so two rules bound it per device,
-at ingest and in the projection alike, once the owner signs a `freeze-timestamps` marker:
+in the projection only (ingest stores what they would skip), once the owner signs a `freeze-timestamps` marker:
 
   1. monotonic: no earlier than the latest timestamp of the device's lower seqs, less one 5-minute budget;
   2. no earlier than the device's first honoured admit, less 5 minutes (`join-request` and `announce` exempt);
@@ -12,8 +12,11 @@ claim it. Without a marker nothing is skipped. Arrival times (`future-dated`) an
 detection only. The mutants at the end each drop one rule or weaken one anchor, and each is caught.
 """
 
+import base64
+import itertools
 import json
 import sys
+import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -22,6 +25,7 @@ import pytest
 PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT / "tests"))
 from test_links import _loadhv, _owner_key, _device, _gov, _entry, _fact, _project  # noqa: E402
+from test_links import _planes  # noqa: E402
 
 DAY = "2026-01-01T"
 
@@ -138,7 +142,7 @@ def test_a_governance_act_outside_the_bounds_is_read_as_absent(tmp_path, monkeyp
 
 # ── ingest ─────────────────────────────────────────────────────────────────────────────────────────────
 
-def test_ingest_lands_a_step_within_the_budget_and_refuses_the_next_that_walks_back(tmp_path, monkeypatch):
+def test_ingest_stores_a_step_back_the_projection_skips(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     owner, (d0, d1), base = _hive(hv)
     first = _fact(hv, d0, "first", ts(12))
@@ -146,37 +150,34 @@ def test_ingest_lands_a_step_within_the_budget_and_refuses_the_next_that_walks_b
     ok = _fact(hv, d0, "four-back", ts(11, 56))             # 4 minutes behind the latest
     bad = _fact(hv, d0, "eight-back", ts(11, 52))           # 4 behind `ok`, 8 behind the latest
     assert hv.append_foreign_entries([ok])[0] == 1
-    assert hv.append_foreign_entries([bad])[0] == 0
-    kept = {(e["node_id"], e["seq"]) for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
-    assert (bad["node_id"], bad["seq"]) not in kept
-    # the same two in one batch, in reverse order: the verdict follows the chain, not the batch
+    assert hv.append_foreign_entries([bad])[0] == 1         # stored: only the projection applies the bounds
+    assert _skipped(hv) == {(bad["node_id"], bad["seq"])}
+    assert _contents(_project(hv, tmp_path, hv.merkle.read_all_entries(hv.JOURNAL_DIR))) == {"first", "four-back"}
     _journal(hv, base + [_marker(hv, owner, {"ownerdev": 3}), first])
-    assert hv.append_foreign_entries([bad, ok])[0] == 1
+    assert hv.append_foreign_entries([bad, ok])[0] == 2     # and the batch order changes nothing
 
 
-def test_ingest_lands_an_equal_timestamp_and_refuses_a_non_canonical_shape(tmp_path, monkeypatch):
+def test_ingest_stores_an_equal_timestamp_and_a_non_canonical_shape_the_projection_skips(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     owner, (d0, d1), base = _hive(hv)
     first = _fact(hv, d0, "first", ts(12))
     _journal(hv, base + [_marker(hv, owner, {"ownerdev": 3}), first])
     same = _fact(hv, d0, "same", ts(12))
     offset = _fact(hv, d0, "offset", "2026-01-01T07:30:00.000-05:00")      # 12:30 UTC, sorts before 12:00
-    assert hv.append_foreign_entries([same])[0] == 1
-    assert hv.append_foreign_entries([offset])[0] == 0
     z = _fact(hv, d0, "z", "2026-01-01T13:00:00Z")
-    assert hv.append_foreign_entries([z])[0] == 0
+    assert hv.append_foreign_entries([same, offset, z])[0] == 3
+    assert _skipped(hv) == {(offset["node_id"], offset["seq"]), (z["node_id"], z["seq"])}
 
 
-def test_ingest_refuses_a_pre_admit_content_entry_but_lands_a_join_request(tmp_path, monkeypatch):
+def test_a_pre_admit_content_entry_is_stored_and_skipped_and_a_join_request_is_honoured(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     owner, (d0, d1), base = _hive(hv)
     _journal(hv, base + [_marker(hv, owner, {"ownerdev": 3})])
     jr = _entry(hv, d1, "governance", {"action": "join-request", "device_id": d1["id"]}, ts(0, 20))
     early = _fact(hv, d1, "early", ts(0, 54))                # 6 minutes before the admit
     ok = _fact(hv, d1, "ok", ts(0, 56))
-    assert hv.append_foreign_entries([jr])[0] == 1
-    assert hv.append_foreign_entries([early])[0] == 0
-    assert hv.append_foreign_entries([ok])[0] == 1
+    assert [hv.append_foreign_entries([e])[0] for e in (jr, early, ok)] == [1, 1, 1]
+    assert _skipped(hv) == {(d1["id"], 2)}
 
 
 def test_ingest_checks_nothing_until_the_marker_arms_it(tmp_path, monkeypatch):
@@ -326,75 +327,9 @@ def _skipped(hv):
     return set(hv._ts_violations(j, hv._governance_state(j)))
 
 
-def test_ingest_chain_leaves_out_an_entry_the_projection_skips(tmp_path, monkeypatch):
-    """A held entry above the tip that the projection skips for its shape must not raise the bar for a later one:
-    a node that held it before the marker arrived refuses what a node that got the marker first lands."""
-    hv = _loadhv(tmp_path, monkeypatch)
-    owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
-    s1 = _fact(hv, d0, "s1", ts(12))
-    s2 = _fact(hv, d0, "s2z", "2026-01-01T13:00:00Z")       # non-canonical, later instant
-    s3 = _fact(hv, d0, "s3", ts(12, 50))
-    _journal(hv, base + [s1, s2])                            # node A held s1, s2 before the marker reached it
-    hv.append_foreign_entries([marker])
-    hv.append_foreign_entries([s3])
-    a = _held(hv)
-    ca = _contents(_project(hv, tmp_path, hv.merkle.read_all_entries(hv.JOURNAL_DIR)))
-    _journal(hv, base + [marker])                            # node B had the marker first
-    hv.append_foreign_entries([s1, s2, s3])
-    b = _held(hv)
-    cb = _contents(_project(hv, tmp_path, hv.merkle.read_all_entries(hv.JOURNAL_DIR)))
-    assert ca == cb == {"s1", "s3"}
-    assert (d0["id"], 3) in a and (d0["id"], 3) in b
-
-
-def test_a_governance_entry_is_judged_after_the_same_batchs_lower_seq_content(tmp_path, monkeypatch):
-    """d0 holds s1 12:00; s2 is a fact at 12:20 and s3 an `announce` at 12:10, 10 minutes behind s2."""
-    hv = _loadhv(tmp_path, monkeypatch)
-    owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
-    s1 = _fact(hv, d0, "s1", ts(12))
-    s2 = _fact(hv, d0, "s2", ts(12, 20))
-    s3 = _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]}, ts(12, 10))
-    _journal(hv, base + [marker, s1])
-    hv.append_foreign_entries([s2, s3])                      # node A: one batch
-    a = _held(hv)
-    _journal(hv, base + [marker, s1])
-    hv.append_foreign_entries([s2])                          # node B: two batches
-    hv.append_foreign_entries([s3])
-    assert a == _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1), (d0["id"], 2)}
-    assert (d0["id"], 3) not in a
-
-
-def test_ingest_refuses_a_governance_entry_for_its_timestamp(tmp_path, monkeypatch):
-    hv = _loadhv(tmp_path, monkeypatch)
-    owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
-    s1 = _fact(hv, d0, "s1", ts(12))
-    behind = _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]}, ts(11, 40))
-    shaped = _entry(hv, d0, "governance", {"action": "announce", "kind": "key", "device_id": d0["id"]},
-                    "2026-01-01T12:30:00Z")
-    _journal(hv, base + [marker, s1])
-    assert hv.append_foreign_entries([behind, shaped])[:2] == (0, 0)
-    assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1)}
-
-
-def test_a_batch_whose_lower_seq_carries_the_later_timestamp(tmp_path, monkeypatch):
-    """s2 at 12:20, s3 at 12:10: in one batch, in either order, s3 is judged after s2 and refused."""
-    hv = _loadhv(tmp_path, monkeypatch)
-    owner, (d0, d1), base = _hive(hv)
-    marker = _marker(hv, owner, {"ownerdev": 3})
-    s1 = _fact(hv, d0, "s1", ts(12))
-    s2 = _fact(hv, d0, "s2", ts(12, 20))
-    s3 = _fact(hv, d0, "s3", ts(12, 10))
-    for batch in ([s3, s2], [s2, s3]):
-        _journal(hv, base + [marker, s1])
-        assert hv.append_foreign_entries(batch)[:2] == (1, 0)
-        assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1), (d0["id"], 2)}
-
-
-def test_ingest_agrees_with_the_projection_for_every_split_of_a_batch(tmp_path, monkeypatch):
-    """Ingest refuses `e` iff `_ts_violations` over held + landed + `e` skips `e`, for any contiguous split."""
+def test_the_journal_is_the_same_for_every_split_of_a_batch_and_the_projection_skips_the_same_entries(tmp_path, monkeypatch):
+    """Ingest refuses nothing for a timestamp: every contiguous split of a run stores all of it, and the projection
+    skips the announce (12:10 behind s2's 12:20), s4 and s5."""
     hv = _loadhv(tmp_path, monkeypatch)
     owner, (d0, d1), base = _hive(hv)
     marker = _marker(hv, owner, {"ownerdev": 3})
@@ -404,9 +339,6 @@ def test_ingest_agrees_with_the_projection_for_every_split_of_a_batch(tmp_path, 
            _fact(hv, d0, "s4", ts(12, 14)),
            _fact(hv, d0, "s5", "2026-01-01T13:00:00Z"),
            _fact(hv, d0, "s6", ts(12, 40))]
-    _journal(hv, base + [marker, s1] + run)
-    expect = _held(hv) - _skipped(hv)
-    assert len(expect) == len(_held(hv)) - 3                 # the announce, s4 and s5 are skipped
     n = len(run)
     for cuts in range(1 << (n - 1)):                         # every composition of the run into batches
         _journal(hv, base + [marker, s1])
@@ -417,7 +349,379 @@ def test_ingest_agrees_with_the_projection_for_every_split_of_a_batch(tmp_path, 
                 batch = []
             batch.append(run[i])
         hv.append_foreign_entries(batch)
-        assert _held(hv) == expect, bin(cuts)
+        assert len(_held(hv)) == 4 + 1 + n, bin(cuts)
+        assert len(_skipped(hv)) == 3, bin(cuts)
+
+
+# ── the bounds apply in the projection only; owner-signed governance beats a device-stamped entry (#230, #250) ──
+# David's rulings of 2026-10-06 (h:e3a8401cdb, h:4c86fdea7a). Each case is offered one entry per batch and as one
+# batch, in every order, each followed by a re-offer of the full set. Every run must end with the same honoured set,
+# admitted set, projected facts AND the same raw journal, and the owner act must be the one that wins.
+
+def _outcome(hv, tmp_path):
+    """What the projection makes of what a node holds: the entries it honours (the bounds skip none of them and, for
+    content, its device is admitted), who is admitted, the facts, and the root
+    over the raw journal (the entries sorted by (node_id, seq), as the chunks a sync compares)."""
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    gov = hv._governance_state(j)
+    root = hv.merkle.hash_entries(sorted(j, key=lambda e: (e["node_id"], e["seq"])))
+    honoured = frozenset((e["node_id"], e["seq"]) for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov))
+    return (honoured, frozenset(gov["admitted"]), frozenset(_contents(_project(hv, tmp_path, j))), root, gov["owner_id"])
+
+
+def _runs(hv, tmp_path, base, entries):
+    """Every run of `entries` (one per batch and one batch, in every order, then a re-offer of the full set); the
+    outcomes that differ between runs."""
+    outcomes = []
+    plans = []
+    for perm in itertools.permutations(entries):
+        n = len(perm)
+        # every composition of the run into batches when it is small; one per batch and one batch otherwise
+        for cuts in (range(1 << (n - 1)) if n <= 4 else (0, (1 << (n - 1)) - 1)):
+            plan, cur = [], [perm[0]]
+            for i in range(1, n):
+                if cuts >> (i - 1) & 1:
+                    plan.append(cur)
+                    cur = []
+                cur.append(perm[i])
+            plans.append(plan + [cur])
+    for plan in plans:
+        _journal(hv, base)
+        for batch in plan:
+            hv.append_foreign_entries(batch)
+        hv.append_foreign_entries(list(entries))
+        o = _outcome(hv, tmp_path)
+        if o not in outcomes:
+            outcomes.append(o)
+    return outcomes
+
+
+def _own_admit(hv, x, owner, at):
+    return _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, at, owner=owner)
+
+
+def _admitted_x(hv, owner, base, x):
+    return base + [_gov(hv, {"action": "admit", "device_id": x["id"], "principal": "px"}, owner[0], owner[1], ts(1, 1), 4),
+                   _marker(hv, owner, {"ownerdev": 4}, seq=5)]
+
+
+def _case_pair(hv):
+    """#230: X, not admitted, holds a fact at 12:20 (seq 1) and an owner-signed admit of itself at 12:10 (seq 2): the
+    admit is honoured and the fact is skipped."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    fact, admit = _fact(hv, x, "x content", ts(12, 20)), _own_admit(hv, x, owner, ts(12, 10))
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] in o[1] and not o[2]   # noqa: E731
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [fact, admit], k
+
+
+def _case_reviewers_probe(hv):
+    """X is admitted by its own owner-signed admit (seq 10, 12:10); its fact at seq 5 (12:20) pushes past the owner acts
+    behind it, and X's announce, admit of Y and set-config sit at seqs 6-8 (12:08). Y has content too."""
+    owner, (d0, d1), base = _hive(hv)
+    x, y = _device(hv), _device(hv)
+    x["seq"] = 9
+    own = _own_admit(hv, x, owner, ts(12, 10))
+    x["seq"] = 4
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    ann = _entry(hv, x, "governance", {"action": "announce", "kind": "key", "pub": x["pub"].hex()}, ts(12, 8))
+    admit_y = _entry(hv, x, "governance", {"action": "admit", "device_id": y["id"], "principal": "py"}, ts(12, 8),
+                     owner=owner)
+    cfg = _entry(hv, x, "governance", {"action": "set-config", "key": "forget_writers", "value": "owner"},
+                 ts(12, 8), owner=owner)
+    k = lambda o: ((x["id"], 5) not in o[0] and {(x["id"], i) for i in (6, 7, 8, 10)} <= o[0]      # noqa: E731
+                   and {x["id"], y["id"]} <= o[1] and o[2] == {"y content"})
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [own, fact, ann, admit_y, cfg, _fact(hv, y, "y content", ts(12, 30))], k
+
+
+def _case_verifiers_probe_1(hv):
+    """X's own admit at seq 10 (12:10), a fact at seq 5 (12:20), and a fact at seq 11 (12:12) behind the admit."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    x["seq"] = 9
+    own = _own_admit(hv, x, owner, ts(12, 10))
+    x["seq"] = 4
+    f5 = _fact(hv, x, "x five", ts(12, 20))
+    x["seq"] = 10
+    k = lambda o: ((x["id"], 5) not in o[0] and (x["id"], 10) in o[0] and (x["id"], 11) in o[0]      # noqa: E731
+                   and x["id"] in o[1] and o[2] == {"x eleven"})
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [own, f5, _fact(hv, x, "x eleven", ts(12, 12))], k
+
+
+def _case_250_own_revoke(hv):
+    """#250 case 1: X is admitted. Its fact at seq 1 (12:20) and an owner-signed revoke of X at seq 2 (12:10): the
+    revoke is honoured, X is not admitted and its fact does not project."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    entries = [_fact(hv, x, "x content", ts(12, 20)),
+               _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)]
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), entries, k
+
+
+def _case_250_own_revoke_three(hv):
+    """The verifier's variant: fact1 12:20, revoke2 12:10, fact3 12:25. The revoke is honoured, X is not admitted, and
+    neither fact projects, whether the fact at seq 3 reached this node before the revoke or after it."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    entries = [_fact(hv, x, "x one", ts(12, 20)),
+               _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner),
+               _fact(hv, x, "x three", ts(12, 25))]
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), entries, k
+
+
+def _case_250_admit_of_y(hv, with_y_content=False):
+    """#250 case 2: X is admitted. Its fact at seq 1 (12:20) and an owner-signed admit of Y on its chain at seq 2
+    (12:10): Y's admit is honoured, Y is admitted, and with Y's content Y's fact projects."""
+    owner, (d0, d1), base = _hive(hv)
+    x, y = _device(hv), _device(hv)
+    entries = [_fact(hv, x, "x content", ts(12, 20)),
+               _entry(hv, x, "governance", {"action": "admit", "device_id": y["id"], "principal": "py"}, ts(12, 10),
+                      owner=owner)]
+    if with_y_content:
+        entries.append(_fact(hv, y, "y content", ts(12, 30)))
+    k = lambda o: ((x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and y["id"] in o[1]      # noqa: E731
+                   and o[2] == ({"y content"} if with_y_content else set()))
+    return _admitted_x(hv, owner, base, x), entries, k
+
+
+def _case_250_admit_of_y_with_content(hv):
+    return _case_250_admit_of_y(hv, with_y_content=True)
+
+
+def _case_announce_and_join_request(hv):
+    """An announce at seq 1 (12:30) and a join-request at seq 2 (12:40) are device-stamped too: the owner admit of X at
+    seq 4 (12:10) is honoured and both are skipped."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    ann = _entry(hv, x, "governance", {"action": "announce", "kind": "key", "pub": x["pub"].hex()}, ts(12, 30))
+    jr = _entry(hv, x, "governance", {"action": "join-request", "device_id": x["id"]}, ts(12, 40))
+    x["seq"] = 3
+    admit = _own_admit(hv, x, owner, ts(12, 10))
+    k = lambda o: (x["id"], 4) in o[0] and not {(x["id"], 1), (x["id"], 2)} & o[0] and x["id"] in o[1]   # noqa: E731
+    return base + [_marker(hv, owner, {"ownerdev": 3})], [ann, jr, admit], k
+
+
+def _case_throwaway_owner_act(hv):
+    """The verifier's #1: X signs a `set-config` with a throwaway owner key embedded in its own payload at seq 1 (12:20).
+    It is not the owner in authority, so it is device-stamped: it does not shield itself, and the real owner's revoke of X
+    at seq 2 (12:10) is honoured, so X is not admitted and neither of its facts projects."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    rogue = _owner_key(hv)
+    forged = _entry(hv, x, "governance", {"action": "set-config", "key": "forget_writers", "value": "owner"},
+                    ts(12, 20), owner=(rogue[0], rogue[1]))
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [forged, revoke, _fact(hv, x, "x three", ts(12, 25))], k
+
+
+def _case_throwaway_owner_admit_of_itself(hv):
+    """The verifier's #1, second form: X signs an `admit` of itself with a throwaway owner key at seq 1 (12:20). It is not
+    the owner in authority, so it admits nothing and moves nothing for the owner's revoke of X (seq 2, 12:10)."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    rogue = _owner_key(hv)
+    forged = _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"},
+                    ts(12, 20), owner=(rogue[0], rogue[1]))
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [forged, revoke, _fact(hv, x, "x three", ts(12, 25))], k
+
+
+def _case_unverified_owner_sig_key(hv):
+    """The verifier's #2: the owner's revoke of X is relayed on d0 (12:10) and X has a fact at 12:15 whose payload merely
+    carries an `owner_sig` key. The key proves nothing, so the fact is X's content and does not project, whichever of
+    the two a node held first."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    revoke = _entry(hv, d0, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    fact = _entry(hv, x, "fact", {"content": "x content", "tags": [], "importance": 0.5, "source": "manual",
+                                  "owner_sig": "AAAA"}, ts(12, 15))
+    k = lambda o: (d0["id"], 1) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [fact, revoke], k
+
+
+def _case_transfer_beats_a_device_fact(hv):
+    """The verifier's transfer probe: X is admitted and holds a fact at seq 1 (12:20); owner A signs a `transfer` to B on
+    X at seq 2 (12:10). The old owner signs it and the walk records B at that position, so it is owner-signed: it wins
+    the tiebreak, B owns the hive and the fact does not project."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    b = _owner_key(hv)
+    fact = _fact(hv, x, "x content", ts(12, 20))
+    xfer = _entry(hv, x, "governance", {"action": "transfer", "new_owner_pub": base64.b64encode(b[1]).decode()}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and not o[2] and o[4] == b[2]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [fact, xfer], k
+
+
+def _case_never_admitted_then_revoked(hv):
+    """The verifier's non-blocking item, from an empty base: Z was never admitted and wrote a fact stamped 2025-01-01, before
+    the genesis owner; the owner revokes Z (12:10), relayed on d0. The pre-genesis stay ends with the honoured revoke, so
+    Z's fact never projects, in every order. (Without the revoke the stay splits on arrival order: #255.)"""
+    owner, (d0, d1), base = _hive(hv)
+    z = _device(hv)
+    fact = _fact(hv, z, "bootstrap", "2025-01-01T00:00:00.000+00:00")
+    revoke = _entry(hv, d0, "governance", {"action": "revoke", "device_id": z["id"]}, ts(12, 10), owner=owner)
+    k = lambda o: (z["id"], 1) not in o[0] and z["id"] not in o[1] and not o[2]   # noqa: E731
+    return [], [fact, base[0], revoke], k
+
+
+def _case_backdated_after_revoke(hv):
+    """The reviewer's #3, verifier's form: no freeze marker. X is admitted, then the owner revokes it (seq 2, 12:10); its
+    fact at seq 1 is stamped 2025-01-01, which puts it before the genesis owner in the journal's order. The stamp is the
+    writer's, so the pre-genesis stay does not apply to a device with an honoured revoke: the fact does not project,
+    whichever of the two a node held first."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    entries = [_fact(hv, x, "x old", "2025-01-01T00:00:00.000+00:00"),
+               _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)]
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
+    admit = _gov(hv, {"action": "admit", "device_id": x["id"], "principal": "px"}, owner[0], owner[1], ts(1, 1), 4)
+    return base + [admit], entries, k
+
+
+_CASES = [_case_backdated_after_revoke, _case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
+          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act,
+          _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key, _case_transfer_beats_a_device_fact, _case_never_admitted_then_revoked]
+
+
+# The two revoke cases end with the same projection but not the same journal, by the admission gate that stays as it was:
+# a fact of X that arrives after the revoke is held finds X unadmitted and is refused, and one that arrived before it
+# was stored while X was admitted (the never-admitted case likewise: a refused Z fact never lands). The revoke race, left to #255; every other case ends with one root.
+_JOURNALS_DIFFER = ("_case_backdated_after_revoke", "_case_250_own_revoke", "_case_250_own_revoke_three", "_case_throwaway_owner_act",
+                    "_case_throwaway_owner_admit_of_itself", "_case_unverified_owner_sig_key", "_case_never_admitted_then_revoked")
+
+
+def _case_holds(hv, tmp_path, case):
+    """Whether every run of `case` ends with the same honoured set, admitted set and facts (and the same journal,
+    except where the admission gate decides it) and the owner act wins."""
+    base, entries, wins = case(hv)
+    outcomes = _runs(hv, tmp_path, base, entries)
+    if case.__name__ in _JOURNALS_DIFFER:
+        outcomes = {o[:3] + o[4:] for o in outcomes}
+        o = next(iter(outcomes))
+        return len(outcomes) == 1 and wins(o[:3] + (None,) + o[3:])
+    return len(outcomes) == 1 and wins(outcomes[0])
+
+
+@pytest.mark.parametrize("case", _CASES, ids=lambda c: c.__name__.strip("_"))
+def test_every_order_ends_the_same_and_the_owner_act_wins(tmp_path, monkeypatch, case):
+    assert _case_holds(_loadhv(tmp_path, monkeypatch), tmp_path, case)
+
+
+def _bootstrap_fact_journal(hv, z, extra):
+    """A bootstrap hive: Z wrote a fact before any owner existed (stamped 2025, so before the genesis owner), then the
+    owner declared genesis. Z was never admitted."""
+    owner, (d0, d1), base = _hive(hv)
+    fact = _fact(hv, z, "bootstrap", "2025-01-01T00:00:00.000+00:00")
+    _journal(hv, [fact] + base + extra(owner))
+    gov = hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    return z["id"] in {e["node_id"] for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov)}, owner
+
+
+def test_a_bootstrap_writer_stays_until_the_owner_revokes_it(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    z = _device(hv)
+    assert _bootstrap_fact_journal(hv, z, lambda owner: [])[0]
+    revoke = lambda owner: [_entry(hv, _device(hv), "governance", {"action": "revoke", "device_id": z["id"]},   # noqa: E731
+                                   ts(12, 10), owner=owner)]
+    assert not _bootstrap_fact_journal(hv, z, revoke)[0]       # revoked, never admitted: the exemption ends
+    purge = lambda owner: [_entry(hv, _device(hv), "governance", {"action": "purge", "device_id": z["id"]},     # noqa: E731
+                                  ts(12, 10), owner=owner)]
+    assert not _bootstrap_fact_journal(hv, z, purge)[0]
+
+
+def _genesis_device_projects(hv, *acts):
+    """Whether a fact of the genesis device projects after the owner's `acts` (purge, revoke) against it."""
+    owner, (d0, d1), base = _hive(hv)
+    fact = {"node_id": "ownerdev", "seq": 9, "type": "fact", "timestamp": ts(12),
+            "payload": {"content": "owner device", "tags": [], "importance": 0.5, "source": "manual"}}
+    _journal(hv, base + [fact] + [_entry(hv, d0, "governance", {"action": a, "device_id": "ownerdev"}, ts(12, 10),
+                                          owner=owner) for a in acts])
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    gov = hv._governance_state(j)
+    return ("ownerdev", 9) in {(e["node_id"], e["seq"]) for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov)}
+
+
+def test_the_genesis_device_is_removed_by_a_purge_or_a_revoke(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    assert _genesis_device_projects(hv)
+    assert not _genesis_device_projects(hv, "purge")
+    assert not _genesis_device_projects(hv, "revoke")
+
+
+def test_a_genesis_device_that_survives_a_purge_is_caught(tmp_path, monkeypatch):
+    hv = _mutated_hv(tmp_path, monkeypatch, '    ok = ok - gov.get("purged", set())          # the genesis device',
+                     '    ok = ok | ({gen} if gen is not None else set())          # the genesis device')
+    assert _genesis_device_projects(hv, "purge")
+
+
+def test_a_second_marker_stamped_behind_the_first_is_exempt(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    _journal(hv, base + [_marker(hv, owner, {"ownerdev": 3})])
+    hv.append_foreign_entries([_marker(hv, owner, {"ownerdev": 5}, seq=5, at=ts(1, 40))])
+    assert ("ownerdev", 5) in _held(hv) - _skipped(hv)
+
+
+def test_an_unadmitted_device_still_cannot_land_content(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    stranger = _device(hv)
+    _journal(hv, base + [_marker(hv, owner, {"ownerdev": 3})])
+    assert hv.append_foreign_entries([_fact(hv, stranger, "stranger", ts(12))])[0] == 0
+
+
+def _mutated_hv(tmp_path, monkeypatch, old, new):
+    src = (PROJECT / "hv").read_text()
+    assert src.count(old) == 1, old
+    monkeypatch.setenv("HIVE_HOME", str(tmp_path))
+    monkeypatch.setenv("HIVE_NOW", "2026-01-10T00:00:00Z")
+    m = types.ModuleType("hvmod_mutant")
+    m.__file__ = str(PROJECT / "hv")
+    exec(compile(src.replace(old, new), str(PROJECT / "hv"), "exec"), m.__dict__)
+    _planes.install_control_plane(m)
+    return m
+
+
+_REFUSE_ON_THE_BOUNDS = ("held = merkle.read_all_entries(JOURNAL_DIR)\n"
+                         "        if (e[\"node_id\"], e[\"seq\"]) in _ts_violations(held + [e], _governance_state(held + [e])):\n"
+                         "            return\n"
+                         "        _append_line(_journal_path_for(e[\"timestamp\"]), json.dumps(e))")
+
+_MUTANTS = {
+    "owner_signed_without_checking_the_owner": (
+        "    return oid is not None and oid in (_owner_at(tl, pos), _owner_at([t for t in tl if t[:3] < pos], pos))\n",
+        "    return oid is not None\n"),
+    "owner_signed_ignores_the_owner_before_a_transfer": (
+        "    return oid is not None and oid in (_owner_at(tl, pos), _owner_at([t for t in tl if t[:3] < pos], pos))\n",
+        "    return oid is not None and oid == _owner_at(tl, pos)\n"),
+    "owner_sig_key_exempts_content": (
+        '''                and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
+                                          e["payload"], gov, "owner"))                  # verified, as of its position''',
+        '''                and "owner_sig" in e["payload"])'''),
+    "pre_genesis_stay_ignores_a_revoke": (
+        '            or (e.get("node_id") not in ended\n                and _owner_at(',
+        '            or (True\n                and _owner_at('),
+    "admitted_gate_removed_from_content_projection": (
+        '    if gov.get("owner_id") is None:\n        return entries\n    gen = ',
+        '    if True:\n        return entries\n    gen = '),
+    "ingest_still_refuses_on_the_bounds": (
+        '_append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes',
+        _REFUSE_ON_THE_BOUNDS),
+    "skipped_device_stamped_entry_still_moves_prior": (
+        '                    out[(nid, e["seq"])] = why\n                    continue',
+        '                    out[(nid, e["seq"])] = why\n                    if not why.startswith("timestamp would"):\n                        continue'),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_MUTANTS))
+def test_each_mutant_of_the_tiebreak_is_caught(tmp_path, monkeypatch, name):
+    hv = _mutated_hv(tmp_path, monkeypatch, *_MUTANTS[name])
+    assert not all(_case_holds(hv, tmp_path, case) for case in _CASES), name
 
 
 def test_a_marker_the_projection_does_not_honour_is_checked_like_any_entry(tmp_path, monkeypatch):
@@ -433,18 +737,19 @@ def test_a_marker_the_projection_does_not_honour_is_checked_like_any_entry(tmp_p
     assert (d0["id"], 1) not in gov["ts_markers"] and ("ownerdev", 4) in gov["ts_markers"]
     assert (d0["id"], 1) in hv._ts_violations(j, gov)
     _journal(hv, base + [marker])
-    assert hv.append_foreign_entries([fake])[:2] == (0, 0)
+    assert hv.append_foreign_entries([fake])[:2] == (1, 0)      # stored (ingest refuses nothing for a timestamp) ...
+    assert (d0["id"], 1) in _skipped(hv)                        # ... and the projection skips it
 
 
-def test_a_marker_that_arrives_in_the_batch_arms_the_rest_of_it(tmp_path, monkeypatch):
+def test_a_batch_that_carries_the_marker_stores_everything(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     owner, (d0, d1), base = _hive(hv)
     marker = _marker(hv, owner, {"ownerdev": 3})
-    s1 = _fact(hv, d0, "s1", ts(12))
-    s2 = _fact(hv, d0, "s2", ts(11))
+    s1, s2 = _fact(hv, d0, "s1", ts(12)), _fact(hv, d0, "s2", ts(11))
     _journal(hv, base)
     hv.append_foreign_entries([s1, s2, marker])
-    assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1)}
+    assert _held(hv) == {("ownerdev", i) for i in (1, 2, 3, 4)} | {(d0["id"], 1), (d0["id"], 2)}
+    assert _skipped(hv) == {(d0["id"], 2)}
 
 
 # ── a device's own clock stepping back is clamped, not refused ──────────────────────────────────────

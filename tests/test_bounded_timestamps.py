@@ -644,6 +644,33 @@ def test_a_strangers_entry_the_bounds_skip_does_not_land(tmp_path, monkeypatch):
     assert hv.append_foreign_entries([admit]) == (1, 0)
     assert hv.append_foreign_entries([fact]) == (0, 0)
     assert not any(e["node_id"] == z["id"] and e["type"] != "governance" for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR))
+    # A stranger with a cut: the owner's revoke of the never-admitted Z sits on Z's own chain (seq 2, 12:10), so a fact below
+    # it (seq 1, 12:20) is skipped and under the cut, and only the `first_admit` guard keeps it out.
+    q = _device(hv)
+    q_fact = _fact(hv, q, "q skipped", ts(12, 20))
+    q_revoke = _entry(hv, q, "governance", {"action": "revoke", "device_id": q["id"]}, ts(12, 10), owner=owner)
+    assert hv.append_foreign_entries([q_revoke]) == (1, 0)
+    assert hv.append_foreign_entries([q_fact]) == (0, 0)
+
+
+def test_a_revoked_device_cannot_flood_storage_above_its_revoke(tmp_path, monkeypatch):
+    """#258, the verifier's flood: the owner's revoke of X sits at seq 2 on X's own chain. 200 facts above it, backdated
+    so the bounds skip them, do not land; the one below it (seq 1) does. A revoke on another device's chain cuts nothing."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    x, w = _device(hv), _device(hv)
+    below = _fact(hv, x, "x below", ts(12, 20))
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    flood = [_fact(hv, x, "x flood %d" % i, ts(0, 30) + "") for i in range(200)]
+    w_below = _fact(hv, w, "w below", ts(12, 20))
+    w_revoke = _entry(hv, d0, "governance", {"action": "revoke", "device_id": w["id"]}, ts(12, 10), owner=owner)
+    _journal(hv, _admitted_x(hv, owner, base, x) + [revoke])
+    assert hv.append_foreign_entries(flood) == (0, 0)
+    assert hv.append_foreign_entries([below]) == (1, 0)
+    held = {(e["node_id"], e["seq"]) for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)}
+    assert (x["id"], 1) in held and not any(k[0] == x["id"] and k[1] > 2 for k in held)
+    _journal(hv, _admitted_x(hv, owner, base, w) + [w_revoke])      # W's revoke is on the owner's device chain: no cut
+    assert hv.append_foreign_entries([w_below]) == (0, 0)
 
 
 def _bootstrap_fact_journal(hv, z, extra):

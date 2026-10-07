@@ -1768,9 +1768,11 @@ def append_foreign_entries(entries, advertised_chunks=None):
             # Read-only member: its content does not land until the owner admits the device.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
             # A device the owner admitted once and then revoked (#258) may land an entry the timestamp projection
-            # skips, as a node that held the entry before the revoke does: a stranger never lands, and an entry of
-            # a revoked device that would project does not.
-            if not (nid in gov["first_admit"] and _ts_skips(e, held_chain(nid), gov)):
+            # skips, as a node that held the entry before the revoke does, but only below the seq of a revoke on its
+            # own chain: a stranger never lands, nor does an entry that would project or one at or above the cut.
+            cut = gov["revoke_cut"].get(nid)
+            if not (nid in gov["first_admit"] and cut is not None and isinstance(seq, int)
+                    and not isinstance(seq, bool) and seq < cut and _ts_skips(e, held_chain(nid), gov)):
                 return _DEFER
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
@@ -2389,7 +2391,7 @@ def _governance_state_uncached(entries):
            "denied": set(), "purged": set(), "standbys": set(),
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
            "principals": {}, "modules": {}, "module_config": {},
-           "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
+           "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(), "revoke_cut": {},
            "keep": {}, "kept": set(),
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
@@ -2586,6 +2588,10 @@ def _governance_state_uncached(entries):
         elif action == "revoke" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
             gov["revoked"].add(p["device_id"])        # honoured: ends the pre-genesis exemption (#230)
+            if p["device_id"] == _nid and isinstance(_seq, int) and not isinstance(_seq, bool):
+                # #258: a revoke on the device's own chain cuts it there; the highest honoured one, so a re-admit and
+                # a second revoke still cover what was written between them. A revoke on the owner's chain sets none.
+                gov["revoke_cut"][_nid] = max(gov["revoke_cut"].get(_nid, _seq), _seq)
         elif action == "deny" and p.get("device_id"):
             gov["denied"].add(p["device_id"])          # drop a pending join-request (admit overrides)
         elif action == "change" and p.get("device_id") and p.get("principal"):
@@ -2852,7 +2858,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
-                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
+                "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(), "revoke_cut": {},
                 "keep": {}, "kept": set(),
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,

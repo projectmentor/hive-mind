@@ -44,7 +44,7 @@ device's past content leaves `hv search`, as the next bullet says (a retired dev
 - **Fixed: the dashboard no longer suggests a nonexistent `hive-mind verify`**; it says `hv verify` (#193, #245).
 - **Tests only:** the suite clears an exported `HIVE_KEY_DIR` (#178, #256) and never reads the repo-root `.peers.json`
   (#142, #257), a member device's retract is pinned never to become an owner act at genesis (#148, #259), and off
-  Linux the core hook output still passes through while the module hook does not run (#241, via #262).
+  Linux the core hook output still passes through while the module hook does not run (#241, via #262), and a retire's keep-through cutoff is pinned across gap fill, revoke and readmit, plain purge and down-level nodes (#266, #269).
 
 ## 2.1 — 2026-10-06 · `v2.1.0`
 

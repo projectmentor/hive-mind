@@ -443,3 +443,29 @@ def test_b_moves_contacts_a_once_and_a_doctor_fix_repoints_it(tmp_path, monkeypa
     # nothing about it reached the journal (local operational state only)
     journal = "".join(f.read_text() for f in (a / "journal").glob("*.jsonl"))
     assert NEW not in journal and "peer_candidates" not in journal
+
+
+def test_a_sighting_without_via_keeps_the_recorded_one(tmp_path, monkeypatch):
+    hvm = _load_hv(tmp_path, monkeypatch)
+    ip = "100.64.1.1"
+    assert hvm._record_peer_candidate(DEV, ip, now=1000, via="outbound") is True
+    assert hvm._record_peer_candidate(DEV, ip, now=2000) is False          # inbound: names no `via`
+    assert hvm._load_peer_candidates()[DEV][ip] == {"first_seen": 1000, "last_seen": 2000, "via": "outbound"}
+    assert hvm._record_peer_candidate(DEV, ip, now=3000, via="inbound") is False   # an explicit `via` overwrites
+    assert hvm._load_peer_candidates()[DEV][ip]["via"] == "inbound"
+
+
+def test_an_outbound_via_in_the_same_second_as_an_inbound_sighting_is_recorded(tmp_path, monkeypatch):
+    hvm = _load_hv(tmp_path, monkeypatch)
+    ip = "100.64.1.3"
+    assert hvm._record_peer_candidate(DEV, ip, now=1000) is True                    # inbound, no `via`
+    assert hvm._record_peer_candidate(DEV, ip, now=1000, via="outbound") is False   # same second: still recorded
+    assert hvm._load_peer_candidates()[DEV][ip] == {"first_seen": 1000, "last_seen": 1000, "via": "outbound"}
+    assert hvm._record_peer_candidate(DEV, ip, now=999, via="inbound") is False     # older clock: last_seen never moves back
+    assert hvm._load_peer_candidates()[DEV][ip] == {"first_seen": 1000, "last_seen": 1000, "via": "inbound"}
+
+
+def test_a_first_sighting_without_via_writes_no_key(tmp_path, monkeypatch):
+    hvm = _load_hv(tmp_path, monkeypatch)
+    assert hvm._record_peer_candidate(DEV, "100.64.1.2", now=1000) is True
+    assert hvm._load_peer_candidates()[DEV]["100.64.1.2"] == {"first_seen": 1000, "last_seen": 1000}

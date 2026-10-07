@@ -8760,9 +8760,11 @@ def _record_peer_candidate(device_id, ip, now=None, via=None):
     cands = _load_peer_candidates()
     hist = cands.setdefault(device_id, {})
     rec = hist.get(ip)
-    if rec is not None and rec["last_seen"] >= now:
-        return False
-    hist[ip] = {"first_seen": rec.get("first_seen", now) if rec else now, "last_seen": now}
+    if rec is not None and rec["last_seen"] >= now and (not via or rec.get("via") == via):
+        return False                                     # nothing new; a same-second sighting naming a new `via` still lands
+    hist[ip] = {"first_seen": rec.get("first_seen", now) if rec else now,
+                "last_seen": max(rec["last_seen"], now) if rec else now}
+    via = via or (rec.get("via") if rec else None)       # a sighting that names no `via` keeps the earlier one
     if via:
         hist[ip]["via"] = via
     if len(hist) > _PEER_CANDIDATES_PER_DEVICE:

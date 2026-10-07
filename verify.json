@@ -1,5 +1,5 @@
 {
-  "digest": "ad68f23f850ca888412602ed8378b2fb7dfae6daeb7447359b5718a02065be3d",
+  "digest": "5bc4ccc44ce884c5f1c135cadde6b03913c9eb420e552164b3297b8afba90042",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -110,7 +110,7 @@
     "tests/test_daemon_code.py": "930ddcd04eeb47598be4980c52b042db78af9d16857e9afde95e5c4bbd970f06",
     "tests/test_dashboard.py": "1ff0a55b7271267a9225315d6f7b8ba006e7df8fb191699f8e2a704ee9e42894",
     "tests/test_device_identity.py": "e321daa34123ee585c13387900089334fc408b1da1f5a98af5a582bbfbf06cb4",
-    "tests/test_dispatch_modules.py": "0d116e703471588a6c4af3f56c4e9f035aad604edcddf5dc6bb5529f6ac4403b",
+    "tests/test_dispatch_modules.py": "6174a8fee4736695adbee31743b53810f88267dba465b2219f5fb0177d7d836e",
     "tests/test_doc_sync.py": "52f609c8fb60c32a7115701cf9f5d51ad934f55e736898bad5bbaa14a61d8e92",
     "tests/test_docs_name_moved_commands.py": "8af2791808ecc070026d30b0cde12f8c968e23eaa060380cce2d1a9b0dfb4233",
     "tests/test_docs_state_2_0_behaviour.py": "932c664ddefe6ae74cb9eec5b514533d948825c4f2dce2cf63a041fd83ee3e2b",

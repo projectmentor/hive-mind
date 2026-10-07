@@ -1775,6 +1775,8 @@ def append_foreign_entries(entries, advertised_chunks=None):
     while unresolved:
         landed_any, waiting = False, []
         for e in unresolved:
+            if gov_dirty:
+                refresh()               # a revoke or admit that landed above is read before the next entry is judged (#284)
             r = judge_governance(e) if e.get("type") == "governance" else judge_content(e)
             if r == _DEFER:
                 waiting.append(e)

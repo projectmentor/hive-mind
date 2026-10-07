@@ -655,3 +655,71 @@ def test_config_refuses_unknown_module_missing_key_bad_key_and_corrupt_file(hive
     (tmp_path / "modules" / "demo" / "config").write_text("not json")
     r = _run(hive, "module", "config", "demo", "set", "k", "v", check=False)
     assert r.returncode == 1 and (tmp_path / "modules" / "demo" / "config").read_text() == "not json"
+
+
+@pytest.fixture
+def slow_units(units, tmp_path, monkeypatch):
+    """The `units` shim, but `disable`/`restart` take 4 s to finish (a drain) and mark `stopped` only then; the base
+    systemctl allowance is shrunk to 2 s so the test is quick (a real one is 30 s against a 75 s drain)."""
+    shim = tmp_path / "shim" / "systemctl"
+    log, done = tmp_path / "systemctl.log", tmp_path / "stopped"
+    shim.write_text(f'#!/bin/sh\necho "$*" >> {log}\ncase "$*" in *disable*service*|*restart*service*) sleep 4; echo x >> {done};; esac\n'
+                    'case "$*" in *is-active*) echo active;; esac\nexit 0\n')
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "2")
+    return done
+
+
+def _slow_add(hive, tmp_path, grace):
+    """Install a module (quick, before the shim is slow is not possible: it is slow from the start), so add with a
+    generous allowance and then restore the short one."""
+    repo = tmp_path / "repo"
+    svc = {**SERVICE, **({"stop_grace": grace} if grace else {})}
+    return _add(hive, repo, _publish(repo, service=svc))
+
+
+@LINUX_ONLY
+def test_remove_waits_out_a_stop_grace_drain_and_deletes_only_after(hive, tmp_path, slow_units, monkeypatch):
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "30")
+    _slow_add(hive, tmp_path, 3)
+    slow_units.unlink(missing_ok=True)
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "2")           # base 2 s < the 4 s drain < grace 3 + 2
+    r = _run(hive, "module", "remove", "demo", check=False)
+    assert r.returncode == 0, r.stderr
+    assert slow_units.exists() and not (tmp_path / "modules" / "demo").exists()
+
+
+@LINUX_ONLY
+def test_remove_that_cannot_wait_long_enough_deletes_nothing(hive, tmp_path, slow_units, monkeypatch):
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "30")
+    unit_dir = Path(os.environ["HOME"]) / ".config" / "systemd" / "user"
+    _slow_add(hive, tmp_path, None)                              # no stop_grace: the allowance stays the base
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "2")
+    r = _run(hive, "module", "remove", "demo", check=False)
+    assert r.returncode != 0 and "still draining" in r.stderr
+    assert (tmp_path / "modules" / "demo" / "module.json").exists() and "demo" in _state(hive)
+    assert (unit_dir / "hive-module-demo.service").exists()
+
+
+@LINUX_ONLY
+def test_update_over_a_draining_unit_shows_no_false_would_not_start_note(hive, tmp_path, slow_units, monkeypatch):
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "30")
+    _slow_add(hive, tmp_path, 3)
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "2")
+    repo = tmp_path / "repo"
+    _publish(repo, version="1.1.0", service={**SERVICE, "stop_grace": 3})
+    r = _run(hive, "module", "update", "demo")
+    assert "would not start" not in r.stdout and "would not start" not in r.stderr
+
+
+@LINUX_ONLY
+def test_a_restart_that_times_out_is_reported_as_a_timeout_not_a_refusal(hive, tmp_path, slow_units, monkeypatch):
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "30")
+    _slow_add(hive, tmp_path, None)
+    monkeypatch.setenv("HIVE_SYSTEMCTL_TIMEOUT", "2")           # no stop_grace: a 4 s restart outlives the 2 s allowance
+    shim = tmp_path / "shim" / "systemctl"
+    shim.write_text(shim.read_text().replace("*disable*service*|*restart*service*", "*restart*service*"))   # only the restart is slow
+    repo = tmp_path / "repo"
+    _publish(repo, version="1.1.0", service=SERVICE)
+    r = _run(hive, "module", "update", "demo", check=False)
+    out = r.stdout + r.stderr
+    assert "would not start" not in out and "had not finished restarting it in time" in out

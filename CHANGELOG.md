@@ -36,7 +36,8 @@ device's past content leaves `hv search`, as the next bullet says.
 - **Fixed: a non-object module record in `.modules.json` reads as absent** in `limits_for` (#227, #247).
 - **Fixed: the dashboard no longer suggests a nonexistent `hive-mind verify`**; it says `hv verify` (#193, #245).
 - **Tests only:** the suite clears an exported `HIVE_KEY_DIR` (#178, #256) and never reads the repo-root `.peers.json`
-  (#142, #257), and a member device's retract is pinned never to become an owner act at genesis (#148, #259).
+  (#142, #257), a member device's retract is pinned never to become an owner act at genesis (#148, #259), and off
+  Linux the core hook output still passes through while the module hook does not run (#241, via #262).
 
 ## 2.1 — 2026-10-06 · `v2.1.0`
 

@@ -112,7 +112,7 @@ State these as the contract, not more.
    of the owner's revoke.
 6. **A module's hooks and service run code outside the signed source.** They are verified at install and by
    `hv doctor`, and not at every event.
-7. **Linux only in 2.1.** On any other platform `hive-mind module add` refuses and exits non-zero before it
+7. **Linux only (2.1, 2.2).** On any other platform `hive-mind module add` refuses and exits non-zero before it
    fetches, mints or installs anything. macOS and Termux follow in a later release.
 8. **Election skew on a mixed fleet.** The module marker on `admit` is read by 2.1 nodes. A 2.0 node ignores it and
    still counts a module device's vote. This matters only on a hive with `quorum_m > 0` and `quorum_by=device`
@@ -153,7 +153,7 @@ dispatcher's caps and gates (`MODULE_API.md`, *Hooks and events*) are stable.
 ## Deferred
 
 Out of scope for 2.1 and 2.2, and not designed here: a remote opt-in for the module API; module support on macOS and
-Termux; the `AGENTS.md` cell (2.2); module-added lines in the session digest, which land with the module that adds
+Termux; the `AGENTS.md` cell; module-added lines in the session digest, which land with the module that adds
 them; a unified entity identity across module and shared entities (3.0, public #151).
 
 ## Versioning

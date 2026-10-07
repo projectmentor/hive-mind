@@ -1020,6 +1020,38 @@ def _group_change(action, device_id, principal=None):
     print(msg)
 
 
+def _group_retire(device_id, through=None, confirm=False):
+    """Retire an honest device (#260): the owner-signed `purge` plus `keep_through` and `keep_hash`, so the chain up to
+    that seq still counts and nothing above it does. `through` defaults to the highest seq of the device this node
+    holds, and must be a seq it holds: the hash is `compute_hash` of that entry, and the projection reads the signed
+    pair, never this node's tip. A device that is already purged needs `confirm`, because the kept prefix counts
+    again in the live rows. A compromised device is `group purge`, with no keep fields."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    held = {e["seq"]: e for e in entries
+            if e.get("node_id") == device_id and isinstance(e.get("seq"), int) and not isinstance(e.get("seq"), bool)}
+    if device_id not in gov["admitted"] and device_id not in gov["purged"]:
+        print(f"{device_id} is not an admitted or purged device — nothing to retire.")
+        return
+    if device_id in gov["purged"] and not confirm:
+        print(f"{device_id} is already purged. Retiring it again names a prefix of its chain that counts again in "
+              f"search; pass --confirm for a device whose history you still trust.")
+        return
+    if not held:
+        print(f"This node holds no entry of {device_id}: nothing to keep. `group purge` tombstones it.")
+        return
+    seq = max(held) if through is None else through
+    if isinstance(seq, bool) or seq not in held:
+        print(f"This node does not hold seq {seq} of {device_id} (it holds 1..{max(held)}, "
+              f"{len(held)} entries): sync first, or choose a held seq with --through.")
+        return
+    payload = {"action": "purge", "device_id": device_id, "keep_through": seq, "keep_hash": compute_hash(held[seq])}
+    if not _append_governance(payload):
+        return
+    print(f"Retired {device_id} (tombstoned) — its chain through seq {seq} still counts, later entries do not; "
+          f"it cannot be re-admitted.")
+
+
 def _config_set(key, value):
     """Set a journaled, owner-signed tunable parameter (same on every node). Owner-only. Covers every
     governed key, whichever `hv config` sub-namespace it is set from: the confidence knobs

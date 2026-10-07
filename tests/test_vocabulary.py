@@ -83,6 +83,7 @@ READERS = {
         ("hv", "_self_signed_owner_acts"),      # genesis candidates
         ("hv", "_ts_owner_signed"),             # the timestamp tiebreak: an owner-signed governance act
         ("hv", "_admitted_content"),            # the projection keeps governance, drops an unadmitted device's content
+        ("hv", "_purge_unkept"),                # the same, for a purged device's content a retire does not keep (#260)
         ("hv", "_governance_state"),
         ("hv", "_governance_state_uncached"),   # the governance walk
         ("hv", "_owner_declaration"),
@@ -165,7 +166,8 @@ NOT_JOURNAL = {
 
 # `hv group` verbs that never reach `_group_change`: they write through a site of their own, or not at all.
 GROUP_VERBS_ELSEWHERE = {"list": "prints the roster; writes nothing",
-                         "admit": "`admit_cmd`, whose `{\"action\": \"admit\"}` literal is its own site"}
+                         "admit": "`admit_cmd`, whose `{\"action\": \"admit\"}` literal is its own site",
+                         "retire": "`group_retire_cmd` -> `_group_retire`, whose `{\"action\": \"purge\", keep_through, keep_hash}` literal is its own site (#260)"}
 
 # The owner-signing wrapper: builds with `hv`'s own builder, passing its `kind` through, then signs.
 LINK_PASS_THROUGH = {("hivemind_owner.py", "_link_payload")}

@@ -259,14 +259,21 @@ def test_a_slow_core_behaviour_shrinks_the_module_budget(tmp_path):
 @pytest.mark.parametrize("fake", [{"uname": "Darwin"}, {"uname": "Linux", "TERMUX_VERSION": "0.118"}])
 def test_off_linux_the_module_loop_is_skipped_silently(tmp_path, fake):
     out = tmp_path / "out"
-    _install(tmp_path, "mod", f"#!/bin/sh\ntouch {out}\n")
-    _install(tmp_path, "hang", "#!/bin/sh\nsleep 30\n")
+    # the core behaviour still runs and its output still passes through: a guard moved above the core `case`
+    # would exit before the nudge and kill it off Linux (mutant: move the `uname` line above `case "$event" in
+    # session-start)`; this test then fails on stdout)
+    nudge = tmp_path / "hive" / "scripts" / "common" / "nudge_hook.sh"
+    nudge.parent.mkdir(parents=True, exist_ok=True)
+    nudge.write_text("#!/bin/sh\necho context\n")
+    nudge.chmod(0o755)
+    _install(tmp_path, "mod", f"#!/bin/sh\ntouch {out}\n", event="user-prompt")
+    _install(tmp_path, "hang", "#!/bin/sh\nsleep 30\n", event="user-prompt")
     shim = tmp_path / "shim"
     shim.mkdir()
     (shim / "uname").write_text(f"#!/bin/sh\necho {fake['uname']}\n")
     (shim / "uname").chmod(0o755)
     extra = {"TERMUX_VERSION": fake["TERMUX_VERSION"]} if "TERMUX_VERSION" in fake else {}
-    r, dt = _run(tmp_path, PATH=f"{shim}:{os.environ['PATH']}", **extra)
-    assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
+    r, dt = _run(tmp_path, event="user-prompt", PATH=f"{shim}:{os.environ['PATH']}", **extra)
+    assert (r.returncode, r.stdout, r.stderr) == (0, "context\n", "")
     assert not out.exists() and dt < 5, dt
     assert not (tmp_path / "hive" / ".bus").exists()

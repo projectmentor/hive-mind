@@ -16,13 +16,20 @@ introduced (a contract) or tagged (a patch).
 
 **Upgrading from 2.1.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep
 working. A mixed 2.1 and 2.2 fleet converges. One effect to expect on the first rebuild (#246): a revoked or purged
-device's past content leaves `hv search`, as the next bullet says.
+device's past content leaves `hv search`, as the next bullet says (a retired device's signed prefix stays).
 
 - **A revoked or purged device's past content leaves `hv search`** (#246, closing #230 and #250). The store now
   projects a device's facts, decisions and ideas only while the final projection lists it as admitted and not purged.
   On rebuild, the content of a revoked or purged device drops out of `hv search` and the dashboard. It stays in the
-  journal and in `hv feed`. A later admit restores a revoked device's rows; a purge is final. An entry that verifies as
-  the owner, and the genesis device until its revoke or purge, are exempt.
+  journal and in `hv feed`. A later admit restores a revoked device's rows; a purge is final. A plain purge drops all of it; a retire
+  (next bullet) keeps the prefix its signed head names. An entry that verifies as the owner, and the genesis device
+  until its revoke or purge, are exempt.
+- **Added: `hive-mind group retire <device>`** (#260). The owner chooses, per device, whether a retired device's past
+  content still counts. `purge` stays the compromise tombstone and drops all of it; `retire` is the same signed `purge`
+  carrying `keep_through` (a seq) and `keep_hash` (the hash of the entry at that seq), and the chain that entry names
+  keeps counting, with its corroboration weight, while later seqs do not. A node that does not know the fields reads it
+  as a plain purge. Ingest stores an entry up to `keep_through` from a purged device in any arrival order. The device
+  still cannot be re-admitted; `revoke` is unchanged. Retiring an already-purged device needs `--confirm`.
 - **Owner-signed governance beats a device-stamped entry, and ingest refuses nothing for a timestamp** (#246). The
   timestamp bounds apply when the store is built, not when an entry arrives, so no entry is lost from a journal for
   its stamp. `docs/CONTRACT.md` states both in its guarantees.

@@ -734,7 +734,8 @@ kept out of `gov["admitted"]` so fleet, election and listing readers see no new 
 the genesis owner stays only for a device with no honoured revoke and no purge, so a writer-chosen stamp cannot outlive
 the owner's revoke. **Store effect on upgrade:** a rebuild drops the content of a revoked or purged device, so
 `hv search` stops returning it; the journal and `hv feed` still hold it, and a later admit brings back a revoked
-device's rows (a purge does not).
+device's rows (a purge does not). A plain purge drops all of a device's content; a retire (`purge` carrying
+`keep_through` and `keep_hash`, #260) keeps the prefix its signed head names; a purge stays final.
 
 ## Testing
 

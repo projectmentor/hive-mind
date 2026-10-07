@@ -597,6 +597,7 @@ hive-mind group revoke k1:…                           # un-admit (reversible) 
 hive-mind group deny k1:…                             # reject a pending join-request (admit overrides)
 hive-mind group change k1:… --principal newname       # re-tag a device's principal (admission unchanged)
 hive-mind group purge k1:…                            # tombstone: permanent; its entries stop counting
+hive-mind group retire k1:… [--through SEQ] [--confirm]   # tombstone an honest device; its chain through SEQ (default: highest held) keeps counting
 ```
 
 With no device_id, `hive-mind group admit` lists the pending join-requests. (Those also surface

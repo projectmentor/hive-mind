@@ -102,7 +102,10 @@ State these as the contract, not more.
    OS user, holding its own device key. It could append a signed line to the journal directly, and ingest on other
    nodes cannot know a quota. So quotas protect against a buggy or over-eager module, not against one with the
    operator's file access. **A hostile module is revoked** (`hive-mind group revoke` or `hive-mind module remove`);
-   its entries stay in the journal and stop counting.
+   its entries stay in the journal and stop counting. A **compromised** module device is `hive-mind group purge`d:
+   none of its content counts, in the projection on any node. An honest one that is being replaced is `hive-mind
+   group retire`d: the same tombstone, but the owner signs the seq and hash of its last good entry, and the chain up to
+   it keeps counting while later entries do not.
 5. **Timestamps are the writer's, within bounds, and the bounds apply in the projection only** *(2.2, #230, #250)*.
    Once the owner arms the bounds (`hive-mind owner freeze-timestamps`), an entry more than 5 minutes before its
    device's latest earlier entry, or before the device's first admit, is skipped by every node when the store is
@@ -110,6 +113,7 @@ State these as the contract, not more.
    never stamps earlier than its own last entry. **Owner-signed governance beats a device-stamped entry:** an
    entry the owner signed keeps its place however a device stamped its own, and a device cannot stamp itself ahead
    of the owner's revoke.
+
 6. **A module's hooks and service run code outside the signed source.** They are verified at install and by
    `hv doctor`, and not at every event.
 7. **Linux only (2.1, 2.2).** On any other platform `hive-mind module add` refuses and exits non-zero before it
@@ -123,7 +127,8 @@ State these as the contract, not more.
 10. **Content projects only for an admitted device, by the final state** *(2.2, #246)*. `hv search`, the store and
     the dashboard show a device's facts, decisions and ideas only while the final projection lists it as admitted and
     not purged. A revoked or purged device's past content leaves the store on rebuild but stays in the journal and
-    in `hv feed` (guarantee 4 stands). A later admit restores a revoked device's rows; a purge is final. Exempt: an
+    in `hv feed` (guarantee 4 stands). A later admit restores a revoked device's rows; a purge is final. A plain purge drops all of it; a retire keeps the
+    prefix its signed head names (`keep_through`, `keep_hash`, guarantee 4). Exempt: an
     entry that verifies as the owner at its position, and the genesis device, which counts as a member from genesis
     until an honoured revoke or a purge of it.
 

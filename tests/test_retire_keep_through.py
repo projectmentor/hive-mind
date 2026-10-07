@@ -367,11 +367,18 @@ def test_a_revoked_former_member_without_confirm_is_refused(tmp_path):
 
 
 def test_a_never_admitted_revoked_id_is_refused_even_with_confirm(tmp_path):
+    """`group revoke` refuses an id that is not admitted, so the revoke is written past that CLI check: dev-x ends up in
+    `revoked`, out of `first_admit`, holding a fact. Retire still refuses, writes no purge, and the fact stays out."""
     _run, _govstate = _cli_hive(tmp_path)
-    _run(tmp_path, "group", "revoke", "dev-x")
+    _run(tmp_path, "remember", "stranger", "--source", "agent", node_id="dev-x")
+    m, _ = _govstate(tmp_path)
+    m._group_change("revoke", "dev-x")
+    _m, gov = _govstate(tmp_path)
+    assert "dev-x" in gov["revoked"] and "dev-x" not in gov["first_admit"] and "dev-x" not in gov["admitted"]
     out = _run(tmp_path, "group", "retire", "dev-x", "--confirm").stdout
     assert "not an admitted or purged device" in out
     assert _purge_acts(tmp_path) == []
+    assert "stranger" not in _cli_contents(tmp_path)
 
 
 # ── gaps the verifier found in #264 (#266) ───────────────────────────────────────────────────────────────────────

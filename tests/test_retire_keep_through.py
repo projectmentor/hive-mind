@@ -338,6 +338,89 @@ def test_a_plain_purge_still_drops_everything(tmp_path):
     assert conn.execute("SELECT count(*) FROM facts").fetchone()[0] == 0
 
 
+# ── gaps the verifier found in #264 (#266) ───────────────────────────────────────────────────────────────────────
+
+def _raw_confidence(hv, with_x_tail):
+    """X retired through seq 1; admitted d0 asserts `c`; X asserts `c` at seq 2, above the cutoff. The confidence of `c`
+    from `_content_evidence` over the raw entries, as `unforget` and `hv feed` call it."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    base = base + [_gov(hv, {"action": "admit", "device_id": x["id"], "principal": "px"}, owner[0], owner[1], ts(1, 2), 4)]
+    x1 = _cfact(hv, x, "x1", ts(5), 1, GENESIS_PREV)
+    tail = _cfact(hv, x, "c", ts(6), 2, hv.compute_hash(x1))
+    y = _cfact(hv, d0, "c", ts(7), 1, GENESIS_PREV)
+    es = base + [x1, y, _act(hv, owner, x, x1, 5, ts(13))] + ([tail] if with_x_tail else [])
+    gov = hv._governance_state(es)
+    return hv._content_confidence(hv._content_evidence(es, gov)["c"], gov)
+
+
+def _evidence_check(hv, tmp_path):
+    return _raw_confidence(hv, True), _raw_confidence(hv, False)
+
+
+def test_the_raw_evidence_leaves_out_what_a_retire_does_not_keep(tmp_path, monkeypatch):
+    with_tail, without = _evidence_check(_loadhv(tmp_path, monkeypatch), tmp_path)
+    assert with_tail == without > 0
+
+
+def _n_plus_one_check(hv, tmp_path):
+    """The seqs of X held after the act and the entries arrive one per batch, in two orders; keep_through is 5."""
+    owner, x, base = _world(hv)
+    x["seq"] = 4
+    head = _cfact(hv, x, "x5", ts(12), 5, "sha256:" + "1" * 64)
+    above = _cfact(hv, x, "x6", ts(12, 5), 6, hv.compute_hash(head))
+    act = _act(hv, owner, x, head, 5, ts(13))
+    out = []
+    for order in ([act, above, head], [head, act, above]):
+        _journal(hv, base)
+        for e in order:
+            hv.append_foreign_entries([e])
+        out.append(sorted(e["seq"] for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR) if e["node_id"] == x["id"]))
+    return out
+
+
+def test_an_entry_one_above_the_cutoff_is_refused_at_ingest(tmp_path, monkeypatch):
+    got = _n_plus_one_check(_loadhv(tmp_path, monkeypatch), tmp_path)
+    assert got == [[5], [5]]
+
+
+def _walk_check(hv, tmp_path):
+    """The head (seq 2) whose `prev_hash` names a held body of the same device at seq 3: the walk must not follow it."""
+    owner, x, base = _world(hv)
+    x1 = _cfact(hv, x, "x1", ts(4), 1, GENESIS_PREV)
+    x3 = _cfact(hv, x, "x3", ts(6), 3, hv.compute_hash(x1))
+    head = _cfact(hv, x, "x2", ts(5), 2, hv.compute_hash(x3))
+    _journal(hv, base + [x1, head, x3, _act(hv, owner, x, head, 5, ts(13))])
+    return _contents(_project(hv, tmp_path, hv.merkle.read_all_entries(hv.JOURNAL_DIR)))
+
+
+def test_a_head_naming_a_higher_seq_body_does_not_pull_it_in(tmp_path, monkeypatch):
+    assert _walk_check(_loadhv(tmp_path, monkeypatch), tmp_path) == {"x2"}
+
+
+def _late_prefix_check(hv, tmp_path):
+    """Retire and plain purge held, then the prefix arrives: refused. With the plain purge first and a later retire,
+    the prefix is stored and projects."""
+    owner, x, base = _world(hv)
+    x["seq"] = 4
+    fact = _cfact(hv, x, "x5", ts(12), 5, "sha256:" + "1" * 64)
+    retire = _act(hv, owner, x, fact, 5, ts(13))
+    plain = _act(hv, owner, x, fact, 6, ts(14), plain=True)
+    retire_late = _act(hv, owner, x, fact, 7, ts(15))
+    out = []
+    for held in ([retire, plain], [plain, retire_late]):
+        _journal(hv, base)
+        hv.append_foreign_entries(held)
+        hv.append_foreign_entries([fact])
+        j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+        out.append(((x["id"], 5) in {(e["node_id"], e["seq"]) for e in j}, frozenset(_contents(_project(hv, tmp_path, j)))))
+    return out
+
+
+def test_case5_the_prefix_arriving_after_the_plain_purge_is_refused(tmp_path, monkeypatch):
+    assert _late_prefix_check(_loadhv(tmp_path, monkeypatch), tmp_path) == [(False, frozenset()), (True, frozenset({"x5"}))]
+
+
 # ── the mutants: each one is caught ──────────────────────────────────────────────────────────────────────────────
 
 def _m_refusal_stays(tmp_path, monkeypatch):
@@ -410,4 +493,39 @@ def test_each_mutant_is_caught(tmp_path, monkeypatch, mutant):
         got = _probe(mutant(tmp_path / "mut", monkeypatch), tmp_path / "mut")
     except AssertionError:
         return                        # the orders no longer agree: caught
+    assert got != real
+
+
+# ── the #266 mutants: each new test fails against its mutant ─────────────────────────────────────────────────────
+
+def _m_evidence_unfiltered(tmp_path, monkeypatch):
+    return _mutated_hv(tmp_path, monkeypatch,
+                       "zero-weight link.\"\"\"\n    gov = gov or _DEFAULT_GOV\n    entries = _purge_unkept(entries, gov)    # #260: a purged device's content counts only as far as a retire keeps it\n",
+                       "zero-weight link.\"\"\"\n    gov = gov or _DEFAULT_GOV\n")
+
+
+def _m_ingest_n_plus_one(tmp_path, monkeypatch):
+    return _mutated_hv(tmp_path, monkeypatch, "if keep is None or not isinstance(seq, int) or seq > keep[0]:",
+                       "if keep is None or not isinstance(seq, int) or seq > keep[0] + 1:")
+
+
+def _m_walk_no_seq_guard(tmp_path, monkeypatch):
+    return _mutated_hv(tmp_path, monkeypatch, 'e = nxt if nxt is not None and nxt["seq"] < e["seq"] else None', "e = nxt")
+
+
+def _m_plain_purge_keeps_pair(tmp_path, monkeypatch):
+    return _mutated_hv(tmp_path, monkeypatch, "            if keep is None or not isinstance(seq, int) or seq > keep[0]:",
+                       "            if False:")
+
+
+@pytest.mark.parametrize("mutant, check", [(_m_evidence_unfiltered, _evidence_check),
+                                           (_m_ingest_n_plus_one, _n_plus_one_check),
+                                           (_m_walk_no_seq_guard, _walk_check),
+                                           (_m_plain_purge_keeps_pair, _late_prefix_check)],
+                         ids=lambda v: v.__name__.strip("_"))
+def test_each_new_test_fails_against_its_mutant(tmp_path, monkeypatch, mutant, check):
+    (tmp_path / "real").mkdir()
+    (tmp_path / "mut").mkdir()
+    real = check(_loadhv(tmp_path / "real", monkeypatch), tmp_path / "real")
+    got = check(mutant(tmp_path / "mut", monkeypatch), tmp_path / "mut")
     assert got != real

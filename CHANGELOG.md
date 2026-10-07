@@ -12,6 +12,12 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
+- **Added: `hive-mind group retire <device>`** (#260). The owner chooses, per device, whether a retired device's past
+  content still counts. `purge` stays the compromise tombstone and drops all of it; `retire` is the same signed `purge`
+  carrying `keep_through` (a seq) and `keep_hash` (the hash of the entry at that seq), and the chain that entry names
+  keeps counting, with its corroboration weight, while later seqs do not. A node that does not know the fields reads it
+  as a plain purge. Ingest stores an entry up to `keep_through` from a purged device in any arrival order. The device
+  still cannot be re-admitted; `revoke` is unchanged. Retiring an already-purged device needs `--confirm`.
 - **Fixed: `hive-mind update --help` ran the update** (#224). `install`, `update`, `status` and `invite` now print usage
   and exit 0 on `-h` / `--help` without changing anything, and refuse an unknown argument with exit 2.
 

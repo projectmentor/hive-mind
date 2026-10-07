@@ -951,6 +951,56 @@ def _ts_violations(entries, gov):
     return out
 
 
+_KEEP_HASH_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def _keep_pair(p):
+    """The `(keep_through, keep_hash)` an owner-signed `purge` carries when its pair is well formed, else None: a
+    seq that is an int (not a bool) of at least 1, and a hash of the `compute_hash` shape. A purge without a
+    well-formed pair is a plain purge (compromise: none of the device's content projects). Pure; whether the hash
+    names the entry at that seq is judged against the held entries by `_purge_kept`."""
+    seq, h = p.get("keep_through"), p.get("keep_hash")
+    if isinstance(seq, int) and not isinstance(seq, bool) and seq >= 1 and isinstance(h, str) and _KEEP_HASH_RE.fullmatch(h):
+        return seq, h
+    return None
+
+
+def _purge_kept(entries, keep):
+    """{(node_id, seq)} a retire keeps (#260): for each device whose latest honoured purge carries the pair `keep[device]
+    = (seq, hash)`, the entry held at that seq whose `compute_hash` is the hash, then each entry held on that device
+    whose `compute_hash` is the `prev_hash` of the one above it, down the chain. The head commits to those bytes
+    transitively, so a body at a lower seq that the head does not name is not kept, and a gap stops the walk until the
+    entry that fills it is held. Pure over the held entries: a stamp and the arrival order never enter."""
+    if not keep:
+        return set()
+    by_hash = {}
+    for e in entries:
+        nid = e.get("node_id")
+        if nid in keep and isinstance(e.get("seq"), int):
+            by_hash[(nid, compute_hash(e))] = e
+    kept = set()
+    for nid, (seq, h) in keep.items():
+        e = by_hash.get((nid, h))
+        if e is None or e.get("seq") != seq:
+            continue                                   # the head is not held, or the pair does not name its own seq
+        while e is not None and (nid, e["seq"]) not in kept:
+            kept.add((nid, e["seq"]))
+            nxt = by_hash.get((nid, e.get("prev_hash")))
+            e = nxt if nxt is not None and nxt["seq"] < e["seq"] else None
+    return kept
+
+
+def _purge_unkept(entries, gov):
+    """`entries` without the content of a purged device that the latest honoured purge does not keep (#260). A plain
+    purge keeps nothing; a retire keeps the prefix `_purge_kept` names."""
+    purged = gov.get("purged") or set()
+    if gov.get("owner_id") is None or not purged:
+        return entries
+    kept = gov.get("kept") or set()
+    return [e for e in entries if e.get("type") == "governance" or e.get("node_id") not in purged
+            or (e.get("node_id"), e.get("seq")) in kept]
+
+
 def _admitted_content(entries, gov):
     """`entries` without the content of a device the same projection does not list in `admitted` once an owner exists
     (#230, #250): ingest stores what the timestamp bounds would skip, so admission is read here, from the projection
@@ -966,7 +1016,9 @@ def _admitted_content(entries, gov):
     ok = ok - gov.get("purged", set())          # the genesis device is a member until an honoured revoke or purge
     ended = gov.get("purged", set()) | gov.get("revoked", set())   # an honoured revoke or purge ends the pre-genesis stay
     timeline = gov.get("owner_timeline") or []
+    kept = gov.get("kept") or set()        # a retired device's named prefix (#260)
     return [e for e in entries if e.get("type") == "governance" or e.get("node_id") in ok
+            or (e.get("node_id"), e.get("seq")) in kept
             or (isinstance(e.get("payload"), dict)                                      # an owner act, not device-stamped:
                 and _is_authorized_writer(None, (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)),
                                           e["payload"], gov, "owner"))                  # verified, as of its position
@@ -1682,10 +1734,17 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if not _verify_entry(e):
             rejected += 1
             return _DONE
+        retired = False
         if has_owner and nid in gov["purged"]:
-            rejected += 1               # a purged device is tombstoned: its new writes are rejected even if later re-admitted
-            return _DONE
-        if has_owner and nid not in admitted:
+            # A purged device is tombstoned: its new writes are rejected even if later re-admitted, except the ones a
+            # retire (#260) keeps: seq <= the signed `keep_through`, whatever order the act and the entry arrive in.
+            # Whether such an entry projects is the projection's call (it must be on the chain the head names).
+            keep = gov.get("keep", {}).get(nid)
+            if keep is None or not isinstance(seq, int) or seq > keep[0]:
+                rejected += 1
+                return _DONE
+            retired = True
+        if has_owner and not retired and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
             # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
             return _DEFER
@@ -2258,7 +2317,7 @@ def _genesis_fingerprint(entries, gov=None):
 
 def _governance_state(entries):
     """Memoized wrapper over the (pure, deterministic) governance projection. The projection reads
-    ONLY governance entries, so the cache key is a content signature of just those — a plain `fact`
+    ONLY governance entries (but for `kept`, derived per call below), so the cache key is a content signature of just those — a plain `fact`
     write (the common case) does not bust it, and the heavy work (sort + multi-stage election walk +
     per-entry Ed25519 verification) is skipped on the long-lived daemon's repeated calls. The cached
     value is the master; every caller gets a deep COPY so a caller mutating its result can never
@@ -2277,7 +2336,11 @@ def _governance_state(entries):
         master = _governance_state_bounded(entries)
         _GOV_CACHE.clear()              # journal grows monotonically; only the latest sig is ever reused
         _GOV_CACHE[sig] = master
-    return copy.deepcopy(master)
+    gov = copy.deepcopy(master)
+    # #260: what the latest honoured retire of each device keeps. It reads the device's own content entries, which the
+    # cache key above leaves out, so it is derived per call (from the signed pair the cached walk resolved), never cached.
+    gov["kept"] = _purge_kept(entries, gov["keep"])
+    return gov
 
 
 def _governance_state_bounded(entries):
@@ -2303,6 +2366,7 @@ def _governance_state_uncached(entries):
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
            "principals": {}, "modules": {}, "module_config": {},
            "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
+           "keep": {}, "kept": set(),
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2506,6 +2570,13 @@ def _governance_state_uncached(entries):
         elif action == "purge" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])    # final tombstone (see _governed_side / ingest)
             gov["purged"].add(p["device_id"])
+            # #260: the latest honoured purge decides. A well-formed keep pair makes it a retire (the named prefix
+            # still counts); a plain one, or a malformed pair, drops the device's content whole.
+            pair = _keep_pair(p)
+            if pair is not None:
+                gov["keep"][p["device_id"]] = pair
+            else:
+                gov["keep"].pop(p["device_id"], None)
         elif action == "standby" and p.get("device_id"):
             # Advisory: a device the owner sanctions to also hold the owner key and act while the
             # owner is offline. No authority is granted here (the key is the authority) — this just
@@ -2638,6 +2709,7 @@ def _content_evidence(entries, gov=None, links=True):
     lands in the corpus (its content is a key of the result, and links and retracts can target it); a
     zero-weight assertion adds no evidence and does not move `last_ts`, exactly like a zero-weight link."""
     gov = gov or _DEFAULT_GOV
+    entries = _purge_unkept(entries, gov)    # #260: a purged device's content counts only as far as a retire keeps it
     isw = float((gov.get("config") or {}).get("introspect_support_weight", CONF_INTROSPECT_SUPPORT_WEIGHT))
     out = {}
     seq_content = {}                       # (node_id, seq) of a fact entry -> its content
@@ -2757,6 +2829,7 @@ _LINK_EVIDENCE_KINDS = dict(vocabulary.LINK_EVIDENCE_SIDES)
 _DEFAULT_GOV = {"owner_id": None, "owner_ts": "", "admitted": set(), "denied": set(), "purged": set(),
                 "standbys": set(), "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
                 "principals": {}, "modules": {}, "module_config": {}, "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
+                "keep": {}, "kept": set(),
                 "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                            "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                            "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2774,10 +2847,11 @@ def _governed_side(weights, gov):
     agents on one machine are correlated, not independent. Returns (total, set_of_device_ids)."""
     has_owner, admitted = gov["owner_id"] is not None, gov["admitted"]
     purged = gov.get("purged", set())
-    lam = gov["config"]["same_device_lambda"]
+    keep = gov.get("keep") or {}          # a retired device's kept prefix still weighs (#260): the entries are filtered
+    lam = gov["config"]["same_device_lambda"]   # by `_purge_unkept` before they reach here
     by_dev = {}
     for (dev, _app, _inst), w in weights.items():
-        if has_owner and (dev not in admitted or dev in purged):
+        if has_owner and dev not in keep and (dev not in admitted or dev in purged):
             continue
         by_dev.setdefault(dev, []).append(w)
     total = 0.0
@@ -2835,6 +2909,7 @@ def _decision_evidence(entries, gov=None):
     Pure over the journal; `_content_confidence` scores it unchanged (governed pos − neg, cap_self when
     every reporter shares one principal — a device cannot vindicate its own decisions)."""
     gov = gov or _DEFAULT_GOV
+    entries = _purge_unkept(entries, gov)    # #260: a purged device's content counts only as far as a retire keeps it
     known = {(e.get("node_id"), e.get("seq")) for e in entries}
     out = {}
     for e in entries:
@@ -2908,6 +2983,7 @@ def _idea_evidence(entries, gov=None):
     Admission, the same-device discount and cap_self apply as for facts via `_content_confidence`, so
     cap_self still binds when every supporter shares one OTHER principal (two devices of B on A's idea)."""
     gov = gov or _DEFAULT_GOV
+    entries = _purge_unkept(entries, gov)    # #260: a purged device's content counts only as far as a retire keeps it
     isw = float((gov.get("config") or {}).get("introspect_support_weight", CONF_INTROSPECT_SUPPORT_WEIGHT))
     authors = {(e.get("node_id"), e.get("seq")): e.get("node_id") for e in entries if e.get("type") == "idea"}
     ideas = set(authors)
@@ -9574,6 +9650,11 @@ def _group_change(action, device_id, principal=None):
     raise NotOnDataPlane(("group", action))
 
 
+def _group_retire(device_id, through=None, confirm=False):
+    """Placeholder: retire is an owner-signed purge that keeps the device's past content — `hive-mind group retire` (#260)."""
+    raise NotOnDataPlane(("group", "retire"))
+
+
 def _group_list():
     """Print the full membership roster: owner, admitted (+principals), pending, denied, purged."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
@@ -9598,7 +9679,7 @@ def _group_list():
     if gov["purged"]:
         print(f"purged ({len(gov['purged'])}):")
         for d in sorted(gov["purged"]):
-            print(f"  {d}")
+            print(f"  {d}" + (f"  (retired: seq 1..{gov['keep'][d][0]} still counts)" if d in gov["keep"] else ""))
     if _x25519 is None:
         print("device keys: n/a (crypto lib absent)")
     else:
@@ -9613,8 +9694,14 @@ def _group_list():
                 print(f"  {d}")
 
 
+def group_retire_cmd(args):
+    """`hive-mind group retire <device> [--through SEQ] [--confirm]` (#260): the owner's purge that keeps the device's
+    chain through a signed seq. Owner-signed, so the step lives on the control plane (`_group_retire`)."""
+    _group_retire(args.device_id, args.through, args.confirm)
+
+
 def group_cmd(args):
-    """Membership lifecycle (owner-only): admit / revoke / deny / change / purge / list.
+    """Membership lifecycle (owner-only): admit / revoke / deny / change / purge / retire / list.
     admit reuses admit_cmd (no arg → pending list, + reciprocal-peer seeding)."""
     action = getattr(args, "group_action", None)
     if action in (None, "list"):
@@ -10457,7 +10544,7 @@ def build_parser():
     admit_parser.add_argument("--principal", help="Tag the person or agent who owns this device")
     admit_parser.add_argument("--module", help="Mark the device as module NAME's (2.1): it never votes in an election")
 
-    group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/list")
+    group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/retire/list")
     group_sub = group_parser.add_subparsers(dest="group_action")
     g_admit = group_sub.add_parser("admit", help="Admit a device; no arg lists pending requests")
     g_admit.add_argument("device_id", nargs="?", help="The peer's device_id (k1:…). Omit to list pending")
@@ -10470,8 +10557,14 @@ def build_parser():
     g_change = group_sub.add_parser("change", help="Re-tag a device's principal (admission unchanged)")
     g_change.add_argument("device_id")
     g_change.add_argument("--principal", required=True, help="The new owner tag (person or agent)")
-    g_purge = group_sub.add_parser("purge", help="Tombstone a device (permanent; excluded from corroboration)")
+    g_purge = group_sub.add_parser("purge", help="Tombstone a compromised device (permanent; none of its content counts)")
     g_purge.add_argument("device_id")
+    g_retire = group_sub.add_parser("retire", help="Tombstone an honest device but keep its past content (purge with keep_through)")
+    g_retire.add_argument("device_id")
+    g_retire.add_argument("--through", type=int, metavar="SEQ",
+                          help="Keep the device's chain up to this seq (default: the highest seq this node holds)")
+    g_retire.add_argument("--confirm", action="store_true",
+                          help="Needed to retire a device that is already purged: its kept prefix counts again")
     group_sub.add_parser("list", help="Show the membership roster")
 
     join_parser = subparsers.add_parser("join", help="Request admission to this device's hive (after syncing it)")
@@ -10672,6 +10765,8 @@ def _dispatch(args):
         owner_cmd(args)
     elif args.command == "admit":
         admit_cmd(args)
+    elif args.command == "group" and args.group_action == "retire":
+        group_retire_cmd(args)
     elif args.command == "group":
         group_cmd(args)
     elif args.command == "join":

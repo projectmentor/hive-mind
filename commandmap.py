@@ -55,6 +55,7 @@ MOVED = {
     ("group", "deny"):              ("group deny",              "owner-signed"),
     ("group", "change"):            ("group change",            "owner-signed"),
     ("group", "purge"):             ("group purge",             "owner-signed"),
+    ("group", "retire"):            ("group retire",            "owner-signed"),
 
     # Governed configuration. The three ways to set a value collapse to one here.
     ("config", "set"):              ("config set",              "owner-signed"),

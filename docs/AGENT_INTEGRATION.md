@@ -594,7 +594,12 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
 - `1.5` — membership **lifecycle** + a unified settings surface. New owner-only `hv group`
   verb groups the admission lifecycle: `admit / revoke / deny / change / purge / list`
   (revoke is reversible; purge is a final tombstone — its entries stay in the journal but stop
-  counting and it can't be re-admitted). `hv config` gains `identity` (this device's key) and
+  counting and it can't be re-admitted; `purge` is for a compromised device, since nobody can tell which of its
+  entries an attacker wrote). `group retire <device>` (#260) is the same tombstone for an honest device you are
+  replacing: it signs `keep_through` and `keep_hash` on the purge, and the chain up to that seq still counts, with
+  its corroboration weight, while later seqs do not and the device still cannot be re-admitted. It defaults to the
+  highest seq this node holds, takes `--through SEQ` for a lower held one, and needs `--confirm` for a device that is
+  already purged. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
   `confidence` (the params) sub-namespaces. `hv key`, `hv admit`, and `hv config set …` are kept
   as silent aliases. Additive: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,

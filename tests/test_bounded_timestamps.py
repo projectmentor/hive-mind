@@ -803,3 +803,46 @@ def test_a_clock_behind_the_chain_max_is_clamped_to_the_max_not_the_previous_ent
     peer = _loadhv(tmp_path / "peer", monkeypatch)
     _journal(peer, base + [old1, old2, marker])
     assert peer.append_foreign_entries([e])[:2] == (1, 0)
+
+
+def _coarrival(hv, n_facts=30):
+    """#284: X is admitted. Its own-chain revoke sits at seq 2 and `n_facts` facts at seq 3.. ride in the same call."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    held = _admitted_x(hv, owner, base, x)
+    x["seq"] = 1
+    revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
+    facts = [_fact(hv, x, f"x fact {i}", ts(12, 20, i)) for i in range(n_facts)]
+    return held, x, revoke, facts
+
+
+def _stored(hv, x):
+    return {e["seq"] for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR) if e["node_id"] == x["id"]}
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["revoke-first", "facts-first"])
+def test_a_revoke_in_the_call_is_read_before_the_facts_behind_it(tmp_path, monkeypatch, reverse):
+    """The call stores what delivering the same entries one by one, in chain order, stores: the revoke, and none of
+    the facts it makes inadmissible. The input order of the call does not matter."""
+    hv = _loadhv(tmp_path / "one", monkeypatch)
+    held, x, revoke, facts = _coarrival(hv)
+    _journal(hv, held)
+    for e in [revoke] + facts:
+        hv.append_foreign_entries([e])
+    one_by_one = _stored(hv, x)
+    assert one_by_one == {2}
+
+    batch = [revoke] + facts
+    _journal(hv, held)
+    hv.append_foreign_entries(batch[::-1] if reverse else batch)
+    assert _stored(hv, x) == one_by_one
+    assert x["id"] not in hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["admitted"]
+
+
+def test_no_fact_from_a_revoked_co_arrival_projects(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    held, x, revoke, facts = _coarrival(hv)
+    _journal(hv, held)
+    hv.append_foreign_entries([revoke] + facts)
+    j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+    assert _contents(_project(hv, tmp_path, j)) == set()

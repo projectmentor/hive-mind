@@ -1,5 +1,5 @@
 {
-  "digest": "dc47e4209cf82bc64459e35e532f394fee2e7f9b3f127c829f3255714a03264f",
+  "digest": "892cb03fb8634a8d9dd8af11b4ade2a47a659c6328a62001032f7bb9ef0627c5",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -44,7 +44,7 @@
     "hive_module_api.py": "285733cf296f43f527135c67a783c772ecaa3de5ea7081bf71ede2503f81db1c",
     "hive_module_client.py": "a734b85aff7cb4bd86f32a3b3ef697e5048e440e7a22d572668b9cebd86718e1",
     "hive_module_doctor.py": "d42fac815facb6124ebb022cd1e11274691dc4713c325a590297f0a6c12dfb48",
-    "hive_modules.py": "3e6cc739294e31d48bdf983cf99006530298f1ab01b3a2054b0d6921cd59c782",
+    "hive_modules.py": "2d0c592829eb7c5b83c9a810c3a8a993bfdec577816fe97c0ddcaaa6ceb45cfb",
     "hive_sync_daemon.py": "08df1d37ae53711d7bd59412658fbc3611972f63ce50c5a78b2247fa29f17516",
     "hivemind_ctl.py": "3fd05b2c14e61e0a6ff2e22ef6db6f8154a4e2b9473d3c22308b7f411aa2abe4",
     "hivemind_owner.py": "aec58688cde9710a2bff6267b08cff742109bae02f9960d848cb2d783cc6a9ef",
@@ -152,7 +152,7 @@
     "tests/test_module_api.py": "dc8b214f12e40710e7f15094e25e0a79f6ed848191b16d7ec8c58673b9c91957",
     "tests/test_module_doctor.py": "6bdb072ddead7af502cffd00f882dd940796bd9283108bb079098bbe54166603",
     "tests/test_module_identity.py": "46c8a242a6baf1c0133b6ae5bbc7c74d69fd9234e22bdee0a87922791bcb0f69",
-    "tests/test_module_lifecycle.py": "93f5d59a443bf89c2d6f804897260dcc2ea7b335cd4e701fade114c7b044bdf9",
+    "tests/test_module_lifecycle.py": "55ef64b51e4c69a0867c33adaa6d4c8dd281dda46c19f3ac1ed987d2941d1d22",
     "tests/test_module_names.py": "ec5b9e88701b5f5548cbc92d42b78340d9f10fc37777321f66004f9b4d140fe5",
     "tests/test_module_nonowner.py": "497752ba54c58da6c17bf27aa32f77aad09796a1c7b8c85bf49c76df2d500555",
     "tests/test_module_write.py": "93076baa732fdfd68d3a469306f234d4c3a5a0cb77cbc70be57dcc0f13aa1afb",

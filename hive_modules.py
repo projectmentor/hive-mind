@@ -433,6 +433,7 @@ def _complete_add(lib, args, name, root, rec):
         remove_units(name)
         if renamed and not staging.exists():
             os.rename(root / name, staging)          # the pending add stays whole, so it can be run again
+            (staging / "config").unlink(missing_ok=True)       # staging is again exactly the tree that was verified
         raise
     _pending_path(name).unlink(missing_ok=True)
     print(f"installed module {name} {manifest['version']} (device {dev}, principal {gov['principals'].get(dev)}); "

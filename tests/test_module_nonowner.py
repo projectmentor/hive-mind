@@ -213,6 +213,40 @@ def test_a_module_that_fails_the_check_stages_nothing_on_a_device_without_the_ow
 
 
 @LINUX_ONLY
+def test_a_wrong_or_missing_publisher_stages_nothing_and_mints_no_key(nodes, tmp_path):
+    pub = _publish(tmp_path / "repo")
+    wrong = _publish(tmp_path / "other", seed=OTHER_SEED)
+    assert wrong != pub
+    r = nodes.add_b(tmp_path / "repo", wrong, check=False)
+    assert r.returncode == 1
+    r2 = nodes.run_b("module", "add", "demo", "--from", str(tmp_path / "repo"), "--principal", "op", check=False)
+    assert r2.returncode == 1                                           # no --publisher and no tty: nothing to confirm
+    assert not (nodes.mods["b"] / ".demo.staging").exists() and not (nodes.mods["b"] / ".demo.pending.json").exists()
+    assert not nodes.b_key().exists()
+
+
+@LINUX_ONLY
+def test_a_failed_completion_leaves_the_pending_add_runnable_again(nodes, tmp_path, units):
+    unit_dir, _calls = units
+    pub = _publish(tmp_path / "repo", service={"command": ["run.sh"], "restart": "always"})
+    out = nodes.add_b(tmp_path / "repo", pub).stdout
+    nodes.run_a(*_admit_line(out))
+    nodes.sync_to_b()
+    unit_dir.mkdir(parents=True, exist_ok=True)
+    unit_dir.chmod(0o500)
+    try:
+        r = nodes.add_b(tmp_path / "repo", pub, check=False)
+    finally:
+        unit_dir.chmod(0o700)
+    if r.returncode == 0:
+        pytest.skip("the unit directory stayed writable (running as root)")
+    assert not nodes.b_modules().exists() and not (nodes.b / ".modules.json").exists()
+    assert not (nodes.mods["b"] / ".demo.staging" / "config").exists()
+    r = nodes.add_b(tmp_path / "repo", pub)
+    assert "installed module demo 1.0.0" in r.stdout
+
+
+@LINUX_ONLY
 def test_a_device_with_no_principal_must_be_given_one(nodes, tmp_path):
     pub = _publish(tmp_path / "repo")
     r = nodes.run_b("module", "add", "demo", "--from", str(tmp_path / "repo"), "--publisher", pub, check=False)

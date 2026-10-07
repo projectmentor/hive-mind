@@ -3,7 +3,7 @@
 What the module API promises, and what it does not. A module author reads this file to know what may be relied on
 across releases; [`MODULE_API.md`](MODULE_API.md) is the route reference and
 [`AGENT_INTEGRATION.md`](AGENT_INTEGRATION.md) §7 the adapter-facing version policy. Contract **2.1** was the first to
-publish this; 2.2 changes guarantee 5 and adds guarantee 10.
+publish this; 2.2 changes guarantees 4 and 5 and adds guarantee 10.
 
 ## Stability tiers
 
@@ -109,7 +109,9 @@ State these as the contract, not more.
 5. **Timestamps are the writer's, within bounds, and the bounds apply in the projection only** *(2.2, #230, #250)*.
    Once the owner arms the bounds (`hive-mind owner freeze-timestamps`), an entry more than 5 minutes before its
    device's latest earlier entry, or before the device's first admit, is skipped by every node when the store is
-   built. Ingest refuses nothing for a timestamp: such an entry stays in the journal and in `hv feed`. A module
+   built. Ingest refuses nothing for a timestamp; the signature, purge, payload and admission gates still refuse
+   as before, and an entry those gates accept stays in the journal and in `hv feed` and is skipped when the store is
+   built. A module
    never stamps earlier than its own last entry. **Owner-signed governance beats a device-stamped entry:** an
    entry the owner signed keeps its place however a device stamped its own, and a device cannot stamp itself ahead
    of the owner's revoke.
@@ -129,8 +131,9 @@ State these as the contract, not more.
     not purged. A revoked or purged device's past content leaves the store on rebuild but stays in the journal and
     in `hv feed` (guarantee 4 stands). A later admit restores a revoked device's rows; a purge is final. A plain purge drops all of it; a retire keeps the
     prefix its signed head names (`keep_through`, `keep_hash`, guarantee 4). Exempt: an
-    entry that verifies as the owner at its position, and the genesis device, which counts as a member from genesis
-    until an honoured revoke or a purge of it.
+    entry that verifies as the owner at its position; the genesis device, which counts as a member from genesis
+    until an honoured revoke or a purge of it; and content positioned before the genesis owner stays only for a device with no honoured revoke and no purge, so a writer-chosen
+    stamp cannot outlive the owner's revoke.
 
 ## `hv feed`: the consumer's obligations
 
@@ -163,7 +166,7 @@ them; a unified entity identity across module and shared entities (3.0, public #
 
 ## Versioning
 
-**2.2** is a MINOR. `hv search --id` is additive, and guarantees 5 and 10 above state how the projection treats timestamps and a revoked device's content. The release tag `v2.2.0` marks the commit that completed it.
+**2.2** is a MINOR. `hv search --id` and `hive-mind group retire` are additive, and guarantees 4, 5 and 10 above state how the projection treats timestamps and a revoked device's content. The release tag `v2.2.0` marks the commit that completed it.
 
 The contract is `MAJOR.MINOR` (`hv version`). 2.1 is a MINOR: additive for the adapter surface. `hv feed` is a new
 verb, `hive-mind module` a new control-plane verb, `/v1` a new surface, and the hook events additive. No verb, flag

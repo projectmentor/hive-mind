@@ -274,7 +274,8 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   admitted and not purged, so after a rebuild a revoked or purged device's past facts, decisions and ideas no longer
   appear in `hv search`, though they stay in the journal and `hv feed`; a later admit brings a revoked device's rows
   back, a purge does not. A plain purge drops all of it; a retire (`hive-mind group retire`, #260) keeps the prefix its
-  signed head names; a purge stays final. Owner-signed governance beats a device-stamped entry, and the timestamp bounds apply in the
+  signed head names; a purge stays final. Exempt: an entry that verifies as the owner, the genesis device until its
+  revoke or purge, and content positioned before the genesis owner stays only for a device with no honoured revoke and no purge. Owner-signed governance beats a device-stamped entry, and the timestamp bounds apply in the
   projection only. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `2.1` — **modules: a signed, loopback-only module API and a module lifecycle** (private #16). **Additive: no
   re-integration.** Nothing an adapter calls changes: no verb, flag or output format moves. New: `hv feed` (read-only
@@ -611,7 +612,6 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   its corroboration weight, while later seqs do not and the device still cannot be re-admitted. It defaults to the
   highest seq this node holds, takes `--through SEQ` for a lower held one, and needs `--confirm` for a device that is
   already purged. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
-
   `confidence` (the params) sub-namespaces. `hv key`, `hv admit`, and `hv config set …` are kept
   as silent aliases. Additive: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,

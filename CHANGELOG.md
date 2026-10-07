@@ -22,8 +22,8 @@ device's past content leaves `hv search`, as the next bullet says (a retired dev
   projects a device's facts, decisions and ideas only while the final projection lists it as admitted and not purged.
   On rebuild, the content of a revoked or purged device drops out of `hv search` and the dashboard. It stays in the
   journal and in `hv feed`. A later admit restores a revoked device's rows; a purge is final. A plain purge drops all of it; a retire
-  (next bullet) keeps the prefix its signed head names. An entry that verifies as the owner, and the genesis device
-  until its revoke or purge, are exempt.
+  (next bullet) keeps the prefix its signed head names. Exempt: an entry that verifies as the owner; the genesis
+  device until its revoke or purge; and content positioned before the genesis owner stays only for a device with no honoured revoke and no purge.
 - **Added: `hive-mind group retire <device>`** (#260). The owner chooses, per device, whether a retired device's past
   content still counts. `purge` stays the compromise tombstone and drops all of it; `retire` is the same signed `purge`
   carrying `keep_through` (a seq) and `keep_hash` (the hash of the entry at that seq), and the chain that entry names
@@ -44,7 +44,9 @@ device's past content leaves `hv search`, as the next bullet says (a retired dev
 - **Fixed: the dashboard no longer suggests a nonexistent `hive-mind verify`**; it says `hv verify` (#193, #245).
 - **Tests only:** the suite clears an exported `HIVE_KEY_DIR` (#178, #256) and never reads the repo-root `.peers.json`
   (#142, #257), a member device's retract is pinned never to become an owner act at genesis (#148, #259), and off
-  Linux the core hook output still passes through while the module hook does not run (#241, via #262), and a retire's keep-through cutoff is pinned across gap fill, revoke and readmit, plain purge and down-level nodes (#266, #269).
+  Linux the core hook output still passes through while the module hook does not run (#241, via #262), and a
+  retire's cutoff is pinned in the raw evidence, at `keep_through + 1` on ingest, against a head naming a higher-seq
+  body, and for a prefix arriving after a plain purge (#266, #269).
 
 ## 2.1 — 2026-10-06 · `v2.1.0`
 

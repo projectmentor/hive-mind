@@ -221,7 +221,9 @@ def _over_quota(state, times, now):
 
 def route_root(ctx, q):
     hv, gov = daemon.hv, ctx["gov"]
-    nodes = set(gov.get("admitted") or ()) - set(gov.get("purged") or ()) - set(gov.get("modules") or ())
+    gen = gov.get("genesis_device")     # a member from genesis, though `owner init` writes no admit for it (as `_admitted_content`)
+    members = set(gov.get("admitted") or ()) | ({gen} if gen and gen not in (gov.get("revoked") or ()) else set())
+    nodes = members - set(gov.get("purged") or ()) - set(gov.get("modules") or ())
     return {"api": API_VERSIONS, "contract": getattr(hv, "CONTRACT_VERSION", None), "hive_id": gov.get("hive_id", ""),
             "device_id": ctx["device_id"], "module": ctx["module"],
             "node_id": hv.NODE_ID, "node_devices": len(nodes),     # a string and a count: no device list, address or principal

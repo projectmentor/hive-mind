@@ -105,7 +105,7 @@ def test_root_names_the_caller_and_serves_only_its_own_module_config(hive):
     code, body = hive.get("/v1/")
     assert code == 200
     assert body == {"api": ["v1"], "contract": hive.hv.CONTRACT_VERSION, "hive_id": "h1", "device_id": hive.mod["id"],
-                    "module": "hwatch", "node_id": hive.hv.NODE_ID, "node_devices": 1, "quota": {"limits": api.QUOTA_DEFAULTS, "used": {"per_hour": 0, "per_day": 0, "lifetime": 0},
+                    "module": "hwatch", "node_id": hive.hv.NODE_ID, "node_devices": 2, "quota": {"limits": api.QUOTA_DEFAULTS, "used": {"per_hour": 0, "per_day": 0, "lifetime": 0},
                                                   "remaining": {"per_hour": 60, "per_day": 500, "lifetime": 50000}},
                     "config": {"x-hwatch:poll": "30s"}}
     code, other = hive.get("/v1/", dev="other")
@@ -120,26 +120,26 @@ def _root(hive):
 
 def test_node_devices_counts_node_devices_and_leaves_out_modules_and_the_revoked(hive):
     oseed, opub, _ = hive.owner
-    # the fixture admits three devices and two of them as modules: one node device (the module devices are excluded)
-    assert _root(hive)["node_devices"] == 1
+    # the fixture's genesis device and one admitted device are nodes; the two module devices are excluded
+    assert _root(hive)["node_devices"] == 2
     extra = TL._device(hive.hv)
     hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "admit", "device_id": extra["id"], "principal": "p9"},
                                             oseed, opub, "2026-01-01T00:00:11Z", 7)])
-    assert _root(hive)["node_devices"] == 2
+    assert _root(hive)["node_devices"] == 3
     hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "revoke", "device_id": extra["id"]},
                                             oseed, opub, "2026-01-01T00:00:12Z", 8)])
-    assert _root(hive)["node_devices"] == 1
+    assert _root(hive)["node_devices"] == 2
 
 
 def test_a_purged_node_device_is_not_counted(hive):
     oseed, opub, _ = hive.owner
     hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "purge", "device_id": hive.plain["id"]},
                                             oseed, opub, "2026-01-01T00:00:11Z", 7)])
-    assert _root(hive)["node_devices"] == 0
+    assert _root(hive)["node_devices"] == 1       # the genesis device remains
     # a later admit leaves the device in the walk's `admitted` but it stays purged (#260): still not counted
     hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "admit", "device_id": hive.plain["id"], "principal": "p0"},
                                             oseed, opub, "2026-01-01T00:00:12Z", 8)])
-    assert _root(hive)["node_devices"] == 0
+    assert _root(hive)["node_devices"] == 1
 
 
 def test_node_id_is_the_device_hv_whoami_names(hive, capsys):
@@ -157,7 +157,7 @@ def test_the_root_answer_carries_no_list_and_only_the_documented_keys(hive):
     for d in (hive.plain, hive.mod, hive.other):
         if d["id"] != body["device_id"]:
             assert d["id"] not in blob            # no other device is named
-    assert "op" not in body and '"principal' not in blob
+    assert '"op"' not in blob and '"principal' not in blob
 
 
 def test_an_unknown_route_is_404_and_an_unsupported_version_names_the_supported_ones(hive):
@@ -300,3 +300,30 @@ def test_the_listener_is_started_by_the_daemon_and_never_blocks_it(monkeypatch):
     assert src.count("modules = _start_module_api()") == 2                  # serve_forever and run_daemon
     monkeypatch.setattr(api, "make_module_server", lambda port=None: (_ for _ in ()).throw(OSError("in use")))
     assert api.start_module_api() is None                         # a taken port is reported, not raised
+
+
+def _one_node_hive(hive, *extra):
+    """Rewrite the journal as `owner init` leaves it: genesis signed as this node, no self-admit, then a module admit."""
+    hv = hive.hv
+    oseed, opub, oid = hive.owner
+    gen = TL._gov(hv, {"action": "owner", "owner_id": oid, "hive_id": "h1"}, oseed, opub, "2026-01-01T00:00:00Z", 1)
+    gen["node_id"] = hv.NODE_ID
+    adm = TL._gov(hv, {"action": "admit", "device_id": hive.mod["id"], "principal": "op", "module": "hwatch"},
+                  oseed, opub, "2026-01-01T00:00:01Z", 2)
+    more = [TL._gov(hv, dict(p), oseed, opub, f"2026-01-01T00:00:{2 + i:02d}Z", 3 + i) for i, p in enumerate(extra)]
+    TL._project(hv, hive.home, [gen, adm] + more).close()
+
+
+def test_a_one_node_hive_counts_its_genesis_device(hive):
+    _one_node_hive(hive)
+    assert _root(hive)["node_devices"] == 1
+
+
+def test_a_revoked_genesis_device_is_not_counted(hive):
+    _one_node_hive(hive, {"action": "revoke", "device_id": hive.hv.NODE_ID})
+    assert _root(hive)["node_devices"] == 0
+
+
+def test_a_purged_genesis_device_is_not_counted(hive):
+    _one_node_hive(hive, {"action": "purge", "device_id": hive.hv.NODE_ID})
+    assert _root(hive)["node_devices"] == 0

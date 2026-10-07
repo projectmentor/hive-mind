@@ -66,7 +66,8 @@ A path under a version this node does not serve (`/v2/…`) is `404` naming the 
 
 `api` lists the path versions served. `module` is the caller's module name. `node_id` is this node's own device id, the
 signer of the entries its `hv` writes, and `node_devices` is how many node devices the hive has: the admitted devices
-that are not purged and not a module (a revoked device is not admitted, so it is not counted). Both are read-only, a
+and the genesis device (a member from genesis, though `owner init` writes no admit for it) that are not revoked, not
+purged and not a module. Both are read-only, a
 string and an integer; the route carries no device list, no address and no principal. A module that is told to run on
 "the one node" can tell a one-node hive (`node_devices` is 1) from a fleet. A node on 2.2 or earlier does not send
 either field, so a module treats an absent `node_devices` as unknown. `config` is the caller's own

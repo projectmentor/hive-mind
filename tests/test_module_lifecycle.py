@@ -281,17 +281,6 @@ def test_a_hand_edited_manifest_ask_cannot_raise_a_limit(hive, tmp_path, monkeyp
     assert lim["per_hour"] == api.QUOTA_DEFAULTS["per_hour"] and lim["per_day"] == 7
 
 
-@LINUX_ONLY
-def test_a_device_without_the_owner_key_refuses_before_touching_anything(hive, tmp_path):
-    pub = _publish(tmp_path / "repo")
-    b = tmp_path / "B"
-    _run(b, "config", "identity", "init")
-    r = _run(b, "module", "add", "demo", "--from", str(tmp_path / "repo"), "--publisher", pub, "--principal", "op",
-             check=False)
-    assert r.returncode == 1 and "owner key" in r.stderr
-    assert not (tmp_path / "modules" / "demo").exists() and not _key_dir_has_module(b)
-
-
 def test_the_data_plane_cannot_reach_module_management():
     """S2: `hv` imports neither this module nor the owner key, and this module reaches the owner steps only
     through the control plane's library (it imports no `ownerkey`)."""
@@ -309,22 +298,6 @@ def test_the_data_plane_cannot_reach_module_management():
     assert "ownerkey" not in imports(PROJECT / "hive_modules.py")
     r = subprocess.run([sys.executable, str(PROJECT / "hv"), "module", "list"], capture_output=True, text=True)
     assert r.returncode != 0
-
-
-@LINUX_ONLY
-def test_update_without_the_owner_key_leaves_the_installed_module_alone(hive, tmp_path):
-    pub = _publish(tmp_path / "repo")
-    _add(hive, tmp_path / "repo", pub)
-    d = tmp_path / "modules" / "demo"
-    before = (d / "run.sh").read_text()
-    _publish(tmp_path / "repo", version="9.9.9", files={"run.sh": "#!/bin/sh\necho DOWNGRADED\n", "hooks/stop": "#!/bin/sh\n"})
-    moved = [f for f in _keys.key_dir(hive).glob("owner-key*") if f.is_file()]
-    assert moved
-    for f in moved:
-        f.rename(f.with_name(f.name + ".aside"))
-    r = _run(hive, "module", "update", "demo", check=False)
-    assert r.returncode == 1 and "owner key" in r.stderr
-    assert (d / "run.sh").read_text() == before and _state(hive)["demo"]["version"] == "1.0.0"
 
 
 @LINUX_ONLY

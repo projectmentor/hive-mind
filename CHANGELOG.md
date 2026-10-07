@@ -12,6 +12,13 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
+- **Added: install a module on a device without the owner key** (hwatch C6, M1b). `hive-mind module add <name> --from
+  <repo>` there stages the verified tree, mints the module's key and prints the owner's `group admit <device> --module
+  <name> --principal <p>` line with the publisher fingerprint and the verified commit, and installs nothing. A second
+  `add` after the owner's admit has synced installs the staged tree; `add --abort <name>` drops it. `module update`
+  no longer needs the owner key (same checks, no membership or quota change), and `module remove` there deletes the
+  tree and key and prints the owner's `group revoke` line (the device stays admitted until then). `quota` stays
+  owner-only. No governance route or entry changes.
 - **Added: `hive-mind group retire <device>`** (#260). The owner chooses, per device, whether a retired device's past
   content still counts. `purge` stays the compromise tombstone and drops all of it; `retire` is the same signed `purge`
   carrying `keep_through` (a seq) and `keep_hash` (the hash of the entry at that seq), and the chain that entry names

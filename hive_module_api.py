@@ -4,7 +4,7 @@ A second, loopback-only HTTP listener for modules: separate processes that read 
 through the core. It is data plane only. It imports no owner-key code (the S2 boundary,
 `tests/test_ownerkey_boundary.py`) and serves no governance, owner, escrow, capsule, cell or comb state.
 
-  GET  /v1/         -> {api, contract, hive_id, device_id, module, quota, config}
+  GET  /v1/         -> {api, contract, hive_id, device_id, module, node_id, node_devices, quota, config}
   GET  /v1/feed     -> `hv feed`: ?after=<node_id:seq,...>&limit=
   GET  /v1/search   -> `api_search`: ?q=&tag=&kind=&min_confidence=&limit=&offset=&sort=&status=
   GET  /v1/item     -> `api_item`: ?id=<h:... or node_id:seq>
@@ -221,8 +221,12 @@ def _over_quota(state, times, now):
 
 def route_root(ctx, q):
     hv, gov = daemon.hv, ctx["gov"]
+    gen = gov.get("genesis_device")     # a member from genesis, though `owner init` writes no admit for it (as `_admitted_content`)
+    members = set(gov.get("admitted") or ()) | ({gen} if gen and gen not in (gov.get("revoked") or ()) else set())
+    nodes = members - set(gov.get("purged") or ()) - set(gov.get("modules") or ())
     return {"api": API_VERSIONS, "contract": getattr(hv, "CONTRACT_VERSION", None), "hive_id": gov.get("hive_id", ""),
             "device_id": ctx["device_id"], "module": ctx["module"],
+            "node_id": hv.NODE_ID, "node_devices": len(nodes),     # a string and a count: no device list, address or principal
             "quota": quota_state(ctx["device_id"], ctx["module"])[0],
             "config": _module_config(gov, ctx["module"])}
 

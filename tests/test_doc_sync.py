@@ -173,3 +173,9 @@ def test_contract_names_every_route_and_the_quota_defaults():
     for key, default in api.QUOTA_DEFAULTS.items():
         assert f"`{key}`" in module_api, f"docs/MODULE_API.md does not name the `{key}` quota"
     assert "50,000" in module_api and "16 KiB" in module_api and "| 60 |" in module_api and "| 500 |" in module_api
+
+
+def test_the_docs_name_the_node_fields_of_the_root_answer():
+    for name in ("MODULE_API.md", "CONTRACT.md"):
+        text = (DOCS / name).read_text()
+        assert "`node_id`" in text and "`node_devices`" in text, name

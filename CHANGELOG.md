@@ -12,6 +12,11 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
+- **Added: `GET /v1/` reports `node_id` and `node_devices`** (hwatch C1, M3b). `node_id` is this node's own device id
+  and `node_devices` the number of node devices in the hive (the admitted devices and the genesis device, not revoked, not purged, not a module device). Two read-only
+  fields, a string and an integer: no device list, address or principal, and no new route. A module can tell a one-node
+  hive from a fleet; it reads an absent `node_devices` as unknown on a node without this. The contract bump and its
+  `CONTRACT_HISTORY.md` entry come with the release that ships it.
 - **Added: install a module on a device without the owner key** (hwatch C6, M1b). `hive-mind module add <name> --from
   <repo>` there stages the verified tree, mints the module's key and prints the owner's `group admit <device> --module
   <name> --principal <p>` line with the publisher fingerprint and the verified commit, and installs nothing. A second

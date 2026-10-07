@@ -1,5 +1,5 @@
 {
-  "digest": "db081db39aef9dd7a110a6acaf88b13e991729a2ca9f961e26c11b370471c1b8",
+  "digest": "f5a70741bd12589387fb4561bf0349c725d8155eeba7e51f9dc03360002166ed",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -28,7 +28,7 @@
     "docs/ADVISORIES.md": "aee9fab7f28266625d7f9d29a8636197f898ae1e117aea8d62456740892a6422",
     "docs/AGENT_INTEGRATION.md": "75fb6c8b805c1b755b87b4a9212c07d517cabfcdd95ecd1b6d6f5b6c6713b641",
     "docs/CLI_REFERENCE.md": "32c39795ce4ad7808b31b9af161d4e5d3b631aa5e71108bc8e996e626b5208ce",
-    "docs/CONTRACT.md": "12887fa769ec62cb7f58c213ebaa1cd174e83a60f722ae35fb7ef93ef61db3de",
+    "docs/CONTRACT.md": "000bf8c09d3e7a78b2b93c96b5a70335ba336e1d74783b9402e712510e0d40a7",
     "docs/CONTRACT_HISTORY.md": "0d21bf774f69cf4a6955e700298f2aeae03ac5e549b667d1ddc12cefc05d0df9",
     "docs/HV_ARCHITECTURE.md": "fed35d46d54501a60e43283a308dcd189e18bdbaf2341330b8bb93015bafed3b",
     "docs/INTERNALS.md": "e349a542bcfd1b86d688051842f0845261b7378470522447fdccf643b8f1588b",
@@ -172,7 +172,7 @@
     "tests/test_recipient_pubkeys.py": "5c899c02684b5398724a86801a0e2dc502b607e0daa95a47dded3f4e50dcff3a",
     "tests/test_ref_fields.py": "fb55f5163b4e628240eb99eca5f3b3d8c907850a573d623664dabe2526a0d6be",
     "tests/test_removed_aliases.py": "6cdf8c7de7084ba287f56ee621e25b1352223349731bf6702264b3fe03ee7363",
-    "tests/test_retire_keep_through.py": "4b2fd7e1647526d4f0b7d354b454c894e2f2697e39581d6363674edb26629dcc",
+    "tests/test_retire_keep_through.py": "a63bbc38f711ab2fbeddac51a7e74ffd9248bc0fb4d128f927607e55d59322ae",
     "tests/test_revoke_decision.py": "3a3de15e9a5bac4b7c4168162dde00ca6df9d86364d94165473067dfb5cca46c",
     "tests/test_s2_split.py": "1b5ec07b08ed1b1d96d006b5e5c1b508337494291c53f462b7d94c1b373df0c4",
     "tests/test_sealed_owner_key.py": "290d941579d27b2af490bc6312890592fc0916af2db041ea2f53792ffd569d72",

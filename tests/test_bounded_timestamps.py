@@ -632,6 +632,20 @@ def test_a_revoked_devices_entry_lands_only_when_the_bounds_skip_it_and_a_strang
     assert not any(k[0] == z["id"] for k in held)
 
 
+def test_a_strangers_entry_the_bounds_skip_does_not_land(tmp_path, monkeypatch):
+    """#258: Z was never admitted. Its chain holds a fact at seq 1 (12:20) and an owner-signed admit of Y at seq 2
+    (12:10), so the bounds skip the fact once the admit is held; the skip must not land a stranger's entry."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    owner, (d0, d1), base = _hive(hv)
+    z, y = _device(hv), _device(hv)
+    fact = _fact(hv, z, "z skipped", ts(12, 20))
+    admit = _entry(hv, z, "governance", {"action": "admit", "device_id": y["id"]}, ts(12, 10), owner=owner)
+    _journal(hv, _admitted_x(hv, owner, base, _device(hv)))
+    assert hv.append_foreign_entries([admit]) == (1, 0)
+    assert hv.append_foreign_entries([fact]) == (0, 0)
+    assert not any(e["node_id"] == z["id"] and e["type"] != "governance" for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR))
+
+
 def _bootstrap_fact_journal(hv, z, extra):
     """A bootstrap hive: Z wrote a fact before any owner existed (stamped 2025, so before the genesis owner), then the
     owner declared genesis. Z was never admitted."""

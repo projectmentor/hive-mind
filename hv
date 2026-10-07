@@ -1037,8 +1037,9 @@ def _ts_unskipped(entries, gov=None):
 
 
 def _ts_skips(e, held, gov):
-    """True when the timestamp bounds skip `e` among the `held` entries: the verdict a node that holds `e` too would
-    reach. Pure over the held journal and the governance projection."""
+    """True when the timestamp bounds skip `e` among the `held` entries of its device's chain: the verdict a node that
+    holds `e` too would reach, as the walk judges each device's chain apart. Pure over those entries and the governance
+    projection."""
     return (e.get("node_id"), e.get("seq")) in _ts_violations(held + [e], gov)
 
 
@@ -1658,8 +1659,21 @@ def append_foreign_entries(entries, advertised_chunks=None):
         entries = sorted(entries, key=lambda x: (x.get("node_id") not in markers, str(x.get("node_id")),
                                                  x.get("seq") if isinstance(x.get("seq"), int) else 0))
 
+    _chains = {}
+
+    def held_chain(nid):
+        """The entries held on device `nid`'s chain, read once per call and kept current as entries land: the timestamp
+        walk judges each device on its own chain, so a refusal needs no other device's entries."""
+        if not _chains:
+            for h in merkle.read_all_entries(JOURNAL_DIR):
+                _chains.setdefault(h.get("node_id"), []).append(h)
+            _chains.setdefault(None, [])              # mark as loaded even for an empty journal
+        return _chains.get(nid, [])
+
     def _landed(e):
         arrived.append((e["node_id"], e["seq"]))
+        if _chains:
+            _chains.setdefault(e["node_id"], []).append(e)
 
     def _persist(e):
         _append_line(_journal_path_for(e["timestamp"]), json.dumps(e))   # validated above in both passes
@@ -1756,7 +1770,7 @@ def append_foreign_entries(entries, advertised_chunks=None):
             # A device the owner admitted once and then revoked (#258) may land an entry the timestamp projection
             # skips, as a node that held the entry before the revoke does: a stranger never lands, and an entry of
             # a revoked device that would project does not.
-            if not (nid in gov["first_admit"] and _ts_skips(e, merkle.read_all_entries(JOURNAL_DIR), gov)):
+            if not (nid in gov["first_admit"] and _ts_skips(e, held_chain(nid), gov)):
                 return _DEFER
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:

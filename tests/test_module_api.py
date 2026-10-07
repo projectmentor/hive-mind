@@ -105,11 +105,59 @@ def test_root_names_the_caller_and_serves_only_its_own_module_config(hive):
     code, body = hive.get("/v1/")
     assert code == 200
     assert body == {"api": ["v1"], "contract": hive.hv.CONTRACT_VERSION, "hive_id": "h1", "device_id": hive.mod["id"],
-                    "module": "hwatch", "quota": {"limits": api.QUOTA_DEFAULTS, "used": {"per_hour": 0, "per_day": 0, "lifetime": 0},
+                    "module": "hwatch", "node_id": hive.hv.NODE_ID, "node_devices": 1, "quota": {"limits": api.QUOTA_DEFAULTS, "used": {"per_hour": 0, "per_day": 0, "lifetime": 0},
                                                   "remaining": {"per_hour": 60, "per_day": 500, "lifetime": 50000}},
                     "config": {"x-hwatch:poll": "30s"}}
     code, other = hive.get("/v1/", dev="other")
     assert other["module"] == "other" and other["config"] == {"x-other:poll": "5m"}
+
+
+def _root(hive):
+    code, body = hive.get("/v1/")
+    assert code == 200
+    return body
+
+
+def test_node_devices_counts_node_devices_and_leaves_out_modules_and_the_revoked(hive):
+    oseed, opub, _ = hive.owner
+    # the fixture admits three devices and two of them as modules: one node device (the module devices are excluded)
+    assert _root(hive)["node_devices"] == 1
+    extra = TL._device(hive.hv)
+    hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "admit", "device_id": extra["id"], "principal": "p9"},
+                                            oseed, opub, "2026-01-01T00:00:11Z", 7)])
+    assert _root(hive)["node_devices"] == 2
+    hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "revoke", "device_id": extra["id"]},
+                                            oseed, opub, "2026-01-01T00:00:12Z", 8)])
+    assert _root(hive)["node_devices"] == 1
+
+
+def test_a_purged_node_device_is_not_counted(hive):
+    oseed, opub, _ = hive.owner
+    hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "purge", "device_id": hive.plain["id"]},
+                                            oseed, opub, "2026-01-01T00:00:11Z", 7)])
+    assert _root(hive)["node_devices"] == 0
+    # a later admit leaves the device in the walk's `admitted` but it stays purged (#260): still not counted
+    hive.hv.append_foreign_entries([TL._gov(hive.hv, {"action": "admit", "device_id": hive.plain["id"], "principal": "p0"},
+                                            oseed, opub, "2026-01-01T00:00:12Z", 8)])
+    assert _root(hive)["node_devices"] == 0
+
+
+def test_node_id_is_the_device_hv_whoami_names(hive, capsys):
+    hive.hv.whoami_cmd(None)
+    assert f"device:    {_root(hive)['node_id']}  (" in capsys.readouterr().out
+
+
+def test_the_root_answer_carries_no_list_and_only_the_documented_keys(hive):
+    body = _root(hive)
+    assert set(body) == {"api", "contract", "hive_id", "device_id", "module", "node_id", "node_devices", "quota", "config"}
+    assert isinstance(body["node_id"], str) and isinstance(body["node_devices"], int) and not isinstance(body["node_devices"], bool)
+    lists = [k for k, v in body.items() if isinstance(v, list)]
+    assert lists == ["api"]                       # the served versions, and nothing about devices
+    blob = json.dumps(body)
+    for d in (hive.plain, hive.mod, hive.other):
+        if d["id"] != body["device_id"]:
+            assert d["id"] not in blob            # no other device is named
+    assert "op" not in body and '"principal' not in blob
 
 
 def test_an_unknown_route_is_404_and_an_unsupported_version_names_the_supported_ones(hive):

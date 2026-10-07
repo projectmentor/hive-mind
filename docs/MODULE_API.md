@@ -60,10 +60,16 @@ A path under a version this node does not serve (`/v2/…`) is `404` naming the 
 
 ```json
 {"api": ["v1"], "contract": "2.1", "hive_id": "…", "device_id": "k1:…", "module": "hwatch",
+ "node_id": "k1:…", "node_devices": 1,
  "quota": {"limits": {…}, "used": {…}, "remaining": {…}}, "config": {"x-hwatch:poll": "30"}}
 ```
 
-`api` lists the path versions served. `module` is the caller's module name. `config` is the caller's own
+`api` lists the path versions served. `module` is the caller's module name. `node_id` is this node's own device id, the
+signer of the entries its `hv` writes, and `node_devices` is how many node devices the hive has: the admitted devices
+that are not purged and not a module (a revoked device is not admitted, so it is not counted). Both are read-only, a
+string and an integer; the route carries no device list, no address and no principal. A module that is told to run on
+"the one node" can tell a one-node hive (`node_devices` is 1) from a fleet. A node on 2.2 or earlier does not send
+either field, so a module treats an absent `node_devices` as unknown. `config` is the caller's own
 `x-<module>:` fleet config, the keys the owner set with a signed `set-config`, as strings. It is a convenience, not
 a confidentiality boundary: the journal is shared by design and `/v1/feed` carries all of it. `quota` is the same
 object [Quotas](#quotas-and-rate-limits) describes.

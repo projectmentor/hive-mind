@@ -12,6 +12,11 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
+- **Added: `GET /v1/` reports `node_id` and `node_devices`** (hwatch C1, M3b). `node_id` is this node's own device id
+  and `node_devices` the number of node devices in the hive (admitted, not purged, not a module device). Two read-only
+  fields, a string and an integer: no device list, address or principal, and no new route. A module can tell a one-node
+  hive from a fleet; it reads an absent `node_devices` as unknown on a node without this. The contract bump and its
+  `CONTRACT_HISTORY.md` entry come with the release that ships it.
 - **Added: `hive-mind group retire <device>`** (#260). The owner chooses, per device, whether a retired device's past
   content still counts. `purge` stays the compromise tombstone and drops all of it; `retire` is the same signed `purge`
   carrying `keep_through` (a seq) and `keep_hash` (the hash of the entry at that seq), and the chain that entry names

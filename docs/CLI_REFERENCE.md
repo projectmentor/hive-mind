@@ -285,6 +285,10 @@ needs attention. It looks at:
 - **ts-bounds**, **future-dated**, **flood** *(2.1, #217)* — advisory: entries the projection skips for a timestamp
   outside the bounds, devices whose entries arrived stamped over 10 minutes ahead of this node's clock, and devices that
   stamped more than `flood_per_minute` (120) or `flood_per_day` (2000) entries (`hv audit` reports the last two too)
+- **journal-lock** *(2.2, #253)* — probes the lock a local write takes while it mints a sequence number. **Fails** when the
+  filesystem refuses it (an NFS mount without lock support, `ENOLCK`), with the same one-line message a write prints;
+  move `HIVE_HOME` to a local filesystem. A write that cannot take the lock stops with that message and exit 1, and
+  journals nothing.
 - **peers** — whether your peer nodes are reachable and in sync
 - **peer-address** — for a peer whose stored address did not answer: whether its device has since
   reached this node from another address with a verified signed request, or answered one of this
@@ -1228,7 +1232,7 @@ checks, strongest last:
    `https://hivemind.projectmentor.org/.well-known/hivemind.pub`, a different origin from the code
    host. Catches a fork that ships its own key and a self-signed manifest.
 
-A healthy install prints `✓ Official HiveMind v2.1 from ProjectMentor — verified.` If you edited
+A healthy install prints `✓ Official HiveMind v2.2 from ProjectMentor — verified.` If you edited
 files yourself it says the install was modified locally.
 
 **Exit codes** (a script or CI step can rely on them):
@@ -1251,7 +1255,7 @@ rather than failed while it is pending (see `hv doctor` above).
 ### `hv version` — Agent contract version
 
 ```
-hv version        # → hv contract-version 2.1
+hv version        # → hv contract-version 2.2
 ```
 
 The version of the agent contract (`docs/AGENT_INTEGRATION.md`). Adapters compare it with the

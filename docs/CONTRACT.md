@@ -1,9 +1,9 @@
-# The module contract (2.1)
+# The module contract (2.2)
 
 What the module API promises, and what it does not. A module author reads this file to know what may be relied on
 across releases; [`MODULE_API.md`](MODULE_API.md) is the route reference and
-[`AGENT_INTEGRATION.md`](AGENT_INTEGRATION.md) §7 the adapter-facing version policy. Contract **2.1** is the first to
-publish this.
+[`AGENT_INTEGRATION.md`](AGENT_INTEGRATION.md) §7 the adapter-facing version policy. Contract **2.1** was the first to
+publish this; 2.2 changes guarantee 5 and adds guarantee 10.
 
 ## Stability tiers
 
@@ -103,9 +103,13 @@ State these as the contract, not more.
    nodes cannot know a quota. So quotas protect against a buggy or over-eager module, not against one with the
    operator's file access. **A hostile module is revoked** (`hive-mind group revoke` or `hive-mind module remove`);
    its entries stay in the journal and stop counting.
-5. **Timestamps are the writer's, within bounds.** Once the owner arms the bounds (`hive-mind owner
-   freeze-timestamps`), an entry more than 5 minutes before its device's latest earlier entry, or before the
-   device's first admit, is skipped by every node. A module never stamps earlier than its own last entry.
+5. **Timestamps are the writer's, within bounds, and the bounds apply in the projection only** *(2.2, #230, #250)*.
+   Once the owner arms the bounds (`hive-mind owner freeze-timestamps`), an entry more than 5 minutes before its
+   device's latest earlier entry, or before the device's first admit, is skipped by every node when the store is
+   built. Ingest refuses nothing for a timestamp: such an entry stays in the journal and in `hv feed`. A module
+   never stamps earlier than its own last entry. **Owner-signed governance beats a device-stamped entry:** an
+   entry the owner signed keeps its place however a device stamped its own, and a device cannot stamp itself ahead
+   of the owner's revoke.
 6. **A module's hooks and service run code outside the signed source.** They are verified at install and by
    `hv doctor`, and not at every event.
 7. **Linux only in 2.1.** On any other platform `hive-mind module add` refuses and exits non-zero before it
@@ -116,6 +120,12 @@ State these as the contract, not more.
    unit on 2.0). `hv doctor` warns (`modules-contract`) about any node still on 2.0 in such a hive.
 9. **A module device is not a node.** It has no sync address, so a 2.0 node's `fleet-contract` check lists it as
    unreachable for as long as it is admitted; 2.1 nodes do not. This noise on 2.0 nodes is accepted skew.
+10. **Content projects only for an admitted device, by the final state** *(2.2, #246)*. `hv search`, the store and
+    the dashboard show a device's facts, decisions and ideas only while the final projection lists it as admitted and
+    not purged. A revoked or purged device's past content leaves the store on rebuild but stays in the journal and
+    in `hv feed` (guarantee 4 stands). A later admit restores a revoked device's rows; a purge is final. Exempt: an
+    entry that verifies as the owner at its position, and the genesis device, which counts as a member from genesis
+    until an honoured revoke or a purge of it.
 
 ## `hv feed`: the consumer's obligations
 
@@ -142,11 +152,13 @@ dispatcher's caps and gates (`MODULE_API.md`, *Hooks and events*) are stable.
 
 ## Deferred
 
-Out of scope for 2.1, and not designed here: a remote opt-in for the module API; module support on macOS and
+Out of scope for 2.1 and 2.2, and not designed here: a remote opt-in for the module API; module support on macOS and
 Termux; the `AGENTS.md` cell (2.2); module-added lines in the session digest, which land with the module that adds
 them; a unified entity identity across module and shared entities (3.0, public #151).
 
 ## Versioning
+
+**2.2** is a MINOR. `hv search --id` is additive, and guarantees 5 and 10 above state how the projection treats timestamps and a revoked device's content. The release tag `v2.2.0` marks the commit that completed it.
 
 The contract is `MAJOR.MINOR` (`hv version`). 2.1 is a MINOR: additive for the adapter surface. `hv feed` is a new
 verb, `hive-mind module` a new control-plane verb, `/v1` a new surface, and the hook events additive. No verb, flag

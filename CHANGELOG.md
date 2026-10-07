@@ -12,8 +12,31 @@ introduced (a contract) or tagged (a patch).
 
 ## Unreleased
 
-- **Fixed: `hive-mind update --help` ran the update** (#224). `install`, `update`, `status` and `invite` now print usage
-  and exit 0 on `-h` / `--help` without changing anything, and refuse an unknown argument with exit 2.
+## 2.2 — 2026-10-07 · `v2.2.0`
+
+**Upgrading from 2.1.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep
+working. A mixed 2.1 and 2.2 fleet converges. One effect to expect on the first rebuild (#246): a revoked or purged
+device's past content leaves `hv search`, as the next bullet says.
+
+- **A revoked or purged device's past content leaves `hv search`** (#246, closing #230 and #250). The store now
+  projects a device's facts, decisions and ideas only while the final projection lists it as admitted and not purged.
+  On rebuild, the content of a revoked or purged device drops out of `hv search` and the dashboard. It stays in the
+  journal and in `hv feed`. A later admit restores a revoked device's rows; a purge is final. An entry that verifies as
+  the owner, and the genesis device until its revoke or purge, are exempt.
+- **Owner-signed governance beats a device-stamped entry, and ingest refuses nothing for a timestamp** (#246). The
+  timestamp bounds apply when the store is built, not when an entry arrives, so no entry is lost from a journal for
+  its stamp. `docs/CONTRACT.md` states both in its guarantees.
+- **`hv search --id SID|REF`** (#158, #249): look one entry up by its `sid` or `ref`. It exits 1 with nothing on stdout
+  when the id names nothing. MCP `hive_lookup` and the dashboard search box take an id too.
+- **A failing journal lock stops the write with a clear error** (#253, #254). `hv doctor` gains a `journal-lock` check.
+- **Concurrent local writers mint distinct seqs and project each entry once** (#215, #252).
+- **Fixed: `hive-mind update --help` ran the update** (#224, #244). `install`, `update`, `status` and `invite` now print
+  usage and exit 0 on `-h` / `--help` without changing anything, and refuse an unknown argument with exit 2.
+- **Fixed: a peer sighting that names no `via` keeps the recorded one** (#146, #261).
+- **Fixed: a non-object module record in `.modules.json` reads as absent** in `limits_for` (#227, #247).
+- **Fixed: the dashboard no longer suggests a nonexistent `hive-mind verify`**; it says `hv verify` (#193, #245).
+- **Tests only:** the suite clears an exported `HIVE_KEY_DIR` (#178, #256) and never reads the repo-root `.peers.json`
+  (#142, #257), and a member device's retract is pinned never to become an owner act at genesis (#148, #259).
 
 ## 2.1 — 2026-10-06 · `v2.1.0`
 

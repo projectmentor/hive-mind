@@ -3,10 +3,9 @@ name: CI (macOS)
 # only runner that exercises the launchd daemon path, a case-insensitive filesystem and Apple's Python.
 #
 # - push to main: ALWAYS runs, so every release commit is tested on macOS and a red macOS build shows there.
-# - push to release/**: runs after each merge into a release branch. It does not gate the merge; a red run
-#   there is fixed forward by an ordinary PR (David, 2026-10-05).
-# - pull request into main (the release PR, and fixes straight to main): runs only when the diff touches a path below.
-#   A PR into a release/** branch shows no macOS check at all; macOS gates the release PR into main instead. A path filter cannot see which function
+# - push to release/**: runs after each merge into a release branch.
+# - pull request into main or release/**: runs only when the diff touches a path below (#242). A PR into a
+#   release branch waits for macOS the same way a PR into main does. A path filter cannot see which function
 #   changed, so any PR that edits `hv` or the daemon still waits for macOS; the saving is docs, skills and
 #   tests outside these paths. A docs-only PR shows no macOS check at all.
 #
@@ -17,7 +16,7 @@ on:
   push:
     branches: [main, 'release/**']
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
     paths:
       - 'hv'
       - 'hive_sync_daemon.py'

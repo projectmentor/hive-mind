@@ -120,7 +120,7 @@ State these as the contract, not more.
 
 6. **A module's hooks and service run code outside the signed source.** They are verified at install and by
    `hv doctor`, and not at every event.
-7. **Linux only (2.1, 2.2).** On any other platform `hive-mind module add` refuses and exits non-zero before it
+7. **Linux only (2.1 to 2.3).** On any other platform `hive-mind module add` refuses and exits non-zero before it
    fetches, mints or installs anything. macOS and Termux follow in a later release.
 8. **Election skew on a mixed fleet.** The module marker on `admit` is read by 2.1 nodes. A 2.0 node ignores it and
    still counts a module device's vote. This matters only on a hive with `quorum_m > 0` and `quorum_by=device`
@@ -140,13 +140,13 @@ State these as the contract, not more.
     tree that passed the same signed-manifest check and the same publisher pin, and mints the module's key, but
     **installs nothing and admits nothing**: no unit, no `.modules.json` row, no journal entry, and no governance route
     or entry type is added. The owner alone admits the device, with the `group admit <device> --module <name>
-    --principal <p>` line the staging prints; the line carries the publisher fingerprint and the verified commit,
+    --principal <p>` line the staging prints; the staging print names the publisher fingerprint and the verified commit beside that line,
     which the owner is expected to check. The key minted at staging is a device key and signs nothing the hive honours
     until that admit. A second `add` installs only when this node's own projection lists the device as admitted for
     that module and not purged, re-checks the staged tree against the signed manifest and requires the manifest's
     digest (which covers the publisher key) and `--from` to match what the first run recorded; otherwise it refuses and
     leaves the staging as it was. `module update` there runs the same checks and the same pinned publisher and changes
-    no membership or quota. `module remove` there deletes the tree and the key but cannot revoke: **the device stays
+    no membership; a limit goes above the defaults only through the owner's `quota`. `module remove` there deletes the tree and the key but cannot revoke: **the device stays
     admitted until the owner runs the `group revoke` line it prints.** `module quota` stays owner-only, so a limit can
     still be raised only by the owner.
 

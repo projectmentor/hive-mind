@@ -288,7 +288,7 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   re-integration.** Nothing an adapter calls changes: no verb, flag or output format moves. New: `hv feed` (read-only
   journal entries past a per-node cursor, with the core's `forgotten` flag on `fact` entries and `affects` on owner
   retracts: a consumer hides what is `forgotten` and never computes its own forget state); `hv entity join|unjoin`;
-  and, on the control plane, `hive-mind module add|remove|update|list|config|quota` and `hive-mind owner freeze-timestamps`.
+  and, on the control plane, `hive-mind module add|remove|update|list|quota` and `hive-mind owner freeze-timestamps`.
   A module is a separate process with its own device key, under the operator's principal; it writes through `/v1`
   on `127.0.0.1` and never reaches the owner key. The promise to module authors, with each route marked stable,
   provisional or internal, is [`CONTRACT.md`](CONTRACT.md); the routes are [`MODULE_API.md`](MODULE_API.md). A MINOR
@@ -618,7 +618,8 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   replacing: it signs `keep_through` and `keep_hash` on the purge, and the chain up to that seq still counts, with
   its corroboration weight, while later seqs do not and the device still cannot be re-admitted. It defaults to the
   highest seq this node holds, takes `--through SEQ` for a lower held one, and needs `--confirm` for a device that is
-  already purged, or already revoked *(2.3)*. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
+  already purged, or *(2.3)* for a revoked former member (in `first_admit`, or the genesis device after an honoured
+  revoke); an id that was only revoked or denied, never a member, is still refused. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
   `confidence` (the params) sub-namespaces. `hv key`, `hv admit`, and `hv config set …` are kept
   as silent aliases. Additive: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,

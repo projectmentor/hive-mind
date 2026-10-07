@@ -1305,14 +1305,14 @@ hive-mind <subcommand> [options]
 | `reset` | Recover a **wedged** install in one command: force-align the code to `origin` (even after a rewrite, even with local edits), rebuild the DB from the journal, refresh the supervisor units + Claude Code hooks, restart the daemon, and verify authenticity. **Your Hive (journal, keys, device identity) is preserved** — this is not `uninstall`. Use it when `hv doctor`/`hv verify` is unhappy after a breaking change. `-y` skips the prompt. |
 | `status` | Show device health and peer sync state. |
 | `invite` | Print the one-line address to paste on a new device so it can join this hive. |
-| `module` | *(2.1, Linux)* Install and manage modules: `add <name> --from <repo>`, `remove`, `update`, `list`, `config`, `quota` (see below). |
+| `module` | *(2.1, Linux)* Install and manage modules: `add <name> --from <repo>`, `remove`, `update`, `list`, `config` *(2.3)*, `quota` (see below). |
 | `uninstall` | Remove HiveMind from this device (see flags below). |
 
 ### `hive-mind module` — Install and manage modules *(2.1, Linux only)*
 
 ```
 hive-mind module add <name> --from <repo> [--publisher KEY] [--principal P]
-hive-mind module add --abort <name>
+hive-mind module add --abort <name>          # (2.3)
 hive-mind module remove <name>
 hive-mind module update <name> [--from <repo>] [--publisher KEY]
 hive-mind module list
@@ -1320,7 +1320,7 @@ hive-mind module config <name> set <key> <value> | unset <key> | list
 hive-mind module quota <name> [--per-hour N] [--per-day N] [--entry-bytes N] [--lifetime N]
 ```
 
-Owner and operator; there is no `hv module`. `quota` needs the owner key; the other verbs also run on a device without it (below). A module is a git repository whose `module.json` is signed by its
+Owner and operator; there is no `hv module`. `quota` needs the owner key; the other verbs also run on a device without it (below) *(2.3)*. A module is a git repository whose `module.json` is signed by its
 publisher key. `add` shows the key and pins it once you confirm (or pass `--publisher` to pin it without a prompt), mints the module's
 own device key, has the owner admit it under your principal, and installs its files, config and unit outside the
 checkout. `remove` revokes the device and keeps the module's journal entries. `update` re-verifies and swaps

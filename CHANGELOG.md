@@ -27,7 +27,7 @@ admits the device with the `group admit --module` line it prints, as before.
   <repo>` there stages the verified tree, mints the module's key and prints the owner's `group admit <device> --module
   <name> --principal <p>` line with the publisher fingerprint and the verified commit, and installs nothing. A second
   `add` after the owner's admit has synced installs the staged tree; `add --abort <name>` drops it. `module update`
-  no longer needs the owner key (same checks, no membership or quota change), and `module remove` there deletes the
+  no longer needs the owner key (same checks, no membership change; only the owner's `quota` raises a limit above the defaults), and `module remove` there deletes the
   tree and key and prints the owner's `group revoke` line (the device stays admitted until then). `quota` stays
   owner-only. No governance route or entry changes.
 - **Added: `service.stop_grace` in a module manifest** (#273, #274). Seconds, 1 to 3600; it renders `TimeoutStopSec`

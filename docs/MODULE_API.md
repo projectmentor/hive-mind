@@ -282,7 +282,7 @@ here stamped more than 10 minutes ahead of this node's clock (from a local arriv
 ## The module manifest
 
 A module is a git repository with a signed manifest. `hive-mind module add` checks it before anything is installed.
-On a device without the owner key it stages the checked tree, mints the key and prints the owner's
+*(2.3)* On a device without the owner key it stages the checked tree, mints the key and prints the owner's
 `group admit … --module` line, and installs once the owner's admit has reached that device
 ([`CLI_REFERENCE.md`](CLI_REFERENCE.md#hive-mind-module--install-and-manage-modules-21-linux-only)).
 
@@ -305,7 +305,10 @@ A field this node does not know is refused, not ignored.
 
 ### `hive-mind module`
 
-Control plane, owner and operator only; there is no `hv module`.
+Control plane, owner and operator; there is no `hv module`. `quota` needs the owner key. *(2.3)* The other verbs also
+run on a device without it: `add` stages and prints the owner's admit line, then installs on a second run once that
+admit has reached the node; `remove` deletes the tree and key and prints the owner's `group revoke` line. The rows
+below describe the owner path.
 
 | Verb | Does |
 |---|---|

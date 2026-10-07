@@ -103,7 +103,7 @@ State these as the contract, not more.
    nodes cannot know a quota. So quotas protect against a buggy or over-eager module, not against one with the
    operator's file access. **A hostile module is revoked** (`hive-mind group revoke` or `hive-mind module remove`);
    its entries stay in the journal and stop counting. A **compromised** module device is `hive-mind group purge`d:
-   none of its content counts, in the journal or on any node. An honest one that is being replaced is `hive-mind
+   none of its content counts, in the projection on any node. An honest one that is being replaced is `hive-mind
    group retire`d: the same tombstone, but the owner signs the seq and hash of its last good entry, and the chain up to
    it keeps counting while later entries do not.
 5. **Timestamps are the writer's, within bounds.** Once the owner arms the bounds (`hive-mind owner

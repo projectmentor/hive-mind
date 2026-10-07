@@ -1,5 +1,5 @@
 {
-  "digest": "2e28fb7fe5fbacc94f22233f6e96f101b56698ec41453b964dc635546f3bd154",
+  "digest": "dc47e4209cf82bc64459e35e532f394fee2e7f9b3f127c829f3255714a03264f",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -47,7 +47,7 @@
     "hive_modules.py": "3e6cc739294e31d48bdf983cf99006530298f1ab01b3a2054b0d6921cd59c782",
     "hive_sync_daemon.py": "08df1d37ae53711d7bd59412658fbc3611972f63ce50c5a78b2247fa29f17516",
     "hivemind_ctl.py": "3fd05b2c14e61e0a6ff2e22ef6db6f8154a4e2b9473d3c22308b7f411aa2abe4",
-    "hivemind_owner.py": "f0ed5cd2145ddbad4df614bca95348e4e6521e7e1268756e79bcf321bd47b160",
+    "hivemind_owner.py": "aec58688cde9710a2bff6267b08cff742109bae02f9960d848cb2d783cc6a9ef",
     "hv": "84dd958d93e4d57e2690ff3a6b81dbcef8c59c9f9ffc6c0bdc09df5f3c0d9925",
     "integrations/claude-code/hive-memory/SKILL.md": "55c025490cd4afecce87901ade9077bada2a73b3443143f42391c2958ccf91bb",
     "integrations/claude-code/install.sh": "588f0f6894c25893d3a098f4ddd422a480e63c85b5bb48c97f2d242069a93894",
@@ -173,7 +173,7 @@
     "tests/test_recipient_pubkeys.py": "5c899c02684b5398724a86801a0e2dc502b607e0daa95a47dded3f4e50dcff3a",
     "tests/test_ref_fields.py": "fb55f5163b4e628240eb99eca5f3b3d8c907850a573d623664dabe2526a0d6be",
     "tests/test_removed_aliases.py": "6cdf8c7de7084ba287f56ee621e25b1352223349731bf6702264b3fe03ee7363",
-    "tests/test_retire_keep_through.py": "a63bbc38f711ab2fbeddac51a7e74ffd9248bc0fb4d128f927607e55d59322ae",
+    "tests/test_retire_keep_through.py": "1956a4cac487e446fd521b19bd02877325d8540ca929c75a353ff6a52cccc70a",
     "tests/test_revoke_decision.py": "3a3de15e9a5bac4b7c4168162dde00ca6df9d86364d94165473067dfb5cca46c",
     "tests/test_s2_split.py": "1b5ec07b08ed1b1d96d006b5e5c1b508337494291c53f462b7d94c1b373df0c4",
     "tests/test_sealed_owner_key.py": "290d941579d27b2af490bc6312890592fc0916af2db041ea2f53792ffd569d72",

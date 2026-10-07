@@ -15,6 +15,15 @@ directory and hashed again there, so a repo that changes between the check and t
 The platform is checked first. Where there is no module backend (everything but Linux with a user supervisor
 in 2.1) `add` says so and exits non-zero before it fetches, mints or installs anything.
 
+**Without the owner key (M1b).** A device that does not hold the owner key can still run a module the owner admits.
+`module add` there fetches, verifies, stages and mints the module's key, writes a pending record beside the staging
+directory, prints the owner's `hive-mind group admit <device> --module <name> --principal <p>` line with the
+publisher fingerprint and the commit that was verified, and stops: no unit, no `.modules.json` row, no admit. Once the
+owner's admit has reached this node, a second `module add` installs the staged tree (re-checked against the signed
+manifest and the digest recorded at the first run); `module add --abort` removes the staging and the key.
+`update` needs no owner key (it checks the tree and the pinned publisher as before and changes no membership or
+quota), `remove` deletes locally and prints the owner's `group revoke` line, and `quota` stays owner-only.
+
 Units (M2, PR 7) are rendered from the manifest's `service` block into `hive-module-<name>.service` (and `.timer`
 when `interval` is set) in the operator's systemd user directory, installed on `add`, re-applied on `update` and
 stopped and removed on `remove`. Hooks (M4, PR 8) and the doctor checks (M7, PR 9) read what this records.
@@ -321,6 +330,131 @@ def _device_state(lib, device_id):
     return "admitted" if device_id in gov["admitted"] else "revoked"
 
 
+# ── the non-owner install (M1b) ─────────────────────────────────────────────────────────────────────
+
+def _pending_path(name):
+    return modules_dir() / f".{name}.pending.json"
+
+
+def _read_pending(name):
+    try:
+        rec = json.loads(_pending_path(name).read_text())
+    except (OSError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) and rec.get("device_id") else None
+
+
+def _admit_line(rec, name):
+    return f"hive-mind group admit {rec['device_id']} --module {name} --principal {rec['principal']}"
+
+
+def _clear_pending(lib, name):
+    """Remove everything a staged, not yet installed module left: the staging directory, the pending record and the
+    minted key."""
+    shutil.rmtree(modules_dir() / f".{name}.staging", ignore_errors=True)
+    _pending_path(name).unlink(missing_ok=True)
+    shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / name, ignore_errors=True)
+
+
+def _abort_add(lib, name):
+    if name in load_state(lib):
+        raise ModuleError(f"module {name!r} is installed: use `hive-mind module remove {name}`")
+    if _read_pending(name) is None:
+        raise ModuleError(f"module {name!r} has no pending add")
+    _clear_pending(lib, name)
+    print(f"aborted the pending add of module {name}: its staging and key are removed")
+
+
+def _stage_for_owner(lib, args, name, root):
+    """First run of `module add` on a device without the owner key: verify, stage, mint, print the owner's line and
+    install nothing."""
+    principal = _operator_principal(lib, args.principal)
+    with tempfile.TemporaryDirectory(prefix="hive-module-") as tmp:
+        src = Path(tmp) / "src"
+        tracked, head = _fetch(args.source, src)
+        manifest = check_tree(src, lib.CONTRACT_VERSION, tracked)
+        if manifest["name"] != name:
+            raise ModuleError(f"the repository holds module {manifest['name']!r}, not {name!r}")
+        _confirm_publisher(manifest, args.publisher)
+        root.mkdir(parents=True, exist_ok=True)
+        os.chmod(root, 0o700)
+        staging = root / f".{name}.staging"
+        minted = False
+        try:
+            _stage(src, manifest, staging)
+            device_id, _pub = lib.mint_module_key(name)
+            minted = True
+            rec = {"device_id": device_id, "principal": principal, "publisher": manifest["publisher"],
+                   "version": manifest["version"], "source": args.source, "commit": head,
+                   "manifest_sha256": _sha256_file(staging / MANIFEST), "staged_at": int(time.time())}
+            _pending_path(name).write_text(json.dumps(rec, indent=1, sort_keys=True) + "\n")
+        except (ModuleError, FileExistsError, OSError, ValueError, RuntimeError) as e:
+            shutil.rmtree(staging, ignore_errors=True)
+            _pending_path(name).unlink(missing_ok=True)
+            if minted:
+                shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / name, ignore_errors=True)
+            raise ModuleError(str(e))
+    print(f"module {name} {manifest['version']} is staged on this device and NOT installed: it has no admit yet.\n"
+          f"On the owner machine, after checking commit {head} of {args.source} "
+          f"(publisher {fingerprint(manifest['publisher'])}), run:\n  {_admit_line(rec, name)}\n"
+          f"When that has reached this node, run `hive-mind module add {name} --from {args.source}` again to install it, "
+          f"or `hive-mind module add --abort {name}` to drop it.")
+
+
+def _complete_add(lib, args, name, root, rec):
+    """Second run: the owner's admit has projected here, so install the staged tree. The tree is re-checked against
+    the signed manifest and against the digest of the manifest this node verified at the first run."""
+    if args.source != rec["source"]:
+        raise ModuleError(f"module {name!r} is staged from {rec['source']}, not {args.source}: finish that add, or "
+                          f"`hive-mind module add --abort {name}`")
+    if args.publisher is not None and args.publisher != rec["publisher"]:
+        raise ModuleError("--publisher does not match the publisher key pinned at the first run: refusing")
+    gov = _gov(lib)
+    dev = rec["device_id"]
+    if gov["modules"].get(dev) != name or dev not in gov["admitted"] or dev in gov["purged"]:
+        raise ModuleError(f"the owner has not admitted {dev} as module {name} on this node yet (it may not have synced). "
+                          f"On the owner machine: {_admit_line(rec, name)}")
+    staging = root / f".{name}.staging"
+    key = Path(lib._ensure_key_dir()) / "modules" / name / "device-key"
+    if not key.exists():
+        raise ModuleError(f"the module's key is gone: `hive-mind module add --abort {name}` and start again")
+    try:
+        derived = lib._device_id_for_pub(ed25519.pub_from_seed(base64.b64decode(key.read_text().strip())))
+    except Exception:
+        derived = None
+    if derived != dev:       # the admitted id must be the one this key file really is
+        raise ModuleError(f"the module's key no longer matches the device id {dev} the owner admitted: "
+                          f"`hive-mind module add --abort {name}` and start again")
+    manifest = check_tree(staging, lib.CONTRACT_VERSION)
+    if _sha256_file(staging / MANIFEST) != rec["manifest_sha256"]:       # the bytes include the publisher key
+        raise ModuleError("the staged tree is not the one this node verified: refusing. "
+                          f"`hive-mind module add --abort {name}` and start again")
+    if (root / name).exists():
+        raise ModuleError(f"module {name!r} is already installed: use `hive-mind module update {name}`")
+    state = load_state(lib)
+    renamed = False
+    try:
+        _write_config(staging, manifest.get("config", {}))
+        os.rename(staging, root / name)
+        renamed = True
+        note = install_units(lib, name, manifest)
+        state[name] = {"version": manifest["version"], "publisher": manifest["publisher"], "device_id": dev,
+                       "source": rec["source"], "commit": rec["commit"], "installed_at": int(time.time()),
+                       "quota": dict(manifest.get("quota") or {}), "owner_quota": {}}
+        save_state(lib, state)
+    except BaseException:
+        remove_units(name)
+        if renamed and not staging.exists():
+            os.rename(root / name, staging)          # the pending add stays whole, so it can be run again
+            (staging / "config").unlink(missing_ok=True)       # staging is again exactly the tree that was verified
+        raise
+    _pending_path(name).unlink(missing_ok=True)
+    print(f"installed module {name} {manifest['version']} (device {dev}, principal {gov['principals'].get(dev)}); "
+          + (f"service {unit_names(name)[0]}" + (" with a timer" if manifest["service"].get("interval") else "")
+             if manifest.get("service") else "no service")
+          + (f" ({note})" if note else "") + "; hooks: " + (", ".join(manifest.get("hooks") or []) or "none"))
+
+
 # ── the unit (M2) ───────────────────────────────────────────────────────────────────────────────────
 
 def unit_dir():
@@ -509,10 +643,22 @@ def cmd_add(lib, args):
     name = args.name
     if not vocabulary.valid_module_name(name):
         raise ModuleError(f"{name!r} is not a valid module name")
+    if args.abort:
+        return _abort_add(lib, name)
+    if not args.source:
+        raise ModuleError("module add needs --from <repository> (or --abort to drop a pending add)")
     state = load_state(lib)
     root = modules_dir()
     if name in state or (root / name).exists():
         raise ModuleError(f"module {name!r} is already installed: use `hive-mind module update {name}`")
+    pending = _read_pending(name)
+    if not lib._owner_key_exists():
+        if pending is not None:
+            return _complete_add(lib, args, name, root, pending)
+        return _stage_for_owner(lib, args, name, root)
+    if pending is not None:
+        raise ModuleError(f"module {name!r} has a pending add from a device without the owner key: "
+                          f"`hive-mind module add --abort {name}` first")
     _require_owner(lib)
     principal = _operator_principal(lib, args.principal)
     with tempfile.TemporaryDirectory(prefix="hive-module-") as tmp:
@@ -570,8 +716,10 @@ def cmd_remove(lib, args):
     rec = state.get(args.name)
     if rec is None:
         raise ModuleError(f"module {args.name!r} is not installed")
-    _require_owner(lib)
     device_id = rec["device_id"]
+    if not lib._owner_key_exists():
+        return _remove_without_owner(lib, args.name, device_id, state)
+    _require_owner(lib)
     if _device_state(lib, device_id) == "admitted":
         lib._group_change("revoke", device_id)
     if _device_state(lib, device_id) == "admitted":
@@ -584,6 +732,22 @@ def cmd_remove(lib, args):
     print(f"removed module {args.name}; its device {device_id} is revoked and its entries stay in the journal")
 
 
+def _remove_without_owner(lib, name, device_id, state):
+    """Remove on a device without the owner key: stop the unit, delete the tree and the key, and say what only the
+    owner can finish. The device id stays admitted until the owner's revoke."""
+    remove_units(name)                            # stop it before its files and key go
+    shutil.rmtree(modules_dir() / name, ignore_errors=True)
+    _clear_pending(lib, name)
+    shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / name, ignore_errors=True)
+    state.pop(name)
+    save_state(lib, state)
+    if _device_state(lib, device_id) == "admitted":
+        print(f"removed module {name} from this node; its device {device_id} STAYS ADMITTED until the owner revokes it. "
+              f"On the owner machine run:\n  hive-mind group revoke {device_id}")
+    else:
+        print(f"removed module {name} from this node; its device {device_id} is already {_device_state(lib, device_id)}")
+
+
 def cmd_update(lib, args):
     ok, why = platform_supported()
     if not ok:
@@ -592,8 +756,7 @@ def cmd_update(lib, args):
     rec = state.get(args.name)
     if rec is None:
         raise ModuleError(f"module {args.name!r} is not installed")
-    _require_owner(lib)
-    source = args.source or rec["source"]
+    source = args.source or rec["source"]            # no owner key needed: it admits, revokes and re-limits nothing
     root = modules_dir()
     with tempfile.TemporaryDirectory(prefix="hive-module-") as tmp:
         src = Path(tmp) / "src"
@@ -723,9 +886,10 @@ def cmd_reapply(lib, args):
 def build_parser():
     p = argparse.ArgumentParser(prog="hive-mind module", description="Install and manage modules (Linux, 2.1).")
     sub = p.add_subparsers(dest="verb", required=True)
-    a = sub.add_parser("add", help="fetch, verify and install a module, mint its device key and admit it")
+    a = sub.add_parser("add", help="fetch, verify and install a module, mint its device key and admit it (without the owner key: stage it and print the owner's admit line)")
     a.add_argument("name")
-    a.add_argument("--from", dest="source", required=True, help="the module's git repository (path or URL)")
+    a.add_argument("--from", dest="source", help="the module's git repository (path or URL); required except with --abort")
+    a.add_argument("--abort", action="store_true", help="drop a staged add that is waiting for the owner's admit")
     a.add_argument("--publisher", help="the publisher key you checked (base64); pins it without a prompt")
     a.add_argument("--principal", help="the operator's principal for the module's device (default: this device's)")
     r = sub.add_parser("remove", help="revoke the module's device and delete it (its entries stay in the journal)")

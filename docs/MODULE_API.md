@@ -282,6 +282,9 @@ here stamped more than 10 minutes ahead of this node's clock (from a local arriv
 ## The module manifest
 
 A module is a git repository with a signed manifest. `hive-mind module add` checks it before anything is installed.
+On a device without the owner key it stages the checked tree, mints the key and prints the owner's
+`group admit … --module` line, and installs once the owner's admit has reached that device
+([`CLI_REFERENCE.md`](CLI_REFERENCE.md#hive-mind-module--install-and-manage-modules-21-linux-only)).
 
 `module.json`, signed by the module's **publisher key** in `module.json.sig` (Ed25519 over the exact bytes of
 `module.json`):

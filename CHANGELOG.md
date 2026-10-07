@@ -17,6 +17,13 @@ introduced (a contract) or tagged (a patch).
   fields, a string and an integer: no device list, address or principal, and no new route. A module can tell a one-node
   hive from a fleet; it reads an absent `node_devices` as unknown on a node without this. The contract bump and its
   `CONTRACT_HISTORY.md` entry come with the release that ships it.
+- **Added: install a module on a device without the owner key** (hwatch C6, M1b). `hive-mind module add <name> --from
+  <repo>` there stages the verified tree, mints the module's key and prints the owner's `group admit <device> --module
+  <name> --principal <p>` line with the publisher fingerprint and the verified commit, and installs nothing. A second
+  `add` after the owner's admit has synced installs the staged tree; `add --abort <name>` drops it. `module update`
+  no longer needs the owner key (same checks, no membership or quota change), and `module remove` there deletes the
+  tree and key and prints the owner's `group revoke` line (the device stays admitted until then). `quota` stays
+  owner-only. No governance route or entry changes.
 
 ## 2.2 — 2026-10-07 · `v2.2.0`
 

@@ -1312,19 +1312,30 @@ hive-mind <subcommand> [options]
 
 ```
 hive-mind module add <name> --from <repo> [--publisher KEY] [--principal P]
+hive-mind module add --abort <name>
 hive-mind module remove <name>
 hive-mind module update <name> [--from <repo>] [--publisher KEY]
 hive-mind module list
 hive-mind module quota <name> [--per-hour N] [--per-day N] [--entry-bytes N] [--lifetime N]
 ```
 
-Owner and operator only; there is no `hv module`. A module is a git repository whose `module.json` is signed by its
+Owner and operator; there is no `hv module`. `quota` needs the owner key; the other verbs also run on a device without it (below). A module is a git repository whose `module.json` is signed by its
 publisher key. `add` shows the key and pins it once you confirm (or pass `--publisher` to pin it without a prompt), mints the module's
 own device key, has the owner admit it under your principal, and installs its files, config and unit outside the
 checkout. `remove` revokes the device and keeps the module's journal entries. `update` re-verifies and swaps
 atomically, and refuses a different publisher key. `quota` is the only way a limit goes above the default. Where the
 platform has no module backend, `add` says so and exits non-zero before it touches anything. The manifest, the unit and
 the limits are in [`MODULE_API.md`](MODULE_API.md). `hive-mind update` re-renders every module's unit afterwards.
+
+**On a device without the owner key** (the owner key lives on another machine). `add` fetches, verifies, stages and mints
+the module's key, then prints the owner's line, `hive-mind group admit <device> --module <name> --principal <p>`, with
+the publisher fingerprint and the commit it verified, and **installs nothing**: no unit, no `.modules.json` row, no
+admit. The owner checks that commit and runs the line. When the admit has synced to this device, run the same
+`add <name> --from <repo>` again: it installs the staged tree, re-checked against the signed manifest and the digest
+recorded at the first run. `add --abort <name>` removes the staging and the key; `hv doctor --fix` never completes a pending add. `update` works without
+the key (same tree check, same pinned publisher; it admits, revokes and re-limits nothing). `remove` stops the unit and
+deletes the tree and the key, then prints the owner's `hive-mind group revoke <device>` line: **the device id stays
+admitted until the owner runs it.** `quota` stays owner-only.
 
 `hv doctor` reports each installed module as `modules:<name>` (a missing, tampered or wrongly signed manifest **fails**;
 an absent or stopped unit, a revoked device, missing config, a down listener and quota past 80% **warn**) and

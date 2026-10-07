@@ -691,8 +691,8 @@ affect confidence.
 ## Bounded entry timestamps (contract 2.1, #217)
 
 Journal order is `(timestamp, node_id, seq)`, and the writer picks the timestamp, so a device could place an entry
-anywhere in history. Two rules bound it per device, applied at ingest **and** in the projection (`_ts_problem`), so
-every node skips the same entries:
+anywhere in history. Two rules bound it per device (`_ts_problem`), so every node skips the same entries. Until 2.2 they
+applied at ingest and in the projection; from 2.2 they apply in the projection only (next section):
 
 1. a timestamp is no earlier than the latest timestamp among the device's lower `seq` entries, less `TS_TOLERANCE`
    (5 minutes, one budget measured against the chain's latest, so small steps cannot walk back without limit);
@@ -716,6 +716,28 @@ tolerance is named on stderr. An explicit `timestamp` argument is used as given.
 `FUTURE_DATED_MINUTES` = 10 ahead of this node's clock) and `flood` (more than the owner-signed `flood_per_minute`,
 default 120, or `flood_per_day`, default 2000, entries from one device) are reported by `hv doctor` and `hv audit`;
 nothing is refused for them. `ts-bounds` names the entries the projection skips.
+
+## Admission and owner authority in the projection (contract 2.2, #230, #250, #246)
+
+The bounded-timestamp rules above are a **projection** rule only: ingest accepts an entry whatever its timestamp, and
+`_ts_problem` runs when the store is built, so every node skips the same entries and none loses one from its journal.
+
+**Owner-signed governance beats a device-stamped entry.** Position in the journal is a device's choice, so the
+projection reads the owner's signature, not the stamp, when the two disagree. The tiebreak is `_ts_owner_signed`: a
+governance act whose signer is the owner at the act's position, or the owner just before it (so an outgoing owner's
+`transfer` keeps its place), beats a device-stamped entry. The content exemption is a different predicate,
+`_is_authorized_writer`: a payload that verifies as the owner at its position; a bare `owner_sig` key fails it.
+
+**Content projects only for an admitted device.** `_projection_entries` and `_content_evidence` keep a device's content
+only while the same projection lists it in `admitted` (`_admitted_content`), read as the final state: `admitted` minus
+`purged`. Three exemptions: (1) a payload that verifies as the owner at its position; (2) the genesis device, a member
+from genesis (`owner init` writes no admit) until an honoured revoke or a purge of it, and restored by a later admit,
+kept out of `gov["admitted"]` so fleet, election and listing readers see no new member; (3) content positioned before
+the genesis owner stays only for a device with no honoured revoke and no purge, so a writer-chosen stamp cannot outlive
+the owner's revoke. **Store effect on upgrade:** a rebuild drops the content of a revoked or purged device, so
+`hv search` stops returning it; the journal and `hv feed` still hold it, and a later admit brings back a revoked
+device's rows (a purge does not). A plain purge drops all of a device's content; a retire (`purge` carrying
+`keep_through` and `keep_hash`, #260) keeps the prefix its signed head names; a purge stays final.
 
 ## Testing
 

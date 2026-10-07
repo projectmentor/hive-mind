@@ -338,6 +338,65 @@ def test_a_plain_purge_still_drops_everything(tmp_path):
     assert conn.execute("SELECT count(*) FROM facts").fetchone()[0] == 0
 
 
+# ── a revoked former member (#271) ───────────────────────────────────────────────────────────────────────────────
+
+def _cli_contents(tmp_path):
+    import sqlite3
+    conn = sqlite3.connect(tmp_path / "store.db")
+    return {r[0] for r in conn.execute("SELECT content FROM facts")}
+
+
+def test_a_revoked_former_member_retired_with_confirm_projects_its_prefix(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    _run(tmp_path, "group", "revoke", "dev-a")
+    assert _cli_contents(tmp_path) == set()
+    r = _run(tmp_path, "group", "retire", "dev-a", "--confirm")
+    assert "Retired dev-a" in r.stdout
+    act = _purge_acts(tmp_path)[0]
+    assert act["keep_through"] == 3 and act["keep_hash"].startswith("sha256:")
+    assert _cli_contents(tmp_path) == {"one", "two", "three"}
+
+
+def test_a_revoked_former_member_without_confirm_is_refused(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    _run(tmp_path, "group", "revoke", "dev-a")
+    out = _run(tmp_path, "group", "retire", "dev-a").stdout
+    assert "--confirm" in out and "revoke dropped" in out
+    assert _purge_acts(tmp_path) == []
+    assert _cli_contents(tmp_path) == set()
+
+
+def test_a_never_admitted_revoked_id_is_refused_even_with_confirm(tmp_path):
+    """`group revoke` refuses an id that is not admitted, so the revoke is written past that CLI check: dev-x ends up in
+    `revoked`, out of `first_admit`, holding a fact. Retire still refuses, writes no purge, and the fact stays out."""
+    _run, _govstate = _cli_hive(tmp_path)
+    _run(tmp_path, "remember", "stranger", "--source", "agent", node_id="dev-x")
+    m, _ = _govstate(tmp_path)
+    m._group_change("revoke", "dev-x")
+    _m, gov = _govstate(tmp_path)
+    assert "dev-x" in gov["revoked"] and "dev-x" not in gov["first_admit"] and "dev-x" not in gov["admitted"]
+    out = _run(tmp_path, "group", "retire", "dev-x", "--confirm").stdout
+    assert "not an admitted or purged device" in out
+    assert _purge_acts(tmp_path) == []
+    assert "stranger" not in _cli_contents(tmp_path)
+
+
+def test_a_revoked_genesis_device_needs_confirm_and_projects_its_prefix(tmp_path):
+    _run, _govstate = _cli_hive(tmp_path)
+    m, gov = _govstate(tmp_path)
+    gen = gov["genesis_device"]
+    _run(tmp_path, "remember", "from genesis", "--source", "agent", node_id=gen)
+    # an unrevoked genesis device is still refused
+    assert "not an admitted or purged device" in _run(tmp_path, "group", "retire", gen, "--confirm").stdout
+    m._group_change("revoke", gen)  # `group revoke` refuses it: owner init never admits the genesis device
+    _m, gov = _govstate(tmp_path)
+    assert gen in gov["revoked"] and gen not in gov["first_admit"] and gen not in gov["admitted"]
+    assert "from genesis" not in _cli_contents(tmp_path)
+    assert "revoke dropped" in _run(tmp_path, "group", "retire", gen).stdout
+    assert _purge_acts(tmp_path) == []
+    assert f"Retired {gen}" in _run(tmp_path, "group", "retire", gen, "--confirm").stdout
+    assert "from genesis" in _cli_contents(tmp_path)
+
 # ── gaps the verifier found in #264 (#266) ───────────────────────────────────────────────────────────────────────
 
 def _raw_confidence(hv, with_x_tail):

@@ -1025,13 +1025,21 @@ def _group_retire(device_id, through=None, confirm=False):
     that seq still counts and nothing above it does. `through` defaults to the highest seq of the device this node
     holds, and must be a seq it holds: the hash is `compute_hash` of that entry, and the projection reads the signed
     pair, never this node's tip. A device that is already purged needs `confirm`, because the kept prefix counts
-    again in the live rows. A compromised device is `group purge`, with no keep fields."""
+    again in the live rows; so does a revoked former member (#271). A compromised device is `group purge`, with no keep fields."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
     held = {e["seq"]: e for e in entries
             if e.get("node_id") == device_id and isinstance(e.get("seq"), int) and not isinstance(e.get("seq"), bool)}
-    if device_id not in gov["admitted"] and device_id not in gov["purged"]:
+    # #271: a revoked former member is retirable too: a device admitted at some point, or the genesis device (which
+    # `owner init` never admits) once a revoke was honoured. An id that was only revoked or denied never was one.
+    former = device_id in gov["revoked"] and (device_id in gov["first_admit"] or device_id == gov.get("genesis_device"))
+    if device_id not in gov["admitted"] and device_id not in gov["purged"] and not former:
         print(f"{device_id} is not an admitted or purged device — nothing to retire.")
+        return
+    if former and device_id not in gov["admitted"] and device_id not in gov["purged"] and not confirm:
+        print(f"{device_id} is revoked: the revoke dropped its content from search. Retiring it brings back the "
+              f"prefix of its chain that the signed head names; pass --confirm for a device whose history you "
+              f"still trust.")
         return
     if device_id in gov["purged"] and not confirm:
         print(f"{device_id} is already purged. Retiring it again names a prefix of its chain that counts again in "

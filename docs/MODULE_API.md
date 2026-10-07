@@ -1,6 +1,6 @@
 # Module API reference (`/v1`)
 
-The route reference for the module API, contract **2.1**. What each route and field *promises* (stable, provisional
+The route reference for the module API, contract **2.2**. What each route and field *promises* (stable, provisional
 or internal), the deprecation window and the limits of the guarantees are in [`CONTRACT.md`](CONTRACT.md); this file
 is what the routes do. The manifest format and the `hive-mind module` verbs are at the end.
 
@@ -59,7 +59,7 @@ A path under a version this node does not serve (`/v2/…`) is `404` naming the 
 ### `GET /v1/`
 
 ```json
-{"api": ["v1"], "contract": "2.1", "hive_id": "…", "device_id": "k1:…", "module": "hwatch",
+{"api": ["v1"], "contract": "2.2", "hive_id": "…", "device_id": "k1:…", "module": "hwatch",
  "node_id": "k1:…", "node_devices": 1,
  "quota": {"limits": {…}, "used": {…}, "remaining": {…}}, "config": {"x-hwatch:poll": "30"}}
 ```

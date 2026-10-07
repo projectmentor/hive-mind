@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 2.1`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 2.2`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -267,6 +267,16 @@ governance actions, config keys, channels and the rest) is listed in [`NAMESPACE
 generated from `vocabulary.py`, and a name anything else adds takes a prefix.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `2.2` — **a revoked device's content leaves search; `hv search --id`** (#246, #249). **Additive: no re-integration.**
+  Nothing an adapter calls changes. New: `hv search --id SID|REF` looks one entry up by `sid` or `ref` and exits 1 with
+  nothing on stdout when the id names nothing, so an agent can verify an id before citing it. The hive's governance
+  reading changes in the way §7 allows a MINOR: content projects only for a device the final projection lists as
+  admitted and not purged, so after a rebuild a revoked or purged device's past facts, decisions and ideas no longer
+  appear in `hv search`, though they stay in the journal and `hv feed`; a later admit brings a revoked device's rows
+  back, a purge does not. A plain purge drops all of it; a retire (`hive-mind group retire`, #260) keeps the prefix its
+  signed head names; a purge stays final. Exempt: an entry that verifies as the owner, the genesis device until its
+  revoke or purge, and content positioned before the genesis owner stays only for a device with no honoured revoke and no purge. Owner-signed governance beats a device-stamped entry, and the timestamp bounds apply in the
+  projection only. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `2.1` — **modules: a signed, loopback-only module API and a module lifecycle** (private #16). **Additive: no
   re-integration.** Nothing an adapter calls changes: no verb, flag or output format moves. New: `hv feed` (read-only
   journal entries past a per-node cursor, with the core's `forgotten` flag on `fact` entries and `affects` on owner
@@ -595,7 +605,9 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   verb groups the admission lifecycle: `admit / revoke / deny / change / purge / list`
   (revoke is reversible; purge is a final tombstone — its entries stay in the journal but stop
   counting and it can't be re-admitted; `purge` is for a compromised device, since nobody can tell which of its
-  entries an attacker wrote). `group retire <device>` (#260) is the same tombstone for an honest device you are
+  entries an attacker wrote; *since 2.2* a revoked or purged device's past content also leaves `hv search`
+  on rebuild while staying in the journal and `hv feed`, and a later admit restores a revoked device's rows).
+  `group retire <device>` (#260) is the same tombstone for an honest device you are
   replacing: it signs `keep_through` and `keep_hash` on the purge, and the chain up to that seq still counts, with
   its corroboration weight, while later seqs do not and the device still cannot be re-admitted. It defaults to the
   highest seq this node holds, takes `--through SEQ` for a lower held one, and needs `--confirm` for a device that is

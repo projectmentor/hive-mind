@@ -1,6 +1,6 @@
 # Module API reference (`/v1`)
 
-The route reference for the module API, contract **2.2**. What each route and field *promises* (stable, provisional
+The route reference for the module API, contract **2.3**. What each route and field *promises* (stable, provisional
 or internal), the deprecation window and the limits of the guarantees are in [`CONTRACT.md`](CONTRACT.md); this file
 is what the routes do. The manifest format and the `hive-mind module` verbs are at the end.
 
@@ -59,12 +59,12 @@ A path under a version this node does not serve (`/v2/…`) is `404` naming the 
 ### `GET /v1/`
 
 ```json
-{"api": ["v1"], "contract": "2.2", "hive_id": "…", "device_id": "k1:…", "module": "hwatch",
+{"api": ["v1"], "contract": "2.3", "hive_id": "…", "device_id": "k1:…", "module": "hwatch",
  "node_id": "k1:…", "node_devices": 1,
  "quota": {"limits": {…}, "used": {…}, "remaining": {…}}, "config": {"x-hwatch:poll": "30"}}
 ```
 
-`api` lists the path versions served. `module` is the caller's module name. `node_id` is this node's own device id, the
+`api` lists the path versions served. `module` is the caller's module name. *Since 2.3:* `node_id` is this node's own device id, the
 signer of the entries its `hv` writes, and `node_devices` is how many node devices the hive has: the admitted devices
 and the genesis device (a member from genesis, though `owner init` writes no admit for it) that are not revoked, not
 purged and not a module. Both are read-only, a
@@ -296,7 +296,7 @@ On a device without the owner key it stages the checked tree, mints the key and 
 | `min_core` | The oldest core contract it runs on, a dotted version; refused on an older node. Default `0`. |
 | `publisher` | The publisher's Ed25519 public key, base64. Required. |
 | `files` | `{relative path: sha256 hex}` for every file, 1 to 500 of them. The fetched tree must hold exactly these files and no others. Required. |
-| `service` | Optional. `{"command": [argv…], "restart": "no" \| "on-failure" \| "always", "interval": seconds ≥ 60, "stop_grace": seconds 1–3600}`. `interval` makes it a timer. `stop_grace` renders `TimeoutStopSec` and `KillMode=mixed`: on stop only the main process gets SIGTERM and may drain a long one-shot for that many seconds; systemd then SIGKILLs the whole group. Without it systemd's default stop timeout applies. |
+| `service` | Optional. `{"command": [argv…], "restart": "no" \| "on-failure" \| "always", "interval": seconds ≥ 60, "stop_grace": seconds 1–3600}`. `interval` makes it a timer. `stop_grace` *(2.3)* renders `TimeoutStopSec` and `KillMode=mixed`: on stop only the main process gets SIGTERM and may drain a long one-shot for that many seconds; systemd then SIGKILLs the whole group. Without it systemd's default stop timeout applies. |
 | `hooks` | Optional list of events the module hooks; each needs a `hooks/<event>` file in the manifest. See *Hooks and events*. |
 | `config` | Optional `{key: default string}`, per-node defaults under the module's own prefix. |
 | `quota` | Optional `{per_hour, per_day, entry_bytes, lifetime}`: at most the defaults. |
@@ -313,7 +313,7 @@ Control plane, owner and operator only; there is no `hv module`.
 | `remove <name>` | Revoke the device, stop and remove the unit, delete the module's files and key, drop the record. The module's entries **stay** in the journal. |
 | `update <name> [--from <repo>]` | Re-verify and swap atomically. A different publisher key than the pin is refused. The device, key, pin and per-node config survive. |
 | `list` | Name, version, publisher fingerprint, signature state, service state, device state, quota use. |
-| `config <name> set <key> <value> \| unset <key> \| list` | Edit the module's per-node config file. Local to this node, never journaled, no owner key needed; keys follow the manifest's rule, values are strings of at most 4096 characters (a value starting with `-` needs `--` first), written atomically with mode 0600. `list` prints `key=value`, sorted. An `update` keeps what you set. |
+| `config <name> set <key> <value> \| unset <key> \| list` | *(2.3)* Edit the module's per-node config file. Local to this node, never journaled, no owner key needed; keys follow the manifest's rule, values are strings of at most 4096 characters (a value starting with `-` needs `--` first), written atomically with mode 0600. `list` prints `key=value`, sorted. An `update` keeps what you set. |
 | `quota <name> [--per-hour N] [--per-day N] [--entry-bytes N] [--lifetime N]` | The owner's limits for one module. |
 
 A module is installed under `$HIVE_MODULES_DIR` (default `~/.hive/modules/<name>/`), **outside the checkout**, so

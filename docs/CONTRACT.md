@@ -1,9 +1,9 @@
-# The module contract (2.2)
+# The module contract (2.3)
 
 What the module API promises, and what it does not. A module author reads this file to know what may be relied on
 across releases; [`MODULE_API.md`](MODULE_API.md) is the route reference and
 [`AGENT_INTEGRATION.md`](AGENT_INTEGRATION.md) §7 the adapter-facing version policy. Contract **2.1** was the first to
-publish this; 2.2 changes guarantees 4 and 5 and adds guarantee 10.
+publish this; 2.2 changed guarantees 4 and 5 and added guarantee 10; 2.3 adds guarantee 11 and the `/v1/` fields below.
 
 ## Stability tiers
 
@@ -21,7 +21,7 @@ Everything a module can reach is marked with one of three tiers.
   `api`. An unserved version is `404` naming the ones that are.
 - **The routes and their verbs**: `GET /v1/`, `/v1/feed`, `/v1/search`, `/v1/item`, `/v1/entity`, `/v1/tip` and
   `POST /v1/entries`, with the parameters, the status codes and the fields [`MODULE_API.md`](MODULE_API.md) lists.
-  `GET /v1/` includes `node_id` (this node's own device id, a string) and `node_devices` (the count of node devices
+  `GET /v1/` includes, since 2.3, `node_id` (this node's own device id, a string) and `node_devices` (the count of node devices
   in the hive, an integer: the admitted devices and the genesis device, with revoked, purged and module devices left out); the route carries no device list, address or principal.
 - **The authentication**: the Hive-Auth envelope, its signing bytes and the module-device requirement; an unsigned
   request is never served.
@@ -136,6 +136,19 @@ State these as the contract, not more.
     entry that verifies as the owner at its position; the genesis device, which counts as a member from genesis
     until an honoured revoke or a purge of it; and content positioned before the genesis owner stays only for a device with no honoured revoke and no purge, so a writer-chosen
     stamp cannot outlive the owner's revoke.
+11. **A module can be installed on a device without the owner key** *(2.3)*. `hive-mind module add` there stages a
+    tree that passed the same signed-manifest check and the same publisher pin, and mints the module's key, but
+    **installs nothing and admits nothing**: no unit, no `.modules.json` row, no journal entry, and no governance route
+    or entry type is added. The owner alone admits the device, with the `group admit <device> --module <name>
+    --principal <p>` line the staging prints; the line carries the publisher fingerprint and the verified commit,
+    which the owner is expected to check. The key minted at staging is a device key and signs nothing the hive honours
+    until that admit. A second `add` installs only when this node's own projection lists the device as admitted for
+    that module and not purged, re-checks the staged tree against the signed manifest and requires the manifest's
+    digest (which covers the publisher key) and `--from` to match what the first run recorded; otherwise it refuses and
+    leaves the staging as it was. `module update` there runs the same checks and the same pinned publisher and changes
+    no membership or quota. `module remove` there deletes the tree and the key but cannot revoke: **the device stays
+    admitted until the owner runs the `group revoke` line it prints.** `module quota` stays owner-only, so a limit can
+    still be raised only by the owner.
 
 ## `hv feed`: the consumer's obligations
 
@@ -162,11 +175,13 @@ dispatcher's caps and gates (`MODULE_API.md`, *Hooks and events*) are stable.
 
 ## Deferred
 
-Out of scope for 2.1 and 2.2, and not designed here: a remote opt-in for the module API; module support on macOS and
+Out of scope for 2.1 to 2.3, and not designed here: a remote opt-in for the module API; module support on macOS and
 Termux; the `AGENTS.md` cell; module-added lines in the session digest, which land with the module that adds
 them; a unified entity identity across module and shared entities (3.0, public #151).
 
 ## Versioning
+
+**2.3** is a MINOR. `GET /v1/` gains two read-only fields, the manifest gains an optional `service.stop_grace`, `hive-mind module config` is a new control-plane verb, and `module add`, `update` and `remove` run on a device without the owner key (guarantee 11). Nothing a module or an adapter calls changes. The release tag `v2.3.0` marks the commit that completed it.
 
 **2.2** is a MINOR. `hv search --id` and `hive-mind group retire` are additive, and guarantees 4, 5 and 10 above state how the projection treats timestamps and a revoked device's content. The release tag `v2.2.0` marks the commit that completed it.
 

@@ -1,5 +1,5 @@
 {
-  "digest": "5bc4ccc44ce884c5f1c135cadde6b03913c9eb420e552164b3297b8afba90042",
+  "digest": "10efee3d128571028d5d24fb769bafc659ff8675849e7823d5f33867e978c228",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -48,7 +48,7 @@
     "hive_sync_daemon.py": "08df1d37ae53711d7bd59412658fbc3611972f63ce50c5a78b2247fa29f17516",
     "hivemind_ctl.py": "3fd05b2c14e61e0a6ff2e22ef6db6f8154a4e2b9473d3c22308b7f411aa2abe4",
     "hivemind_owner.py": "89fd15240c283334d38d606bc28d98fd5c24295025245b837ed2a62486b849aa",
-    "hv": "7efb7f8471d51e3b8b4fbb74cc25cdee273d2995774efe58483c7b8880e9bb03",
+    "hv": "f0ca186528e25385a2dba2ab9ea8c57ddd3da14031cdad56788f4a49f9532bb3",
     "integrations/claude-code/hive-memory/SKILL.md": "55c025490cd4afecce87901ade9077bada2a73b3443143f42391c2958ccf91bb",
     "integrations/claude-code/install.sh": "588f0f6894c25893d3a098f4ddd422a480e63c85b5bb48c97f2d242069a93894",
     "integrations/claude-code/wire-up/SKILL.md": "e99f90fa4feadbb8e300defd09173c73d3b82833e3dc013f0448fd1dabf28159",
@@ -128,7 +128,7 @@
     "tests/test_governance.py": "4df50c66a01cd16e70dc1643eea7940cf838f239cda2755a421d305088611aa7",
     "tests/test_group.py": "497c7aa8e4b74a8a9ed29ee8f5a02bf27e3e40a24bedd0a7860a1bbda136a054",
     "tests/test_hardening_batch2.py": "49855e078fd4de4419fb3c0636d653f9e3824d54c50b7ea7754392c761b7e0a3",
-    "tests/test_hello_sig.py": "589ff923cda51253cc824bb4b4061c19121526222b22e33a6eb8309fd52a45a0",
+    "tests/test_hello_sig.py": "813ca1fdd149182485299b21ac4c82da7663a76b9453dbdffdce7aa02db27611",
     "tests/test_hermes_plugin.py": "36b4bdae5c04fe889fd1f2bd4434fb7eb4274c4f64c05f89d4b54124f82b44d8",
     "tests/test_hive_home_sandbox.py": "eeac54f97fe0b42ca78fd7cf06f3a5c3906085b2c534343a6a3b40c613e19eec",
     "tests/test_hv.py": "73450752967673822421344c01405150d0d0ffa59e2892683ad54ade6236a488",
@@ -162,7 +162,7 @@
     "tests/test_owner_init_closes.py": "657be17288db6b784a7524d79c64e1988f99028628cf1561d01046d524b81932",
     "tests/test_ownerkey_boundary.py": "a62e30d9272d2b61fcd7bd642dc8f2afbde4db7dded36dff4ae69dfd1776334d",
     "tests/test_payload_shape.py": "95970687b4d72156b4feac98b382aa34837e8a1d4e041a705c84a31ba95ba9ab",
-    "tests/test_peer_address.py": "6e79f53fccf74770f822bd53665e2784c59bf39a2bfbadf38415c24fdb3451a9",
+    "tests/test_peer_address.py": "0f83dbc0d7e613ee11b2e84628395d1d9ce9b91feef1d0bb9c00b94a805efb10",
     "tests/test_peers_isolation.py": "002bd72d3769a096dea25c976e3d0018cc04be9078550e131f08f2e3cfb5dfe1",
     "tests/test_perf.py": "08939cc662d426f16989077fad73cab1d404c87db67fad951e02663ab0decf5c",
     "tests/test_projection_authz.py": "cd472af9ecc6a4a3cf5566386b657e9c2c44a03b858e09b11d617410bf898c71",

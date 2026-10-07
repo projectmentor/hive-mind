@@ -412,6 +412,13 @@ def _complete_add(lib, args, name, root, rec):
     key = Path(lib._ensure_key_dir()) / "modules" / name / "device-key"
     if not key.exists():
         raise ModuleError(f"the module's key is gone: `hive-mind module add --abort {name}` and start again")
+    try:
+        derived = lib._device_id_for_pub(ed25519.pub_from_seed(base64.b64decode(key.read_text().strip())))
+    except Exception:
+        derived = None
+    if derived != dev:       # the admitted id must be the one this key file really is
+        raise ModuleError(f"the module's key no longer matches the device id {dev} the owner admitted: "
+                          f"`hive-mind module add --abort {name}` and start again")
     manifest = check_tree(staging, lib.CONTRACT_VERSION)
     if _sha256_file(staging / MANIFEST) != rec["manifest_sha256"]:       # the bytes include the publisher key
         raise ModuleError("the staged tree is not the one this node verified: refusing. "

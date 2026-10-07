@@ -6,6 +6,7 @@ copied, as sync does). Mutants of each rule were armed by hand against these tes
 """
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -244,6 +245,19 @@ def test_a_failed_completion_leaves_the_pending_add_runnable_again(nodes, tmp_pa
     assert not (nodes.mods["b"] / ".demo.staging" / "config").exists()
     r = nodes.add_b(tmp_path / "repo", pub)
     assert "installed module demo 1.0.0" in r.stdout
+
+
+@LINUX_ONLY
+def test_a_key_swapped_between_the_runs_is_refused(nodes, tmp_path, units):
+    import base64
+    pub = _publish(tmp_path / "repo", service={"command": ["run.sh"], "restart": "always"})
+    out = nodes.add_b(tmp_path / "repo", pub).stdout
+    nodes.run_a(*_admit_line(out))
+    nodes.sync_to_b()
+    (nodes.b_key() / "device-key").write_text(base64.b64encode(os.urandom(32)).decode() + "\n")
+    r = nodes.add_b(tmp_path / "repo", pub, check=False)
+    assert r.returncode == 1 and "no longer matches" in r.stderr
+    assert not nodes.b_modules().exists() and not (nodes.b / ".modules.json").exists()
 
 
 @LINUX_ONLY

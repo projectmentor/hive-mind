@@ -53,6 +53,9 @@ class ModuleError(Exception):
 
 # ── places ──────────────────────────────────────────────────────────────────────────────────────────
 
+CONFIG_KEY = re.compile(r"[A-Za-z0-9_.:-]+\Z")
+
+
 def modules_dir():
     return Path(os.environ.get("HIVE_MODULES_DIR") or Path.home() / ".hive" / "modules")
 
@@ -502,6 +505,55 @@ def _write_config(dest_dir, defaults):
     os.chmod(path, 0o600)
 
 
+def _config_path(lib, name):
+    if name not in load_state(lib):
+        raise ModuleError(f"module {name!r} is not installed")
+    return modules_dir() / name / "config"
+
+
+def _read_config(path):
+    try:
+        have = json.loads(path.read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        raise ModuleError(f"{path} is not readable JSON ({e}): fix or remove it first")
+    if not isinstance(have, dict):
+        raise ModuleError(f"{path} is not a JSON object: fix or remove it first")
+    return have
+
+
+def _save_config(path, have):
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(have, indent=1, sort_keys=True) + "\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def cmd_config(lib, args):
+    """`module config <name> set|unset|list`: edit the per-node config file (local, never journaled, kept by update).
+    No owner key is needed: it is this node's own file."""
+    path = _config_path(lib, args.name)
+    have = _read_config(path)
+    if args.action == "list":
+        for k in sorted(have):
+            print(f"{k}={have[k]}")
+        return
+    if not CONFIG_KEY.match(args.key):
+        raise ModuleError(f"bad config key {args.key!r}: letters, digits and . _ : - only")
+    if args.action == "set":
+        if args.value is None:
+            raise ModuleError("config set needs a value")
+        have[args.key] = args.value
+        print(f"{args.name}: set {args.key}={args.value}")
+    else:
+        if args.key not in have:
+            raise ModuleError(f"{args.name} has no config key {args.key!r}")
+        del have[args.key]
+        print(f"{args.name}: unset {args.key}")
+    _save_config(path, have)
+
+
 def cmd_add(lib, args):
     ok, why = platform_supported()
     if not ok:
@@ -740,16 +792,24 @@ def build_parser():
     q.add_argument("name")
     for k in QUOTA_KEYS:
         q.add_argument(f"--{k.replace('_', '-')}", dest=k, type=int)
+    c = sub.add_parser("config", help="set, unset or list a module's per-node config (local, kept by update)")
+    c.add_argument("name")
+    c.add_argument("action", choices=("set", "unset", "list"))
+    c.add_argument("key", nargs="?")
+    c.add_argument("value", nargs="?")
     return p
 
 
 VERBS = {"add": cmd_add, "remove": cmd_remove, "update": cmd_update, "list": cmd_list, "quota": cmd_quota,
-         "reapply": cmd_reapply}
+         "reapply": cmd_reapply, "config": cmd_config}
 
 
 def main(lib, argv):
     """Run `hive-mind module <argv>` against the control-plane library `lib`. Returns an exit status."""
     args = build_parser().parse_args(argv)
+    if args.verb == "config" and args.action != "list" and args.key is None:
+        print(f"hive-mind module: config {args.action} needs a key", file=sys.stderr)
+        return 2
     try:
         VERBS[args.verb](lib, args)
     except ModuleError as e:

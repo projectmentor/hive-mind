@@ -310,6 +310,7 @@ Control plane, owner and operator only; there is no `hv module`.
 | `remove <name>` | Revoke the device, stop and remove the unit, delete the module's files and key, drop the record. The module's entries **stay** in the journal. |
 | `update <name> [--from <repo>]` | Re-verify and swap atomically. A different publisher key than the pin is refused. The device, key, pin and per-node config survive. |
 | `list` | Name, version, publisher fingerprint, signature state, service state, device state, quota use. |
+| `config <name> set <key> <value> \| unset <key> \| list` | Edit the module's per-node config file. Local to this node, never journaled, no owner key needed; values are strings, written atomically with mode 0600. `list` prints `key=value`, sorted. An `update` keeps what you set. |
 | `quota <name> [--per-hour N] [--per-day N] [--entry-bytes N] [--lifetime N]` | The owner's limits for one module. |
 
 A module is installed under `$HIVE_MODULES_DIR` (default `~/.hive/modules/<name>/`), **outside the checkout**, so

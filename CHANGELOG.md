@@ -13,7 +13,7 @@ introduced (a contract) or tagged (a patch).
 ## Unreleased
 
 - **`hv search --chain`** (#157, #283). Follow one decision's supersede chain, one hop per line, to the decision that is still in effect. A superseded decision names the entry that replaced it by stable id (`superseded_by_sid`, `superseded_by_ref`) on `hv search`, `hv search --id`, the dashboard, and the MCP tools. The contract number is still 2.3. `hv version` changes when the next contract note is written.
-- **A revoke in the same ingest call is read before the next entry is judged** (#284, #285). Facts from that device that come later in its sequence are not stored. Facts that were already stored stay in the journal and in `hv feed`, and they stay out of `hv search`.
+- **A device's own revoke in the same ingest call is read before that device's later entries are judged** (#284, #285). Facts from that device that come later in its sequence are not stored. A revoke carried on another device's chain is read only if that chain is swept first. Otherwise the facts are stored, and they do not project. (#289) Facts that were already stored stay in the journal and in `hv feed`, and they stay out of `hv search`.
 
 ## 2.3 — 2026-10-07 · `v2.3.0`
 

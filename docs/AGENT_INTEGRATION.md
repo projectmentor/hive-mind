@@ -623,7 +623,7 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   already purged, or *(2.3)* for a revoked former member (in `first_admit`, or the genesis device after an honoured
   revoke); an id that was only revoked or denied, never a member, is still refused. A down-level node reads it as a plain purge. `hv config` gains `identity` (this device's key) and
   `confidence` (the params) sub-namespaces. Through 1.x, `hv key`, `hv admit`, and `hv config set …` were
-  silent aliases. In 2.0 those names print the `hive-mind` form and exit 2. Additive for 1.5: adapters still only *read* derived confidence; nothing to re-wire.
+  silent aliases. In 2.0 `hv admit` and `hv config set` print their `hive-mind` form, `hv key` prints `hv config identity`, and all three exit 2. Additive for 1.5: adapters still only *read* derived confidence; nothing to re-wire.
 - `1.4` — confidence is now a **governed projection**: its derivation parameters (caps, decay,
   same-source discount) are owner-signed and journaled via the new `hv config` verb, and owner-forget
   (`hv retract --owner`) is cryptographically authorized once an owner exists. Additive: adapters

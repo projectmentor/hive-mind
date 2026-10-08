@@ -244,7 +244,8 @@ Most of the time your agents call `hv` for you. Full reference:
 
 Deeper reading: [`docs/INTERNALS.md`](docs/INTERNALS.md),
 [`docs/SYNC_API.md`](docs/SYNC_API.md), [`docs/HV_ARCHITECTURE.md`](docs/HV_ARCHITECTURE.md) (the two
-planes, `hv` and `hive-mind`), [`docs/history/P2P_DESIGN.md`](docs/history/P2P_DESIGN.md) (the original
+planes, `hv` and `hive-mind`), [`docs/MODULES.md`](docs/MODULES.md) (how to write a module),
+[`docs/history/P2P_DESIGN.md`](docs/history/P2P_DESIGN.md) (the original
 sync design, kept as history), the
 [continual-learning design](docs/design/hivemind_continual_learning_design.md) behind contract
 1.19–1.20, how several helpers share one project in
@@ -270,6 +271,29 @@ brain (`hv`), one spec, no hand-maintained per-agent adapters.
 - **Claude Desktop (MCP)** — a local stdio MCP server (`integrations/mcp/`) exposes the hive to
   Claude Desktop, so it reads and writes your shared memory with no copy-paste.
 - **Any CLI agent** — if it can run a shell command, it can use `hv`.
+
+---
+
+## Modules
+
+A **module** is a signed, sandboxed add-on. It is its own process, with its own device key and
+its own write quota. The owner admits that device. The module talks to the hive only on
+loopback, through `/v1`, never through the owner key. Install one with
+`hive-mind module add <name> --from <repo>`.
+
+**Trust.** The module's `module.json` is signed by its publisher key. That key is shown at
+`add` and pinned on first use (or you pass `--publisher`). The HiveMind release key never signs
+a module. The owner then admits the module's device (`admit --module`). On a machine that does
+not hold the owner key, `add` stages the tree and prints the owner's admit line; a second `add`
+after that admit has synced finishes the install.
+
+**Today (contract 2.3).** Modules run on Linux with a systemd user manager.
+[`docs/MODULES.md`](docs/MODULES.md) is the developer guide: the manifest, signing, the
+`x-<module>:` namespace, the module API, per-node vs fleet config, and a worked example.
+The route reference is [`docs/MODULE_API.md`](docs/MODULE_API.md).
+
+**hwatch** is the first module. It watches GitHub and the hive, routes addressed posts and
+holds to agent seats, and launches those sessions.
 
 ---
 

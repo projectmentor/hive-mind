@@ -739,6 +739,12 @@ the owner's revoke. **Store effect on upgrade:** a rebuild drops the content of 
 device's rows (a purge does not). A plain purge drops all of a device's content; a retire (`purge` carrying
 `keep_through` and `keep_hash`, #260) keeps the prefix its signed head names; a purge stays final.
 
+**A revoke in the same ingest call is read before the next entry is judged** (#284).
+Entries from one device are ordered by sequence number, so that device's own revoke is judged
+before later facts from the same device, and those later facts are not stored. Content that was
+already stored before the revoke stays in the journal and in `hv feed`, and it stays out of
+`hv search`, as the upgrade note above says.
+
 ## Testing
 
 ```bash

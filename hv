@@ -1595,8 +1595,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
 
     The batch is swept in (device, seq) order, so a device's entries are judged against its chain in order
     whatever their type. Content waits for an admit that arrives later in the same batch, and is refused only
-    when no sweep can admit it. A revoke that lands in the same sweep is read before the next entry is
-    judged, so later facts from that device are not stored (#284). Does NOT persist to SQLite — the caller runs rebuild() once afterwards
+    when no sweep can admit it. A device's own revoke in the same sweep is read before that
+    device's later entries are judged, so those facts are not stored (#284). A revoke carried on another device's chain is read only if
+    that chain is swept first; otherwise the facts are stored, and they do not project. Does NOT persist to SQLite — the caller runs rebuild() once afterwards
     if accepted > 0. Returns (accepted, duplicates)."""
     existing = journal_keys()
     accepted = duplicates = rejected = 0

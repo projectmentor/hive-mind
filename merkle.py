@@ -25,6 +25,10 @@ CHUNK_SIZE = 100
 # The envelope of a journal entry: the fields every reader trusts before it looks at a payload (SECREV A1).
 SEQ_MAX = 2**53                 # exclusive: a seq must survive a JSON round trip through a float, and SQLite binds int64
 SEQ_JUMP_MAX = 2**20            # ingest: at most this far past the highest seq already held for the device
+# The types this node reads payload fields of: a null payload is as unreadable as a non-object one (#304). Kept equal
+# to vocabulary.ENTRY_TYPES by tests/test_envelope.py; a type outside it still lands and projects to nothing.
+_OBJECT_PAYLOAD_TYPES = ("capsule", "cell", "comb", "decision", "entity", "entity_fact", "fact", "governance", "idea",
+                         "link", "retract")
 _STR_FIELDS = ("action", "device_id", "proposal_id", "basis_ts", "label", "principal", "module")   # of a governance payload
 
 
@@ -32,7 +36,7 @@ def envelope_problem(e, tip=None):
     """Why this entry's envelope cannot be trusted, or None. Pure over the entry; never raises.
 
     `node_id` a non-empty str, `seq` an int (not a bool) in [1, 2**53), `type` a non-empty str, `payload` an
-    object or null, and `prev_hash` / `timestamp` / `sig` str when present (nothing reads an absent one). The governance and name-keyed rows below
+    object (null only for a type this node does not know), and `prev_hash` / `timestamp` / `sig` str when present (nothing reads an absent one). The governance and name-keyed rows below
     check the few payload fields that readers key a dict on or compare. The type vocabulary is deliberately
     NOT closed: an entry of a type this node does not know still lands and projects to nothing (the
     version-skew rule in vocabulary.py). `tip`, when given, is the highest seq this node holds for the device:
@@ -54,10 +58,10 @@ def envelope_problem(e, tip=None):
         if field in e and not isinstance(e[field], str):
             return f"{field} is not a string"
     p = e.get("payload")
-    if p is None:
+    if p is None and typ not in _OBJECT_PAYLOAD_TYPES:
         return None
     if not isinstance(p, dict):
-        return "payload is not an object or null"
+        return "payload is not an object"
     if typ == "governance":
         for field in _STR_FIELDS:
             if p.get(field) is not None and not isinstance(p[field], str):

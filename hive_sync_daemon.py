@@ -113,6 +113,14 @@ RATE_REFILL_PER_SEC = 64                   #   sync is bursty — these throttle
 _request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):
+        return None            # a signed proxy read is never re-sent to wherever a peer points
+
+
+_NO_REDIRECT = urllib.request.build_opener(_NoRedirect)
+
+
 class _DeadlineReader:
     """The request stream of one connection, read with a WALL-CLOCK deadline instead of a per-read timeout.
     `SOCKET_TIMEOUT` alone restarts at every received byte, so a peer sending a byte every few seconds holds
@@ -648,6 +656,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 qs = "&".join(f"{k}={quote(v[0])}" for k, v in q.items() if k != "node")
                 try:
+                    if sync_common.sync_auth_outbound_mode() == "enforce" and not hv._telemetry_target_verified(
+                            addr, node, hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))):
+                        # a signature names no audience: none goes to an address that has not proved itself
+                        self._send(200, {"available": False, "reachable": False, "node_id": node,
+                                         "error": "address not verified for this node"})
+                        return
                     # generous timeout: a slow mobile node computes /api/overview (merkle + governance
                     # over the whole journal in pure Python) in ~10-15s; the SPA shows a spinner meanwhile.
                     # Sign the proxied read with THIS node's device key so the admitted peer accepts it.
@@ -655,7 +669,7 @@ class Handler(BaseHTTPRequestHandler):
                     hdrs = sync_common.sign_sync_request("GET", u.path, fwd_qs, b"")
                     req = urllib.request.Request(
                         f"http://{addr}{u.path}" + (f"?{fwd_qs}" if fwd_qs else ""), headers=hdrs)
-                    with urllib.request.urlopen(req, timeout=20) as rr:
+                    with _NO_REDIRECT.open(req, timeout=20) as rr:
                         body = rr.read()
                     self.send_response(200)
                     self.send_header("Content-Type", "application/json")

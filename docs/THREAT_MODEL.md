@@ -234,8 +234,11 @@ shown because a planted forget would be re-signed too. Once set,
   freshness window (`HIVE_SYNC_AUTH_WINDOW`, default 300 s; the nonce is remembered for twice that) and be
   served as this node, for as long as the third node still admits this one. Under outbound `enforce` the
   address is a verified one: a pull is unsigned until the hello is `verified`, and the dashboard's signed
-  telemetry read (`GET /api/telemetry`, redirects off) is not sent to an address whose `/hive/info` is not
-  `verified` for that device. Closed node-locally, with no
+  telemetry read (`GET /api/telemetry`) and the daemon's per-node proxy (`GET /api/overview`, `/api/search`,
+  `/api/status`, `/api/telemetry` with `?node=`) are not sent to an address whose `/hive/info` is not
+  `verified` for that device; those reads follow no redirect. The hello request, the `/hive/info` probe that
+  gates these reads, and `/sync/merkle-root` stay signed open-discovery reads (a replay of one does not disclose
+  the journal). Closed node-locally, with no
   format change: a device the owner revokes or purges is dropped from `.peers.json` when the revoke or purge
   projects, and `hv sync now`, the sync loop and the doctor probes send it nothing. An entry is matched by
   its device `id` (`k1:…`); an entry labelled otherwise (`group admit --principal` seeds the principal) is

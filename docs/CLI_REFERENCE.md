@@ -375,6 +375,11 @@ under the release key this install already pins, or the update is refused and no
 re-sign has not landed yet is waited for, then refused. `hive-mind update --allow-unsigned` overrides this for a
 fork you trust.
 
+`hive-mind update` also refuses a commit that is not a descendant of the one installed: an older tree (a rollback to
+an earlier commit, whose signature is still valid) or a rewritten history. It prints both shas and changes nothing.
+`hive-mind update --allow-rewind` installs it, for a history rewrite you made on purpose; the signature check still
+applies. The normal fast-forward is unchanged.
+
 ---
 
 ### `hv doctor merkle` — Diagnose sync problems

@@ -136,6 +136,8 @@ State these as the contract, not more.
     entry that verifies as the owner at its position; the genesis device, which counts as a member from genesis
     until an honoured revoke or a purge of it; and content positioned before the genesis owner stays only for a device with no honoured revoke and no purge, so a writer-chosen
     stamp cannot outlive the owner's revoke.
+    Admitted is not enough for a module device: an entry outside its module's write policy stops projecting
+    (the module-policy projection, 2.4; [AGENT_INTEGRATION §7](AGENT_INTEGRATION.md), [CONTRACT_HISTORY](CONTRACT_HISTORY.md)). It stays in the journal, and the module contract does not change.
 11. **A module can be installed on a device without the owner key** *(2.3)*. `hive-mind module add` there stages a
     tree that passed the same signed-manifest check and the same publisher pin, and mints the module's key, but
     **installs nothing and admits nothing**: no unit, no `.modules.json` row, no journal entry, and no governance route

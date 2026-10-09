@@ -3708,16 +3708,28 @@ def _entity_name(entry):
 
 
 def _entity_declined(entries, gov):
-    """2.1 (#208, option 3): the `entity` entries the projection does not apply, as a set of (node_id, seq).
-    A module device (the `module` admit marker, `gov["modules"]`) may write only `x-<its module>:<name>` entities
-    (the gate's `entity-prefix-required`), and may update one only if it is that name's creator, the first APPLIED
-    entity entry for the name in replay order `(node_id, seq)`, the order `persist_entity`'s `ON CONFLICT(name)`
-    folds in (the gate's `not-entity-owner`). A non-module device is never declined: its entity write by name is
-    as it was. Pure over the journal and governance, so every node declines the same entries whatever order they
-    arrived in. A declined entry is skipped, not kept as evidence. The module marker is read as of the end of the
-    journal, like the election exclusion."""
+    """The `entity` entries the projection does not apply, as a set of (node_id, seq): the module-policy ones
+    and the weigh-only ones (`_entity_verdicts`)."""
+    module_declined, weigh_only = _entity_verdicts(entries, gov)
+    return module_declined | weigh_only
+
+
+def _entity_verdicts(entries, gov):
+    """(module_declined, weigh_only), each a set of (node_id, seq) of `entity` entries the projection skips.
+
+    2.1 (#208, option 3): a module device (the `module` admit marker, `gov["modules"]`) may write only
+    `x-<its module>:<name>` entities (the gate's `entity-prefix-required`), and may update one only if it is that
+    name's creator, the first APPLIED entity entry for the name in replay order `(node_id, seq)`, the order
+    `persist_entity`'s `ON CONFLICT(name)` folds in (the gate's `not-entity-owner`).
+
+    SECREV B3 (hive-mind-private #51): every other device is held to the rule links use (`_link_authority`, the
+    creator's entry standing as the target). The creator, or an owner-signed write, rewrites the entity; any other
+    admitted device's write is weigh-only: it is skipped like a declined one, so it does not replace the entity.
+    Pre-owner, only the creator rule applies, as for links. Pure over the journal and governance, so every node
+    declines the same entries whatever order they arrived in. A declined entry is skipped, not kept as evidence.
+    The module marker is read as of the end of the journal, like the election exclusion."""
     modules = gov.get("modules") or {}
-    declined, creator = set(), {}
+    declined, weigh_only, creator = set(), set(), {}
     for e in entries:
         if e.get("type") != "entity":
             continue
@@ -3726,13 +3738,17 @@ def _entity_declined(entries, gov):
             continue
         node = e.get("node_id")
         module = modules.get(node)
+        first = creator.get(name)
         if module is not None:
             split = vocabulary.split_module_name(name)
-            if split is None or split[0] != module or creator.get(name, node) != node:
+            if split is None or split[0] != module or (first is not None and first.get("node_id") != node):
                 declined.add((node, e.get("seq")))
                 continue
-        creator.setdefault(name, node)
-    return declined
+        elif first is not None and _link_authority(e, first, gov) != "hard":
+            weigh_only.add((node, e.get("seq")))
+            continue
+        creator.setdefault(name, e)
+    return declined, weigh_only
 
 
 # ── the module write policy (2.1; hive-mind-private #50) ───────────────────────────────────────────────────
@@ -6383,6 +6399,12 @@ def entity(args):
             sys.exit(2)
         payload = {"name": args.name, "type": args.type or "unknown", "attributes": attrs}
         entry = append_journal("entity", payload)
+        pentries = _projection_entries(merkle.read_all_entries(JOURNAL_DIR))
+        if (entry["node_id"], entry["seq"]) in _entity_verdicts(pentries, _governance_state(pentries))[1]:
+            # Weigh-only (#51): the same verdict `rebuild_db` reaches. The entry is journaled (permanent) and stays so.
+            print(f"Entity '{args.name}' was created by another device: this write is journaled but does not replace "
+                  f"it. Only its creator, or the owner, rewrites an entity.", file=sys.stderr)
+            sys.exit(1)
         try:
             conn = get_conn()
             res = persist_entity(conn, entry)
@@ -9062,6 +9084,24 @@ def _doctor_status():
                                      f"module API would have refused; they do not project: "
                                      f"{', '.join(f'{n}:{q} (module {mods.get(n)})' for n, q in breach[:10])}"
                                      f"{' …' if len(breach) > 10 else ''}"})
+    except Exception:
+        pass
+
+    # 3f1b2. Entity rewrites (SECREV B3, #51): an `entity` write by a device that is neither the name's creator nor
+    #        the owner is weigh-only, as a link is: the projection skips it and the entity keeps the creator's
+    #        (or the owner's) latest write. A journal written before this rule may hold some that used to win;
+    #        they stay on disk and stop winning. Advisory.
+    try:
+        pentries = _projection_entries(entries)
+        _md, weigh = _entity_verdicts(pentries, _governance_state(pentries))
+        if weigh:
+            by_key = {(e.get("node_id"), e.get("seq")): e for e in pentries}
+            checks.append({"name": "entity-rewrite", "status": "warn",
+                           "detail": f"{len(weigh)} entity write{'s' if len(weigh) != 1 else ''} by a device that is neither "
+                                     f"the entity's creator nor the owner; they do not replace the entity: "
+                                     + ", ".join(f"{n}:{q} ({_entity_name(by_key[(n, q)])})"
+                                                 for n, q in sorted(weigh, key=lambda k: (str(k[0]), k[1] if isinstance(k[1], int) else 0))[:10])
+                                     + (" …" if len(weigh) > 10 else "")})
     except Exception:
         pass
 

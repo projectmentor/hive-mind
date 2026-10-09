@@ -111,15 +111,66 @@ def test_a_name_a_device_created_first_stays_with_the_device_even_when_it_is_the
     assert hive.hv.get_conn().execute("SELECT type FROM entities WHERE name = 'x-hwatch:seeded'").fetchone()["type"] == "pre-seeded"
 
 
-def test_an_owner_or_plain_device_still_updates_by_name_as_before(hive):
+def test_a_plain_device_still_creates_and_the_creator_still_updates_by_name(hive):
     hv = hive.hv
-    early = device_sorted(hive, before=hive.plain)
-    a = ent(hv, early, "david", T % 1, "person", {"v": 1})
-    b = ent(hv, hive.plain, "david", T % 2, "human", {"v": 2})       # a later writer in replay order wins, as ever
+    a = ent(hv, hive.plain, "david", T % 1, "person", {"v": 1})
+    b = ent(hv, hive.plain, "david", T % 2, "human", {"v": 2})       # the author's own later write wins
     c = ent(hv, hive.plain, "x-hwatch:note", T % 3, "n1")           # a plain device may use a module's prefix too
     conn = project(hive, hive.entries + [a, b, c])
     assert rows(conn) == [("david", "human", '{"v": 2}'), ("x-hwatch:note", "n1", "{}")]
     assert hv._entity_declined(journal(hive), hv._governance_state(journal(hive))) == set()
+
+
+def test_another_admitted_devices_rewrite_by_name_is_weigh_only(hive):
+    """SECREV B3 (#51): fails on main, where the last write in replay order replaces the entity."""
+    hv = hive.hv
+    early = device_sorted(hive, before=hive.plain)
+    a = ent(hv, early, "david", T % 1, "person", {"v": 1})
+    rewrite = ent(hv, hive.plain, "david", T % 2, "human", {"v": 2})     # admitted, signed, valid, and not the author
+    conn = project(hive, hive.entries + [a, rewrite])
+    assert rows(conn) == [("david", "person", '{"v": 1}')]
+    assert conn.execute("SELECT count(*) FROM journal_index WHERE node_id = ? AND seq = ?", (rewrite["node_id"], rewrite["seq"])).fetchone()[0] == 0
+    gov = hv._governance_state(journal(hive))
+    assert hv._entity_verdicts(journal(hive), gov) == (set(), {(rewrite["node_id"], rewrite["seq"])})
+
+
+def test_the_author_and_an_owner_signed_write_rewrite_the_entity(hive):
+    hv = hive.hv
+    oseed, opub, _ = hive.owner
+    early = device_sorted(hive, before=hive.plain)
+    a = ent(hv, early, "david", T % 1, "person", {"v": 1})
+    foreign = ent(hv, hive.plain, "david", T % 2, "human", {"v": 2})
+    conn = project(hive, hive.entries + [a, foreign])
+    assert rows(conn) == [("david", "person", '{"v": 1}')]
+    mine = ent(hv, early, "david", T % 3, "person", {"v": 3})            # the author's rewrite
+    conn = project(hive, hive.entries + [a, foreign, mine])
+    assert rows(conn) == [("david", "person", '{"v": 3}')]
+    owner_signed = TL._entry(hv, hive.plain, "entity", {"name": "david", "type": "ruled", "attributes": {"v": 4}, "source": "manual"},
+                             T % 4, owner=(oseed, opub))                    # the owner commands, through any admitted device
+    conn = project(hive, hive.entries + [a, foreign, mine, owner_signed])
+    assert rows(conn) == [("david", "ruled", '{"v": 4}')]
+    assert hv._entity_verdicts(journal(hive), hv._governance_state(journal(hive)))[1] == {(foreign["node_id"], foreign["seq"])}
+
+
+def test_a_module_device_is_still_refused_a_foreign_entity_as_208_made_it(hive):
+    hv = hive.hv
+    a = ent(hv, hive.plain, "david", T % 1, "person", {"v": 1})
+    rewrite = mod_ent(hv, hive.mod, "david", T % 2, "hacked", {"v": 2})
+    conn = project(hive, hive.entries + [a, rewrite])
+    assert rows(conn) == [("david", "person", '{"v": 1}')]
+    module_declined, weigh = hv._entity_verdicts(journal(hive), hv._governance_state(journal(hive)))
+    assert module_declined == {(rewrite["node_id"], rewrite["seq"])} and weigh == set()
+
+
+def test_hv_doctor_counts_entity_rewrites_that_no_longer_win(hive):
+    hv = hive.hv
+    early = device_sorted(hive, before=hive.plain)
+    a = ent(hv, early, "david", T % 1, "person", {"v": 1})
+    rewrite = ent(hv, hive.plain, "david", T % 2, "human", {"v": 2})
+    project(hive, hive.entries + [a, rewrite]).close()
+    checks = {c["name"]: c for c in hv._doctor_status()}
+    assert "entity-rewrite" in checks, "doctor reports the weigh-only entity write"
+    assert "1 entity write" in checks["entity-rewrite"]["detail"] and "david" in checks["entity-rewrite"]["detail"]
 
 
 # ── the projection (requirement 1 and 4) ───────────────────────────────────────────────────────────────

@@ -3735,6 +3735,190 @@ def _entity_declined(entries, gov):
     return declined
 
 
+# ── the module write policy (2.1; hive-mind-private #50) ───────────────────────────────────────────────────
+# What a module device (one the owner admitted with `--module`) may journal, as pure functions of the module's
+# name, the entry's type and its payload. A problem is `(http status, message, extra fields)`, or None.
+# `hive_module_api` enforces it before it appends (and turns a problem into a 4xx), and the projection enforces the
+# SAME functions on every module-carried entry (`_module_policy_declined`), so a peer that pushes a module's entry
+# through `/sync/ingest` cannot land what the API would have refused, and the two cannot drift: there is one rule
+# table (`vocabulary.MODULE_ENTRY_TYPES`, `check_module_name`, `REF_FIELDS`) and one set of readers of it. State the
+# rule needs beyond the entry (the entity's creator, a link's ends, the signature, the quota) stays where that state
+# is: `_entity_declined`, `resolve_link`, ingest, the API.
+
+_MODULE_REF_WANT = {"pair": "a [node_id, seq] pair", "pairs": "a list of [node_id, seq] pairs",
+                    "ref": "a [node_id, seq] pair or an `h:` short id"}
+# Payload fields that name a local row id or a pre-1.19 reference. `rebuild_db` still projects them from an old
+# journal, with no authority check, so a module may not carry them. The table is read from `REF_FIELDS`; the
+# names listed are the ones the plan named, kept so a status change in the table cannot drop them.
+_MODULE_LEGACY_REF_NAMES = ("supersedes_ref", "supersedes", "resolves_ref", "entity_ref", "fact_ref", "entity_id", "fact_id")
+# field -> (what it must be, test); each is "absent or ..." and the projection binds it straight into SQLite
+_MODULE_BOUND_FIELDS = {
+    "importance": ("a number", lambda v: _is_number(v)), "confidence": ("a number", lambda v: _is_number(v)),
+    "source_session": ("a string", lambda v: isinstance(v, str)), "created_at": ("a string", lambda v: isinstance(v, str)),
+    "rationale": ("a string", lambda v: isinstance(v, str)),
+    "access_count": ("an integer", lambda v: _is_int64(v)),
+    "attributes": ("an object", lambda v: isinstance(v, dict)),
+}
+
+
+def _module_legacy_ref_fields():
+    return sorted(set(_MODULE_LEGACY_REF_NAMES) | {k for k, r in vocabulary.REF_FIELDS.items() if r["status"] == vocabulary.LEGACY})
+
+
+def _module_type_problem(module, etype, payload):
+    if etype not in vocabulary.MODULE_ENTRY_TYPES:
+        return 403, f"a module may write {', '.join(vocabulary.MODULE_ENTRY_TYPES)}, not {etype!r}", {"field": "type"}
+    return None
+
+
+def _module_names_problem(module, etype, payload):
+    """Every name the payload introduces is a core name a module may use or its own `x-<module>:` name (plan A4,
+    reserved names): the source app and class, each tag. A fact whose source is `manual` is refused here."""
+    source = payload.get("source")
+    if not isinstance(source, str) or not source:
+        return 400, "payload.source is required: a module's source is `x-<module>`", {}
+    app, ctx, _inst, _sess = _parse_source(source)
+    why = vocabulary.check_module_name(module, "source_apps", app)
+    if why is None and ":" in source:
+        why = vocabulary.check_module_name(module, "source_contexts", ctx)
+    if why:
+        return 403, why, {"field": "source"}
+    if "channel" in payload and payload["channel"] not in vocabulary.CHANNEL_NAMES:
+        return 400, "payload.channel must be one of " + ", ".join(vocabulary.CHANNEL_NAMES), {"got": payload["channel"]}
+    tags = payload.get("tags", [])
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        return 400, "payload.tags must be a list of strings", {}
+    for t in tags:
+        why = vocabulary.check_module_name(module, "behaviour_tags", t)
+        if why:
+            return 403, why, {"field": "tags"}
+    return None
+
+
+def _module_fields_problem(module, etype, payload):
+    """Refuse a legacy ref field, and a field the projection binds whose type SQLite cannot take (plan A4: a signed
+    payload must not make `rebuild_db` raise). `type` is checked only on an entity, where it is the entity's type."""
+    legacy = [k for k in _module_legacy_ref_fields() if k in payload]
+    if legacy:
+        return 400, "a module may not carry a legacy reference field; use a link entry", {"fields": legacy}
+    for k, (want, ok) in _MODULE_BOUND_FIELDS.items():
+        if k in payload and not ok(payload[k]):
+            return 400, f"payload.{k} must be {want} or absent", {}
+    if etype == "entity" and "type" in payload and not isinstance(payload["type"], str):
+        return 400, "payload.type must be a string or absent", {}
+    return None
+
+
+def _module_shape_problem(module, etype, payload):
+    if etype in ("fact", "decision", "idea") and not (isinstance(payload.get("content"), str) and payload["content"]):
+        return 400, f"a {etype} needs payload.content, a non-empty string", {}
+    if etype == "entity" and not (isinstance(payload.get("name"), str) and payload["name"]):
+        return 400, "an entity needs payload.name, a non-empty string", {}
+    return None
+
+
+def _module_link_problem(module, etype, payload):
+    """A link's kind is a core kind or `x-<module>:…`. A core kind carries the `from_ref`/`to_ref` pairs
+    `resolve_link` reads, and a `data` object whose `confidence` and `polarity` the pass-2 readers
+    (`_link_entity`, `_decision_evidence`) bind or dereference raw. A module's own kind carries the envelope's
+    `from`/`to`, each a pair or an `h:` short id (shape-checked in the refs stage, resolved when a projection reads
+    it). The link's ends are state, checked by the API (`shared-entity-link`) and `resolve_link`."""
+    if etype != "link":
+        return None
+    kind = payload.get("kind")
+    why = vocabulary.check_module_name(module, "link_kinds", kind) if isinstance(kind, str) else "payload.kind is required"
+    if why:
+        return (403 if isinstance(kind, str) else 400), why, {"field": "kind"}
+    if kind == "same-as":
+        return 403, "same-as-core-only", {"detail": "a join between a module's entity and a shared one is written by a "
+                                          "device or the owner, never by a module", "field": "kind"}
+    if kind in vocabulary.LINK_KINDS and "data" in payload:
+        data = payload["data"]
+        if not isinstance(data, dict):
+            return 400, "payload.data must be an object or absent", {}
+        for k in ("confidence", "polarity"):
+            if k in data and not _is_number(data[k]):
+                return 400, f"payload.data.{k} must be a number or absent", {}
+    return None
+
+
+def _module_ref_check(shape, v):
+    if shape == "pair":
+        return _valid_ref(v)
+    if shape == "pairs":
+        return isinstance(v, list) and all(_valid_ref(x) for x in v)
+    if shape == "ref":
+        return _valid_ref(v) or (isinstance(v, str) and bool(_SID_RE.match(v)))
+    raise KeyError(f"REF_FIELDS shape {shape!r} has no module-gate check")
+
+
+def _module_ref_rows(etype, payload):
+    """The `REF_FIELDS` rows a module's `etype` entry must carry or may carry: (field, row, required)."""
+    for k, r in vocabulary.REF_FIELDS.items():
+        if r["status"] not in (vocabulary.WRITTEN, vocabulary.RESERVED) or etype not in r["types"]:
+            continue
+        if etype == "link":     # a core kind carries from_ref/to_ref, a module's own kind the envelope's from/to
+            if (k in ("from_ref", "to_ref")) == (payload.get("kind") in vocabulary.LINK_KINDS):
+                yield k, r, True
+        else:
+            yield k, r, False
+
+
+def _module_refs_problem(module, etype, payload):
+    """Shape-check every reference field a module may write, read from `REF_FIELDS` so a row added later is
+    covered (or raises in `_module_ref_check`) without a hand-kept list."""
+    for k, r, required in _module_ref_rows(etype, payload):
+        if k not in payload and not required:
+            continue
+        if not _module_ref_check(r["shape"], payload.get(k)):
+            return 400, f"payload.{k} must be {_MODULE_REF_WANT[r['shape']]}" + ("" if required else " or absent"), {}
+    return None
+
+
+_MODULE_POLICY_STAGES = (("type", _module_type_problem), ("names", _module_names_problem),
+                         ("fields", _module_fields_problem), ("shape", _module_shape_problem),
+                         ("link", _module_link_problem), ("refs", _module_refs_problem))
+
+
+def _module_policy_problem(module, etype, payload, stages=None):
+    """The first reason module `module` may not journal an `etype` entry with this `payload`, or None: the type
+    allow-list (no `retract`, no `governance`), the names (no `manual` or `owner` source, no foreign `x-` name), the
+    fields, the content, a link's kind and the reference fields. `stages` names a subset, in order, for the API
+    (which checks state between them); the default is all of them. A payload that is not an object is a problem."""
+    if not isinstance(payload, dict):
+        return 400, "the payload must be an object", {}
+    for name, fn in _MODULE_POLICY_STAGES:
+        if stages is None or name in stages:
+            problem = fn(module, etype, payload)
+            if problem is not None:
+                return problem
+    return None
+
+
+def _module_policy_declined(entries, gov):
+    """The entries the projection does not apply because a module device carried them in breach of the write
+    policy, as a set of (node_id, seq): the module marker (`gov["modules"]`) says whose entries are judged, as of the
+    end of the journal, as `_entity_declined` reads it, and `_module_policy_problem` is the API's own gate. Governance
+    is not content and is left to `_governance_state` (a module device neither votes nor proposes there). A rule
+    that cannot be evaluated declines the entry: a module's entry is never kept for want of a verdict. Pure over the
+    journal and governance, so every node declines the same entries."""
+    modules = gov.get("modules") or {}
+    if not modules:
+        return set()
+    declined = set()
+    for e in entries:
+        module = modules.get(e.get("node_id"))
+        if module is None or e.get("type") == "governance":
+            continue
+        try:
+            problem = _module_policy_problem(module, e.get("type"), e.get("payload"))
+        except Exception:
+            problem = (400, "unreadable", {})
+        if problem is not None:
+            declined.add((e.get("node_id"), e.get("seq")))
+    return declined
+
+
 _PASS1 = {
     "fact": persist_fact,
     "decision": persist_decision,
@@ -3928,6 +4112,9 @@ def _projection_entries(journal, note=False):
     gov = _governance_state(journal)
     journal = _ts_unskipped(journal, gov)    # #217: the timestamp bounds skip an entry for every type
     journal = _admitted_content(journal, gov)
+    refused = _module_policy_declined(journal, gov)     # 2.1 (#50): what the module write policy would have refused
+    if refused:
+        journal = [e for e in journal if (e.get("node_id"), e.get("seq")) not in refused]
     return [e for e in journal if e["type"] not in _PAYLOAD_SHAPES
             or (_projectable(e) if note else _unprojectable(e) is None)]
 
@@ -8856,6 +9043,21 @@ def _doctor_status():
                            "detail": f"{len(bad)} entr{'y' if len(bad) == 1 else 'ies'} with a malformed payload "
                                      f"field, skipped or projected by default: {', '.join(bad[:10])}"
                                      f"{' …' if len(bad) > 10 else ''}"})
+    except Exception:
+        pass
+
+    # 3f1b. Module write policy (#50): entries a module's key landed that the API gate would have refused (a `retract`,
+    #       a `manual` source, a foreign name, ...). They stay in the journal, which is permanent, and stop projecting.
+    #       Each names its module and entry so the owner can see what to revoke or `module remove`. Advisory.
+    try:
+        breach = sorted(_module_policy_declined(entries, gov), key=lambda k: (str(k[0]), k[1] if isinstance(k[1], int) else 0))
+        if breach:
+            mods = gov.get("modules") or {}
+            checks.append({"name": "module-policy", "status": "warn",
+                           "detail": f"{len(breach)} entr{'y' if len(breach) == 1 else 'ies'} a module key wrote that the "
+                                     f"module API would have refused; they do not project: "
+                                     f"{', '.join(f'{n}:{q} (module {mods.get(n)})' for n, q in breach[:10])}"
+                                     f"{' …' if len(breach) > 10 else ''}"})
     except Exception:
         pass
 

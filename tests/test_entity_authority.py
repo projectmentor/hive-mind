@@ -557,5 +557,6 @@ def test_mutant_applying_a_module_entity_fact_puts_the_fact_on_the_shared_entity
     entries = hive.entries + [mfact, ef]
     count = lambda conn: conn.execute("SELECT count(*) FROM entity_facts").fetchone()[0]
     assert count(project(hive, entries)) == 0
+    monkeypatch.setattr(hv, "_module_policy_declined", lambda entries, gov: set())   # #50 declines it first; this probes the guard under it
     monkeypatch.setattr(hv, "_module_of", lambda gov, entry: None)
     assert count(project(hive, entries)) == 1

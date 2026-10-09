@@ -391,6 +391,13 @@ def _core_has(table, name):
     return name in table or any(k.endswith("*") and name.startswith(k[:-1]) for k in table)
 
 
+# The entry types a module may write (plan A3). Rule 4 only forbids adding types; this allow-list is the plan's choice.
+# `governance`, `capsule`, `cell`, `comb` and `retract` are refused: a retract from a module would be peer evidence
+# in the module's name. The module API gate and the projection (`hv _module_policy_problem`) both read it here, so
+# the two cannot drift. `tests/test_module_write.py` holds it to `ENTRY_TYPES`.
+MODULE_ENTRY_TYPES = ("fact", "decision", "idea", "entity", "link")
+
+
 # category -> (core names a module may USE bare, or None when it may use none). A module may use a core link
 # kind, tag or source context (they carry no new meaning); it may never write `manual` or `owner` as its source
 # app, nor the `owner` context (a retract from either is a forget). `source_apps` is checked on its own below.

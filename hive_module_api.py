@@ -58,10 +58,7 @@ _module_slots = threading.BoundedSemaphore(MODULE_MAX_CONCURRENT)
 QUOTA_DEFAULTS = {"per_hour": 60, "per_day": 500, "entry_bytes": 16 * 1024, "lifetime": 50000}
 HOUR, DAY = 3600, 86400
 QUOTA_FILE = ".module-quota.json"
-# The entry types a module may write (plan A3). Rule 4 only forbids adding types; this allow-list is the plan's choice.
-# `governance`, `capsule`, `cell`, `comb` and `retract` are refused: a retract from a module would be peer evidence
-# in the module's name. `tests/test_module_api.py` holds the two lists to `vocabulary.ENTRY_TYPES`.
-MODULE_ENTRY_TYPES = ("fact", "decision", "idea", "entity", "link")
+MODULE_ENTRY_TYPES = vocabulary.MODULE_ENTRY_TYPES   # the one table; the projection reads it too (`hv _module_policy_problem`)
 ENTRY_FIELDS = ("node_id", "seq", "type", "timestamp", "payload", "prev_hash", "pub", "sig")
 # What `api_search` may be asked. A5 splits two ways: search and item withhold the text of anything the owner
 # forgot (`status=forgotten` is refused, and `include_forgotten=False` hides it in every branch), while
@@ -244,52 +241,13 @@ def _refused(code, why, **extra):
     return _Refused(code, dict({"error": why}, **extra))
 
 
-def _check_names(module, payload):
-    """Every name the payload introduces is a core name a module may use or its own `x-<module>:` name (plan A4,
-    reserved names): the source app and class, each tag, a link's kind."""
-    hv = daemon.hv
-    source = payload.get("source")
-    if not isinstance(source, str) or not source:
-        raise _refused(400, "payload.source is required: a module's source is `x-<module>`")
-    app, ctx, _inst, _sess = hv._parse_source(source)
-    why = vocabulary.check_module_name(module, "source_apps", app)
-    if why is None and ":" in source:
-        why = vocabulary.check_module_name(module, "source_contexts", ctx)
-    if why:
-        raise _refused(403, why, field="source")
-    if "channel" in payload and payload["channel"] not in vocabulary.CHANNEL_NAMES:
-        raise _refused(400, "payload.channel must be one of " + ", ".join(vocabulary.CHANNEL_NAMES), got=payload["channel"])
-    tags = payload.get("tags", [])
-    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-        raise _refused(400, "payload.tags must be a list of strings")
-    for t in tags:
-        why = vocabulary.check_module_name(module, "behaviour_tags", t)
-        if why:
-            raise _refused(403, why, field="tags")
-
-
-def _check_link(module, payload):
-    """A link's kind is a core kind or `x-<module>:…`. A core kind carries the `from_ref`/`to_ref` pairs
-    `resolve_link` reads, and a `data` object whose `confidence` and `polarity` the pass-2 readers
-    (`_link_entity`, `_decision_evidence`) bind or dereference raw. A module's own kind carries the envelope's
-    `from`/`to`, each a pair or an `h:` short id (shape-checked here, resolved when a projection reads it).
-    An end that resolves to nothing yet is allowed: the target may sync later, and a projection skips a dangling
-    edge deterministically. The ref fields themselves are checked in `_check_refs`, from `REF_FIELDS`."""
-    kind = payload.get("kind")
-    why = vocabulary.check_module_name(module, "link_kinds", kind) if isinstance(kind, str) else "payload.kind is required"
-    if why:
-        raise _refused(403 if isinstance(kind, str) else 400, why, field="kind")
-    if kind == "same-as":
-        raise _refused(403, "same-as-core-only", detail="a join between a module's entity and a shared one is written by a "
-                       "device or the owner, never by a module", field="kind")
-    _check_link_ends(module, payload)
-    if kind in vocabulary.LINK_KINDS and "data" in payload:
-        data = payload["data"]
-        if not isinstance(data, dict):
-            raise _refused(400, "payload.data must be an object or absent")
-        for k in ("confidence", "polarity"):
-            if k in data and not _is_number(data[k]):
-                raise _refused(400, f"payload.data.{k} must be a number or absent")
+def _enforce(problem):
+    """Raise the module gate's refusal for a policy problem `(status, message, extra)` from `hv`, if there is one.
+    The rules live in `hv` (`_module_policy_problem`), because the projection applies the same ones to what a
+    module's key already landed; this route only turns a problem into a 4xx that writes nothing."""
+    if problem is not None:
+        code, why, extra = problem
+        raise _refused(code, why, **extra)
 
 
 def _link_end(conn, v):
@@ -340,79 +298,6 @@ def _check_entity(ctx, payload):
         raise _refused(403, "not-entity-owner", field="name", detail="the entity was created by another writer")
 
 
-_REF_WANT = {"pair": "a [node_id, seq] pair", "pairs": "a list of [node_id, seq] pairs", "ref": "a [node_id, seq] pair or an `h:` short id"}
-
-
-def _ref_check(shape, v):
-    hv = daemon.hv
-    if shape == "pair":
-        return hv._valid_ref(v)
-    if shape == "pairs":
-        return isinstance(v, list) and all(hv._valid_ref(x) for x in v)
-    if shape == "ref":
-        return hv._valid_ref(v) or _is_sid(v)
-    raise KeyError(f"REF_FIELDS shape {shape!r} has no module-gate check")
-
-
-def _ref_rows(etype, payload):
-    """The `REF_FIELDS` rows a module's `etype` entry must carry or may carry: (field, row, required)."""
-    for k, r in vocabulary.REF_FIELDS.items():
-        if r["status"] not in (vocabulary.WRITTEN, vocabulary.RESERVED) or etype not in r["types"]:
-            continue
-        if etype == "link":     # a core kind carries from_ref/to_ref, a module's own kind the envelope's from/to
-            if (k in ("from_ref", "to_ref")) == (payload.get("kind") in vocabulary.LINK_KINDS):
-                yield k, r, True
-        else:
-            yield k, r, False
-
-
-def _check_refs(etype, payload):
-    """Shape-check every reference field a module may write, read from `REF_FIELDS` so a row added later is
-    covered (or raises in `_ref_check`) without a hand-kept list. A bad value is a 400 that writes nothing."""
-    for k, r, required in _ref_rows(etype, payload):
-        if k not in payload and not required:
-            continue
-        if not _ref_check(r["shape"], payload.get(k)):
-            raise _refused(400, f"payload.{k} must be {_REF_WANT[r['shape']]}" + ("" if required else " or absent"))
-
-
-# Payload fields that name a local row id or a pre-1.19 reference. `rebuild_db` still projects them from an old
-# journal, with no authority check, so a module may not carry them. The table is read from `REF_FIELDS`; the
-# names listed are the ones the plan named, kept so a status change in the table cannot drop them.
-_LEGACY_REF_NAMES = ("supersedes_ref", "supersedes", "resolves_ref", "entity_ref", "fact_ref", "entity_id", "fact_id")
-
-
-def _legacy_ref_fields():
-    return sorted(set(_LEGACY_REF_NAMES) | {k for k, r in vocabulary.REF_FIELDS.items() if r["status"] == vocabulary.LEGACY})
-
-
-def _is_number(v):
-    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and (not isinstance(v, int) or -2 ** 63 <= v < 2 ** 63)
-
-
-# field -> (what it must be, test); each is "absent or ..." and the projection binds it straight into SQLite
-_BOUND_FIELDS = {
-    "importance": ("a number", _is_number), "confidence": ("a number", _is_number),
-    "source_session": ("a string", lambda v: isinstance(v, str)), "created_at": ("a string", lambda v: isinstance(v, str)),
-    "rationale": ("a string", lambda v: isinstance(v, str)),
-    "access_count": ("an integer", lambda v: isinstance(v, int) and not isinstance(v, bool) and -2 ** 63 <= v < 2 ** 63),
-    "attributes": ("an object", lambda v: isinstance(v, dict)),
-}
-
-
-def _check_fields(etype, payload):
-    """Refuse a legacy ref field, and a field the projection binds whose type SQLite cannot take (plan A4: a signed
-    payload must not make `rebuild_db` raise). `type` is checked only on an entity, where it is the entity's type."""
-    legacy = [k for k in _legacy_ref_fields() if k in payload]
-    if legacy:
-        raise _refused(400, "a module may not carry a legacy reference field; use a link entry", fields=legacy)
-    for k, (want, ok) in _BOUND_FIELDS.items():
-        if k in payload and not ok(payload[k]):
-            raise _refused(400, f"payload.{k} must be {want} or absent")
-    if etype == "entity" and "type" in payload and not isinstance(payload["type"], str):
-        raise _refused(400, "payload.type must be a string or absent")
-
-
 def _dry_run(entry):
     """Project `entry` into the live store inside a SAVEPOINT and roll it back; the backstop for any field the
     checks above do not know. Raises _Refused(400) when the core's own projection raises on it."""
@@ -447,24 +332,18 @@ def _check_entry(ctx, entry, limits):
         raise _refused(400, "malformed entry: seq is an integer from 1, payload an object, the rest strings")
     if entry["node_id"] != ctx["device_id"]:
         raise _refused(403, "an entry is signed by the device that sends it", node_id=entry["node_id"], device_id=ctx["device_id"])
-    if entry["type"] not in MODULE_ENTRY_TYPES:
-        raise _refused(403, f"a module may write {', '.join(MODULE_ENTRY_TYPES)}, not {entry['type']!r}", field="type")
+    _enforce(hv._module_policy_problem(ctx["module"], entry["type"], payload, ("type",)))
     if not hv._valid_timestamp(entry["timestamp"]):
         raise _refused(400, "timestamp must be an ISO 8601 time")
     if not hv._verify_entry(entry) or hv._ed25519 is None:
         raise _refused(400, "the signature does not verify for this entry and key")
-    _check_names(ctx["module"], payload)
     t = entry["type"]
-    _check_fields(t, payload)
-    if t in ("fact", "decision", "idea") and not (isinstance(payload.get("content"), str) and payload["content"]):
-        raise _refused(400, f"a {t} needs payload.content, a non-empty string")
-    if t == "entity" and not (isinstance(payload.get("name"), str) and payload["name"]):
-        raise _refused(400, "an entity needs payload.name, a non-empty string")
+    _enforce(hv._module_policy_problem(ctx["module"], t, payload, ("names", "fields", "shape")))
     if t == "entity":
         _check_entity(ctx, payload)
+    _enforce(hv._module_policy_problem(ctx["module"], t, payload, ("link", "refs")))
     if t == "link":
-        _check_link(ctx["module"], payload)
-    _check_refs(t, payload)
+        _check_link_ends(ctx["module"], payload)
 
 
 def route_entries(ctx, q, body):

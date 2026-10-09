@@ -571,7 +571,7 @@ def test_every_written_ref_field_is_shape_checked(hive, t, kind, field, bad):
 def test_the_ref_check_is_the_registry_not_a_list(hive, monkeypatch):
     """A mutant that drops the registry-driven check lets the malformed `informed_by` in: the dry run does not catch a shape only a reader walks."""
     payload = {"source": SRC, "content": "probe decision zz", "tags": [], "informed_by": [5]}
-    monkeypatch.setattr(api, "_ref_rows", lambda etype, payload: iter(()))
+    monkeypatch.setattr(hive.hv, "_module_ref_rows", lambda etype, payload: iter(()))
     monkeypatch.setattr(hive.hv, "_payload_problem", lambda entry: None)    # 2.0.3 #205: ingest also refuses it; this probes the route's own check
     (code, _), _ = post(hive, "mod", "decision", payload)
     assert code == 200
@@ -580,10 +580,10 @@ def test_the_ref_check_is_the_registry_not_a_list(hive, monkeypatch):
     assert 400 <= code < 500
 
 
-def test_a_new_ref_shape_has_no_silent_pass(monkeypatch):
+def test_a_new_ref_shape_has_no_silent_pass(hive, monkeypatch):
     monkeypatch.setitem(vocabulary.REF_FIELDS, "later_ref", {"types": ("fact",), "shape": "triple", "status": vocabulary.WRITTEN, "meaning": "x"})
     with pytest.raises(KeyError):
-        api._check_refs("fact", {"later_ref": 1})
+        hive.hv._module_refs_problem("hwatch", "fact", {"later_ref": 1})
 
 
 @pytest.mark.parametrize("kind", ["entity", "outcome-of"])

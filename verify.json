@@ -1,5 +1,5 @@
 {
-  "digest": "7c6d13f67cc0dcafda6f2af35acd55c4b4b5377c028dd858c18343a04c79f19c",
+  "digest": "d43ea01170e40ffed813b6e18b21a2f938be5201641e56e09da96c250b856b2e",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -10,7 +10,7 @@
     ".github/workflows/ci.yml": "757cc07ddfdafa609c315425dfe1000c838ba9a0caf938406d2604b2bdd779ad",
     ".github/workflows/cla.yml": "900240ebc0ee273c4e29e791790a357532b038ac0dcfe61fe9a76772b0c6896a",
     ".github/workflows/sign.yml": "ce497aa2a81d7218813774ba4a0f4defa21516ef60b9dafa42140d2184237c67",
-    "CHANGELOG.md": "c9698a22d7069915274cc58b5c7ac444dc1945e35455a0fefd26a328ad6296ef",
+    "CHANGELOG.md": "b7c05cc7c0333c6dcee76a484416f9b9cfabe7b643dc77b9ab9ce9e3c8d7b9b9",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "75843641cf3c903ef1a06011f229e42f82e3bdff7e67da75cddbb65972c670da",
     "README.md": "5a64fa84d2435d0f196beba3bad2118c7e41387d6f42215e2a34f6bd1f2c1b4c",
@@ -31,7 +31,7 @@
     "docs/ADVISORIES.md": "aee9fab7f28266625d7f9d29a8636197f898ae1e117aea8d62456740892a6422",
     "docs/AGENT_INTEGRATION.md": "915a4e8de823d2295f946439d01b93f5218061996d6bfdb193c899323b9ffbad",
     "docs/CLI_REFERENCE.md": "432dd554ee6bbf7e486b2311c26477811e3638efc20b54723ecdd9faf80e3543",
-    "docs/CONTRACT.md": "18b30aa4535e68b64c5b1a2378069ec69e33fa07bd4fb03f8d8885bd153c6ebc",
+    "docs/CONTRACT.md": "fde35c70530e029f941d39df554385706b8a88b30f2a233838d134e8f866b470",
     "docs/CONTRACT_HISTORY.md": "1bb898357b3dc106c065a3a356a16a5b2f90cc3d715f42f91cac8b0740ae8190",
     "docs/HV_ARCHITECTURE.md": "fed35d46d54501a60e43283a308dcd189e18bdbaf2341330b8bb93015bafed3b",
     "docs/INTERNALS.md": "2a3671d95aea6548fcf1b14210088583f5fdac9e5bbc7d862773703367ba7d60",
@@ -213,6 +213,6 @@
     "vocabulary.py": "13c48daa6e38c6be024e2f50f295b9aa9b3e476f250ec3c0d928f4026e9a5ba6",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
-  "sequence": 500,
+  "sequence": 502,
   "version": "2.4"
 }

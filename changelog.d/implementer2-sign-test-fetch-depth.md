@@ -1,0 +1,1 @@
+- `sign.yml`: the `test` job now checks out full history (`fetch-depth: 0`), so `gen_verify` can write the manifest `sequence` and main is re-signed again (#326).

@@ -235,3 +235,67 @@ def test_the_projection_records_where_each_device_was_ended(tmp_path, monkeypatc
     _run(a, "group", "purge", r_dev)
     gov = hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))
     assert set(gov["ended_at"]) == {r_dev}
+
+
+def _listed(a, r_dev, port):
+    entry = {"id": r_dev, "url": f"http://127.0.0.1:{port}"}
+    (a / ".peers.json").write_text(json.dumps({"self": "a", "port": _free_port(), "peers": [entry]}))
+    return entry
+
+
+def test_sync_with_peer_sends_an_ended_device_nothing_even_when_the_entry_was_not_pruned(tmp_path, monkeypatch, capsys):
+    """`sync now` prunes first, so the guard in `_sync_with_peer` is the only thing between a caller that hands
+    it an entry directly and a signed read to R. Drop the guard and the round starts."""
+    from test_hello_sig import _client_as
+    import sync_client as sc
+    a, c, a_dev, r_dev = _hive(tmp_path, "revoke")
+    hv = _hvmod(a, monkeypatch)
+    _client_as(hv, monkeypatch)
+    rounds = []
+    monkeypatch.setattr(sc, "_sync_round", lambda peer, mode=None: rounds.append(peer))
+    sc._sync_with_peer({"id": r_dev, "url": "http://127.0.0.1:1"})
+    assert rounds == [], "a round started against a revoked device"
+    assert "skipped" in capsys.readouterr().out
+    live = {"id": (c / ".device-id").read_text().strip(), "url": "http://127.0.0.1:2"}
+    sc._sync_with_peer(live)
+    assert rounds == [live]
+
+
+def test_rebuild_db_drops_an_ended_device_from_peers_json(tmp_path, monkeypatch):
+    """The projection itself prunes: no `sync now`, no probe, only a rebuild after the revoke."""
+    a, c, a_dev, r_dev = _hive(tmp_path, "revoke")
+    live_dev = (c / ".device-id").read_text().strip()
+    _listed(a, r_dev, 1)
+    kept = {"id": live_dev, "url": "http://127.0.0.1:2"}
+    cfg = json.loads((a / ".peers.json").read_text())
+    cfg["peers"].append(kept)
+    (a / ".peers.json").write_text(json.dumps(cfg))
+    hv = _hvmod(a, monkeypatch)
+    hv.rebuild_db()
+    assert json.loads((a / ".peers.json").read_text())["peers"] == [kept]
+
+
+def test_probe_peer_map_sends_an_ended_device_nothing(tmp_path, monkeypatch):
+    """The doctor peer probes are signed reads too: an ended device's entry is filtered before any request."""
+    a, c, a_dev, r_dev = _hive(tmp_path, "revoke")
+    hv = _hvmod(a, monkeypatch)
+    with _capture() as (pr, seen):
+        entry = _listed(a, r_dev, pr)
+        assert hv._probe_peer_map(peerlist=[entry]) == {}
+        assert seen == [], f"the probe reached the revoked device: {[p for p, _ in seen]}"
+
+
+def test_a_re_admitted_device_is_not_ended(tmp_path, monkeypatch):
+    """`revoked - admitted`: a revoke is reversible, so a re-admitted device stays a listed peer; a purge is final."""
+    a, c, a_dev, r_dev = _hive(tmp_path, "revoke")
+    hv = _hvmod(a, monkeypatch)
+    state = lambda: hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))
+    assert hv._ended_devices(state()) == {r_dev}
+    _run(a, "group", "admit", r_dev, "--principal", "r")
+    gov = state()
+    assert r_dev in gov["revoked"] and r_dev in gov["admitted"]          # the revoke is still on record
+    assert hv._ended_devices(gov) == set()
+    entry = {"id": r_dev, "url": "http://127.0.0.1:1"}
+    assert hv._live_peers([entry], gov) == [entry]
+    _run(a, "group", "purge", r_dev)
+    assert hv._ended_devices(state()) == {r_dev}

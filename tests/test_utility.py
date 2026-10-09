@@ -238,7 +238,7 @@ def test_api_search_sorts_and_salience_alias(hive, monkeypatch):
     assert hv.api_search("build", sort="importance")["facts"][0]["content"].startswith("gamma")
     assert hv.api_search("build", sort="utility")["facts"][0]["content"].startswith("alpha")
     assert all("importance" in f and "utility" in f for f in hv.api_search("build")["facts"])
-    html = (PROJECT / "dashboard" / "index.html").read_text()
+    html = (PROJECT / "dashboard" / "app.js").read_text()
     assert 'value="importance"' in html and 'value="utility"' in html and "sort:'confidence'" in html
     assert 'q.get("sort", ["confidence"])' in (PROJECT / "hive_sync_daemon.py").read_text()
 

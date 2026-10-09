@@ -119,7 +119,7 @@ def test_the_ingest_handler_answers_200_and_lands_the_valid_entries(tmp_path, mo
                  _fact("k1:00000000000000c2", "../PWNED", "bad"),
                  _fact("k1:00000000000000c3", LIVE_SHAPES[1], "two")]
         req = urllib.request.Request(f"http://127.0.0.1:{port}/sync/ingest", data=json.dumps({"entries": batch}).encode(),
-                                     headers={"Content-Type": "application/json"}, method="POST")
+                                     headers={"Content-Type": "application/json", "Hive-CSRF": sd.sync_common.csrf_token()}, method="POST")
         with urllib.request.urlopen(req, timeout=10) as r:
             assert r.status == 200
             assert json.loads(r.read())["accepted"] == 2

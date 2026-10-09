@@ -253,7 +253,7 @@ def test_api_search_rows_carry_sid_and_api_item_resolves_it(hive, monkeypatch):
     it = hv.api_item(dec["ref"])                                         # a raw ref resolves too
     assert it["kind"] == "decision" and it["item"]["content"] == "base decision about deploys"
     assert "error" in hv.api_item("h:0000000000") and "error" in hv.api_item("garbage")
-    html = (PROJECT / "dashboard" / "index.html").read_text()
+    html = (PROJECT / "dashboard" / "app.js").read_text()
     assert "/api/item?sid=" in html and "hashchange" in html and "history.replaceState" in html
     daemon = (PROJECT / "hive_sync_daemon.py").read_text()
     assert '"/api/item"' in daemon and "hv.api_item(" in daemon

@@ -630,6 +630,9 @@ class ModuleHandler(BaseHTTPRequestHandler):
     def _handle(self):
         if not is_loopback_peer(self.client_address[0] if self.client_address else ""):
             return self._send(403, {"error": "the module API is local-only"})
+        srv_port = self.server.server_address[1] if getattr(self, "server", None) else 0
+        if not daemon.sync_common.host_header_ok(self.headers.get("Host"), srv_port):
+            return self._send(421, {"error": "Host not served here"})
         if not _module_slots.acquire(blocking=False):
             return self._send(503, {"error": "server busy"})
         try:

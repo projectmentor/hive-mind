@@ -250,6 +250,8 @@ LOCAL_FILES = {
                                                  "synced).", where="hive"),
     ".key-dir":              _v(WRITTEN, "2.0", "The path of this checkout's key directory, so a renamed checkout keeps "
                                                 "its keys.", where="hive"),
+    ".csrf-token":           _v(WRITTEN, "2.0", "The secret a local client sends as `Hive-CSRF` on a POST to this "
+                                               "node's loopback daemon (0600, never synced).", where="hive"),
     ".module-quota.json":    _v(WRITTEN, "2.1", "Each module device's hourly and daily write times, for the module API's rate "
                                                 "limits (0600, never journaled). The lifetime count is the journal's, not this "
                                                 "file's.", where="hive"),

@@ -223,6 +223,7 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 |---|---|---|---|---|
 | `.arrivals.jsonl` | `$HIVE_HOME` | written | 2.1 | When this node first received each foreign entry, for the `future-dated` check; never synced, never read by the projection. |
 | `.bus` | `$HIVE_HOME` | written | 1.10 | Directory for the local event log, `introspect.log`; never synced. |
+| `.csrf-token` | `$HIVE_HOME` | written | 2.0 | The secret a local client sends as `Hive-CSRF` on a POST to this node's loopback daemon (0600, never synced). |
 | `.device-id` | `$HIVE_HOME` | written | 1.3 | This device's id, `k1:` and 16 hex of its key's sha256. |
 | `.device-key` | `$HIVE_HOME` | legacy | 1.3 | The device key's pre-2.0 path in the checkout. It still loads, with a `keyperm` warning, and `hv doctor --fix` moves it. |
 | `.genesis-pin` | `$HIVE_HOME` | written | 1.27 | Which `owner` declaration established this hive (0600, never synced). |

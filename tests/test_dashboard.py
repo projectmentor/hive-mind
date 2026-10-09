@@ -220,3 +220,86 @@ def test_sync_endpoints_unaffected(daemon):
     # The dashboard routes are additive — the sync surface must be byte-for-byte unchanged.
     assert _get(daemon, "/sync/hello")[0] == 200
     assert _get(daemon, "/sync/merkle-root")[0] == 200
+
+
+# ── loopback hardening: Host check, cross-site POST guard, CSP, no script execution from data ────────
+
+def _raw(port, method, path, headers=None, body=b""):
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    h = dict(headers or {})
+    h.setdefault("Host", f"127.0.0.1:{port}")
+    if body:
+        h["Content-Length"] = str(len(body))
+    c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+    for k, v in h.items():
+        c.putheader(k, v)
+    c.endheaders(body or None)
+    r = c.getresponse()
+    out = (r.status, r.read(), dict(r.getheaders()))
+    c.close()
+    return out
+
+
+def test_a_loopback_request_with_a_foreign_host_is_refused(daemon):
+    for host in ("evil.example", f"evil.example:{daemon}", f"127.0.0.1.evil.example:{daemon}", "127.0.0.1:1"):
+        for path in ("/api/overview", "/", "/api/search?q=android", "/sync/merkle-root"):
+            st, body, _ = _raw(daemon, "GET", path, {"Host": host})
+            assert st == 421, (host, path, st)
+            assert b"android" not in body
+        assert _raw(daemon, "POST", "/sync/ingest", {"Host": host}, b"{}")[0] == 421
+    for host in (f"127.0.0.1:{daemon}", f"localhost:{daemon}", "localhost", f"[::1]:{daemon}"):
+        assert _raw(daemon, "GET", "/api/overview", {"Host": host})[0] == 200, host
+
+
+def _tok(hive):
+    return (hive.home / ".csrf-token").read_text().strip()
+
+
+def test_a_cross_site_post_to_ingest_is_refused(daemon, hive):
+    body = json.dumps({"entries": []}).encode()
+    # a browser-sent request carries Origin / Sec-Fetch-Site and cannot carry the token
+    for hdrs in ({"Origin": "https://evil.example"},
+                 {"Origin": "null"},
+                 {"Sec-Fetch-Site": "cross-site"},
+                 {"Sec-Fetch-Site": "same-site"},
+                 {"Origin": f"http://127.0.0.1:{daemon}"},                       # same-origin but no token
+                 {"Origin": "https://evil.example", "Hive-CSRF": "wrong"}):
+        st, _, _ = _raw(daemon, "POST", "/sync/ingest", hdrs, body)
+        assert st == 403, hdrs
+    # a foreign Origin is refused even when the token is right
+    assert _raw(daemon, "POST", "/sync/ingest", {"Origin": "https://evil.example", "Hive-CSRF": _tok(hive)}, body)[0] == 403
+    # the local client with the token, and no browser labels, is accepted
+    st, out, _ = _raw(daemon, "POST", "/sync/ingest", {"Hive-CSRF": _tok(hive)}, body)
+    assert st == 200 and json.loads(out)["accepted"] == 0
+    st, _, _ = _raw(daemon, "POST", "/sync/ingest",
+                    {"Hive-CSRF": _tok(hive), "Origin": f"http://127.0.0.1:{daemon}", "Sec-Fetch-Site": "same-origin"}, body)
+    assert st == 200
+
+
+def test_the_dashboard_is_served_with_a_content_security_policy(daemon):
+    st, body, h = _raw(daemon, "GET", "/")
+    assert st == 200 and h.get("Content-Security-Policy") == "default-src 'self'"
+    assert h.get("X-Content-Type-Options") == "nosniff"
+    st, js, h = _raw(daemon, "GET", "/app.js")
+    assert st == 200 and "javascript" in h["Content-Type"] and b"function html(" in js
+    assert _raw(daemon, "GET", "/app.css")[0] == 200
+
+
+def test_the_dashboard_builds_its_dom_without_executing_data():
+    """A tag, fact or peer string is only ever a text node or an attribute value: no markup is built from data, and
+    no script runs from an attribute (`new Function` over `data-onclick` was the sink for a tag with a quote)."""
+    import re
+    d = PROJECT / "dashboard"
+    page, js = (d / "index.html").read_text(), (d / "app.js").read_text()
+    assert "<script src=\"app.js\"></script>" in page
+    assert not re.search(r"<script(?![^>]*\bsrc=)", page) and "<style" not in page      # nothing inline for the CSP to block
+    assert not re.search(r"\son[a-z]+\s*=|\sstyle\s*=", page)
+    for sink in ("new Function", "eval(", "data-onclick", "javascript:", "document.write", "insertAdjacentHTML", "outerHTML", "esc("):
+        assert sink not in js, sink
+    assert re.findall(r"\.innerHTML\s*=", js) == [".innerHTML="]                         # only html()'s own static template
+    assert "t.innerHTML=s;" in js
+    # the quote that broke out of the old data-onclick string now lands in a text node and a closure
+    assert "onclick=${e=>{e.stopPropagation();filterTag(t);}}" in js and ">${t}</span>" in js
+    css = (d / "app.css").read_text()
+    assert "url(http" not in css and "@import" not in css

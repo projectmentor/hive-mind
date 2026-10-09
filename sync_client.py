@@ -20,7 +20,8 @@ import socket
 import sys
 import threading
 import time
-from urllib.parse import urlencode
+from pathlib import Path
+from urllib.parse import urlencode, urlparse
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -92,12 +93,22 @@ def _get_nonced(base, path, **params):
     return r.json(), headers.get("Hive-Auth-Nonce")
 
 
-def _post(base, path, payload):
+def _post(base, path, payload, peer=None):
     # Serialize the body ourselves (not requests' json=) so the SIGNED body hash matches the exact
     # transmitted bytes; then sign over those bytes.
     body = json.dumps(payload).encode()
     headers = {"Content-Type": "application/json"}
     headers.update(sync_common.sign_sync_request("POST", path, "", body))
+    host = urlparse(base).hostname or ""
+    if sync_common.is_loopback(host):                  # a loopback daemon wants its local-client token
+        tok = sync_common.csrf_token()
+        if peer and peer.get("csrf_token_file"):       # a daemon on this machine under another HIVE_HOME
+            try:
+                tok = Path(peer["csrf_token_file"]).read_text().strip()
+            except OSError:
+                pass
+        if tok:
+            headers["Hive-CSRF"] = tok
     r = _sess().post(f"{base}{path}", data=body, headers=headers, timeout=60)
     r.raise_for_status()
     return r.json()
@@ -275,7 +286,7 @@ def _sync_with_peer(peer, mode=None):
     # so a batch that partially overlaps prior state is idempotent.
     for i in range(0, len(push), PUSH_PAGE):
         pushed += _post(base, "/sync/ingest",
-                        {"entries": push[i:i + PUSH_PAGE], "hive_id": local_hive}).get("accepted", 0)
+                        {"entries": push[i:i + PUSH_PAGE], "hive_id": local_hive}, peer).get("accepted", 0)
 
     done = f", pushed {pushed}" if action == "push" else ""
     print(f"  {pid}: pulled {accepted} (dup {duplicates}){done}{note}")

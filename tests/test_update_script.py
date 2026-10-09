@@ -307,6 +307,26 @@ def test_a_tree_that_fails_the_check_is_refused_and_left_untouched(sandbox, kw, 
     assert sb.state() == before and not marker.exists()
 
 
+@pytest.mark.parametrize("stray", ["__pycache__/merkle.cpython-312.pyc", "journal/x.log", "tools/run"],
+                         ids=["tracked-pyc", "tracked-journal-file", "extensionless-file"])
+def test_a_tracked_file_outside_the_manifest_is_refused_even_under_a_good_signature(sandbox, stray):
+    sb = sandbox()
+    marker = sb.tmp / "fetched-code-ran"
+    f = sb.src / stray
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(f"open({str(marker)!r}, 'w').write('x')\n")
+    _git(sb.src, "add", "-f", stray)
+    _fix_manifest_digest(sb.src)                  # the digest ignores the stray file, so this stays signed
+    _git(sb.src, "add", "-A")
+    _git(sb.src, "commit", "-q", "-m", "stray tracked file")
+    _git(sb.src, "push", "-q", "origin", "main")
+    before = sb.state()
+    r = sb.update(HIVE_RESIGN_WAIT_S=1)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REFUSED" in r.stderr and "(unsigned_files)" in r.stderr
+    assert "Update complete" not in r.stdout and sb.state() == before and not marker.exists()
+
+
 def test_the_fetched_hv_is_never_run_to_judge_itself(sandbox):
     """The fetched tree's own `hv` would say whatever it likes; the installed one judges."""
     sb = sandbox()

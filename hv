@@ -6986,6 +6986,12 @@ _VERIFY_EXTENSIONLESS = {"hv"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg",
                 ".html", ".css", ".js", ".svg"}   # .html/.css/.js/.svg: the dashboard SPA + assets the
                                                   # daemon serves are signed too (tamper-evident over HTTP)
+# Tracked files the manifest does not cover and a pinned check tolerates. Nothing else outside the manifest
+# may ride in under a good signature: a tracked __pycache__/*.pyc is loaded by CPython without reading its
+# source. Each is inert on a node (license, ignore list, a Windows-only helper, a test fixture).
+_VERIFY_PINNED_UNSIGNED_OK = {".gitignore", "LICENSE", "scripts/platform/windows/remove-portproxy.bat",
+                              "tests/security/Dockerfile"}
+_VERIFY_TRUST_ARTIFACTS = {"verify.json", "verify.json.sig", "hivemind.pub"}
 OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
 # The trust anchor: the public key, served from our own TLS domain (a DIFFERENT origin than the
 # code host). A fork can ship its own hivemind.pub, but it cannot change what this URL serves, so a
@@ -7108,6 +7114,14 @@ def _verify_status(root, check_anchor=True, pinned_pub=None):
         if not _ed25519.verify(manifest_bytes, sig, pinned_pub):
             return {"level": "sig_invalid", "version": ver, "ok": False, "lines": [
                 f"⚠ v{ver}: the manifest is not signed by the key this install pins."]}
+        tracked = _git_tracked(root)
+        stray = None if tracked is None else sorted(
+            t for t in tracked if t not in local["files"] and t not in _VERIFY_TRUST_ARTIFACTS
+            and t not in _VERIFY_PINNED_UNSIGNED_OK)
+        if stray is None or stray:
+            return {"level": "unsigned_files", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver} tracks files the signature does not cover"
+                + (f": {', '.join(stray[:5])}" if stray else " (cannot list the tree).")]}
         return {"level": "signed", "version": ver, "ok": True, "lines": [
             f"✓ v{ver}: integrity OK and signed by the pinned key."]}
 

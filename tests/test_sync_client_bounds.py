@@ -278,3 +278,89 @@ def test_a_body_cut_cleanly_at_the_deadline_is_refused_not_parsed_short(serve, m
     s = serve(ok)
     with pytest.raises(sc.SyncBoundError, match="deadline"):
         sc._get(s.url, "/sync/hello")
+
+
+def _raw_server(serve_conn):
+    import socket
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(8)
+
+    def loop():
+        while True:
+            try:
+                c, _ = srv.accept()
+            except OSError:
+                return
+            threading.Thread(target=serve_conn, args=(c,), daemon=True).start()
+    threading.Thread(target=loop, daemon=True).start()
+    return srv, f"http://127.0.0.1:{srv.getsockname()[1]}"
+
+
+def _read_request(c):
+    buf = b""
+    while b"\r\n\r\n" not in buf:
+        d = c.recv(4096)
+        if not d:
+            return False
+        buf += d
+    return True
+
+
+def _drip_bytes(c):
+    try:
+        for _ in range(600):
+            c.sendall(b"H")
+            time.sleep(0.1)
+    except OSError:
+        pass
+
+
+def test_a_drip_on_a_reused_pooled_connection_is_cut(monkeypatch):
+    """One good keep-alive reply, then the second request on the same connection drips its status line."""
+    def conn(c):
+        try:
+            if _read_request(c):
+                c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+            if _read_request(c):
+                _drip_bytes(c)
+        except OSError:
+            pass
+    srv, url = _raw_server(conn)
+    try:
+        sc._session = None
+        monkeypatch.setattr(sc, "ROUND_DEADLINE", 1.5)
+        sc._round.deadline = time.monotonic() + 1.5
+        try:
+            assert sc._get(url, "/sync/hello") == {}
+            t0 = time.monotonic()
+            with pytest.raises(sc.SyncBoundError, match="deadline"):
+                sc._get(url, "/sync/hello")
+        finally:
+            sc._round.deadline = None
+        assert time.monotonic() - t0 < 4
+    finally:
+        srv.close()
+
+
+def test_a_proxy_in_the_environment_does_not_escape_the_round_deadline(monkeypatch):
+    """HTTP_PROXY must not route sync traffic through untracked pools: a dripping proxy is still cut."""
+    def conn(c):
+        if _read_request(c):
+            _drip_bytes(c)
+    proxy, purl = _raw_server(conn)
+    try:
+        monkeypatch.setenv("HTTP_PROXY", purl)
+        monkeypatch.setenv("http_proxy", purl)
+        monkeypatch.delenv("NO_PROXY", raising=False)
+        monkeypatch.delenv("no_proxy", raising=False)
+        sc._session = None
+        assert sc._sess().trust_env is False
+        ok = _Server(lambda h: (h.send_response(200), h.send_header("Content-Length", "2"), h.end_headers(), h.wfile.write(b"{}")))
+        try:
+            assert sc._get(ok.url, "/sync/hello") == {}    # went direct, not via the proxy
+        finally:
+            ok.close()
+        sc._session = None
+    finally:
+        proxy.close()

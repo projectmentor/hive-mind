@@ -235,6 +235,7 @@ def _sess():
     global _session
     if _session is None:
         s = requests.Session()
+        s.trust_env = False     # sync peers are direct tailnet addresses; a proxy pool would bypass the tracked sockets
         adapter = _ClampMSSAdapter()
         s.mount("http://", adapter)
         s.mount("https://", adapter)

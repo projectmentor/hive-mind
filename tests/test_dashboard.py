@@ -277,6 +277,33 @@ def test_a_cross_site_post_to_ingest_is_refused(daemon, hive):
     assert st == 200
 
 
+def test_a_browser_labelled_cross_site_post_is_refused_even_with_the_right_token(daemon, hive):
+    body = json.dumps({"entries": []}).encode()
+    for site in ("cross-site", "same-site", "CROSS-SITE"):
+        st, _, _ = _raw(daemon, "POST", "/sync/ingest", {"Hive-CSRF": _tok(hive), "Sec-Fetch-Site": site}, body)
+        assert st == 403, site
+    for site in ("none", "same-origin"):
+        assert _raw(daemon, "POST", "/sync/ingest", {"Hive-CSRF": _tok(hive), "Sec-Fetch-Site": site}, body)[0] == 200, site
+
+
+def test_a_loopback_post_without_the_token_needs_a_valid_signed_envelope(daemon):
+    import sync_common
+    seed = os.urandom(32)          # the test hive has no owner, so any well-formed signature is accepted
+    body = json.dumps({"entries": []}).encode()
+    path = "/sync/ingest"
+
+    def env(b=body):
+        return sync_common.signed_request_headers(seed, "POST", path, "", b)
+
+    # an unsigned claim of a device, and an envelope signed over a different body, do not stand in for the token
+    assert _raw(daemon, "POST", path, {"Hive-Auth-Device": "k1:0000000000000000"}, body)[0] == 403
+    assert _raw(daemon, "POST", path, env(b'{"entries": [1]}'), body)[0] == 403
+    good = env()
+    st, out, _ = _raw(daemon, "POST", path, good, body)
+    assert st == 200 and json.loads(out)["accepted"] == 0
+    assert _raw(daemon, "POST", path, good, body)[0] == 403          # replayed nonce
+
+
 def test_the_dashboard_is_served_with_a_content_security_policy(daemon):
     st, body, h = _raw(daemon, "GET", "/")
     assert st == 200 and h.get("Content-Security-Policy") == "default-src 'self'"

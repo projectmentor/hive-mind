@@ -367,6 +367,11 @@ exactly on its upstream commit, and that commit is under 30 minutes old,
 failure (✗), because an unsigned change to `main` is exactly what the check exists
 to catch.
 
+`hive-mind update` applies the same test before it replaces anything: the commit it would switch to must verify
+under the release key this install already pins, or the update is refused and nothing changes. A commit whose
+re-sign has not landed yet is waited for, then refused. `hive-mind update --allow-unsigned` overrides this for a
+fork you trust.
+
 ---
 
 ### `hv doctor merkle` — Diagnose sync problems

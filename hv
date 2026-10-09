@@ -6986,6 +6986,12 @@ _VERIFY_EXTENSIONLESS = {"hv"}
 _VERIFY_EXTS = {".py", ".sh", ".md", ".txt", ".json", ".mjs", ".yml", ".yaml", ".example", ".toml", ".cfg",
                 ".html", ".css", ".js", ".svg"}   # .html/.css/.js/.svg: the dashboard SPA + assets the
                                                   # daemon serves are signed too (tamper-evident over HTTP)
+# Tracked files the manifest does not cover and a pinned check tolerates. Nothing else outside the manifest
+# may ride in under a good signature: a tracked __pycache__/*.pyc is loaded by CPython without reading its
+# source. Each is inert on a node (license, ignore list, a Windows-only helper, a test fixture).
+_VERIFY_PINNED_UNSIGNED_OK = {".gitignore", "LICENSE", "scripts/platform/windows/remove-portproxy.bat",
+                              "tests/security/Dockerfile"}
+_VERIFY_TRUST_ARTIFACTS = {"verify.json", "verify.json.sig", "hivemind.pub"}
 OFFICIAL_VERIFY_URL = "https://raw.githubusercontent.com/projectmentor/hive-mind/main/verify.json"
 # The trust anchor: the public key, served from our own TLS domain (a DIFFERENT origin than the
 # code host). A fork can ship its own hivemind.pub, but it cannot change what this URL serves, so a
@@ -7055,7 +7061,7 @@ def _fetch_official_pubkey():
         return None
 
 
-def _verify_status(root, check_anchor=True):
+def _verify_status(root, check_anchor=True, pinned_pub=None):
     """The integrity + authenticity verdict, as data (shared by `verify` and `doctor`).
     Three independent layers, strongest last:
       1. INTEGRITY  — local source fingerprint matches the bundled manifest (verify.json). Catches
@@ -7068,7 +7074,13 @@ def _verify_status(root, check_anchor=True):
          manifest: the bundled key will not match the one served from hivemind.projectmentor.org.
     Returns {level, version, ok, lines}. `ok` is True once integrity holds and the bundled signature
     (if any) is valid; the key-anchor layer only changes the headline, never `ok`. check_anchor=False
-    skips the network layer (fast, offline-safe). Never raises and never blocks."""
+    skips the network layer (fast, offline-safe). Never raises and never blocks.
+
+    pinned_pub (32 raw bytes) is for judging a tree that is NOT installed yet (`hive-mind update` checks the
+    fetched tree before it switches to it). The tree's own hivemind.pub is then no evidence at all: the manifest
+    must verify under the pinned key, taken from the installed tree, and the tree must ship that same key
+    (hivemind.pub is outside the manifest, so a swapped one would otherwise ride in under a good signature).
+    Anything short of that is not ok: no signature, a different key, a bad signature."""
     root = Path(root)
     local = _source_manifest(root)
     try:
@@ -7088,6 +7100,30 @@ def _verify_status(root, check_anchor=True):
         return {"level": "modified", "version": ver, "ok": False, "lines": [
             "⚠ This install has been MODIFIED locally — your files differ from the signed manifest.",
             f"  If you did not edit it yourself, reinstall from the official source: {OFFICIAL_SOURCE}"]}
+
+    if pinned_pub is not None:
+        if _ed25519 is None or not pinned_pub:
+            return {"level": "unverifiable", "version": ver, "ok": False, "lines": [
+                "⚠ Cannot check the signature here (no Ed25519 implementation or no pinned key)."]}
+        if sig is None:
+            return {"level": "unsigned", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver} carries no release signature."]}
+        if bundled_pub != pinned_pub:
+            return {"level": "key_changed", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver} ships a different signing key than the one this install pins."]}
+        if not _ed25519.verify(manifest_bytes, sig, pinned_pub):
+            return {"level": "sig_invalid", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver}: the manifest is not signed by the key this install pins."]}
+        tracked = _git_tracked(root)
+        stray = None if tracked is None else sorted(
+            t for t in tracked if t not in local["files"] and t not in _VERIFY_TRUST_ARTIFACTS
+            and t not in _VERIFY_PINNED_UNSIGNED_OK)
+        if stray is None or stray:
+            return {"level": "unsigned_files", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver} tracks files the signature does not cover"
+                + (f": {', '.join(stray[:5])}" if stray else " (cannot list the tree).")]}
+        return {"level": "signed", "version": ver, "ok": True, "lines": [
+            f"✓ v{ver}: integrity OK and signed by the pinned key."]}
 
     # Layer 2: signature.
     if _ed25519 is None or sig is None or bundled_pub is None:

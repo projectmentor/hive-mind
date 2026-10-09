@@ -5,16 +5,20 @@ set -euo pipefail
 # `-h`/`--help` prints usage and changes nothing; any other argument is refused (exit 2) BEFORE the
 # command does anything (#224). Keep this ahead of every side effect.
 ALLOW_UNSIGNED=0
+ALLOW_REWIND=0
 for _a in "$@"; do
   case "$_a" in
     -h|--help)
-      echo "Usage: hive-mind update [--allow-unsigned]"
+      echo "Usage: hive-mind update [--allow-unsigned] [--allow-rewind]"
       echo "  Pull the latest code, restart the daemon and re-verify (auto-heals after a force-push/rewrite)."
       echo "  The new code is checked against this install's pinned release key BEFORE it replaces anything;"
       echo "  a tree that is unsigned, modified or signed by another key is refused and nothing changes."
       echo "  --allow-unsigned  install it anyway (a fork, or a main whose re-sign has not landed). Your call."
+      echo "  --allow-rewind    switch to a commit that is not a descendant of the installed one (an older tree, or a"
+      echo "                    deliberately rewritten history). Without it such a tree is refused and nothing changes."
       exit 0 ;;
     --allow-unsigned) ALLOW_UNSIGNED=1 ;;
+    --allow-rewind) ALLOW_REWIND=1 ;;
     *) echo "hive-mind update: unknown argument '$_a' (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -148,6 +152,21 @@ else
   if [ "$_MODE" = refuse ]; then
     echo "  Upstream diverged AND you have local changes — refusing to reset." >&2
     echo "  Commit/stash your changes, then: git -C \"$HIVE_DIR\" reset --hard @{u}" >&2
+    exit 1
+  fi
+
+  # A fetched commit that is not a descendant of the installed HEAD is either an OLDER tree (a rollback to an
+  # earlier signed commit, whose signature is still valid) or a rewritten history. Neither is installed
+  # without the operator saying so. This is not a full rollback check: the manifest signs file contents, not
+  # commits, so an old signed tree wrapped in a descendant commit is a fast-forward (THREAT_MODEL). Nothing has changed yet.
+  if [ "$_MODE" = reset ] && [ "$ALLOW_REWIND" = 0 ]; then
+    if git -C "$HIVE_DIR" merge-base --is-ancestor "$_NEW" HEAD 2>/dev/null; then _WHAT="an OLDER commit than the installed one"
+    else _WHAT="a rewritten history (not a descendant of the installed commit)"; fi
+    echo "hive-mind update: REFUSED. origin/$_BR is at ${_NEW:0:12}, $_WHAT." >&2
+    echo "  Installed: ${_HEAD:0:12}   Fetched: ${_NEW:0:12}" >&2
+    echo "  Installing a commit that is not a descendant of the installed one is refused. Nothing was changed: $_BR is still at ${_HEAD:0:12}" >&2
+    echo "  and the working tree is untouched." >&2
+    echo "  If upstream history was rewritten on purpose and you trust it: hive-mind update --allow-rewind" >&2
     exit 1
   fi
 

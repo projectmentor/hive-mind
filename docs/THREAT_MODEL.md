@@ -207,6 +207,13 @@ shown because a planted forget would be re-signed too. Once set,
   than its advertised IP is `addr-unproven`, so `enforce` only pulls from it. The merkle-root comparison
   that ends a round for a peer already in sync stays unsigned: an impostor that echoes this node's root
   can stall its sync with that peer (a denial of service, not a disclosure).
+- **Update rollback protection is git ancestry only.** `hive-mind update` refuses a fetched commit that is
+  not a descendant of the installed one unless `--allow-rewind` is passed, which stops a plain force-push of an
+  older signed commit. `verify.json` signs file contents, not commits or their parents, and its `version` is
+  coarse, so an older signed tree committed as a descendant of the installed commit is a fast-forward and
+  still installs under the pinned key. Closing that needs a signed monotonic counter in the manifest, a
+  signing-format change that waits on the maintainer's decision. Until then, whoever can write the update
+  origin can roll a node back; keep that origin under the same control as the release key.
 - **Anyone can obtain a responder signature over a nonce it chooses.** `/hive/info` is open discovery,
   so any reachable host can make a node sign. The statement holds only public facts (node id, hive id,
   advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`

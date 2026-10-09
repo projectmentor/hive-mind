@@ -139,7 +139,7 @@ class Sandbox:
         self.port = _free_port()
         (self.hive / ".peers.json").write_text(json.dumps({"port": self.port, "peers": []}))
 
-    def upstream_commit(self, stale=False, **sign):
+    def upstream_commit(self, stale=False, force=False, msg=None, **sign):
         """A new commit on the remote's main: a code change (README line) plus its manifest, `sign` as for
         _sign (seed, pub_seed, sig), or a deliberately stale digest (an unsigned `[skip ci]` squash)."""
         n = len(_git(self.src, "log", "--format=%H").split())
@@ -147,8 +147,8 @@ class Sandbox:
             fh.write(f"\nrelease note {n}\n")
         (_stale_manifest_digest if stale else _fix_manifest_digest)(self.src, **({} if stale else sign))
         _git(self.src, "add", "-A")
-        _git(self.src, "commit", "-q", "-m", f"change {n}")
-        _git(self.src, "push", "-q", "origin", "main")
+        _git(self.src, "commit", "-q", "-m", msg or f"change {n}")
+        _git(self.src, "push", "-q", *(["-f"] if force else []), "origin", "main")
         return _git(self.src, "rev-parse", "HEAD")
 
     def state(self):
@@ -346,6 +346,70 @@ def test_allow_unsigned_installs_it_anyway_and_says_so(sandbox, kw):
     r = sb.update(args=["--allow-unsigned"])
     assert r.returncode == 0, r.stdout + r.stderr
     assert "because of --allow-unsigned" in r.stdout and "Update complete" in r.stdout
+    assert _git(sb.hive, "rev-parse", "HEAD") == new
+
+
+def _installed_one_ahead(sb):
+    """The node has updated to a signed commit B1 (base B0 -> B1). Returns (B0, B1)."""
+    b0 = _git(sb.hive, "rev-parse", "HEAD")
+    b1 = sb.upstream_commit()
+    _git(sb.hive, "pull", "-q", "--ff-only")
+    assert _git(sb.hive, "rev-parse", "HEAD") == b1
+    return b0, b1
+
+
+def _refused_as_rewind(sb, r, before, b0, b1, what):
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REFUSED" in r.stderr and what in r.stderr and "--allow-rewind" in r.stderr
+    assert b0[:12] in r.stderr and b1[:12] in r.stderr          # both shas are named
+    assert "not a descendant of the installed one is refused" in r.stderr
+    assert "Update complete" not in r.stdout and "Restarting sync daemon" not in r.stdout and not sb.log.exists()
+    assert sb.state() == before
+
+
+def test_a_rollback_to_an_older_signed_commit_is_refused_and_left_untouched(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    _git(sb.src, "reset", "-q", "--hard", b0)                    # origin/main goes back to B0, still validly signed
+    _git(sb.src, "push", "-q", "-f", "origin", "main")
+    before = sb.state()
+    r = sb.update()
+    _refused_as_rewind(sb, r, before, b0, b1, "an OLDER commit")
+    assert _git(sb.hive, "rev-parse", "HEAD") == b1
+
+
+def test_a_diverged_rewrite_is_refused_without_the_flag_and_reset_with_it(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    _git(sb.src, "reset", "-q", "--hard", b0)
+    new = sb.upstream_commit(force=True, msg="rewritten change")  # B0 -> B1': same parent, other history
+    assert new != b1
+    before = sb.state()
+    r = sb.update()
+    _refused_as_rewind(sb, r, before, new, b1, "a rewritten history")
+    r = sb.update(args=["--allow-rewind"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "hard-resetting" in r.stdout and "Update complete" in r.stdout
+    assert _git(sb.hive, "rev-parse", "HEAD") == new
+
+
+def test_allow_rewind_does_not_waive_the_signature_check(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    _git(sb.src, "reset", "-q", "--hard", b0)
+    sb.upstream_commit(force=True, sig=False)
+    before = sb.state()
+    r = sb.update(args=["--allow-rewind"])
+    assert r.returncode == 1 and "(unsigned)" in r.stderr, r.stdout + r.stderr
+    assert sb.state() == before
+
+
+def test_a_normal_fast_forward_needs_no_rewind_flag(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    new = sb.upstream_commit()
+    r = sb.update()
+    assert r.returncode == 0 and "REFUSED" not in r.stderr, r.stdout + r.stderr
     assert _git(sb.hive, "rev-parse", "HEAD") == new
 
 

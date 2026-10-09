@@ -80,6 +80,7 @@ READERS = {
         ("merkle.py", "envelope_problem"),      # the envelope (SECREV A1): the payload fields a reader keys on, per type
         ("hv", "feed_page"),                    # `hv feed` (2.1): forgotten on a fact, affects on a retract
         ("hive_module_api.py", "_check_entry"),    # `POST /v1/entries` (2.1): the shape each module-writable type needs
+        ("hv", "_module_policy_declined"),      # 2.1 (#50): the projection leaves a module's governance entry to `_governance_state`
         ("hv", "_capsule_version_conflicts"),
         ("hv", "_self_signed_owner_acts"),      # genesis candidates
         ("hv", "_succession_inversions"),       # doctor succession: transfer / claim-succession arrival order
@@ -107,6 +108,7 @@ READERS = {
         ("hv", "_join_request_url"),
         ("hv", "_join_request_label"),
         ("hv", "_entity_declined"),             # 2.1 (#208): a module's entity write, judged in replay order
+        ("hv", "_module_policy_declined"),       # 2.1 (#50): a module's entry judged by the write policy; governance is left alone
         ("hv", "_same_as_pair"),                # a `same-as` end must be an entity entry
         ("hv", "_same_as_live"),                # which `same-as` joins count, and the retracts that withdraw them
         ("hv", "_ts_problem"),                  # 2.1 (#217): a governance `join-request` / `announce` is exempt from rule 2
@@ -114,7 +116,7 @@ READERS = {
     "kind": {                                   # a `link` payload's kind
         ("hv", "_same_as_live"),
         ("hv", "resolve_link"),                 # a `same-as` is written only when it is live
-        ("hive_module_api.py", "_check_link"),  # a module's `same-as` is 403 `same-as-core-only`
+        ("hv", "_module_link_problem"),         # a module's `same-as` is 403 `same-as-core-only`
         ("hv", "_decision_evidence"),
         ("hv", "_idea_evidence"),               # `{"supports": …, "contradicts": …}.get(kind)`
         ("hv", "_signer_reliability"),

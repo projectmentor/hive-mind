@@ -105,7 +105,7 @@ READERS = {
         ("hv", "_compute_audit"),
         ("hv", "_recipient_pubkeys"),           # capsule recipients
         ("hv", "_doctor_status"),
-        ("hv", "_join_request_url"),
+        ("hv", "_join_request_urls"),
         ("hv", "_join_request_label"),
         ("hv", "_entity_verdicts"),            # 2.1 (#208), #51: an entity write, judged in replay order
         ("hv", "_module_policy_declined"),       # 2.1 (#50): a module's entry judged by the write policy; governance is left alone
@@ -133,7 +133,7 @@ READERS = {
         ("hv", "_owner_declaration"),
         ("hv", "_pending_admissions"),
         ("hv", "_recipient_pubkeys"),
-        ("hv", "_join_request_url"),
+        ("hv", "_join_request_urls"),
         ("hv", "_join_request_label"),
     },
     "key": {                                    # a `set-config` payload's key

@@ -715,7 +715,7 @@ each of these names the `hive-mind` form and exits 2, acting on nothing:
 ```
 hive-mind owner claim [--mint] [--force]             # (successor side) claim ownership against a nomination
 hive-mind owner escrow                               # store the key (passphrase-encrypted) IN the hive
-hive-mind owner export [--out FILE] [--passphrase]   # back up the owner key to an off-device file
+hive-mind owner export [--out FILE] [--plaintext]   # back up the owner key to an off-device file (passphrase-encrypted; --plaintext is the opt-in unencrypted form)
 hive-mind owner freeze-timestamps                    # arm the bounded entry timestamps (2.1, #217)
 hive-mind owner heartbeat                            # refresh owner liveness (resets the dead-man timer)
 hive-mind owner import FILE [--force]                # restore it from a file on another device

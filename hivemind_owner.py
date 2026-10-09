@@ -658,25 +658,22 @@ def owner_cmd(args):
         oid = _owner_id_for_pub(_ed25519.pub_from_seed(seed))
         out = Path(getattr(args, "out", None) or f"hive-owner-{oid}.key")
         env = {"hive_id": gov.get("hive_id", ""), "owner_id": oid}
-        if getattr(args, "passphrase", False):
+        plaintext = getattr(args, "plaintext", False)
+        if not plaintext:
             pw = _read_passphrase("Passphrase to encrypt the owner key (blank line / Ctrl-C to cancel): ",
                                   confirm=True)
             if pw is None:
-                print("Cancelled — nothing exported.")
+                print("Cancelled — nothing exported. (`--plaintext` writes an unencrypted file instead.)")
                 return
             env.update(_owner_seal(seed, pw))
         else:
             env["enc"] = "none"
             env["seed"] = base64.b64encode(seed).decode()
-        out.write_text(json.dumps(env, indent=2) + "\n")
-        try:
-            os.chmod(out, 0o600)
-        except Exception:
-            pass
+        ownerkey._write_0600(out, json.dumps(env, indent=2) + "\n")
         print(f"Owner key exported to {out} (chmod 600).")
         if env.get("enc") == "none":
-            print("  UNENCRYPTED — treat this like an SSH private key; anyone holding it is the owner.")
-            print("  Re-run with --passphrase to encrypt it for transport.")
+            print("  UNENCRYPTED (--plaintext) — treat this like an SSH private key; anyone holding it is the owner.")
+            print("  Move it off this device and delete this copy; `hv doctor` reports stray copies (owner-copies).")
         return
     if action == "import":
         try:

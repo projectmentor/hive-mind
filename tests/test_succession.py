@@ -91,7 +91,7 @@ def test_export_import_round_trip_resumes_same_owner(tmp_path):
     _run(home, "owner", "init")
     oid = _owner_id(home)
     keyfile = tmp_path / "owner.key"
-    _run(home, "owner", "export", "--out", str(keyfile))
+    _run(home, "owner", "export", "--plaintext", "--out", str(keyfile))
     assert keyfile.exists()
     _keys.key_path(home, "owner-key.sealed").unlink()                          # lose the owner device's key
     assert "This is a member node" in _run(home, "owner", "show").stdout

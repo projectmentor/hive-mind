@@ -209,6 +209,14 @@ def test_a_device_that_is_not_admitted_or_not_a_module_is_403(hive):
     assert code == 403 and "entries" not in body
 
 
+def test_a_module_request_naming_a_foreign_host_is_refused(hive):
+    assert hive.get("/v1/", dev="mod")[0] == 200
+    for host in ("evil.example", f"evil.example:{hive.port}", f"127.0.0.1:{hive.port + 1}"):
+        code, body = hive.get("/v1/feed", dev="mod", headers={"Host": host})
+        assert code == 421 and "entries" not in body, host
+    assert hive.get("/v1/", dev="mod", headers={"Host": f"localhost:{hive.port}"})[0] == 200
+
+
 def test_a_hive_with_no_owner_refuses_every_module_request(tmp_path, monkeypatch):
     (tmp_path / "x").mkdir()
     h = Hive(tmp_path / "x", monkeypatch, with_owner=False)

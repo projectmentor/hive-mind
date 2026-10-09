@@ -368,6 +368,51 @@ def is_loopback(addr):
     return addr in ("127.0.0.1", "::1", "localhost") or str(addr).startswith("127.")
 
 
+def host_header_ok(host, port, bound=()):
+    """Whether a `Host` header names this listener: `localhost`, a loopback literal, or one of the `bound`
+    addresses, on the listener's own `port` (or no port). Loopback is trusted by source address, so a
+    browser that was steered to 127.0.0.1 by a hostile name (DNS rebinding) arrives with that name in
+    `Host`; an absent or foreign `Host` is refused."""
+    host = (host or "").strip().lower()
+    if not host:
+        return False
+    if host.startswith("["):                         # [v6]:port
+        name, _, rest = host[1:].partition("]")
+        hport = rest[1:] if rest.startswith(":") else ("" if not rest else None)
+    elif host.count(":") == 1:
+        name, _, hport = host.partition(":")
+    else:                                             # bare name, or a bare v6 literal
+        name, hport = host, ""
+    if hport is None or (hport and hport != str(port)):
+        return False
+    allowed = {"localhost", "127.0.0.1", "::1"} | {str(b).lower() for b in bound if b and b not in ("0.0.0.0", "::")}
+    return name in allowed
+
+
+def csrf_token_path():
+    return hive_home() / ".csrf-token"
+
+
+def csrf_token(create=False):
+    """The per-hive secret a LOCAL client sends as `Hive-CSRF` on a POST to the loopback listener. A page in
+    the operator's browser cannot read this file, so it cannot forge the header. None when absent."""
+    path = csrf_token_path()
+    try:
+        tok = path.read_text().strip()
+        if tok:
+            return tok
+    except OSError:
+        pass
+    if not create:
+        return None
+    import secrets
+    tok = secrets.token_hex(32)
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write(tok + "\n")
+    return tok
+
+
 def should_rebind(bound, resolved, auto):
     """#47: whether a running daemon bound to `bound` should restart to bind `resolved` (what
     resolve_bind answers now). Only an automatic bind moves, and only TOWARD a real address: loopback

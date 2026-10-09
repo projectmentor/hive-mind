@@ -16,6 +16,7 @@ Endpoints:
 import base64
 import collections
 import errno
+import hmac
 import json
 import os
 import shutil
@@ -55,9 +56,13 @@ _LOADED = _loaded_code()
 _DASH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard")
 _STATIC = {
     "index.html": "text/html; charset=utf-8",
+    "app.js": "text/javascript; charset=utf-8",
+    "app.css": "text/css; charset=utf-8",
     "logo.svg": "image/svg+xml",
     "favicon.svg": "image/svg+xml",
 }
+
+DASHBOARD_CSP = "default-src 'self'"
 
 # Sync wire-protocol version. Advertised in /sync/hello and /hive/info so additive handshake
 # changes can be negotiated without a journal-schema break. Bumped to 2 with read-authentication
@@ -82,7 +87,7 @@ _REMOTE_AUTH = frozenset({"/sync/hello", "/sync/chunk"})
 _LOOPBACK_ONLY = frozenset({
     "/api/overview", "/api/search", "/api/tags", "/api/related", "/api/item", "/api/audit",
     "/api/status", "/api/telemetry", "/api/peers", "/api/daemon",
-    "/", "/index.html", "/dashboard", "/dashboard/", "/logo.svg", "/favicon.svg",
+    "/", "/index.html", "/dashboard", "/dashboard/", "/logo.svg", "/favicon.svg", "/app.js", "/app.css",
 })
 
 # Serialize journal-mutating ingests so an inbound POST and the periodic
@@ -323,6 +328,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if name == "index.html":
+            # The dashboard loads only its own script and stylesheet and runs no inline code.
+            self.send_header("Content-Security-Policy", DASHBOARD_CSP)
         self.end_headers()
         self.wfile.write(body)
 
@@ -350,6 +359,42 @@ class Handler(BaseHTTPRequestHandler):
         source address is its tailnet IP, never 127.x/::1."""
         ip = self.client_address[0] if self.client_address else ""
         return ip in ("127.0.0.1", "::1") or ip.startswith("127.")
+
+    def _host_ok(self):
+        """The `Host` header must name this listener (see sync_common.host_header_ok). Checked on every request
+        that arrives on loopback, because loopback is trusted by source address alone."""
+        srv = getattr(self, "server", None)
+        addr = getattr(srv, "server_address", None) or ("", 0)
+        adv = (_ADVERTISED.get("addr") or "").rpartition(":")[0]
+        return sync_common.host_header_ok(self.headers.get("Host"), addr[1], (addr[0], adv))
+
+    def _refuse_foreign_host(self):
+        """True (after sending 421) when a loopback request names a host that is not this listener."""
+        if self._is_loopback() and not self._host_ok():
+            self._send(421, {"error": "Host not served here"})
+            return True
+        return False
+
+    def _csrf_ok(self, u, raw):
+        """Cross-site guard for a POST. A browser always labels a cross-site request: `Sec-Fetch-Site`, and an
+        `Origin` that is not this listener. Either one marks it foreign and it is refused (sends 403). A
+        request that arrives on loopback must also prove it comes from a local client: the `Hive-CSRF`
+        token (sync_common.csrf_token) or a valid signed peer envelope, neither of which a page can supply."""
+        site = (self.headers.get("Sec-Fetch-Site") or "").lower()
+        origin = self.headers.get("Origin")
+        ok = site in ("", "same-origin", "none")
+        if ok and origin is not None:
+            netloc = urlparse(origin).netloc.lower() if origin.lower() != "null" else ""
+            ok = bool(netloc) and netloc == (self.headers.get("Host") or "").strip().lower()
+        if ok and self._is_loopback():
+            want = sync_common.csrf_token()
+            got = self.headers.get("Hive-CSRF") or ""
+            ok = bool(want) and hmac.compare_digest(want.encode(), got.encode())
+            if not ok and self.headers.get("Hive-Auth-Device"):
+                ok = _verify_sync_request(self.headers, self.command, u.path, u.query, raw, self._gov())[0]
+        if not ok:
+            self._send(403, {"error": "cross-site request refused", "accepted": 0})
+        return ok
 
     def _gov(self):
         return hv._governance_state(_entries())
@@ -436,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         q = parse_qs(u.query)
         try:
+            if self._refuse_foreign_host():
+                return
             # Read-auth gate (GHSA-242f): classify the path once. open-discovery falls through;
             # remote-auth and loopback-only are enforced here (the /api/* proxy paths are in
             # loopback-only, so they're gated here too, then the outbound proxy re-signs below).
@@ -575,7 +622,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, {"peers": hv.api_peers(probe=probe)})
             elif u.path in ("/", "/index.html", "/dashboard", "/dashboard/"):
                 self._serve_static("index.html")
-            elif u.path in ("/logo.svg", "/favicon.svg"):
+            elif u.path in ("/logo.svg", "/favicon.svg", "/app.js", "/app.css"):
                 self._serve_static(u.path.lstrip("/"))
             else:
                 self._send(404, {"error": "not found"})
@@ -589,6 +636,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             u = urlparse(self.path)
+            if self._refuse_foreign_host():
+                return
             if u.path != "/sync/ingest":
                 self._send(404, {"error": "not found"})
                 return
@@ -603,6 +652,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(413, {"error": "request too large", "max_bytes": MAX_BODY_BYTES})
                 return
             raw = self.rfile.read(length) if length else b""
+            if not self._csrf_ok(u, raw):
+                return
             # remote-auth: read-auth gate over the exact body bytes, so an unadmitted device can't
             # even attempt an ingest under enforce (entries are still per-entry verified below).
             if not self._authorized(u, body=raw):
@@ -697,6 +748,7 @@ def make_server(bind=None, port=None):
             srv = ThreadingHTTPServer((bind, p), Handler)
             sync_common.clamp_mss(srv.socket)   # accepted connections inherit the clamped MSS (Linux)
             _ADVERTISED["addr"] = _advertised_addr(bind, p)
+            sync_common.csrf_token(create=True)
             if p != base:
                 print(f"sync daemon: :{base} is held by a non-hive service; using :{p}")
                 _persist_port(p)

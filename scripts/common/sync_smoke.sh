@@ -43,10 +43,10 @@ conf() { HIVE_HOME="$1" python3 -c "import sqlite3,os,sys;print(sqlite3.connect(
 printf '%sSync smoke%s  (A=%s:%s  B=%s:%s)\n' "$B_" "$N" "$A" "$PA" "$B" "$PB"
 
 cat > "$A/.peers.json" <<JSON
-{"self":"nodeA","bind":"127.0.0.1","port":$PA,"peers":[{"id":"nodeB","url":"http://127.0.0.1:$PB"}]}
+{"self":"nodeA","bind":"127.0.0.1","port":$PA,"peers":[{"id":"nodeB","url":"http://127.0.0.1:$PB","csrf_token_file":"$B/.csrf-token"}]}
 JSON
 cat > "$B/.peers.json" <<JSON
-{"self":"nodeB","bind":"127.0.0.1","port":$PB,"peers":[{"id":"nodeA","url":"http://127.0.0.1:$PA"}]}
+{"self":"nodeB","bind":"127.0.0.1","port":$PB,"peers":[{"id":"nodeA","url":"http://127.0.0.1:$PA","csrf_token_file":"$A/.csrf-token"}]}
 JSON
 
 # Each instance needs a distinct node id (both run on the same host, so the
@@ -136,11 +136,11 @@ C=$(mktemp -d)
 env HIVE_HOME="$C" python3 "$HM" owner init >/dev/null
 env HIVE_HOME="$C" "$HV" remember "only in hive C" --source agent >/dev/null
 A_BEFORE=$(count "$A" facts)
-printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A"}],"bind":"127.0.0.1","port":%s}' "$PA" "$PC" > "$C/.peers.json"
+printf '{"peers":[{"url":"http://127.0.0.1:%s","node_id":"A","csrf_token_file":"%s/.csrf-token"}],"bind":"127.0.0.1","port":%s}' "$PA" "$A" "$PC" > "$C/.peers.json"
 env HIVE_HOME="$C" "$HV" sync now 2>&1 | sed 's/^/  /'
 eq "C did not pull A's alpha fact"  "$(HIVE_HOME="$C" python3 -c "import sqlite3,os;print(sqlite3.connect(os.path.join('$C','store.db')).execute(\"SELECT count(*) FROM facts WHERE content LIKE 'alpha%'\").fetchone()[0])")" "0"
 eq "A did not ingest C's fact"      "$(count "$A" facts)" "$A_BEFORE"
-CODE=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
+CODE=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' -X POST -H "Hive-CSRF: $(cat "$A/.csrf-token")" "http://127.0.0.1:$PA/sync/ingest" -d '{"entries":[],"hive_id":"h1:deadbeefdeadbeef"}')
 eq "cross-hive /sync/ingest rejected" "$CODE" "409"
 rm -rf "$C"
 

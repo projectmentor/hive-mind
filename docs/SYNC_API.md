@@ -418,6 +418,7 @@ Written by the installer; per node and git-ignored.
 | `bind` | automatic | Optional override of the bind address (see *Binding*); `0.0.0.0` is treated as automatic |
 | `sync_auth` | `permissive` | Optional sync auth mode (`hv sync auth` sets it) |
 | `sync_auth_outbound` | `permissive` | Optional outbound mode: what a peer's hello must prove before this node pushes to it (`hv sync auth --outbound` sets it; see *Responder signatures*) |
+| `peers[].csrf_token_file` | optional | Path to the `.csrf-token` of a daemon on this same machine under another `HIVE_HOME`. A POST to a loopback daemon needs its `Hive-CSRF` token (or a valid signed envelope); `hv sync` reads this file to send it. Not needed for a remote peer |
 
 Admitting a device with `hive-mind group admit` also adds a peer entry from the address in its join request.
 To add a device, run `hive-mind invite` on a device already in the hive and paste the line into

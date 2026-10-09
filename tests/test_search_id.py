@@ -69,5 +69,5 @@ def test_search_needs_a_query_or_an_id(populated):
 
 
 def test_dashboard_opens_an_idea_by_deep_link():
-    html = (Path(__file__).resolve().parent.parent / "dashboard" / "index.html").read_text()
+    html = (Path(__file__).resolve().parent.parent / "dashboard" / "app.js").read_text()
     assert "r.kind==='idea'" in html and "d.kind==='idea'" in html

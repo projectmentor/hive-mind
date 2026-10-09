@@ -248,6 +248,8 @@ LOCAL_FILES = {
                                                "`keyperm` warning, and `hv doctor --fix` moves it.", where="hive"),
     ".genesis-pin":          _v(WRITTEN, "1.27", "Which `owner` declaration established this hive (0600, never "
                                                  "synced).", where="hive"),
+    ".succession-pin":      _v(WRITTEN, "2.3", "The owner-succession acts this node accepted, pinned the way the genesis is "
+                                                "(0600, never synced).", where="hive"),
     ".key-dir":              _v(WRITTEN, "2.0", "The path of this checkout's key directory, so a renamed checkout keeps "
                                                 "its keys.", where="hive"),
     ".csrf-token":           _v(WRITTEN, "2.0", "The secret a local client sends as `Hive-CSRF` on a POST to this "

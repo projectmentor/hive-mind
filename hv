@@ -285,6 +285,11 @@ OWNER_SEALED_PATH = KEY_DIR / "owner-key.sealed"
 # converges, and `hv doctor genesis` fails until the operator pins.
 GENESIS_PIN_PATH = HIVE_HOME / ".genesis-pin"
 
+# SECREV A3: the owner-succession acts (`transfer`, `claim-succession`) this node accepted, pinned the way the genesis
+# is. Once pinned, a succession act is honoured only if it is one of the pinned acts or is positioned AFTER the last one,
+# so an act stamped back into an earlier term cannot re-route the chain. Same custody as the genesis pin.
+SUCCESSION_PIN_PATH = HIVE_HOME / ".succession-pin"
+
 
 _OWNER_KEY_SIZES = {44, 45}         # base64 of a 32-byte seed, with or without the trailing newline
 _OWNER_SEALED_SIZES = range(128, 4097)   # the sealed envelope: about 240 bytes of JSON
@@ -899,6 +904,8 @@ def _ts_owner_signed(e, gov):
     pos = (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0))
     # The owner at the act's position, or the one just before it: the outgoing owner signs a `transfer`, and the walk
     # records the successor at that same position.
+    if not _member_at(gov, pos[1], pos):
+        return False                           # SECREV A3: an act no member carried is not honoured, so it shields nothing
     return oid is not None and oid in (_owner_at(tl, pos), _owner_at([t for t in tl if t[:3] < pos], pos))
 
 
@@ -1820,6 +1827,11 @@ def append_foreign_entries(entries, advertised_chunks=None):
     if refused_payload:
         _quarantine(refused_payload, gov)        # node-local evidence for `hv doctor`; never synced
     _record_arrivals([k for k in arrived if k[0] != NODE_ID])
+    if any(a[0] != NODE_ID for a in arrived):
+        try:
+            _pin_successions(merkle.read_all_entries(JOURNAL_DIR))   # first-seen order, now that arrivals are recorded
+        except Exception:
+            pass
     if rejected:
         reasons = "bad signature, malformed timestamp or payload, unauthorized governance, or content from an " \
                   "unadmitted device"
@@ -2153,6 +2165,26 @@ def _owner_at(owner_timeline, pos):
     return owner
 
 
+def _member_at(gov, nid, pos):
+    """True when device `nid` was a member AT journal position `pos`: the genesis device (always), or admitted by an
+    honoured owner act at or before `pos` and not revoked or purged by one at or before it. SECREV A3: an owner
+    signature proves the KEY signed, not WHEN; the carrying device being a member at that position is what ties the act
+    to the owner's term, since a former owner's key on a device nobody admitted could stamp any position it likes."""
+    if nid == gov.get("genesis_device"):
+        return True
+    for a, b in (gov.get("member_spans") or {}).get(str(nid), ()):
+        if a <= pos and (b is None or pos <= b):   # the revoke or purge itself is still carried by the device it ends
+            return True
+    return False
+
+
+def _owner_signed_at(oid, pos, gov):
+    """`oid` (the verified owner signature on an act) is the owner in authority at `pos`, and the device that carries the
+    act (`pos[1]`) was a member there. The one test the owner-signed content paths (forget, link, capsule, cell) share
+    with the governance walk."""
+    return oid is not None and oid == _owner_at(gov.get("owner_timeline") or [], pos) and _member_at(gov, pos[1], pos)
+
+
 def _is_authorized_writer(signer, pos, payload, gov, policy):
     """True if this content entry — device-signed by `signer`, carrying `payload`, at journal position
     `pos` — may write an authority-bearing content type under `policy` ('owner'|'fertile').
@@ -2169,8 +2201,7 @@ def _is_authorized_writer(signer, pos, payload, gov, policy):
     adopted, hive #59). Caller invokes this only once an owner exists and crypto is available."""
     if policy == "fertile":
         return signer is not None and signer in gov.get("admitted", set()) and signer not in gov.get("purged", set())
-    oid = _verify_governance(payload)
-    return oid is not None and oid == _owner_at(gov.get("owner_timeline") or [], pos)
+    return _owner_signed_at(_verify_governance(payload), pos, gov)
 
 
 def _capsule_version_conflicts(entries):
@@ -2319,6 +2350,81 @@ def _genesis_fingerprint(entries, gov=None):
     return ""
 
 
+def _load_succession_pin():
+    """This node's succession pin `{genesis_hash, tip: [ts, node_id, seq], acts: [hash, ...]}`, or None (legacy: nothing
+    pinned). A malformed file is not a pin, as with the genesis pin."""
+    try:
+        pin = json.loads(SUCCESSION_PIN_PATH.read_text())
+        tip = pin["tip"]
+        if (isinstance(pin, dict) and pin.get("genesis_hash") and isinstance(pin["acts"], list)
+                and isinstance(tip, list) and len(tip) == 3):
+            return pin
+    except Exception:
+        pass
+    return None
+
+
+def _write_succession_pin(pin):
+    """Write the pin 0600 and atomically, like the genesis pin."""
+    SUCCESSION_PIN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not SUCCESSION_PIN_PATH.exists():
+        SUCCESSION_PIN_PATH.touch(mode=0o600)
+    _atomic_write_text(SUCCESSION_PIN_PATH, json.dumps(pin, sort_keys=True) + "\n")
+    os.chmod(SUCCESSION_PIN_PATH, 0o600)
+    return pin
+
+
+def _succession_inversions(entries):
+    """[(earlier_ref, later_ref)] for succession acts (`transfer`, `claim-succession`, owner-signed) where the act that
+    sorts EARLIER in the journal's order reached this node LATER than one that sorts after it: the signature of a
+    backdated act. An entry this device wrote itself has no arrival record and counts as arrived first. Local evidence,
+    like `future-dated`: it reads this node's arrival record and changes no projection."""
+    arrived = _read_arrivals()
+    acts = []
+    for e in entries:
+        p = e.get("payload")
+        if (e.get("type") == "governance" and isinstance(p, dict) and p.get("action") in ("transfer", "claim-succession")
+                and _verify_governance(p) is not None):
+            at = arrived.get((e.get("node_id"), e.get("seq")))
+            at = _ts_instant(at) if at is not None else None
+            if at is None and e.get("node_id") != NODE_ID:
+                continue                        # arrival unknown: no evidence either way
+            acts.append(((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)), at))
+    acts.sort(key=lambda a: a[0])
+    out = []
+    for i, (pos_a, at_a) in enumerate(acts):
+        for pos_b, at_b in acts[i + 1:]:
+            if at_a is not None and (at_b is None or at_a > at_b):
+                out.append((f"{pos_a[1]}:{pos_a[2]}", f"{pos_b[1]}:{pos_b[2]}"))
+    return out
+
+
+def _pin_successions(entries):
+    """Pin the succession acts the projection honours, as the genesis is pinned: the first time they are seen here, in the
+    order they reached this node. Extends a pin with each newly honoured act (every one sits after the tip, or the walk
+    would not have honoured it). With no pin yet it pins only when arrival order and journal order agree for every
+    succession act; otherwise it pins nothing and leaves `hv doctor` to say so. Returns the pin or None."""
+    gov = _governance_state(entries)
+    gh = (gov.get("genesis") or {}).get("hash")
+    if gov.get("owner_id") is None or not gh:
+        return None
+    pin = _load_succession_pin()
+    if pin is not None and pin.get("genesis_hash") != gh:
+        pin = None                              # the genesis changed (a deliberate re-genesis): start again
+    acts = sorted(gov.get("successions") or [], key=lambda a: tuple(a["pos"]))
+    if pin is None:
+        if _succession_inversions(entries):
+            return None
+        tip = list(acts[-1]["pos"]) if acts else list(gov["genesis"]["pos"])
+        new = {"genesis_hash": gh, "tip": tip, "acts": [a["hash"] for a in acts]}
+    else:
+        fresh = [a for a in acts if a["hash"] not in set(pin["acts"])]
+        if not fresh:
+            return pin
+        new = {"genesis_hash": gh, "tip": list(fresh[-1]["pos"]), "acts": pin["acts"] + [a["hash"] for a in fresh]}
+    return _write_succession_pin(new)
+
+
 def _governance_state(entries):
     """Memoized wrapper over the (pure, deterministic) governance projection. The projection reads
     ONLY governance entries (but for `kept`, derived per call below), so the cache key is a content signature of just those — a plain `fact`
@@ -2327,7 +2433,8 @@ def _governance_state(entries):
     value is the master; every caller gets a deep COPY so a caller mutating its result can never
     corrupt the cache. Output is byte-identical to the uncached projection for the same journal."""
     govs_raw = [e for e in entries if e.get("type") == "governance"]
-    parts = ([json.dumps(_load_genesis_pin(), sort_keys=True, separators=(",", ":"))] +   # the pin decides
+    parts = ([json.dumps(_load_genesis_pin(), sort_keys=True, separators=(",", ":")),     # the pin decides
+              json.dumps(_load_succession_pin(), sort_keys=True, separators=(",", ":"))] +
              [json.dumps([e.get("node_id"), e.get("seq"), e.get("timestamp"),             # genesis (#14)
                           e.get("sig"), e.get("payload")], sort_keys=True, separators=(",", ":"))
               for e in govs_raw])
@@ -2370,7 +2477,7 @@ def _governance_state_uncached(entries):
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
            "principals": {}, "modules": {}, "module_config": {},
            "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
-           "keep": {}, "kept": set(),
+           "keep": {}, "kept": set(), "successions": [], "unpinned": [], "uncarried": [], "member_spans": {},
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2390,12 +2497,12 @@ def _governance_state_uncached(entries):
             # owner key. Require a real device signature (these acts are new in 1.9 — nothing legacy
             # to grandfather); admission is enforced later in the walk. `signer=None` marks them.
             if "sig" in e and _verify_entry(e):
-                govs.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p, None))
+                govs.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p, None, e))
             continue
         signer = _verify_governance(p)
         if signer is None:
             continue   # unsigned or forged governance is ignored
-        govs.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p, signer))
+        govs.append((e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0), p, signer, e))
     govs.sort(key=lambda x: (x[0], x[1], x[2]))   # deterministic order across nodes
 
     # 1) Establish the owner. The PINNED genesis wins (hive-mind-private #14): the pin decides, not
@@ -2419,6 +2526,8 @@ def _governance_state_uncached(entries):
     gov["hive_id"] = cp.get("hive_id", "")
     gen_pos = (gov["owner_ts"], str(chosen.get("node_id", "")), chosen.get("seq", 0))
     gov["genesis"]["ref"] = f"{chosen.get('node_id')}:{chosen.get('seq')}"
+    gov["genesis"]["hash"] = compute_hash(chosen)
+    gov["genesis"]["pos"] = list(gen_pos)
     gov["genesis_device"] = chosen.get("node_id")   # a member from genesis (`owner init` writes no admit); see `_admitted_content`
 
     # 2) Single deterministic walk: the OWNER SUCCESSION CHAIN (Stage B) and the QUORUM ELECTION
@@ -2439,7 +2548,42 @@ def _governance_state_uncached(entries):
     owner_act = {current: gov["owner_ts"]}    # owner_id -> latest ts of an owner-signed act (liveness)
     proposals = {}                            # Stage C: election_id -> {new_pub, new_oid, basis_ts, voters, installed}
     pending_votes = {}                        # election_id -> {voter_units} seen BEFORE the proposal (clock skew)
-    for _ts, _nid, _seq, p, signer in govs:
+    spin = _load_succession_pin()
+    if spin is not None and spin.get("genesis_hash") != gov["genesis"]["hash"]:
+        spin = None                           # a pin taken against another genesis (a re-genesis) pins nothing here
+    spin_tip = tuple(spin["tip"]) if spin else None
+    spin_acts = set(spin["acts"]) if spin else set()
+
+    def carried(nid):
+        """SECREV A3: the device carrying an owner-signed act is a member AT THIS POINT in the walk: admitted, or the
+        genesis device. The owner signature alone proves the KEY signed; a former owner's key on a device nobody
+        admitted proves nothing about when it signed."""
+        return nid in gov["admitted"] or nid == gov["genesis_device"]
+
+    def span_open(nid, pos):
+        sp = gov["member_spans"].setdefault(str(nid), [])
+        if not sp or sp[-1][1] is not None:
+            sp.append([pos, None])
+
+    def span_close(nid, pos):
+        sp = gov["member_spans"].get(str(nid))
+        if sp and sp[-1][1] is None:
+            sp[-1][1] = pos
+
+    def succession_ok(pos, h):
+        """A succession act is honoured when no pin exists, it is pinned, or it is positioned after the pinned tip."""
+        return spin is None or h in spin_acts or pos > spin_tip
+
+    def _succession_honoured(ts, nid, seq, entry):
+        """Record a succession act the projection reads, and say whether the pin lets it move the chain."""
+        h = compute_hash(entry)
+        if not succession_ok((ts, str(nid), seq), h):
+            gov["unpinned"].append((str(nid), seq))
+            return False
+        gov["successions"].append({"pos": (ts, str(nid), seq), "hash": h})
+        return True
+
+    for _ts, _nid, _seq, p, signer, _e in govs:
         action = p.get("action")
 
         # --- Stage C: device-signed quorum election (signer is None — authority is membership) ---
@@ -2498,6 +2642,10 @@ def _governance_state_uncached(entries):
                     gov["owner_term"] += 1
             continue
 
+        if action != "claim-succession" and not carried(str(_nid)):
+            gov["uncarried"].append((str(_nid), _seq, action))
+            continue                          # SECREV A3: owner-signed, but carried by a device that was not a member here
+
         owner_act[signer] = max(owner_act.get(signer, ""), _ts)   # any owner-signed act = liveness
 
         # --- Stage B: advance the owner chain (evaluated BEFORE the current-owner gate) ---
@@ -2513,11 +2661,14 @@ def _governance_state_uncached(entries):
             continue
         if action == "claim-succession":
             # Self-signed by the successor's NEW owner key (like genesis): the embedded owner_pub is
-            # what signed it. Valid only against an open matching nomination.
+            # what signed it. Valid only against an open matching nomination, which only a member-carried act
+            # of the current owner opens, so the claim needs no carrier of its own (SECREV A3).
             cp = _canon_pub(p.get("owner_pub", ""))
-            if signer == p.get("owner_id") and cp and cp in nominations:
+            if signer == p.get("owner_id") and cp and cp in nominations and _succession_honoured(_ts, _nid, _seq, _e):
                 current = p["owner_id"]
                 owner_pubs[current] = p.get("owner_pub")
+                gov["admitted"].add(str(_nid))    # the claimed device is the new owner's, a member from the claim (as the genesis device)
+                span_open(_nid, (_ts, str(_nid), _seq))
                 owner_timeline.append((_ts, str(_nid), _seq, current))
                 nominations.clear()           # nominations close on succession
                 gov["owner_term"] += 1
@@ -2527,6 +2678,8 @@ def _governance_state_uncached(entries):
                 try:
                     new_oid = _owner_id_for_pub(base64.b64decode(p["new_owner_pub"]))
                 except Exception:
+                    continue
+                if not _succession_honoured(_ts, _nid, _seq, _e):
                     continue
                 current = new_oid
                 owner_pubs[new_oid] = p["new_owner_pub"]
@@ -2553,6 +2706,7 @@ def _governance_state_uncached(entries):
             # A later admit re-admits a revoked device and clears a prior deny. Purge is a final
             # tombstone — admit does NOT clear it (a purged device cannot be resurrected here).
             gov["admitted"].add(p["device_id"])
+            span_open(p["device_id"], (_ts, str(_nid), _seq))
             gov["first_admit"].setdefault(p["device_id"], _ts)   # #217 rule 2's floor: a re-admit never moves it
             gov["denied"].discard(p["device_id"])
             if p.get("principal"):
@@ -2565,6 +2719,7 @@ def _governance_state_uncached(entries):
                 gov["modules"].pop(p["device_id"], None)
         elif action == "revoke" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
+            span_close(p["device_id"], (_ts, str(_nid), _seq))
             gov["revoked"].add(p["device_id"])        # honoured: ends the pre-genesis exemption (#230)
         elif action == "deny" and p.get("device_id"):
             gov["denied"].add(p["device_id"])          # drop a pending join-request (admit overrides)
@@ -2573,6 +2728,7 @@ def _governance_state_uncached(entries):
                 gov["principals"][p["device_id"]] = p["principal"]
         elif action == "purge" and p.get("device_id"):
             gov["admitted"].discard(p["device_id"])    # final tombstone (see _governed_side / ingest)
+            span_close(p["device_id"], (_ts, str(_nid), _seq))
             gov["purged"].add(p["device_id"])
             # #260: the latest honoured purge decides. A well-formed keep pair makes it a retire (the named prefix
             # still counts); a plain one, or a malformed pair, drops the device's content whole.
@@ -2627,6 +2783,7 @@ def _governance_state_uncached(entries):
     # hive_id stay the term-0 values — they mark when governance BEGAN (grandfathers pre-owner forgets).
     gov["owner_id"], gov["owner_pub"] = current, owner_pubs.get(current)
     gov["owner_timeline"] = sorted(owner_timeline)    # ascending by position for `_owner_at`
+    gov["member_spans"] = {n: [(tuple(a), tuple(b) if b else None) for a, b in sp] for n, sp in gov["member_spans"].items()}
     gov["nominations"] = nominations
     gov["escrows"] = sorted(((e["ts"], e["nid"], e["seq"], e["env"]) for e in escrows
                              if not e["revoked"]), key=lambda x: (x[0], x[1], x[2]))
@@ -2762,7 +2919,7 @@ def _content_evidence(entries, gov=None, links=True):
                 # (#122); an unforget never is. An unsigned/forged owner act is ignored.
                 signer = _verify_governance(p) if "owner_sig" in p else None
                 at = _owner_at(timeline, pos)
-                honored = (signer is not None and signer == at) or (at is None and not unforget and grandfather)
+                honored = _owner_signed_at(signer, pos, gov) or (at is None and not unforget and grandfather)
             else:
                 honored = not unforget   # pre-governance: legacy source-tag forget honored; no owner, no unforget
             owner_acts.setdefault(content, []).append((pos, not unforget, honored))
@@ -4018,7 +4175,7 @@ def _same_as_live(entries, gov, by_ref=None):
             owner = False
             if "owner_sig" in p:
                 oid = _verify_governance(p)
-                owner = oid is not None and oid == _owner_at(timeline, pos)
+                owner = _owner_signed_at(oid, pos, gov)
             if e.get("node_id") == target.get("node_id") or owner:
                 withdrawals.append((pos, tuple(p["retracts_ref"])))
     # Each join stands until a withdrawal that follows it names it: a withdrawal of a `same-as` that was never an
@@ -4118,7 +4275,7 @@ def _forgets_grandfathered(entries, gov):
         signer = _verify_governance(p) if "owner_sig" in p else None
         at = _owner_at(timeline, pos)
         grandfathered = not unforget and at is None
-        honored = (signer is not None and signer == at) or grandfathered
+        honored = _owner_signed_at(signer, pos, gov) or grandfathered
         label = f"forget {e.get('node_id')}:{e.get('seq')}→{ref[0]}:{ref[1]}"
         content = seq_content.get(tuple(ref))
         if content is None:
@@ -8653,6 +8810,35 @@ def _doctor_status():
     except Exception:
         pass
 
+    # 3f1c. Owner succession (SECREV A3): who carried each owner-signed act, and in what order the succession acts
+    #       reached this node. FAIL = a succession act arrived after one that sorts later (a backdated act), or an
+    #       act the pin refuses; warn = owner-signed acts dropped because no member carried them, or no pin yet.
+    try:
+        if gov.get("owner_id"):
+            inv = _succession_inversions(entries)
+            if inv or gov.get("unpinned"):
+                bits = [f"{a} sorts before {b} but reached this node after it" for a, b in inv[:5]]
+                bits += [f"{n}:{q} is refused by the succession pin" for n, q in gov["unpinned"][:5]]
+                checks.append({"name": "succession", "status": "fail",
+                               "detail": "; ".join(bits) + " — a succession act dated into an earlier term. Verify the "
+                                         "chain with the owner out of band, rotate the retired owner key, then re-pin"})
+            elif gov.get("uncarried"):
+                u = gov["uncarried"]
+                checks.append({"name": "succession", "status": "warn",
+                               "detail": f"{len(u)} owner-signed act(s) carried by a device that was not a member at "
+                                         f"that position are not honoured: "
+                                         + ", ".join(f"{n}:{q} ({a})" for n, q, a in u[:5])})
+            elif _load_succession_pin() is None:
+                checks.append({"name": "succession", "status": "warn",
+                               "detail": "owner-succession acts are not pinned on this device; "
+                                         "`hv doctor --fix` pins them (the legacy rule honours any positioned act)"})
+            else:
+                checks.append({"name": "succession", "status": "ok",
+                               "detail": f"{len(gov.get('successions') or [])} succession act(s) pinned; "
+                                         "arrival order matches journal order"})
+    except Exception:
+        pass
+
     # 3f1b. The local quarantine (#205): entries ingest refused for their payload, kept verbatim on this node
     #       only (the newest QUARANTINE_MAX). Advisory.
     try:
@@ -9396,6 +9582,21 @@ def doctor_cmd(args):
         # Pin the genesis when there is exactly one candidate. A plain `hv doctor` stays read-only and
         # only warns; pinning is operator state, so it is `hive-mind doctor --fix` (2.0 PR 2b), and this
         # plane's placeholder only says so. Never guesses: two candidates mean a rival is stored.
+        # Pin the succession acts the same way (SECREV A3), only when arrival order and journal order agree.
+        try:
+            _es = merkle.read_all_entries(JOURNAL_DIR)
+            if _load_succession_pin() is None and _governance_state(_es)["owner_id"]:
+                if dry:
+                    print("\n  would pin this hive's owner-succession acts.")
+                elif _pin_successions(_es) is not None:
+                    print("\n--fix: pinned this hive's owner-succession acts "
+                          f"({SUCCESSION_PIN_PATH.name}, 0600, never synced).")
+                else:
+                    print("\n--fix: NOT pinning succession acts: one reached this node out of journal order "
+                          "(see the succession check).")
+        except Exception as e:
+            print(f"\n--fix: succession-pin heal error: {e}")
+
         try:
             _heal_genesis_pin(merkle.read_all_entries(JOURNAL_DIR), dry)
         except Exception as e:

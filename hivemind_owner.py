@@ -360,6 +360,11 @@ def _append_governance(action_payload):
     entry = append_journal("governance", _sign_governance_payload(action_payload, seed, pub),
                            timestamp=os.environ.get("HIVE_NOW") or None)
     rebuild_db()
+    _es = merkle.read_all_entries(JOURNAL_DIR)
+    _pin_successions(_es)               # SECREV A3: the owner's own succession act is pinned as it is written
+    if (entry["node_id"], entry["seq"], action_payload.get("action")) in _governance_state(_es)["uncarried"]:
+        print(f"WARNING: this device ({entry['node_id']}) is not admitted, so the projection does NOT honour that act. "
+              "Run owner acts from an admitted device (or the genesis device).")
     return entry
 
 
@@ -915,6 +920,7 @@ def owner_cmd(args):
         forked = _load_genesis_pin() is not None
         _write_genesis_pin(_genesis_pin_for(genesis))
         rebuild_db()
+        _pin_successions(merkle.read_all_entries(JOURNAL_DIR))   # a fresh genesis starts a fresh succession pin
         stashed = _stash_owner_key(seed)
         print(f"Owner established: {oid}")
         print(f"  hive_id: {hive_id}")

@@ -319,6 +319,8 @@ def _one_node_hive(hive, *extra):
     adm = TL._gov(hv, {"action": "admit", "device_id": hive.mod["id"], "principal": "op", "module": "hwatch"},
                   oseed, opub, "2026-01-01T00:00:01Z", 2)
     more = [TL._gov(hv, dict(p), oseed, opub, f"2026-01-01T00:00:{2 + i:02d}Z", 3 + i) for i, p in enumerate(extra)]
+    for e in [adm] + more:
+        e["node_id"] = hv.NODE_ID          # `owner init` leaves every owner act on this one device (SECREV A3: the carrier)
     TL._project(hv, hive.home, [gen, adm] + more).close()
 
 

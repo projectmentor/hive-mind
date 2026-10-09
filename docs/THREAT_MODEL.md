@@ -234,15 +234,25 @@ shown because a planted forget would be re-signed too. Once set,
   This only lets such an adversary *skip the waiting period* — controlling a quorum already permits
   a legitimate takeover after the wait — and the forged entries sort anomalously late. Residual,
   documented.
-- **Backdating by a compromised RETIRED owner key.** Capsule write-authorization under the owner
-  policy is point-in-time, judged by the entry's self-asserted timestamp against the owner-succession
-  timeline (there is no positional anchor for a content entry, unlike an election `basis_ts`). An
-  attacker who compromises a *former* owner key can forge a timestamp placing a malicious
-  capsule/tombstone *inside that key's former term*, where the projection still honors it. A
-  current-owner-only rule would avoid this but would also silently drop a prior owner's legitimate
-  seals after every ownership change — so point-in-time is the deliberate choice (it is required for
-  owner-resilience correctness). *Mitigation:* rotate capsules (and the upstream secrets) on an
-  ownership change, the same hygiene already advised when a device is removed. Residual, documented.
+- **Backdating by a compromised RETIRED owner key.** Owner authority is point-in-time: an act is judged by its
+  self-asserted position against the owner-succession timeline (there is no positional anchor for an entry, unlike an
+  election `basis_ts`), because a current-owner-only rule would silently drop a prior owner's legitimate acts after every
+  ownership change. The owner signature proves the KEY signed, not WHEN, so a *former* owner key could stamp an act
+  *inside its own former term*, and the projection would honour it. That covers `transfer` (which re-routes
+  succession), `admit`, `purge`, `set-config`, `freeze-timestamps`, owner forgets, hard links, capsules and cells.
+  *Closed (SECREV A3):* the projection honours an owner-signed act only when the device carrying it is the genesis device
+  or was admitted, at or before that position, by an honoured owner act and not since revoked or purged. A device nobody
+  admitted proves nothing about when the retired key signed. A device that claims a nominated succession is a member from
+  the claim. Succession acts (`transfer`, `claim-succession`) are also **pinned** on each node the way the genesis is
+  (`.succession-pin`, 0600, never synced): once pinned, a succession act is honoured only if it is one of the pinned acts
+  or sorts after the last, so an act dated into an earlier term cannot re-route the chain. `hv doctor` (`succession`)
+  fails when a succession act reached this node after one that sorts later, or when the pin refuses one, and warns when
+  an owner-signed act is dropped for want of a member carrying it. *Residual:* the retired key on a device that IS
+  admitted (a compromised member) can still stamp acts into the old term until the pin is taken, and the pin is
+  first-seen on each node, so a node that first sees the backdated act before the real one pins it (the arrival-order
+  check is what reports that). Owner acts must be made from an admitted device or the genesis device; a new device is
+  admitted from one of those. *Mitigation:* rotate the owner key after any succession and treat the retired key as a
+  live secret; rotate capsules (and the upstream secrets) on an ownership change, as when a device is removed.
 - **Old ciphertext survives revocation/rotation.** A device removed (or an owner retired) still holds
   any capsule version it already synced; `rotate`/`tombstone` cut it off the *new* version only. To
   truly cut access, rotate the upstream token/secret too. Inherent to encrypt-to-device (you cannot

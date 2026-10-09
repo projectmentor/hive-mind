@@ -397,6 +397,8 @@ def _runs(hv, tmp_path, base, entries):
 
 
 def _own_admit(hv, x, owner, at):
+    """An owner-signed (re-)admit of X carried on X's own chain. X is already admitted when it is read (SECREV A3: an
+    owner-signed act counts only from a member, so a device cannot admit itself)."""
     return _entry(hv, x, "governance", {"action": "admit", "device_id": x["id"], "principal": "px"}, at, owner=owner)
 
 
@@ -412,7 +414,7 @@ def _case_pair(hv):
     x = _device(hv)
     fact, admit = _fact(hv, x, "x content", ts(12, 20)), _own_admit(hv, x, owner, ts(12, 10))
     k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] in o[1] and not o[2]   # noqa: E731
-    return base + [_marker(hv, owner, {"ownerdev": 3})], [fact, admit], k
+    return _admitted_x(hv, owner, base, x), [fact, admit], k
 
 
 def _case_reviewers_probe(hv):
@@ -431,7 +433,7 @@ def _case_reviewers_probe(hv):
                  ts(12, 8), owner=owner)
     k = lambda o: ((x["id"], 5) not in o[0] and {(x["id"], i) for i in (6, 7, 8, 10)} <= o[0]      # noqa: E731
                    and {x["id"], y["id"]} <= o[1] and o[2] == {"y content"})
-    return base + [_marker(hv, owner, {"ownerdev": 3})], [own, fact, ann, admit_y, cfg, _fact(hv, y, "y content", ts(12, 30))], k
+    return _admitted_x(hv, owner, base, x), [own, fact, ann, admit_y, cfg, _fact(hv, y, "y content", ts(12, 30))], k
 
 
 def _case_verifiers_probe_1(hv):
@@ -445,7 +447,7 @@ def _case_verifiers_probe_1(hv):
     x["seq"] = 10
     k = lambda o: ((x["id"], 5) not in o[0] and (x["id"], 10) in o[0] and (x["id"], 11) in o[0]      # noqa: E731
                    and x["id"] in o[1] and o[2] == {"x eleven"})
-    return base + [_marker(hv, owner, {"ownerdev": 3})], [own, f5, _fact(hv, x, "x eleven", ts(12, 12))], k
+    return _admitted_x(hv, owner, base, x), [own, f5, _fact(hv, x, "x eleven", ts(12, 12))], k
 
 
 def _case_250_own_revoke(hv):
@@ -500,7 +502,7 @@ def _case_announce_and_join_request(hv):
     x["seq"] = 3
     admit = _own_admit(hv, x, owner, ts(12, 10))
     k = lambda o: (x["id"], 4) in o[0] and not {(x["id"], 1), (x["id"], 2)} & o[0] and x["id"] in o[1]   # noqa: E731
-    return base + [_marker(hv, owner, {"ownerdev": 3})], [ann, jr, admit], k
+    return _admitted_x(hv, owner, base, x), [ann, jr, admit], k
 
 
 def _case_throwaway_owner_act(hv):
@@ -515,6 +517,19 @@ def _case_throwaway_owner_act(hv):
     revoke = _entry(hv, x, "governance", {"action": "revoke", "device_id": x["id"]}, ts(12, 10), owner=owner)
     k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] not in o[1] and not o[2]   # noqa: E731
     return _admitted_x(hv, owner, base, x), [forged, revoke, _fact(hv, x, "x three", ts(12, 25))], k
+
+
+def _case_throwaway_owner_act_from_a_member(hv):
+    """The same forgery while X is still a member when it is read (nothing revokes X): a `set-config` signed with a throwaway
+    key at seq 1 (12:20) must not shield itself against the owner's own `set-config` on X's chain at seq 2 (12:10)."""
+    owner, (d0, d1), base = _hive(hv)
+    x = _device(hv)
+    rogue = _owner_key(hv)
+    forged = _entry(hv, x, "governance", {"action": "set-config", "key": "forget_writers", "value": "owner"},
+                    ts(12, 20), owner=(rogue[0], rogue[1]))
+    real = _entry(hv, x, "governance", {"action": "set-config", "key": "cap_self", "value": 0.4}, ts(12, 10), owner=owner)
+    k = lambda o: (x["id"], 2) in o[0] and (x["id"], 1) not in o[0] and x["id"] in o[1]   # noqa: E731
+    return _admitted_x(hv, owner, base, x), [forged, real], k
 
 
 def _case_throwaway_owner_admit_of_itself(hv):
@@ -565,7 +580,7 @@ def _case_never_admitted_then_revoked(hv):
     fact = _fact(hv, z, "bootstrap", "2025-01-01T00:00:00.000+00:00")
     revoke = _entry(hv, d0, "governance", {"action": "revoke", "device_id": z["id"]}, ts(12, 10), owner=owner)
     k = lambda o: (z["id"], 1) not in o[0] and z["id"] not in o[1] and not o[2]   # noqa: E731
-    return [], [fact, base[0], revoke], k
+    return [], [fact, base[0], base[1], revoke], k
 
 
 def _case_backdated_after_revoke(hv):
@@ -583,7 +598,7 @@ def _case_backdated_after_revoke(hv):
 
 
 _CASES = [_case_backdated_after_revoke, _case_pair, _case_reviewers_probe, _case_verifiers_probe_1, _case_250_own_revoke, _case_250_own_revoke_three,
-          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act,
+          _case_250_admit_of_y, _case_250_admit_of_y_with_content, _case_announce_and_join_request, _case_throwaway_owner_act, _case_throwaway_owner_act_from_a_member,
           _case_throwaway_owner_admit_of_itself, _case_unverified_owner_sig_key, _case_transfer_beats_a_device_fact, _case_never_admitted_then_revoked]
 
 
@@ -616,7 +631,7 @@ def _bootstrap_fact_journal(hv, z, extra):
     owner declared genesis. Z was never admitted."""
     owner, (d0, d1), base = _hive(hv)
     fact = _fact(hv, z, "bootstrap", "2025-01-01T00:00:00.000+00:00")
-    _journal(hv, [fact] + base + extra(owner))
+    _journal(hv, [fact] + base + extra(owner, d0))
     gov = hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))
     j = hv.merkle.read_all_entries(hv.JOURNAL_DIR)
     return z["id"] in {e["node_id"] for e in hv._admitted_content(hv._ts_unskipped(j, gov), gov)}, owner
@@ -625,11 +640,11 @@ def _bootstrap_fact_journal(hv, z, extra):
 def test_a_bootstrap_writer_stays_until_the_owner_revokes_it(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     z = _device(hv)
-    assert _bootstrap_fact_journal(hv, z, lambda owner: [])[0]
-    revoke = lambda owner: [_entry(hv, _device(hv), "governance", {"action": "revoke", "device_id": z["id"]},   # noqa: E731
+    assert _bootstrap_fact_journal(hv, z, lambda owner, d0: [])[0]
+    revoke = lambda owner, d0: [_entry(hv, d0, "governance", {"action": "revoke", "device_id": z["id"]},   # noqa: E731
                                    ts(12, 10), owner=owner)]
     assert not _bootstrap_fact_journal(hv, z, revoke)[0]       # revoked, never admitted: the exemption ends
-    purge = lambda owner: [_entry(hv, _device(hv), "governance", {"action": "purge", "device_id": z["id"]},     # noqa: E731
+    purge = lambda owner, d0: [_entry(hv, d0, "governance", {"action": "purge", "device_id": z["id"]},     # noqa: E731
                                   ts(12, 10), owner=owner)]
     assert not _bootstrap_fact_journal(hv, z, purge)[0]
 

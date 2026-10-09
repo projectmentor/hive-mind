@@ -284,6 +284,14 @@ shown because a planted forget would be re-signed too. Once set,
   so it cannot tell a sealed export from a plaintext one. A `--plaintext --out` under another name, or a
   copy outside those directories, is invisible to it. Operator rule: delete exports after moving them
   off-device.
+- **The release key is a repository-level secret.** `sign.yml` runs the test suite in a job with no secrets
+  and signs in a separate job (`needs: test`, `environment: signing`, deployable from `main` only), so a pull
+  request's code never runs with the key in scope, and `tests/test_workflow_secrets.py` fails if a job that runs
+  pytest references `secrets.`. `HIVE_SIGNING_KEY` itself stays a repository secret (its seed cannot be
+  recovered to move it into the Environment), so a workflow pushed to another branch by someone with write
+  access could still reference it. Only an admitted party (a repository writer) can do that; accepted for
+  3.x. `SIGN_APP_ID` and `SIGN_APP_KEY` are read from the `signing` Environment once added there, and from
+  the repository until then. Operator rule: keep write access to the repository to the people who may sign.
 
 ## Cryptographic posture
 

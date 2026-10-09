@@ -29,6 +29,12 @@ on:
       - '!verify.json'
       - '!verify.json.sig'
 
+# Two jobs (hive-mind-private #56). `test` runs the whole suite, which is repo code a PR author can change,
+# so it holds NO secrets: none are referenced in it (tests/test_workflow_secrets.py enforces that for every
+# job that runs pytest). `sign` needs `test`, runs in the `signing` Environment (deployable from `main` only),
+# and runs nothing from the repo except gen_verify.py, sign_release.py (its own suite gate is skipped,
+# because `test` just passed on the same commit) and the `hv verify` self-check.
+#
 # The default GITHUB_TOKEN only reads. The push to main uses a short-lived token for the
 # `hivemind-release-signer` GitHub App (below), the one identity a ruleset on main can list as a bypass (#131).
 permissions:
@@ -39,8 +45,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  sign:
+  test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: '3.12'        # match ci.yml
+
+      - name: Install test deps
+        run: pip install -r requirements.txt pytest pytest-xdist==3.8.0
+
+      # The suite runs against the regenerated manifest, as it did when signing ran in the same job
+      # (tests/test_update_script.py relies on a current verify.json). This only writes the working copy.
+      - name: Regenerate manifest
+        run: python3 scripts/common/gen_verify.py
+
+      - name: Run the full suite
+        run: python3 -m pytest -q -n auto
+
+  sign:
+    needs: test
+    runs-on: ubuntu-latest
+    # SIGN_APP_ID and SIGN_APP_KEY resolve from this Environment once they are added to it, and from the
+    # repository secrets until then. HIVE_SIGNING_KEY stays a repository secret (its seed cannot be recovered
+    # to move it). The Environment deploys from `main` only.
+    environment: signing
+    permissions:
+      contents: read
     steps:
       # #131: push as the hivemind-release-signer GitHub App, not as the default GITHUB_TOKEN. The built-in
       # Actions app cannot be a ruleset bypass actor (GitHub answers 422), so once main requires status
@@ -59,10 +95,7 @@ jobs:
           token: ${{ steps.app-token.outputs.token }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
-          python-version: '3.12'        # match ci.yml — the sign gate runs the same suite
-
-      - name: Install test deps
-        run: pip install -r requirements.txt pytest pytest-xdist==3.8.0   # sign_release.py's gate: the full suite, `-n auto`
+          python-version: '3.12'        # gen_verify.py, sign_release.py and `hv verify` use the standard library only
 
       - name: Regenerate manifest
         run: python3 scripts/common/gen_verify.py
@@ -70,6 +103,7 @@ jobs:
       - name: Sign and self-check
         env:
           HIVE_SIGNING_KEY: ${{ secrets.HIVE_SIGNING_KEY }}
+          HIVE_SIGN_SKIP_TESTS: '1'     # the `test` job above ran the full suite on this commit, with no secrets
         run: |
           if [ -z "$HIVE_SIGNING_KEY" ]; then
             echo "HIVE_SIGNING_KEY not set yet — committing unsigned manifest only."

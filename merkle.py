@@ -110,6 +110,25 @@ def read_all_entries(journal_dir):
     return entries
 
 
+def max_raw_seq(journal_dir, node_id):
+    """The highest integer seq any parseable journal line holds for `node_id`, INCLUDING a line the reader skips
+    for a failed envelope (it still occupies its key on a peer that accepts it). 0 when there is none."""
+    journal_dir = Path(journal_dir)
+    top = 0
+    if not journal_dir.exists():
+        return top
+    for f in sorted(journal_dir.glob("*.jsonl")):
+        for line in f.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if (isinstance(e, dict) and e.get("node_id") == node_id and isinstance(e.get("seq"), int)
+                    and not isinstance(e["seq"], bool)):
+                top = max(top, e["seq"])
+    return top
+
+
 def corrupt_lines(journal_dir):
     """Count (and sample the files of) non-empty journal lines that read_all_entries SILENTLY skips —
     unparseable JSON or entries whose envelope is malformed (e.g. a truncated/garbled .jsonl from a crash mid-

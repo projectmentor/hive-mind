@@ -1333,6 +1333,7 @@ def append_journal(entry_type, payload, timestamp=None):
     # processes that each read the tip before either appended would mint the same (node_id, seq).
     with _journal_mint_lock():
         seq, prev_hash, prev_ts = _next_seq_and_prev(NODE_ID, with_timestamp=True)
+        seq = max(seq, merkle.max_raw_seq(JOURNAL_DIR, NODE_ID) + 1)      # never reuse the seq of a line the reader skips
         if not explicit:
             timestamp = _clamp_timestamp(timestamp, prev_ts)
         entry = {

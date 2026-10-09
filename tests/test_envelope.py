@@ -251,6 +251,21 @@ def test_a_local_write_that_fails_the_envelope_is_refused_and_its_seq_not_reused
     assert [e["seq"] for e in merkle.read_all_entries(tmp_path / "journal")] == [1, 2]
 
 
+def test_a_local_write_does_not_reuse_the_seq_of_a_line_on_disk_the_reader_skips(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    first = hv.append_journal("fact", {"content": "a"})
+    skipped = {"node_id": first["node_id"], "seq": 2, "type": "cell", "timestamp": first["timestamp"],
+               "payload": {"name": "c", "version": "2"}, "prev_hash": "sha256:x"}
+    assert merkle.envelope_problem(skipped) is not None
+    with open(next((tmp_path / "journal").glob("*.jsonl")), "a") as fh:      # straight onto the journal, not through append_journal
+        fh.write(json.dumps(skipped) + "\n")
+    second = hv.append_journal("fact", {"content": "b"})
+    assert second["seq"] == 3
+    keys = [(e["node_id"], e["seq"]) for e in _on_disk(tmp_path)]
+    assert len(keys) == len(set(keys))
+
+
 def test_wire_add_names_a_bad_name_or_version(tmp_path, monkeypatch, capsys):
     hv = _loadhv(tmp_path, monkeypatch)
     _jd(tmp_path)

@@ -213,7 +213,10 @@ shown because a planted forget would be re-signed too. Once set,
   a legacy identity (no device key) can never pass `enforce`, and a peer stored under a host name rather
   than its advertised IP is `addr-unproven`, so `enforce` only pulls from it. The merkle-root comparison
   that ends a round for a peer already in sync stays unsigned: an impostor that echoes this node's root
-  can stall its sync with that peer (a denial of service, not a disclosure).
+  can stall its sync with that peer (a denial of service, not a disclosure). Under `enforce` the pull is
+  unsigned until the hello is `verified`: an `unsigned`, `unadmitted` or `addr-unproven` peer is sent no
+  `Hive-Auth-*` headers (a legacy peer that does not check signatures still answers; an enforce-mode peer that
+  has not proved its address is not pulled until it has, and `hv doctor --fix` repoints a proved address).
 - **Update rollback protection needs one update to start, and trusts the signer's count.** `hive-mind update`
   refuses a fetched commit that is not a descendant of the installed one unless `--allow-rewind` is passed, and
   refuses a signed manifest whose `sequence` (the integer `git rev-list --count HEAD` of the commit sign.yml
@@ -229,7 +232,10 @@ shown because a planted forget would be re-signed too. Once set,
   query, body hash, timestamp and nonce, but not the node it is sent to, and each node's nonce cache is its
   own. An admitted, unrevoked peer that this node signs reads to can replay them to a third node inside the
   freshness window (`HIVE_SYNC_AUTH_WINDOW`, default 300 s; the nonce is remembered for twice that) and be
-  served as this node, for as long as the third node still admits this one. Closed node-locally, with no
+  served as this node, for as long as the third node still admits this one. Under outbound `enforce` the
+  address is a verified one: a pull is unsigned until the hello is `verified`, and the dashboard's signed
+  telemetry read (`GET /api/telemetry`, redirects off) is not sent to an address whose `/hive/info` is not
+  `verified` for that device. Closed node-locally, with no
   format change: a device the owner revokes or purges is dropped from `.peers.json` when the revoke or purge
   projects, and `hv sync now`, the sync loop and the doctor probes send it nothing. An entry is matched by
   its device `id` (`k1:…`); an entry labelled otherwise (`group admit --principal` seeds the principal) is

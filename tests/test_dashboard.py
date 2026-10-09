@@ -286,6 +286,15 @@ def test_a_browser_labelled_cross_site_post_is_refused_even_with_the_right_token
         assert _raw(daemon, "POST", "/sync/ingest", {"Hive-CSRF": _tok(hive), "Sec-Fetch-Site": site}, body)[0] == 200, site
 
 
+def test_a_loopback_post_with_the_wrong_token_is_refused_with_no_browser_labels(daemon, hive):
+    # no Origin / Sec-Fetch-Site, so only the token value stands between this and a 200
+    body = json.dumps({"entries": []}).encode()
+    right = _tok(hive)
+    for bad in ("wrong", "x" * len(right), right[:-1], right + "x"):
+        assert _raw(daemon, "POST", "/sync/ingest", {"Hive-CSRF": bad}, body)[0] == 403, bad
+    assert _raw(daemon, "POST", "/sync/ingest", {"Hive-CSRF": right}, body)[0] == 200
+
+
 def test_a_loopback_post_without_the_token_needs_a_valid_signed_envelope(daemon):
     import sync_common
     seed = os.urandom(32)          # the test hive has no owner, so any well-formed signature is accepted

@@ -1415,6 +1415,8 @@ Advanced, rarely needed:
 |---|---|---|
 | `HIVE_SYNC_AUTH_WINDOW` | `300` | Seconds of clock skew tolerated on a signed sync request |
 | `HIVE_SYNC_PULL_PAGE` / `HIVE_SYNC_PUSH_PAGE` | `25` | Entries per sync request when pulling / pushing |
+| `HIVE_SYNC_ROUND_DEADLINE` | `240` | Seconds one round with one peer may take in total, connect to last byte; past it the peer is reported and the round moves on |
+| `HIVE_SYNC_MAX_RESPONSE` | `33554432` | Bytes of one peer reply the client will accept (32 MiB); a larger reply is refused |
 | `HIVE_SYNC_MAXSEG` | `1000` | TCP segment-size clamp for sync connections, for tailnet paths with MTU below 1280 (`0` disables) |
 | `HIVE_OWNER_PASSPHRASE` | — | Supplies the passphrase that encrypts an owner-key export or escrow, non-interactively (automation and tests) |
 | `HIVE_OWNER_KEY_PASSPHRASE` | — | Unlocks the owner key sealed at rest (2.0), non-interactively; empty cancels. Anything that can read this variable can owner-sign, so set it only for the command that needs it |

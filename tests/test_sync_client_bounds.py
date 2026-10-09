@@ -75,11 +75,39 @@ def test_drip_is_cut_at_the_round_deadline(serve, monkeypatch):
     sc._round.deadline = time.monotonic() + 1.5
     t0 = time.monotonic()
     try:
-        with pytest.raises(requests.RequestException):
+        with pytest.raises(sc.SyncBoundError, match="deadline"):   # not a JSON error from a short body
             sc._get(s.url, "/sync/hello")
     finally:
         sc._round.deadline = None
     assert time.monotonic() - t0 < 5
+
+
+def test_slow_body_chunks_hit_the_deadline_check_without_the_timer(serve, monkeypatch):
+    """The timer is the cut; the per-chunk check is the backstop. Pin the backstop on its own."""
+    class _NoTimer:
+        def __init__(self, *a, **k): pass
+        daemon = True
+        def start(self): pass
+        def cancel(self): pass
+    monkeypatch.setattr(sc.threading, "Timer", _NoTimer)
+
+    def slow_chunks(h):
+        h.send_response(200)
+        h.end_headers()
+        try:
+            for _ in range(20):
+                h.wfile.write(b"x" * sc._STREAM_CHUNK)
+                h.wfile.flush()
+                time.sleep(0.3)
+        except OSError:
+            pass
+    s = serve(slow_chunks)
+    sc._round.deadline = time.monotonic() + 1.0
+    try:
+        with pytest.raises(sc.SyncBoundError, match="deadline"):
+            sc._get(s.url, "/sync/hello")
+    finally:
+        sc._round.deadline = None
 
 
 def test_response_over_the_cap_is_refused(serve, monkeypatch):
@@ -155,3 +183,98 @@ def test_a_refused_peer_does_not_stop_the_round_for_others(serve, monkeypatch, c
     out = capsys.readouterr().out
     assert out.count("redirect refused") == 2
     assert sc._round.deadline is None
+
+
+def _drip_headers(h):
+    """Never finishes its headers: a header line every 100 ms, each well inside any idle timeout."""
+    try:
+        h.wfile.write(b"HTTP/1.1 200 OK\r\n")
+        for _ in range(600):
+            h.wfile.flush()
+            time.sleep(0.1)
+            h.wfile.write(b"X-Pad: 1\r\n")
+    except OSError:
+        pass
+
+
+def _drip_status_line(h):
+    try:
+        for byte in b"HTTP/1.1 200 OK" + b" " * 600:
+            h.wfile.write(bytes([byte]))
+            h.wfile.flush()
+            time.sleep(0.1)
+    except OSError:
+        pass
+
+
+@pytest.mark.parametrize("drip", [_drip_headers, _drip_status_line])
+@pytest.mark.parametrize("verb", ["get", "post"])
+def test_drip_before_the_headers_is_cut_at_the_round_deadline(serve, monkeypatch, drip, verb):
+    s = serve(drip)
+    monkeypatch.setattr(sc, "ROUND_DEADLINE", 1.5)
+    sc._round.deadline = time.monotonic() + 1.5
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(sc.SyncBoundError, match="deadline"):
+            if verb == "get":
+                sc._get(s.url, "/sync/hello")
+            else:
+                sc._post(s.url, "/sync/ingest", {"entries": []})
+    finally:
+        sc._round.deadline = None
+    assert time.monotonic() - t0 < 4
+
+
+def test_a_round_of_slow_requests_is_cut_at_the_total_deadline(serve, monkeypatch):
+    """Each request is well inside its own idle timeout; together they pass the round deadline."""
+    def slow(h):
+        time.sleep(0.4)
+        body = b"{}"
+        h.send_response(200)
+        h.send_header("Content-Length", str(len(body)))
+        h.end_headers()
+        h.wfile.write(body)
+    s = serve(slow)
+    calls = []
+
+    def many_requests(peer, mode=None):
+        for _ in range(12):
+            sc._get(s.url, "/sync/hello")
+            calls.append(1)
+    monkeypatch.setattr(sc, "_sync_round", many_requests)
+    monkeypatch.setattr(sc, "ROUND_DEADLINE", 1.6)
+    t0 = time.monotonic()
+    with pytest.raises(sc.SyncBoundError, match="deadline"):
+        sc._sync_with_peer({"url": s.url})
+    assert time.monotonic() - t0 < 3.5
+    assert 1 <= len(calls) < 12
+    assert sc._round.deadline is None
+
+
+def test_watchdog_state_is_clean_after_a_request(serve):
+    s = serve(lambda h: (h.send_response(200), h.send_header("Content-Length", "2"), h.end_headers(), h.wfile.write(b"{}")))
+    assert sc._get(s.url, "/sync/hello") == {}
+    assert getattr(sc._round, "cell", None) is None
+    assert sc._get(s.url, "/sync/hello") == {}      # a pooled connection is reused and tracked again
+
+
+def test_a_body_cut_cleanly_at_the_deadline_is_refused_not_parsed_short(serve, monkeypatch):
+    """A shutdown can end a read as a clean EOF; a short body must not be returned as complete."""
+    cells = []
+    real_cell = sc._Cell
+    monkeypatch.setattr(sc, "_Cell", lambda: cells.append(real_cell()) or cells[-1])
+    real_iter = requests.Response.iter_content
+
+    def cut_after_last_chunk(self, *a, **k):
+        yield from real_iter(self, *a, **k)
+        cells[-1].fire()
+    monkeypatch.setattr(requests.Response, "iter_content", cut_after_last_chunk)
+
+    def ok(h):
+        h.send_response(200)
+        h.send_header("Content-Length", "2")
+        h.end_headers()
+        h.wfile.write(b"{}")
+    s = serve(ok)
+    with pytest.raises(sc.SyncBoundError, match="deadline"):
+        sc._get(s.url, "/sync/hello")

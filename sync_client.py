@@ -24,6 +24,9 @@ from pathlib import Path
 from urllib.parse import urlencode, urlparse
 
 import requests
+import urllib3
+import urllib3.connection
+import urllib3.connectionpool
 from requests.adapters import HTTPAdapter
 
 import merkle
@@ -69,6 +72,70 @@ def _remaining():
     return left
 
 
+class _Cell:
+    """The sockets one _bounded call opens or reuses, so the deadline timer can cut the request
+    while it is still connecting, uploading or waiting on its headers (there is no response yet)."""
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.socks, self.r, self.fired = [], None, False
+
+    def add(self, sock):
+        with self.lock:
+            if not self.fired:
+                self.socks.append(sock)
+                return
+        _shutdown(sock)
+
+    def fire(self):
+        with self.lock:
+            self.fired = True
+            socks, r = list(self.socks), self.r
+        for sock in socks:
+            _shutdown(sock)
+        if r is not None:
+            _abort(r)
+
+
+def _shutdown(sock):
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except Exception:
+        pass
+
+
+def _track(sock):
+    cell = getattr(_round, "cell", None)
+    if cell is not None and sock is not None:
+        cell.add(sock)
+
+
+class _TrackedConnMixin:
+    def _new_conn(self):                 # before any TLS handshake, so a handshake drip is cut too
+        sock = super()._new_conn()
+        _track(sock)
+        return sock
+
+    def request(self, *a, **kw):         # a pooled connection reused for this call
+        _track(getattr(self, "sock", None))
+        return super().request(*a, **kw)
+
+
+class _TrackedHTTPConnection(_TrackedConnMixin, urllib3.connection.HTTPConnection):
+    pass
+
+
+class _TrackedHTTPSConnection(_TrackedConnMixin, urllib3.connection.HTTPSConnection):
+    pass
+
+
+class _TrackedHTTPPool(urllib3.connectionpool.HTTPConnectionPool):
+    ConnectionCls = _TrackedHTTPConnection
+
+
+class _TrackedHTTPSPool(urllib3.connectionpool.HTTPSConnectionPool):
+    ConnectionCls = _TrackedHTTPSConnection
+
+
 def _abort(r):
     """Cut a response whose body is still arriving: shut its socket down so a blocked read returns
     (iter_content blocks until a whole chunk arrives, so a one-byte drip never reaches a size check)."""
@@ -86,13 +153,29 @@ def _abort(r):
 
 def _bounded(method, url, op_timeout, **kw):
     """One request under the round deadline and byte cap, never following a redirect. Returns the
-    response with its (capped) body already read."""
+    response with its (capped) body already read. The deadline timer is armed before the request is
+    sent, so connect, upload and the status line and headers are inside it, not only the body."""
     t = min(op_timeout, _remaining())
-    r = _sess().request(method, url, timeout=(t, t), allow_redirects=False, stream=True, **kw)
-    watchdog = threading.Timer(_remaining(), _abort, (r,))
+    cell = _Cell()
+    watchdog = threading.Timer(_remaining(), cell.fire)
     watchdog.daemon = True
+    _round.cell = cell
     watchdog.start()
+    r = None
     try:
+        try:
+            r = _sess().request(method, url, timeout=(t, t), allow_redirects=False, stream=True, **kw)
+        except SyncBoundError:
+            raise
+        except Exception as e:           # a request the watchdog cut is a deadline refusal
+            if cell.fired:
+                raise SyncBoundError("round deadline exceeded") from e
+            raise
+        finally:
+            _round.cell = None
+        cell.r = r
+        if cell.fired:
+            raise SyncBoundError("round deadline exceeded")
         if 300 <= r.status_code < 400:
             raise SyncBoundError(f"redirect refused (HTTP {r.status_code})")
         try:
@@ -112,17 +195,19 @@ def _bounded(method, url, op_timeout, **kw):
         except SyncBoundError:
             raise
         except Exception as e:           # a read the watchdog cut is a deadline refusal, not a short body
-            if not watchdog.is_alive():
+            if cell.fired:
                 raise SyncBoundError("round deadline exceeded") from e
             raise
-        if not watchdog.is_alive():      # cut at the deadline: the body may be short
+        if cell.fired:                   # cut at the deadline: the body may be short
             raise SyncBoundError("round deadline exceeded")
         r._content = b"".join(body)
         r._content_consumed = True
         return r
     finally:
         watchdog.cancel()
-        r.close()
+        _round.cell = None
+        if r is not None:
+            r.close()
 
 
 class _ClampMSSAdapter(HTTPAdapter):
@@ -138,7 +223,8 @@ class _ClampMSSAdapter(HTTPAdapter):
         if sync_common.MAXSEG_OK:
             opts.append((socket.IPPROTO_TCP, socket.TCP_MAXSEG, sync_common.SYNC_MAX_SEG))
         kwargs["socket_options"] = opts
-        return super().init_poolmanager(*args, **kwargs)
+        super().init_poolmanager(*args, **kwargs)
+        self.poolmanager.pool_classes_by_scheme = {"http": _TrackedHTTPPool, "https": _TrackedHTTPSPool}
 
 
 _session = None

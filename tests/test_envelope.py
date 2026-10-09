@@ -367,3 +367,71 @@ def test_wire_add_names_a_bad_name_or_version(tmp_path, monkeypatch, capsys):
         hv.wire_cmd(type("A", (), {"add": str(f)})())
     assert _on_disk(tmp_path) == []
     assert capsys.readouterr().out.count("must be") == 2
+
+
+# ── the owner signature does not cover the entry type: a body must fit its own type (SECREV B1) ───────────────
+
+def _bodies(hv):
+    """One genuine body of each owner-authored content type, carrying an owner signature as `hv-mind` attaches it."""
+    cap = hv._capsule_build("tok", "credential", b"s3cret", {}, 1, "h1", "k1:x")
+    tomb = {"capsule_id": "abc", "name": "tok", "kind": "tombstone", "version": 2, "alg": "tombstone-v1", "wraps": []}
+    cell = {"name": "wf", "kind": "tool", "version": 1, "spec": {"cmd": "echo hi"}}
+    agent = {"name": "ag", "kind": "agent", "version": 1, "spec": {}}
+    comb = {"name": "set", "cells": ["wf", "ag"], "version": 1}
+    return {"capsule": [cap, tomb], "cell": [cell, agent], "comb": [comb]}
+
+
+def _owner_signed(body):
+    return dict(body, owner_sig="AAAA", owner_pub="BBBB")
+
+
+def test_genuine_capsule_cell_and_comb_pass(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    for typ, bodies in _bodies(hv).items():
+        for n, body in enumerate(bodies, 1):
+            assert merkle.envelope_problem(_signed(hv, d, n, typ, _owner_signed(body))) is None, (typ, body)
+    _jd(tmp_path)
+    run = [_signed(hv, d, n, typ, _owner_signed(b)) for n, (typ, b) in
+           enumerate([(t, b) for t, bs in _bodies(hv).items() for b in bs], 1)]
+    assert hv.append_foreign_entries(run)[0] == len(run)
+
+
+@pytest.mark.parametrize("src,dst", [("capsule", "cell"), ("cell", "capsule"), ("capsule", "comb"), ("comb", "capsule"),
+                                     ("cell", "comb"), ("comb", "cell")])
+def test_an_owner_signed_body_relabelled_to_another_type_is_refused(tmp_path, monkeypatch, src, dst):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    for body in _bodies(hv)[src]:
+        bad = _signed(hv, d, 1, dst, _owner_signed(body))
+        assert merkle.envelope_problem(bad) is not None
+        _assert_refused_and_journal_reads(hv, tmp_path, bad)
+        for f in (Path(tmp_path) / "journal").glob("*.jsonl"):
+            f.unlink()
+
+
+def test_a_relabelled_body_already_on_disk_is_skipped_and_counted(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    bodies = _bodies(hv)
+    good = [_fact(hv, d, "one", TS % 1)]
+    poison = [_signed(hv, d, 50, "cell", _owner_signed(bodies["capsule"][0])),
+              _signed(hv, d, 51, "capsule", _owner_signed(bodies["cell"][0])),
+              _signed(hv, d, 52, "capsule", _owner_signed(bodies["comb"][0])),
+              _signed(hv, d, 53, "comb", _owner_signed(bodies["cell"][0]))]
+    _project(hv, tmp_path, good + poison).close()
+    held = merkle.read_all_entries(hv.JOURNAL_DIR)
+    assert [e["seq"] for e in held] == [1]
+    assert merkle.corrupt_lines(hv.JOURNAL_DIR)[0] == len(poison)
+    assert hv._cell_state(held) == {} and hv._capsule_state(held) == {} and hv._comb_state(held) == {}
+
+
+def test_wire_add_names_a_cell_without_a_kind_and_a_comb_without_cells(tmp_path, monkeypatch, capsys):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    for body in ({"type": "cell", "name": "c"}, {"type": "comb", "name": "k", "cells": "c"}):
+        f = tmp_path / "c.json"
+        f.write_text(json.dumps(body))
+        hv.wire_cmd(type("A", (), {"add": str(f)})())
+    assert _on_disk(tmp_path) == []
+    assert capsys.readouterr().out.count("Not a valid") == 2

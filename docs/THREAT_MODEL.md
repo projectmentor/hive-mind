@@ -310,11 +310,15 @@ it, so the sources are gated:
   `author_association`. Both unset admits nobody. On this fleet they are fleet keys, set by the owner with a
   signed `hive-mind config set`: `authors` is the owner's login and `author_classes` is
   `owner,member,collaborator`. The shipped dev workflow's addressed rules also require one of those three
-  classes. Text from anyone else is dropped before it is classified, so it never reaches a seat or wakes one.
+  classes. An event is admitted when its author's login is in `authors` or its association maps to a class in
+  `author_classes`. Text from anyone whose login is not listed and whose class is not listed is dropped before it
+  is classified, so it never reaches a seat or wakes one.
   The gate therefore admits the owner's account plus anyone the owner makes a collaborator on a watched repo (or
   an org member, if the repos move to an org). Today the only collaborator on all three repos is the owner.
 - **Hive events are not author-gated.** Any admitted device's entry reaches the hive channel.
-- **Fork heads are never checked out.** A seat does not fetch or run a PR head from a fork.
+- **Fork heads are not followed.** When `head.repo` is not the base repository, hwatch takes no later head move
+  and reads none of that head's checks. The first opened event from an admitted author is still yielded and
+  carries that head sha. hwatch itself checks no head out.
 - **Untrusted bodies are framed as data.** Whatever text a seat does read from GitHub or the hive reaches it
   marked as data to read, not as instructions.
 

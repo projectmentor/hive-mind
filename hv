@@ -8235,8 +8235,10 @@ def _fix_key_perms():
 
 
 def _owner_copies():
-    """Paths (never contents) of plaintext owner-key copies: `hive-owner-*.key` exports in HIVE_HOME, the
-    current directory, the home directory and the identity stash, plus the stash's plaintext `.owner-key`."""
+    """Paths (never contents) of owner-key copies: `hive-owner-*.key` exports in HIVE_HOME, the current
+    directory, the home directory and the identity stash, plus the stash's plaintext `.owner-key`. The
+    exports are found by name and never opened: the default export is sealed, `--plaintext` is not, and both
+    write the same basename."""
     stash = Path(os.environ.get("HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity"))
     found = []
     for d in (HIVE_HOME, Path.cwd(), Path.home(), stash):
@@ -8469,9 +8471,17 @@ def _doctor_status():
     try:
         found = _owner_copies()
         if found:
+            plain = [f for f in found if Path(f).name == ".owner-key"]
+            named = [f for f in found if f not in plain]
+            parts = []
+            if named:
+                parts.append(f"{len(named)} owner-key export file(s) found by name in HIVE_HOME, the current "
+                             "directory, the home directory or the identity stash, not opened, so each may be "
+                             "sealed or plaintext: " + ", ".join(named))
+            if plain:
+                parts.append("plaintext identity-stash owner key: " + ", ".join(plain))
             checks.append({"name": "owner-copies", "status": "warn", "detail": (
-                f"{len(found)} plaintext owner-key copy/copies outside the sealed key: "
-                + ", ".join(found) + ". Move off-device what you need, then delete them yourself; "
+                "; ".join(parts) + ". Move off-device what you need, then delete the rest yourself; "
                 "`hv doctor` never deletes or reads them")})
         else:
             checks.append({"name": "owner-copies", "status": "ok", "detail": "no stray owner-key copies found"})

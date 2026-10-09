@@ -257,6 +257,9 @@ needs attention. It looks at:
 - **keyperm** — your private key files are `0600` (not group/other-readable)
 - **journal** — your device's history is intact and unbroken from the start
 - **database** — the local lookup index is in step with that history
+- **owner-copies** — owner-key files found by name (`hive-owner-*.key`, and the stash's
+  `.owner-key`) in `$HIVE_HOME`, the current directory, the home directory and the identity stash. It
+  never opens or deletes them, so an export it lists may be sealed or plaintext
 - **owner** — whether this device can sign governance (holds the owner key), plus any
   open succession nominations or owner-key sprawl
 - **device-keys** — whether every admitted device has a usable capsule key, and whether any
@@ -779,7 +782,7 @@ change), and `hv doctor` fails until you do. `hv` never opens the key in either 
 **The owner key is a single point of failure — back it up.** `hive-mind owner init`
 auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key.sealed` (survives uninstall; sealed since 2.0),
 and `hive-mind owner export` writes a portable copy you can store off-device (use
-`--passphrase` to encrypt it; an exported key is total hive authority, so treat it
+`$HIVE_OWNER_PASSPHRASE` or the prompt for its passphrase; the export is sealed unless you pass `--plaintext`; an exported key is total hive authority, so treat it
 like an SSH private key). If the owner device dies, `hive-mind owner import` installs the
 key on a new device and governance resumes under the **same** owner identity — no
 journal change. `import` refuses a key that doesn't match the journal's established

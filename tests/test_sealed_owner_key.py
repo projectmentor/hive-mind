@@ -430,6 +430,30 @@ def test_doctor_owner_copies_finds_each_planted_copy(tmp_path):
     assert all(p.exists() for p in planted)                       # nothing deleted
 
 
+def test_doctor_owner_copies_does_not_call_a_sealed_default_export_plaintext(tmp_path):
+    home, seed = _plaintext_node(tmp_path)
+    cwd = tmp_path / "cwd"
+    fake_home = tmp_path / "fakehome"
+    cwd.mkdir()
+    fake_home.mkdir()
+    (tmp_path / "stash" / ".owner-key").unlink()
+    r = subprocess.run([sys.executable, str(PROJECT / "hivemind_ctl.py"), "owner", "export"],
+                       env=_env(home, HOME=str(fake_home), HIVE_OWNER_PASSPHRASE="export-pass"), cwd=cwd,
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=POSIX)
+    assert r.returncode == 0, r.stderr
+    exported = list(cwd.glob("hive-owner-*.key")) + list(Path(home).glob("hive-owner-*.key")) \
+        + list(fake_home.glob("hive-owner-*.key"))
+    assert exported and "seed" not in json.loads(exported[0].read_text())
+    d = subprocess.run([sys.executable, str(PROJECT / "hv"), "doctor", "--format", "json"],
+                       env=_env(home, HOME=str(fake_home)), cwd=cwd, capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, start_new_session=POSIX)
+    check = next(c for c in json.loads(d.stdout)["checks"] if c["name"] == "owner-copies")
+    assert check["status"] == "warn" and str(exported[0]) in check["detail"]
+    assert "plaintext owner-key copy" not in check["detail"]
+    assert "sealed or plaintext" in check["detail"] and "not opened" in check["detail"]
+    assert seed not in check["detail"]
+
+
 def test_doctor_owner_copies_ok_when_clean(tmp_path):
     home, _ = _plaintext_node(tmp_path)
     cwd = tmp_path / "cwd"

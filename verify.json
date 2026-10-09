@@ -1,5 +1,5 @@
 {
-  "digest": "1381d0ebc6ca665d0640fd596a8b47c9ed0a512a4db5288a0faa7fb8870c495a",
+  "digest": "59e0ad9def6f54436e2423cc2905b6f88be89c13846eb1f9e46420ac980307c7",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -18,6 +18,7 @@
     "advisories.json": "e1f7246819257c9cdcb8118aaee972ed89f22fb056d67230320d5ea7fdce6703",
     "cells/example-tool.json": "cdf871f60fb23a894a2b8a60849c4c20c05c7396c0e449302f04c3a155ed4369",
     "chacha20poly1305.py": "6c3bb50dc126dab128184280b4d11cb1494800651e97aea941a821f31ff012fd",
+    "changelog.d/fix-313-sync-read-timeout.md": "e33ce06d8f35a221cab9c8754f17133bb0e7738f5dbb34d81e48979c7d06894d",
     "changelog.d/sec-49-entry-type-shapes.md": "10b0f1075596b8ae9007eedca565c91edfdbc0c3a6257494f0a5acddafb1618c",
     "changelog.d/sec-50-module-write-projection.md": "87553bb5ef6a9deab99b212b4423a97490a33a3e8ea25d28dfcd4f357513c80c",
     "commandmap.py": "e6545fd239e6f1a7d46a9298dd9b0c98c9ef11b01a002d315f8169db9400a5a5",
@@ -91,7 +92,7 @@
     "scripts/platform/linux/_units.sh": "100d9e8970dada5b027147d9a90d2af474e0accdf4bc1d7c157c15ebb96f6216",
     "scripts/platform/macos/_launchd.sh": "ff0a12116f5a625e7066de3a03822cf5d740e0a5f070a37af47c94fef3ae72a8",
     "scripts/platform/termux/_runit.sh": "3306411d30ec5dcc37c1becc16b530c96792fab7ded01ac1d7a1afea9b935286",
-    "sync_client.py": "3d354c5de63a0d7395c92150ad989878893b59c35c2fda9d675dd1e676fd87c0",
+    "sync_client.py": "244c3ec2bd79d3d544be7a8158c14390322d638e863014a678474f74dc4224c3",
     "sync_common.py": "3e99e3ee8569ee20d6a06ae5b00bc412572a08cb53d1b5fd5c917973a18eaefa",
     "tests/_ed25519_reference.py": "313e3f52e74ad1f5afe3c729565e57fb9c5f9861b51497cf8fc4de00243c4460",
     "tests/_guard_probe.py": "97718cd5eec56cda59e38db28f1200f8c38a8bd9b9e572a3f04f2ed3cc16bf73",
@@ -197,7 +198,7 @@
     "tests/test_sync.py": "726874bc1aa063058e03d74296d34b37472b6e9de6d937aa6e03f844f40d6f98",
     "tests/test_sync_auth.py": "e0350a7e155a150691fb44641f38702a50c1912574023de1c6e0984eb5930b45",
     "tests/test_sync_bind.py": "25b2c3797b501c8426fc8ea16c009cd945e6f5c598d4e27986e6495c08d4e2d6",
-    "tests/test_sync_client_bounds.py": "d439d92e24cde28b0658331e645316e5361a90cff930ad85de6695ffb118700f",
+    "tests/test_sync_client_bounds.py": "ce14500f89337eeb2a94ebfccb99f340f5721d9e278acd173e2353363ce2a7cc",
     "tests/test_sync_request_signing.py": "b06946b11daad25c7499ebd172e3d0b3fabba5727248ab75d5a438920119a28d",
     "tests/test_telemetry.py": "474fa1c80eb012071f8c7963b72bfc7ec4b563d19539cea5443ab39eba8d4f89",
     "tests/test_trust_velocity.py": "603ad7980d372843b876baad8fc79597bfa27606a3443cd067eaaa98cba1f696",

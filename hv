@@ -1579,6 +1579,70 @@ def _first_pull_door(entries, tips, advertised_chunks):
     return door
 
 
+# Authority-less governance (`join-request`, `announce`) lands on a device signature alone, so anyone who can
+# push can make this node store it forever and, for a join-request, have the owner later write its fields into
+# .peers.json. These are the bounds on what such a payload may carry; ingest refuses what breaks them, and
+# `_add_peer` and the join-request readers re-check, so an entry already in a journal cannot reach .peers.json.
+AUTHORITYLESS_PAYLOAD_MAX = 2048          # bytes of canonical JSON
+_PEER_LABEL_MAX, _PEER_URL_MAX, _PEER_ID_MAX, _PEER_SCALAR_MAX = 80, 256, 64, 256
+_PEER_ID_RE = re.compile(r"[A-Za-z0-9:._\-]{1,%d}" % _PEER_ID_MAX)
+_PEER_URL_RE = re.compile(r"https?://[A-Za-z0-9._\-\[\]:]{1,200}/?")
+
+
+def _plain_text(v, limit):
+    """A str of 1..limit characters with no control character (it is printed, logged and written to JSON)."""
+    return isinstance(v, str) and 0 < len(v) <= limit and v.isprintable()
+
+
+def _peer_url_ok(v):
+    return isinstance(v, str) and len(v) <= _PEER_URL_MAX and bool(_PEER_URL_RE.fullmatch(v))
+
+
+def _peer_label_ok(v):
+    return _plain_text(v, _PEER_LABEL_MAX)
+
+
+def _authorityless_shape_ok(e):
+    """Whether a `join-request` or `announce` entry has the size and shape such a payload ever has. A field
+    this version does not know is allowed if it is a short scalar, so a later version's field still rides
+    through; the whole payload is capped either way."""
+    p = e.get("payload")
+    if not isinstance(p, dict):
+        return False
+    try:
+        if len(json.dumps(p, sort_keys=True).encode()) > AUTHORITYLESS_PAYLOAD_MAX:
+            return False
+    except (TypeError, ValueError):
+        return False
+    action = p.get("action")
+    known = {"action"}
+    if action == "join-request":
+        did = p.get("device_id")
+        if not (isinstance(did, str) and _PEER_ID_RE.fullmatch(did) and did == e.get("node_id")):
+            return False
+        known |= {"device_id", "label", "url", "requested_principal"}
+        if "label" in p and not _peer_label_ok(p["label"]):
+            return False
+        if "url" in p and not _peer_url_ok(p["url"]):
+            return False
+        if "requested_principal" in p and not _plain_text(p["requested_principal"], _PEER_ID_MAX):
+            return False
+    elif action == "announce":
+        known |= {"kind", "data"}
+        if "kind" in p and not _plain_text(p["kind"], 32):
+            return False
+        data = p.get("data")
+        if "data" in p and not (isinstance(data, dict) and len(data) <= 8 and all(
+                isinstance(k, str) and len(k) <= 32 and isinstance(v, str) and len(v) <= _PEER_SCALAR_MAX
+                for k, v in data.items())):
+            return False
+    else:
+        return False
+    return all(k in known or (isinstance(k, str) and len(k) <= 32 and isinstance(v, (bool, int, str))
+                              and (not isinstance(v, str) or len(v) <= _PEER_SCALAR_MAX))
+               for k, v in p.items())
+
+
 def append_foreign_entries(entries, advertised_chunks=None):
     """Append FOREIGN journal entries verbatim (preserving node_id/seq) with G-Set dedup by
     (node_id, seq). Two membership gates keep the shared journal sound (D0-v2 two-tier membership):
@@ -1677,6 +1741,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if not _valid_timestamp(e.get("timestamp")):
             rejected += 1               # the timestamp names the journal file: never persist one that isn't a time
             return _DONE
+        if (e.get("payload") or {}).get("action") in ("join-request", "announce") and not _authorityless_shape_ok(e):
+            rejected += 1               # checked before the signature: an oversized or misshapen ask is not worth verifying
+            return _DONE
         if not _verify_entry(e):
             rejected += 1               # forged/corrupt device signature
             return _DONE
@@ -1733,9 +1800,6 @@ def append_foreign_entries(entries, advertised_chunks=None):
         if not _valid_timestamp(e.get("timestamp")):
             rejected += 1
             return _DONE
-        if not _verify_entry(e):
-            rejected += 1
-            return _DONE
         retired = False
         if has_owner and nid in gov["purged"]:
             # A purged device is tombstoned: its new writes are rejected even if later re-admitted, except the ones a
@@ -1748,8 +1812,12 @@ def append_foreign_entries(entries, advertised_chunks=None):
             retired = True
         if has_owner and not retired and nid not in admitted:
             # Read-only member: its content does not land until the owner admits the device.
-            # Checked before the payload, so a stranger's hostile entry is refused and never quarantined.
+            # Checked before the payload, so a stranger's hostile entry is refused and never quarantined, and
+            # before the signature, so an unadmitted device costs this node no Ed25519 verification.
             return _DEFER
+        if not _verify_entry(e):
+            rejected += 1
+            return _DONE
         problem = _hostile_problem(e) or _payload_problem(e)
         if problem is not None:
             rejected += 1               # #205: a payload the projection cannot bind safely never lands
@@ -9757,7 +9825,7 @@ def _join_request_url(device_id):
     for e in merkle.read_all_entries(JOURNAL_DIR):
         if e.get("type") == "governance":
             p = e.get("payload", {})
-            if p.get("action") == "join-request" and p.get("device_id") == device_id and p.get("url"):
+            if p.get("action") == "join-request" and p.get("device_id") == device_id and _peer_url_ok(p.get("url")):
                 url = p["url"]
     return url
 
@@ -9766,8 +9834,9 @@ def _add_peer(url, label):
     """Idempotently add {url} to this node's .peers.json (skips self + duplicates). Returns True if
     added. This is how admission SEEDS reciprocal peering — connectivity stays a separate concern
     from the trust grant (admit confers no governance), and the peer list remains editable."""
-    if not url or url.rstrip("/") == _self_sync_url().rstrip("/"):
+    if not _peer_url_ok(url) or url.rstrip("/") == _self_sync_url().rstrip("/"):
         return False
+    label = label if _plain_text(label, _PEER_LABEL_MAX) else None     # a bad label falls back to the url
     path = HIVE_HOME / ".peers.json"
     try:
         cfg = json.loads(path.read_text()) if path.exists() else {}
@@ -9929,7 +9998,7 @@ def _join_request_label(device_id):
     for e in merkle.read_all_entries(JOURNAL_DIR):
         if e.get("type") == "governance":
             p = e.get("payload", {})
-            if p.get("action") == "join-request" and p.get("device_id") == device_id and p.get("label"):
+            if p.get("action") == "join-request" and p.get("device_id") == device_id and _peer_label_ok(p.get("label")):
                 label = p["label"]
     return label
 

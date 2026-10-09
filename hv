@@ -10381,8 +10381,9 @@ def _self_sync_url():
 def _join_request_urls(ended_at=None):
     """{device_id: url} each device advertised in its join-request (last one wins). `ended_at` ({device: journal
     position of the revoke or purge that ended it}) stops a device's join-requests at that act: a join-request
-    written after the device was ended leaves the URL where it was, and so does one this node received after the
-    act's stamp (`.arrivals.jsonl`) whatever stamp it carries; one with no arrival record keeps the stamp rule
+    written after the device was ended leaves the URL where it was. Where this node has an arrival record
+    (`.arrivals.jsonl`) for the join-request it decides alone: received after the act's stamp leaves the URL,
+    received at or before it counts whatever stamp it carries; with no arrival record the stamp rule applies
     (SECREV B6)."""
     urls = {}
     arrived = _read_arrivals() if ended_at else {}
@@ -10392,10 +10393,11 @@ def _join_request_urls(ended_at=None):
             if p.get("action") == "join-request" and _peer_url_ok(p.get("url")):
                 cut = (ended_at or {}).get(p.get("device_id"))
                 if cut:
-                    if (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)) > tuple(cut):
-                        continue
                     got, act = _ts_instant(arrived.get((e.get("node_id"), e.get("seq")))), _ts_instant(cut[0])
-                    if got is not None and act is not None and got > act:
+                    if got is not None and act is not None:
+                        if got > act:
+                            continue
+                    elif (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)) > tuple(cut):
                         continue
                 urls[p.get("device_id")] = p["url"]
     return urls

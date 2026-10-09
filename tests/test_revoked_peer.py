@@ -210,6 +210,20 @@ def test_a_join_request_this_node_received_after_the_ending_act_leaves_its_url_w
     assert hv._join_request_urls() == {r: new}                               # no ending act: last wins
 
 
+def test_a_join_request_received_before_the_act_counts_whatever_stamp_it_carries(tmp_path, monkeypatch):
+    """A stamp that sorts after the act, on a join-request this node had already received, must not hide its URL."""
+    hv = _hvmod(tmp_path, monkeypatch)
+    r = "k1:" + "a" * 16
+    old, new = "http://100.64.0.7:9876", "http://100.64.0.8:9876"
+    journal = [_join(r, 1, "2026-01-01T00:00:00Z", old), _join(r, 2, "2026-01-05T00:00:00Z", new)]   # seq 2 stamped after the cut
+    monkeypatch.setattr(hv.merkle, "read_all_entries", lambda _d: journal)
+    cut = ("2026-01-02T00:00:00Z", "o1:owner", 5)
+    assert hv._join_request_urls({r: cut}) == {r: old}                       # no arrival record: the stamp rule drops it
+    (hv.HIVE_HOME / ".arrivals.jsonl").write_text(
+        '{"n": "%s", "s": 1, "at": "2026-01-01T00:00:05Z"}\n{"n": "%s", "s": 2, "at": "2026-01-01T00:00:09Z"}\n' % (r, r))
+    assert hv._join_request_urls({r: cut}) == {r: new}                       # received before the act: it counts
+
+
 def test_the_projection_records_where_each_device_was_ended(tmp_path, monkeypatch):
     a, c, a_dev, r_dev = _hive(tmp_path, "revoke")
     hv = _hvmod(a, monkeypatch)

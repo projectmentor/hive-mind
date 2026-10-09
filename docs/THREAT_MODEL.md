@@ -233,7 +233,7 @@ shown because a planted forget would be re-signed too. Once set,
   format change: a device the owner revokes or purges is dropped from `.peers.json` when the revoke or purge
   projects, and `hv sync now`, the sync loop and the doctor probes send it nothing. An entry is matched by
   its device `id` (`k1:…`); an entry labelled otherwise (`group admit --principal` seeds the principal) is
-  matched by the URL of the ended device's last join-request at or before the revoke or purge that ended it (a
+  matched by the URL of the ended device's last join-request at or before the revoke or purge that ended it (one this node received at or before the act counts whatever stamp it carries; a
   join-request it writes afterwards leaves that URL where it was, and so does one this node received after the
   act's stamp, by its own arrival record, whatever stamp it carries), else by the one device verified at its host in
   `.peer_candidates.json`. A match is dropped when an admitted device was verified at, or advertised, the same

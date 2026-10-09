@@ -139,7 +139,7 @@ class Sandbox:
         self.port = _free_port()
         (self.hive / ".peers.json").write_text(json.dumps({"port": self.port, "peers": []}))
 
-    def upstream_commit(self, stale=False, force=False, **sign):
+    def upstream_commit(self, stale=False, force=False, msg=None, **sign):
         """A new commit on the remote's main: a code change (README line) plus its manifest, `sign` as for
         _sign (seed, pub_seed, sig), or a deliberately stale digest (an unsigned `[skip ci]` squash)."""
         n = len(_git(self.src, "log", "--format=%H").split())
@@ -147,7 +147,7 @@ class Sandbox:
             fh.write(f"\nrelease note {n}\n")
         (_stale_manifest_digest if stale else _fix_manifest_digest)(self.src, **({} if stale else sign))
         _git(self.src, "add", "-A")
-        _git(self.src, "commit", "-q", "-m", f"change {n}")
+        _git(self.src, "commit", "-q", "-m", msg or f"change {n}")
         _git(self.src, "push", "-q", *(["-f"] if force else []), "origin", "main")
         return _git(self.src, "rev-parse", "HEAD")
 
@@ -362,7 +362,7 @@ def _refused_as_rewind(sb, r, before, b0, b1, what):
     assert r.returncode == 1, r.stdout + r.stderr
     assert "REFUSED" in r.stderr and what in r.stderr and "--allow-rewind" in r.stderr
     assert b0[:12] in r.stderr and b1[:12] in r.stderr          # both shas are named
-    assert "older or rewritten tree is refused" in r.stderr
+    assert "not a descendant of the installed one is refused" in r.stderr
     assert "Update complete" not in r.stdout and "Restarting sync daemon" not in r.stdout and not sb.log.exists()
     assert sb.state() == before
 
@@ -382,7 +382,7 @@ def test_a_diverged_rewrite_is_refused_without_the_flag_and_reset_with_it(sandbo
     sb = sandbox()
     b0, b1 = _installed_one_ahead(sb)
     _git(sb.src, "reset", "-q", "--hard", b0)
-    new = sb.upstream_commit(force=True)                         # B0 -> B1': same parent, other history
+    new = sb.upstream_commit(force=True, msg="rewritten change")  # B0 -> B1': same parent, other history
     assert new != b1
     before = sb.state()
     r = sb.update()

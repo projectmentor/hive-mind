@@ -156,14 +156,15 @@ else
   fi
 
   # A fetched commit that is not a descendant of the installed HEAD is either an OLDER tree (a rollback to an
-  # earlier signed commit, whose signature is still valid) or a rewritten history. Git ancestry is the
-  # monotonic check: neither is installed without the operator saying so. Nothing has changed yet.
+  # earlier signed commit, whose signature is still valid) or a rewritten history. Neither is installed
+  # without the operator saying so. This is not a full rollback check: the manifest signs file contents, not
+  # commits, so an old signed tree wrapped in a descendant commit is a fast-forward (THREAT_MODEL). Nothing has changed yet.
   if [ "$_MODE" = reset ] && [ "$ALLOW_REWIND" = 0 ]; then
     if git -C "$HIVE_DIR" merge-base --is-ancestor "$_NEW" HEAD 2>/dev/null; then _WHAT="an OLDER commit than the installed one"
     else _WHAT="a rewritten history (not a descendant of the installed commit)"; fi
     echo "hive-mind update: REFUSED. origin/$_BR is at ${_NEW:0:12}, $_WHAT." >&2
     echo "  Installed: ${_HEAD:0:12}   Fetched: ${_NEW:0:12}" >&2
-    echo "  Installing an older or rewritten tree is refused. Nothing was changed: $_BR is still at ${_HEAD:0:12}" >&2
+    echo "  Installing a commit that is not a descendant of the installed one is refused. Nothing was changed: $_BR is still at ${_HEAD:0:12}" >&2
     echo "  and the working tree is untouched." >&2
     echo "  If upstream history was rewritten on purpose and you trust it: hive-mind update --allow-rewind" >&2
     exit 1

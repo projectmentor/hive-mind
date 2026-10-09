@@ -266,16 +266,70 @@ def test_a_local_write_does_not_reuse_the_seq_of_a_line_on_disk_the_reader_skips
     assert len(keys) == len(set(keys))
 
 
+def _raw(tmp_path, first, seq, **kw):
+    line = {"node_id": first["node_id"], "seq": seq, "type": "fact", "timestamp": first["timestamp"],
+            "payload": {"content": "raw"}, "prev_hash": "sha256:x", **kw}
+    with open(next((tmp_path / "journal").glob("*.jsonl")), "a") as fh:      # straight onto the journal
+        fh.write(json.dumps(line) + "\n")
+
+
+def _skipped(tmp_path, first, seq):
+    _raw(tmp_path, first, seq, type="cell", payload={"name": "c", "version": "2"})
+
+
 def test_a_raw_line_at_seq_max_does_not_block_later_local_writes(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     _jd(tmp_path)
     first = hv.append_journal("fact", {"content": "a"})
-    huge = {"node_id": first["node_id"], "seq": 2**53, "type": "fact", "timestamp": first["timestamp"],
-            "payload": {"content": "wide"}, "prev_hash": "sha256:x"}
-    assert merkle.envelope_problem(huge) is not None
-    with open(next((tmp_path / "journal").glob("*.jsonl")), "a") as fh:
-        fh.write(json.dumps(huge) + "\n")
+    _raw(tmp_path, first, 2**53)
     assert hv.append_journal("fact", {"content": "b"})["seq"] == 2
+    assert len(_on_disk(tmp_path)) == 3
+
+
+def test_a_skipped_line_far_above_the_tip_does_not_move_the_next_seq(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    first = hv.append_journal("fact", {"content": "a"})
+    _skipped(tmp_path, first, 7)
+    assert hv.append_journal("fact", {"content": "b"})["seq"] == 2
+
+
+def test_a_string_seq_occupies_nothing(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    first = hv.append_journal("fact", {"content": "a"})
+    _raw(tmp_path, first, "2")
+    assert hv.append_journal("fact", {"content": "b"})["seq"] == 2
+
+
+def test_a_float_seq_occupies_its_integer_key(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    first = hv.append_journal("fact", {"content": "a"})
+    _raw(tmp_path, first, 2.0)
+    assert hv.append_journal("fact", {"content": "b"})["seq"] == 3
+
+
+def test_a_true_seq_occupies_key_one(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    (tmp_path / "journal" / "2026-10.jsonl").write_text(json.dumps(
+        {"node_id": hv.NODE_ID, "seq": True, "type": "fact", "timestamp": "2026-10-09T00:00:00Z",
+         "payload": {"content": "t"}, "prev_hash": "sha256:x"}) + "\n")
+    assert merkle.read_all_entries(tmp_path / "journal") == []
+    assert hv.append_journal("fact", {"content": "b"})["seq"] == 2
+
+
+def test_a_full_seq_range_refuses_the_write_and_leaves_the_file_unchanged(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    first = hv.append_journal("fact", {"content": "a"})
+    _raw(tmp_path, first, 2**53 - 2)
+    _skipped(tmp_path, first, 2**53 - 1)
+    before = {f.name: f.read_bytes() for f in (tmp_path / "journal").glob("*.jsonl")}
+    with pytest.raises(ValueError):
+        hv.append_journal("fact", {"content": "b"})
+    assert {f.name: f.read_bytes() for f in (tmp_path / "journal").glob("*.jsonl")} == before
 
 
 def test_wire_add_names_a_bad_name_or_version(tmp_path, monkeypatch, capsys):

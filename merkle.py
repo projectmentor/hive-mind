@@ -110,24 +110,29 @@ def read_all_entries(journal_dir):
     return entries
 
 
-def max_raw_seq(journal_dir, node_id):
-    """The highest integer seq any parseable journal line holds for `node_id`, INCLUDING a line the reader skips
-    for a failed envelope (it still occupies its key on a peer that accepts it). A seq at or past SEQ_MAX is not
-    counted: no peer accepts it, and minting past it would be refused. 0 when there is none."""
+def occupied_seqs(journal_dir, node_id):
+    """The seqs in [1, SEQ_MAX) that any parseable journal line holds for `node_id`, INCLUDING a line the reader
+    skips for a failed envelope (it still occupies its key on a peer that accepts it). Occupied means equal under
+    the G-Set key equality after json.loads: 2, 2.0 and True (for 1) are one key, "2" is not. A seq outside the
+    range occupies nothing: no peer accepts it."""
     journal_dir = Path(journal_dir)
-    top = 0
+    held = set()
     if not journal_dir.exists():
-        return top
+        return held
     for f in sorted(journal_dir.glob("*.jsonl")):
         for line in f.read_text().splitlines():
             try:
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if (isinstance(e, dict) and e.get("node_id") == node_id and isinstance(e.get("seq"), int)
-                    and not isinstance(e["seq"], bool) and e["seq"] < SEQ_MAX):
-                top = max(top, e["seq"])
-    return top
+            if not isinstance(e, dict) or e.get("node_id") != node_id:
+                continue
+            seq = e.get("seq")
+            if isinstance(seq, str) or not isinstance(seq, (int, float)):
+                continue
+            if seq == seq and seq not in (float("inf"), float("-inf")) and seq == int(seq) and 1 <= seq < SEQ_MAX:
+                held.add(int(seq))
+    return held
 
 
 def corrupt_lines(journal_dir):

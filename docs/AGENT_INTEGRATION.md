@@ -1,6 +1,6 @@
 # HiveMind Agent Integration Spec
 
-`Contract-Version: 2.3`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
+`Contract-Version: 2.4`  *(SemVer `MAJOR.MINOR`; authoritative value: `hv version`)*
 
 > **Audience: any AI agent** (Claude Code, Hermes, OpenClaw, an MCP host, any CLI agent).
 > You are reading this because you are joining a HiveMind — a shared, local-first memory.
@@ -267,6 +267,7 @@ governance actions, config keys, channels and the rest) is listed in [`NAMESPACE
 generated from `vocabulary.py`, and a name anything else adds takes a prefix.
 
 **Changelog.** The full per-version record is [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
+- `2.4` — **`hv search --chain`; a superseded decision names its superseder** (#157, #283). **Additive: no re-integration.** Nothing an adapter calls changes. New: `hv search --chain SID|REF` follows one decision's supersede chain to the decision in effect and exits 1 when the id names no decision; and a superseded decision carries `superseded_by_sid`, `superseded_by_ref`, `superseded_by_authority` and `supersede_evidence` in `hv search` and `hv search --id` JSON, the dashboard and the MCP tools (an adapter that ignores unknown fields is unaffected; the node-local `superseded_by` rowid is unchanged). The hive's governance reading tightens in the way §7 allows a MINOR: an owner-signed act, an entry whose body does not match its type, a module device's out-of-policy entry and a non-creator's entity rewrite stop projecting, and a revoked or purged device leaves .peers.json; they stay in the journal. Full entry: [`CONTRACT_HISTORY.md`](CONTRACT_HISTORY.md).
 - `2.3` — **module-author additions: `/v1/` node fields, `stop_grace`, `module config`, a non-owner install**
   (#270, #274, #277, #272, #278, #279). **Additive: no re-integration.** Nothing an adapter calls changes. New for
   modules: `GET /v1/` reports `node_id` and `node_devices`; a manifest's `service.stop_grace` gives a long one-shot time

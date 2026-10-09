@@ -9,7 +9,7 @@ agent on every machine can use it too. Local-first, no cloud, no central server.
 
 Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
 Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/) ·
-Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Best practices: [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md) · Current agent contract: **2.3** (`hv version`)
+Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Best practices: [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md) · Current agent contract: **2.4** (`hv version`)
 
 <p align="center">
   <a href="https://hivemind.projectmentor.org/dev/#dashboard">

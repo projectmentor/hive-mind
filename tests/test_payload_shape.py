@@ -164,7 +164,10 @@ def test_unprojectable_journaled_entry_never_raises_in_any_pass_or_reader(tmp_pa
     conn = _project(hv, tmp_path, [good, bad, later])
     assert {r["content"] for r in conn.execute("SELECT content FROM facts")} == {"kept", "later"}
     c = hv.rebuild_db()
-    assert c["malformed"] == 1 and c["entries"] == 3
+    if isinstance(payload, dict):
+        assert c["malformed"] == 1 and c["entries"] == 3
+    else:       # SECREV A1: the reader drops a payload that is not an object with the envelope, and counts the line
+        assert c["malformed"] == 0 and c["entries"] == 2 and c["skipped_lines"] == 1
     hv.api_search("")
 
 

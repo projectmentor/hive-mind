@@ -77,6 +77,7 @@ READABLE = (vocabulary.WRITTEN, vocabulary.LEGACY, vocabulary.READ)
 READERS = {
     "type": {
         ("hv", "append_foreign_entries"),       # ingest: swept in (device, seq) order, content waits for an admit
+        ("merkle.py", "envelope_problem"),      # the envelope (SECREV A1): the payload fields a reader keys on, per type
         ("hv", "feed_page"),                    # `hv feed` (2.1): forgotten on a fact, affects on a retract
         ("hive_module_api.py", "_check_entry"),    # `POST /v1/entries` (2.1): the shape each module-writable type needs
         ("hv", "_capsule_version_conflicts"),

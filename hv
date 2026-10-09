@@ -438,7 +438,7 @@ def _owner_unseal(env, passphrase):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "2.3"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
+CONTRACT_VERSION = "2.4"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
 
 
 # --------------------------------------------------------------------------

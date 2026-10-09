@@ -1,1 +1,0 @@
-- tests: each guard from the SECREV B6 change (#314) now has a test that fails when it is removed: the `_sync_with_peer` skip, the `rebuild_db` ended-peer prune, the `_probe_peer_map` filter, and the `- admitted` subtraction in `_ended_devices` (#319). No behaviour change.

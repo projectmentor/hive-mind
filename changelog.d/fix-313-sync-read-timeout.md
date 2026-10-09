@@ -1,1 +1,0 @@
-- sync_client: a per-request timeout clamped to the round deadline that fires just before the deadline watchdog now surfaces as the round-deadline error, not a raw `ReadTimeout` (#313).

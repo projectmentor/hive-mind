@@ -458,6 +458,8 @@ rewritten.
 | `HIVE_SYNC_AUTH_WINDOW` | `300` | Signed-request freshness window, seconds |
 | `HIVE_SYNC_PULL_PAGE` | `25` | Entries per `/sync/chunk` request |
 | `HIVE_SYNC_PUSH_PAGE` | `25` | Entries per `/sync/ingest` request |
+| `HIVE_SYNC_ROUND_DEADLINE` | `240` | Seconds one round with one peer may take in total, connect to last byte |
+| `HIVE_SYNC_MAX_RESPONSE` | `33554432` | Bytes of one peer reply the client will accept (32 MiB) |
 | `HIVE_SYNC_MAXSEG` | `1000` | TCP segment-size clamp for sync connections (`0` disables it) |
 
 ### Platform notes

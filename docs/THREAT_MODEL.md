@@ -300,6 +300,33 @@ shown because a planted forget would be re-signed too. Once set,
   3.x. `SIGN_APP_ID` and `SIGN_APP_KEY` are read from the `signing` Environment once added there, and from
   the repository until then. Operator rule: keep write access to the repository to the people who may sign.
 
+## Seat steering (agent seats driven by GitHub and the hive)
+
+A seat is an agent session that the runner wakes on a GitHub event or a hive entry. Text a seat reads can steer
+it, so the sources are gated:
+
+- **`runner.github_authors`** (default: the owner's account only). The runner drops a comment, review, PR or
+  issue whose author is outside the list before it classifies the event, so foreign text never reaches a seat or
+  wakes one. A missing author counts as foreign.
+- **Fork heads are never checked out.** A seat does not fetch or run a PR head from a fork.
+- **Untrusted bodies are framed as data.** Whatever text a seat does read from GitHub or the hive reaches it
+  marked as data to read, not as instructions.
+
+**Residual (accepted for 3.x).** Seats run as the operator's OS user with the operator's `gh` login. A seat
+steered through the owner's own account, or through an entry signed by an admitted device, therefore acts with the
+owner's GitHub scope. A narrow seat token and a separate OS user for seats would only limit the damage after one
+of those two sources is already compromised, so they are not built. Both sources are inside the trust boundary
+this model already draws: an admitted device is a member of the hive, and the owner account is the owner.
+
+Operator rules:
+
+- Keep `runner.github_authors` to the owner's account.
+- Run seats only on nodes the owner controls.
+- Admit no device the owner does not control while seats run as the operator.
+
+**Reopen if** any of these arrives: federation, hosted relays, an admitted device the owner does not control, or a
+second login in `runner.github_authors`. Tracked in hive-mind-private #44.
+
 ## Cryptographic posture
 
 - Primitives are **pure-Python** (Ed25519, X25519, Ed25519↔Curve25519, ChaCha20-Poly1305 per

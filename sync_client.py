@@ -388,6 +388,11 @@ def _hello_note(check, action):
 
 
 def _sync_with_peer(peer, mode=None):
+    # Before any signed byte leaves: the envelope names no audience, so a listed peer can replay what it
+    # is sent to a third node. A device the owner revoked or purged is not sent a thing (SECREV B6).
+    if hv._live_peers([peer], hv._governance_state(_local_entries())) == []:
+        print(f"  {_peer_label(peer)}: skipped: the owner revoked or purged this device")
+        return
     _round.deadline = time.monotonic() + ROUND_DEADLINE
     try:
         _sync_round(peer, mode)
@@ -483,6 +488,8 @@ def sync_now():
         print("No peers configured (.peers.json). Nothing to sync.")
         return
     mode = sync_common.sync_auth_outbound_mode(cfg)
+    if hv._prune_ended_peers(hv._governance_state(_local_entries())):
+        peers = sync_common.load_peers().get("peers", [])
     print(f"sync now: {hv.NODE_ID} -> {len(peers)} peer(s)")
     for peer in peers:
         try:

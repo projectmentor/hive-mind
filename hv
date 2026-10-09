@@ -38,6 +38,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -2520,7 +2521,7 @@ def _governance_state_uncached(entries):
            "nominations": set(), "escrows": [], "elections": [], "owner_term": 0,
            "principals": {}, "modules": {}, "module_config": {},
            "ts_tips": {}, "ts_markers": set(), "first_admit": {}, "revoked": set(),
-           "keep": {}, "kept": set(), "uncarried": [], "member_spans": {},
+           "keep": {}, "kept": set(), "uncarried": [], "member_spans": {}, "ended_at": {},
            "config": {"same_device_lambda": CONF_SAME_DEVICE_LAMBDA, "cap_self": CONF_CAP_SELF,
                                         "quorum_m": GOV_QUORUM_M, "quorum_by": GOV_QUORUM_BY,
                                         "dead_man_days": GOV_DEAD_MAN_DAYS,
@@ -2731,6 +2732,8 @@ def _governance_state_uncached(entries):
             span_open(p["device_id"], (_ts, str(_nid), _seq))
             gov["first_admit"].setdefault(p["device_id"], _ts)   # #217 rule 2's floor: a re-admit never moves it
             gov["denied"].discard(p["device_id"])
+            if p["device_id"] not in gov["purged"]:
+                gov["ended_at"].pop(p["device_id"], None)
             if p.get("principal"):
                 gov["principals"][p["device_id"]] = p["principal"]
             # 2.1: an owner `admit` carrying `module: <name>` marks a module's device; a later admit without
@@ -2743,6 +2746,7 @@ def _governance_state_uncached(entries):
             gov["admitted"].discard(p["device_id"])   # reversible: a later admit restores it
             span_close(p["device_id"], (_ts, str(_nid), _seq))
             gov["revoked"].add(p["device_id"])        # honoured: ends the pre-genesis exemption (#230)
+            gov["ended_at"].setdefault(p["device_id"], (_ts, str(_nid), _seq))   # where this ending began (SECREV B6)
         elif action == "deny" and p.get("device_id"):
             gov["denied"].add(p["device_id"])          # drop a pending join-request (admit overrides)
         elif action == "change" and p.get("device_id") and p.get("principal"):
@@ -2752,6 +2756,7 @@ def _governance_state_uncached(entries):
             gov["admitted"].discard(p["device_id"])    # final tombstone (see _governed_side / ingest)
             span_close(p["device_id"], (_ts, str(_nid), _seq))
             gov["purged"].add(p["device_id"])
+            gov["ended_at"].setdefault(p["device_id"], (_ts, str(_nid), _seq))
             # #260: the latest honoured purge decides. A well-formed keep pair makes it a retire (the named prefix
             # still counts); a plain one, or a malformed pair, drops the device's content whole.
             pair = _keep_pair(p)
@@ -6086,7 +6091,10 @@ def _probe_peer_map(timeout=6, peerlist=None, identity=None):   # generous: mobi
         return {}
     entries = merkle.read_all_entries(JOURNAL_DIR)
     local_root = merkle.merkle_root(merkle.chunk_hashes(entries))
-    gov = _governance_state(entries) if identity is not None else None
+    gov = _governance_state(entries)
+    peerlist = _live_peers(peerlist, gov)      # a revoked or purged device is sent nothing (SECREV B6)
+    if not peerlist:
+        return {}
 
     def probe(peer):
         url = str(peer.get("url", "")).rstrip("/")
@@ -6497,6 +6505,7 @@ def rebuild_db():
     try:
         counts = _rebuild_in_transaction(conn)
         conn.commit()
+        _prune_ended_peers_after_rebuild()
         return counts
     except BaseException:
         conn.rollback()      # the previous projection stays queryable (#206)
@@ -9509,6 +9518,88 @@ def _atomic_write_text(path, text):
         raise
 
 
+def _prune_ended_peers_after_rebuild():
+    """The projection just replayed the journal: a revoke or purge in it now ends that device as a listed peer.
+    Best-effort and cheap when there is nothing to do (no .peers.json, or no peer in it)."""
+    try:
+        if (HIVE_HOME / ".peers.json").exists():
+            _prune_ended_peers(_governance_state(merkle.read_all_entries(JOURNAL_DIR)))
+    except Exception:
+        pass
+
+
+def _ended_devices(gov):
+    """Devices an honoured revoke or purge has ended: revoked and not re-admitted, or purged (a purge is final).
+    Empty before an owner exists, since without one nothing is honoured."""
+    if not gov.get("owner_id"):
+        return set()
+    return set(gov.get("purged") or ()) | (set(gov.get("revoked") or ()) - set(gov.get("admitted") or ()))
+
+
+def _peer_ended_device(peer, ended, cands=None, joins=None, admitted=()):
+    """The ended device this .peers.json entry stands for, else None. An entry naming a device id is decided on
+    that id alone. Any other label (`group admit --principal` seeds the principal) is matched to an ended device
+    by that device's join-request URL, else by the host a signed request or hello once proved it at
+    (.peer_candidates.json) when it is the only device verified there. Either match is dropped when an ADMITTED
+    device (not ended) was verified at, or advertised, the same host: a reinstall at the old address keeps its
+    entry. A join-request from a device outside `admitted` is only a claim and keeps nothing. A node-local judgement: no wire format involved (SECREV B6)."""
+    if not ended or not isinstance(peer, dict):
+        return None
+    pid = str(peer.get("id") or "")
+    if _is_device_id(pid):
+        return pid if pid in ended else None
+    url = str(peer.get("url") or "")
+    host = _url_host(url)
+    if not host:
+        return None
+    cands = _load_peer_candidates() if cands is None else cands
+    joins = _join_request_urls() if joins is None else joins
+    live = ({d for d, hist in cands.items() if host in hist} | {d for d, u in joins.items() if _url_host(u) == host}) & set(admitted) - ended
+    if live:
+        return None
+    by_url = sorted(d for d in ended if joins.get(d, "").rstrip("/") == url.rstrip("/"))
+    if by_url:
+        return by_url[0]
+    here = [d for d, hist in cands.items() if host in hist]
+    return here[0] if len(here) == 1 and here[0] in ended else None
+
+
+def _live_peers(peers, gov):
+    """`peers` without the entries of an ended device: this node sends such a device nothing, signed or not."""
+    ended = _ended_devices(gov)
+    if not ended:
+        return list(peers)
+    cands, joins, adm = _load_peer_candidates(), _join_request_urls(gov.get("ended_at")), gov.get("admitted") or ()
+    return [p for p in peers if _peer_ended_device(p, ended, cands, joins, adm) is None]
+
+
+def _prune_ended_peers(gov):
+    """Drop the entries of a revoked or purged device from this node's .peers.json (SECREV B6). The signed request
+    envelope names no audience, so every signed read this node sends a listed peer is one that peer can replay to
+    a third node inside the freshness window; a device the owner ended must therefore stop being a listed peer.
+    Returns the dropped device ids. A re-admitted device is re-added by the admission flow, not here."""
+    path = HIVE_HOME / ".peers.json"
+    ended = _ended_devices(gov)
+    if not ended or not path.exists():
+        return []
+    try:
+        cfg = json.loads(path.read_text())
+        peers = cfg.get("peers") or []
+        cands, joins, adm = _load_peer_candidates(), _join_request_urls(gov.get("ended_at")), gov.get("admitted") or ()
+        gone = [(p, _peer_ended_device(p, ended, cands, joins, adm)) for p in peers]
+        if not any(d for _p, d in gone):
+            return []
+        cfg["peers"] = [p for p, d in gone if d is None]
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(cfg, indent=2) + "\n")
+        os.replace(tmp, path)
+    except (OSError, ValueError, AttributeError):
+        return []
+    dropped = sorted({d for _p, d in gone if d})
+    print(f"hv: dropped {', '.join(dropped)} from .peers.json: the owner revoked or purged it", file=sys.stderr)
+    return dropped
+
+
 def _load_peer_candidates():
     """{device_id: {ip: {"first_seen": s, "last_seen": s}}} (epoch seconds) from PEER_CANDIDATES_PATH.
     {} when the file is absent or unreadable: it is advisory, so a bad one only means nothing learned."""
@@ -10287,15 +10378,34 @@ def _self_sync_url():
     return f"http://{addr}" if addr else ""
 
 
-def _join_request_url(device_id):
-    """The reachable URL a device advertised in its join-request (last one wins), or '' if none."""
-    url = ""
+def _join_request_urls(ended_at=None):
+    """{device_id: url} each device advertised in its join-request (last one wins). `ended_at` ({device: journal
+    position of the revoke or purge that ended it}) stops a device's join-requests at that act: a join-request
+    written after the device was ended leaves the URL where it was. Where this node has an arrival record
+    (`.arrivals.jsonl`) for the join-request it decides alone: received after the act's stamp leaves the URL,
+    received at or before it counts whatever stamp it carries; with no arrival record the stamp rule applies
+    (SECREV B6)."""
+    urls = {}
+    arrived = _read_arrivals() if ended_at else {}
     for e in merkle.read_all_entries(JOURNAL_DIR):
         if e.get("type") == "governance":
             p = e.get("payload", {})
-            if p.get("action") == "join-request" and p.get("device_id") == device_id and _peer_url_ok(p.get("url")):
-                url = p["url"]
-    return url
+            if p.get("action") == "join-request" and _peer_url_ok(p.get("url")):
+                cut = (ended_at or {}).get(p.get("device_id"))
+                if cut:
+                    got, act = _ts_instant(arrived.get((e.get("node_id"), e.get("seq")))), _ts_instant(cut[0])
+                    if got is not None and act is not None:
+                        if got > act:
+                            continue
+                    elif (e.get("timestamp", ""), str(e.get("node_id", "")), e.get("seq", 0)) > tuple(cut):
+                        continue
+                urls[p.get("device_id")] = p["url"]
+    return urls
+
+
+def _join_request_url(device_id):
+    """The reachable URL a device advertised in its join-request (last one wins), or '' if none."""
+    return _join_request_urls().get(device_id, "")
 
 
 def _add_peer(url, label):

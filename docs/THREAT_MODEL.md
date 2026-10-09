@@ -225,6 +225,29 @@ shown because a planted forget would be re-signed too. Once set,
   override, and the `sequence` is only as monotonic as the history the signer counts, so a history rewrite that
   shortens `main` below an installed node's number needs `--allow-rewind` there. Whoever holds the release key
   can still sign any number.
+- **A signed read is not bound to an audience** (SECREV B6). The `Hive-Auth-*` envelope signs the method, path,
+  query, body hash, timestamp and nonce, but not the node it is sent to, and each node's nonce cache is its
+  own. An admitted, unrevoked peer that this node signs reads to can replay them to a third node inside the
+  freshness window (`HIVE_SYNC_AUTH_WINDOW`, default 300 s; the nonce is remembered for twice that) and be
+  served as this node, for as long as the third node still admits this one. Closed node-locally, with no
+  format change: a device the owner revokes or purges is dropped from `.peers.json` when the revoke or purge
+  projects, and `hv sync now`, the sync loop and the doctor probes send it nothing. An entry is matched by
+  its device `id` (`k1:…`); an entry labelled otherwise (`group admit --principal` seeds the principal) is
+  matched by the URL of the ended device's last join-request at or before the revoke or purge that ended it (one this node received at or before the act counts whatever stamp it carries; a
+  join-request it writes afterwards leaves that URL where it was, and so does one this node received after the
+  act's stamp, by its own arrival record, whatever stamp it carries), else by the one device verified at its host in
+  `.peer_candidates.json`. A match is dropped when an admitted device was verified at, or advertised, the same
+  host, so a reinstall at the old address keeps its entry once the new device is admitted; a join-request
+  from a device that is not admitted is only a claim and keeps nothing. An entry set by hand with no device
+  `id`, at an address that matches neither, keeps getting signed reads, so list peers by their `k1:…` id.
+  Accepted for 3.x (an admitted device only): clock skew between this node's receipt clock and the act's stamp, and
+  entries that arrived before arrival records existed (they keep the stamp rule); that device can append a join-request whose URL differs from
+  the one `group admit` stored (the last one wins), after which the principal-labelled row matches nothing,
+  and a second admitted device whose join-request names the host keeps the row; list those peers by `k1:…`
+  id. What remains: a peer you still list can do this to a third node, so
+  list only devices you trust to hold your reads, and revoke a device before you stop trusting it. A daemon
+  restart empties the nonce cache, so a request captured within the window is replayable once. Binding the
+  responder into the signed bytes is a wire-format change and waits on the maintainer's decision.
 - **Anyone can obtain a responder signature over a nonce it chooses.** `/hive/info` is open discovery,
   so any reachable host can make a node sign. The statement holds only public facts (node id, hive id,
   advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`

@@ -304,6 +304,44 @@ shown because a planted forget would be re-signed too. Once set,
   3.x. `SIGN_APP_ID` and `SIGN_APP_KEY` are read from the `signing` Environment once added there, and from
   the repository until then. Operator rule: keep write access to the repository to the people who may sign.
 
+## Seat steering (agent seats driven by GitHub and the hive)
+
+A seat is an agent session that the runner wakes on a GitHub event or a hive entry. Text a seat reads can steer
+it, so the sources are gated:
+
+- **The GitHub channel gate** (`channel.<name>.authors` and `channel.<name>.author_classes`). `authors` lists
+  logins; `author_classes` lists the classes (`owner`, `member`, `collaborator`, ...) mapped from GitHub's
+  `author_association`. Both unset admits nobody. On this fleet they are fleet keys, set by the owner with a
+  signed `hive-mind config set`: `authors` is the owner's login and `author_classes` is
+  `owner,member,collaborator`. The shipped dev workflow's addressed rules also require one of those three
+  classes. An event is admitted when its author's login is in `authors` or its association maps to a class in
+  `author_classes`. Text from anyone whose login is not listed and whose class is not listed is dropped before it
+  is classified, so it never reaches a seat or wakes one.
+  The gate therefore admits the owner's account plus anyone the owner makes a collaborator on a watched repo (or
+  an org member, if the repos move to an org). Today the only collaborator on all three repos is the owner.
+- **Hive events are not author-gated.** Any admitted device's entry reaches the hive channel.
+- **Fork heads are not followed.** When `head.repo` is not the base repository, hwatch takes no later head move
+  and reads none of that head's checks. The first opened event from an admitted author is still yielded and
+  carries that head sha. hwatch itself checks no head out.
+- **Untrusted bodies are framed as data.** Whatever text a seat does read from GitHub or the hive reaches it
+  marked as data to read, not as instructions.
+
+**Residual (accepted for 3.x).** Seats run as the operator's OS user with the operator's `gh` login. A seat
+steered through the owner's own account, or through an entry signed by an admitted device, therefore acts with the
+owner's GitHub scope. A narrow seat token and a separate OS user for seats would only limit the damage after one
+of those two sources is already compromised, so they are not built. Both sources are inside the trust boundary
+this model already draws: an admitted device is a member of the hive, and the owner account is the owner.
+
+Operator rules:
+
+- Keep `channel.github.authors` to the owner's login.
+- Add no collaborator (or org member) to a watched repo while `author_classes` includes that class.
+- Run seats only on nodes the owner controls.
+- Admit no device the owner does not control while seats run as the operator.
+
+**Reopen if** any of these arrives: federation, hosted relays, an admitted device the owner does not control, or a
+second login or collaborator admitted by the gate. Tracked in hive-mind-private #44.
+
 ## Cryptographic posture
 
 - Primitives are **pure-Python** (Ed25519, X25519, Ed25519↔Curve25519, ChaCha20-Poly1305 per

@@ -170,6 +170,16 @@ shown because a planted forget would be re-signed too. Once set,
   pinned serves no journal to a remote caller and accepts no push (403 on `/sync/hello`, `/sync/chunk`
   and `/sync/ingest`; `/hive/info` and `/sync/merkle-root` stay open; loopback is never gated), which
   closes the window in which a joiner could be captured and then relay a rival onward.
+- **Loopback is trusted by source address, `Host` and, on a POST, a token.** A request from a loopback
+  address skips the signed-request gate, so the daemon no longer trusts the address alone: the `Host`
+  header must name this listener (`localhost`, a loopback address or the bound address, on its port) or
+  the answer is `421`, which stops a DNS-rebinding page from reading the dashboard or the module API.
+  `/sync/ingest` refuses a request the browser labels cross-site (`Sec-Fetch-Site`, or an `Origin` that is
+  not this listener), and a POST that arrives on loopback must carry the `Hive-CSRF` token from
+  `$HIVE_HOME/.csrf-token` (0600, never synced) or a valid signed envelope. A local process running as the
+  same user can still read the token file; that boundary is the OS account, as before. The dashboard is
+  served with `Content-Security-Policy: default-src 'self'` and builds its page from text nodes, so a
+  journal value cannot run as script.
 - **Unsigned entries cannot fork a chain.** `_verify_entry` accepts an entry with no signature at all
   (historical entries predate device keys), so an unsigned entry could take an admitted device's future
   `(node_id, seq)`, become that device's chain tip, and make the device's own later entry drop as a

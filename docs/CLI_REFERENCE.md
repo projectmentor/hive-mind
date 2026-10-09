@@ -782,7 +782,7 @@ change), and `hv doctor` fails until you do. `hv` never opens the key in either 
 **The owner key is a single point of failure — back it up.** `hive-mind owner init`
 auto-stashes a copy to `~/.config/hive-mind/identity/.owner-key.sealed` (survives uninstall; sealed since 2.0),
 and `hive-mind owner export` writes a portable copy you can store off-device (use
-`$HIVE_OWNER_PASSPHRASE` or the prompt for its passphrase; the export is sealed unless you pass `--plaintext`; an exported key is total hive authority, so treat it
+`$HIVE_OWNER_PASSPHRASE` or the prompt for its passphrase; the export is sealed by default and `--plaintext` is the opt-in for an unencrypted file; the old `--passphrase` flag is still accepted and changes nothing, since sealed is already the default; an exported key is total hive authority, so treat it
 like an SSH private key). If the owner device dies, `hive-mind owner import` installs the
 key on a new device and governance resumes under the **same** owner identity — no
 journal change. `import` refuses a key that doesn't match the journal's established

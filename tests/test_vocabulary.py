@@ -123,6 +123,7 @@ READERS = {
     },
     "action": {                                 # a `governance` payload's action
         ("hv", "append_foreign_entries"),       # the authority-less allowlist, the pinned genesis
+        ("hv", "_authorityless_shape_ok"),      # the size and shape of a join-request / announce payload
         ("hv", "_self_signed_owner_acts"),
         ("hv", "_succession_inversions"),
         ("hv", "_governance_state_uncached"),   # every act the walk honours

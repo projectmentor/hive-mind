@@ -20,11 +20,13 @@ import hmac
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import urllib.request
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, urlparse
 
@@ -100,11 +102,68 @@ _ingest_lock = threading.Lock()
 # read), or flood it (request storm). These guards are best-effort and NOT consensus-bearing.
 MAX_BODY_BYTES = 32 * 1024 * 1024          # reject /sync/ingest bodies larger than this (413)
 SOCKET_TIMEOUT = 30                        # per-connection read timeout, seconds (slow-loris guard)
+HEADER_DEADLINE = 10                       # whole request line + headers must arrive within this, seconds (a trickle does not renew it)
+BODY_DEADLINE = 60                         # a POST body must arrive within this, seconds, from the end of the headers
+MAX_CONNECTIONS_PER_IP = 16                # open connections (header phase included) one source address may hold; excess is refused
+MAX_NONCE_LEN = 64                         # Hive-Auth-Nonce, characters; a longer one is refused before it is cached
 MAX_CONCURRENT_REQUESTS = 32               # in-flight handlers; excess → 503 (thread-exhaustion guard)
 RATE_BUCKET_CAPACITY = 256                 # per-peer token bucket burst (generous: a full chunked
 RATE_REFILL_PER_SEC = 64                   #   sync is bursty — these throttle abuse, not real sync)
 
 _request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
+
+
+class _DeadlineReader:
+    """The request stream of one connection, read with a WALL-CLOCK deadline instead of a per-read timeout.
+    `SOCKET_TIMEOUT` alone restarts at every received byte, so a peer sending a byte every few seconds holds
+    its thread (and, in a POST, a handler slot) indefinitely. Here every recv gets the time that is left, and
+    the deadline is only ever moved by `set_deadline`, which the handler calls once the headers are in."""
+
+    def __init__(self, sock, seconds):
+        self._sock, self._buf = sock, bytearray()
+        self.set_deadline(seconds)
+
+    def set_deadline(self, seconds):
+        self._deadline = time.monotonic() + seconds
+
+    def _fill(self):
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise socket.timeout("request deadline passed")
+        self._sock.settimeout(min(SOCKET_TIMEOUT, left))
+        try:
+            chunk = self._sock.recv(65536)
+        finally:
+            self._sock.settimeout(SOCKET_TIMEOUT)      # the response is written under the ordinary timeout
+        self._buf += chunk
+        return bool(chunk)
+
+    def _take(self, n):
+        out = bytes(self._buf[:n])
+        del self._buf[:n]
+        return out
+
+    def readline(self, limit=-1):
+        while True:
+            i = self._buf.find(b"\n")
+            if i >= 0:
+                n = i + 1
+                break
+            if 0 <= limit <= len(self._buf):
+                n = limit
+                break
+            if not self._fill():
+                n = len(self._buf)
+                break
+        return self._take(n if limit < 0 else min(n, limit))
+
+    def read(self, n=-1):
+        while (n < 0 or len(self._buf) < n) and self._fill():
+            pass
+        return self._take(len(self._buf) if n < 0 else n)
+
+    def close(self):
+        pass
 
 
 class _RateLimiter:
@@ -137,6 +196,37 @@ _rate_limiter = _RateLimiter(RATE_BUCKET_CAPACITY, RATE_REFILL_PER_SEC)
 
 def _entries():
     return merkle.read_all_entries(hv.JOURNAL_DIR)
+
+
+_root_lock = threading.Lock()
+_root_cache = {"sig": None, "root": None}
+
+
+def _journal_sig():
+    """What the journal files look like now: (name, mtime, size) of each, or None if they cannot be listed."""
+    try:
+        base = Path(hv.JOURNAL_DIR)
+        sig = [str(base)]
+        for f in sorted(base.glob("*.jsonl")):
+            st = f.stat()
+            sig.append((f.name, st.st_mtime_ns, st.st_size))
+        return tuple(sig)
+    except OSError:
+        return None
+
+
+def _merkle_root_cached():
+    """The journal's Merkle root, re-hashed only when a journal file's mtime or size has changed. The open
+    /sync/merkle-root route is unauthenticated, so without this every request re-read and re-hashed the whole
+    journal. The signature is taken BEFORE the read, so an append that lands mid-hash leaves the cache stale
+    for the next request, never fresh for a root that predates the append."""
+    sig = _journal_sig()
+    with _root_lock:
+        if sig is not None and _root_cache["sig"] == sig:
+            return _root_cache["root"]
+        root = merkle.merkle_root(merkle.chunk_hashes(_entries()))
+        _root_cache["sig"], _root_cache["root"] = sig, root
+        return root
 
 
 _HV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hv")
@@ -222,6 +312,8 @@ def _verify_sync_request(headers, method, path, query, body_bytes, gov):
         return (False, "missing-auth-headers", None)
     if alg != sync_common.HIVE_AUTH_ALG:
         return (False, "bad-alg", None)
+    if len(nonce) > MAX_NONCE_LEN or len(pub_b64) > 64 or len(sig_b64) > 128 or len(device_id) > 64:
+        return (False, "malformed-auth", None)     # before anything is decoded, verified or cached
     try:
         pub = base64.b64decode(pub_b64)
         sig = base64.b64decode(sig_b64)
@@ -281,6 +373,50 @@ def _note_verified_peer(device_id, ip):
             pass
 
 
+class _BoundedServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that holds at most MAX_CONNECTIONS_PER_IP open connections per source address. A
+    connection still in its header phase has a thread but no request slot, so `_request_slots` cannot see it;
+    the cap is what stops one address from spending every thread. Over the cap the connection is answered 503
+    and closed before a thread is started for it."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._conn_lock = threading.Lock()
+        self._conns = collections.Counter()
+
+    def _release(self, ip):
+        with self._conn_lock:
+            self._conns[ip] -= 1
+            if self._conns[ip] <= 0:
+                del self._conns[ip]
+
+    def process_request(self, request, client_address):
+        ip = client_address[0]
+        with self._conn_lock:
+            over = self._conns[ip] >= MAX_CONNECTIONS_PER_IP
+            if not over:
+                self._conns[ip] += 1
+        if over:
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.0 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._release(ip)
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._release(client_address[0])
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "hive-sync/2.0"
     timeout = SOCKET_TIMEOUT             # honored by socketserver setup() → socket read timeout
@@ -292,6 +428,8 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
         sync_common.clamp_mss(self.connection)   # keep responses under a sub-1280-MTU tailnet ceiling
+        self.rfile.close()
+        self.rfile = _DeadlineReader(self.connection, HEADER_DEADLINE)
 
     def log_message(self, fmt, *args):  # keep the daemon quiet; errors go to do_*
         pass
@@ -561,8 +699,7 @@ class Handler(BaseHTTPRequestHandler):
                     "genesis_fingerprint": hv._genesis_fingerprint(es, gov),   # (#14) signed with the body
                 })
             elif u.path == "/sync/merkle-root":
-                es = _entries()                     # open discovery: a single root hash, no content
-                self._send(200, {"root_hash": merkle.merkle_root(merkle.chunk_hashes(es))})
+                self._send(200, {"root_hash": _merkle_root_cached()})    # open discovery: a single root hash, no content
             elif u.path == "/sync/chunk":          # remote-auth (gated above): the journal itself
                 node = q.get("node", [None])[0]
                 start = int(q.get("start", ["1"])[0])
@@ -651,7 +788,16 @@ class Handler(BaseHTTPRequestHandler):
             if length < 0 or length > MAX_BODY_BYTES:
                 self._send(413, {"error": "request too large", "max_bytes": MAX_BODY_BYTES})
                 return
-            raw = self.rfile.read(length) if length else b""
+            self.rfile.set_deadline(BODY_DEADLINE)
+            try:
+                raw = self.rfile.read(length) if length else b""
+            except socket.timeout:
+                self.close_connection = True
+                self._send(408, {"error": "request body too slow", "accepted": 0})
+                return
+            if len(raw) < length:                  # the peer closed before sending what it promised
+                self._send(400, {"error": "short body", "accepted": 0})
+                return
             if not self._csrf_ok(u, raw):
                 return
             # remote-auth: read-auth gate over the exact body bytes, so an unadmitted device can't
@@ -745,7 +891,7 @@ def make_server(bind=None, port=None):
     # still means "already running" (redundant launch → clean no-op).
     for p in range(base, base + 5):
         try:
-            srv = ThreadingHTTPServer((bind, p), Handler)
+            srv = _BoundedServer((bind, p), Handler)
             sync_common.clamp_mss(srv.socket)   # accepted connections inherit the clamped MSS (Linux)
             _ADVERTISED["addr"] = _advertised_addr(bind, p)
             sync_common.csrf_token(create=True)
@@ -777,7 +923,7 @@ def _extra_servers(primary_bind, port):
     extra = []
     if _needs_loopback_alias(primary_bind):
         try:
-            s = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+            s = _BoundedServer(("127.0.0.1", port), Handler)
             sync_common.clamp_mss(s.socket)
             extra.append(s)
         except OSError as e:

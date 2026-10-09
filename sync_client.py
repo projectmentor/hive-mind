@@ -43,6 +43,88 @@ PULL_PAGE = max(1, int(os.environ.get("HIVE_SYNC_PULL_PAGE", "25")))   # entries
 PUSH_PAGE = max(1, int(os.environ.get("HIVE_SYNC_PUSH_PAGE", "25")))   # entries per /sync/ingest POST
 
 
+# ── bounds on what one peer can make a round spend (hive-mind-private #55) ────────────────────────
+# The per-operation timeouts alone let a peer that drips a byte at a time hold a round open forever, a
+# reply of any size was buffered whole, and a redirect carried our signed headers to another host. So:
+# one deadline covers a whole round with one peer, a reply over the cap is refused, and no redirect is
+# ever followed (a 3xx is a refusal, and nothing is sent to its target).
+ROUND_DEADLINE = float(os.environ.get("HIVE_SYNC_ROUND_DEADLINE", "240"))        # seconds per peer round
+MAX_RESPONSE_BYTES = int(os.environ.get("HIVE_SYNC_MAX_RESPONSE", str(32 * 1024 * 1024)))
+_STREAM_CHUNK = 16 * 1024
+_round = threading.local()
+
+
+class SyncBoundError(requests.RequestException):
+    """A peer's reply was refused: past the round deadline, over the byte cap, or a redirect."""
+
+
+def _remaining():
+    """Seconds left in this thread's round (a fresh full round outside one)."""
+    deadline = getattr(_round, "deadline", None)
+    if deadline is None:
+        return ROUND_DEADLINE
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise SyncBoundError("round deadline exceeded")
+    return left
+
+
+def _abort(r):
+    """Cut a response whose body is still arriving: shut its socket down so a blocked read returns
+    (iter_content blocks until a whole chunk arrives, so a one-byte drip never reaches a size check)."""
+    for find in (lambda: r.raw._connection.sock, lambda: r.raw._fp.fp.raw._sock):
+        try:
+            find().shutdown(socket.SHUT_RDWR)
+            break
+        except Exception:
+            continue
+    try:
+        r.raw.close()
+    except Exception:
+        pass
+
+
+def _bounded(method, url, op_timeout, **kw):
+    """One request under the round deadline and byte cap, never following a redirect. Returns the
+    response with its (capped) body already read."""
+    t = min(op_timeout, _remaining())
+    r = _sess().request(method, url, timeout=(t, t), allow_redirects=False, stream=True, **kw)
+    watchdog = threading.Timer(_remaining(), _abort, (r,))
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        if 300 <= r.status_code < 400:
+            raise SyncBoundError(f"redirect refused (HTTP {r.status_code})")
+        try:
+            declared = int(r.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            declared = 0
+        if declared > MAX_RESPONSE_BYTES:
+            raise SyncBoundError("response over the size cap")
+        body, size = [], 0
+        try:
+            for chunk in r.iter_content(_STREAM_CHUNK):
+                size += len(chunk)
+                if size > MAX_RESPONSE_BYTES:
+                    raise SyncBoundError("response over the size cap")
+                _remaining()
+                body.append(chunk)
+        except SyncBoundError:
+            raise
+        except Exception as e:           # a read the watchdog cut is a deadline refusal, not a short body
+            if not watchdog.is_alive():
+                raise SyncBoundError("round deadline exceeded") from e
+            raise
+        if not watchdog.is_alive():      # cut at the deadline: the body may be short
+            raise SyncBoundError("round deadline exceeded")
+        r._content = b"".join(body)
+        r._content_consumed = True
+        return r
+    finally:
+        watchdog.cancel()
+        r.close()
+
+
 class _ClampMSSAdapter(HTTPAdapter):
     """Cap the outgoing TCP segment size on sync connections so multi-KB bodies survive a
     sub-1280-MTU tailnet path. Adds the socket option ONLY where TCP_MAXSEG is settable
@@ -88,7 +170,7 @@ def _get_nonced(base, path, **params):
     # Also hands back the request's nonce (None when unsigned): a responder signs its hello over it (#107).
     qs = urlencode(params) if params else ""
     headers = sync_common.sign_sync_request("GET", path, qs, b"")
-    r = _sess().get(f"{base}{path}", params=params or None, timeout=15, headers=headers or None)
+    r = _bounded("GET", f"{base}{path}", 15, params=params or None, headers=headers or None)
     r.raise_for_status()
     return r.json(), headers.get("Hive-Auth-Nonce")
 
@@ -109,7 +191,7 @@ def _post(base, path, payload, peer=None):
                 pass
         if tok:
             headers["Hive-CSRF"] = tok
-    r = _sess().post(f"{base}{path}", data=body, headers=headers, timeout=60)
+    r = _bounded("POST", f"{base}{path}", 60, data=body, headers=headers)
     r.raise_for_status()
     return r.json()
 
@@ -135,6 +217,8 @@ def _peer_label(peer):
 def _short_err(e):
     """A one-line reason for a failed peer round, instead of the raw requests/urllib3 dump."""
     exc = requests.exceptions
+    if isinstance(e, SyncBoundError):
+        return str(e)
     if isinstance(e, exc.ConnectTimeout):
         return "connect timeout"
     if isinstance(e, exc.ReadTimeout):
@@ -213,6 +297,14 @@ def _hello_note(check, action):
 
 
 def _sync_with_peer(peer, mode=None):
+    _round.deadline = time.monotonic() + ROUND_DEADLINE
+    try:
+        _sync_round(peer, mode)
+    finally:
+        _round.deadline = None
+
+
+def _sync_round(peer, mode=None):
     base = peer["url"].rstrip("/")
     pid = _peer_label(peer)
     mode = mode or sync_common.sync_auth_outbound_mode()

@@ -62,7 +62,7 @@ def _journal(home):
 
 def _seed_b64(home):
     out = Path(home).parent / "export.json"
-    assert _ctl(home, "owner", "export", "--out", str(out)).returncode == 0
+    assert _ctl(home, "owner", "export", "--plaintext", "--out", str(out)).returncode == 0
     return json.loads(out.read_text())["seed"]
 
 
@@ -239,7 +239,7 @@ def test_owner_seal_converts_a_plaintext_key_in_place(tmp_path):
 
 def _seed_b64_with(home, pw):
     out = Path(home).parent / "export2.json"
-    assert _ctl(home, "owner", "export", "--out", str(out), HIVE_OWNER_KEY_PASSPHRASE=pw).returncode == 0
+    assert _ctl(home, "owner", "export", "--plaintext", "--out", str(out), HIVE_OWNER_KEY_PASSPHRASE=pw).returncode == 0
     return json.loads(out.read_text())["seed"]
 
 
@@ -372,3 +372,97 @@ def test_the_link_flag_list_matches_the_parser(tmp_path, monkeypatch):
         ref_opts = {a.dest for a in sub.choices[cmd]._actions
                     if a.option_strings and a.metavar in ("FACT", "DECISION", "REF")}
         assert set(m._LINK_FLAGS[cmd]) == ref_opts, (cmd, sorted(ref_opts))
+
+
+# ---- owner export is sealed by default; stray plaintext copies are reported (private #52) ----------------
+
+def test_owner_export_is_sealed_by_default(tmp_path):
+    home, seed = _plaintext_node(tmp_path)
+    out = tmp_path / "default-export.json"
+    r = _ctl(home, "owner", "export", "--out", str(out), HIVE_OWNER_PASSPHRASE="export-pass")
+    assert r.returncode == 0, r.stderr
+    env = json.loads(out.read_text())
+    assert env.get("enc") != "none" and "seed" not in env
+    assert seed not in out.read_text()
+    assert "UNENCRYPTED" not in r.stdout
+
+
+def test_owner_export_default_cancels_without_a_passphrase(tmp_path):
+    home, _ = _plaintext_node(tmp_path)
+    out = tmp_path / "none.json"
+    r = _ctl(home, "owner", "export", "--out", str(out), HIVE_OWNER_PASSPHRASE=None)
+    assert not out.exists()
+    assert "nothing exported" in r.stdout.lower()
+
+
+@pytest.mark.skipif(not POSIX, reason="POSIX modes")
+def test_owner_export_plaintext_is_0600_and_atomic(tmp_path):
+    home, seed = _plaintext_node(tmp_path)
+    out = tmp_path / "plain.json"
+    r = _ctl(home, "owner", "export", "--plaintext", "--out", str(out))
+    assert r.returncode == 0, r.stderr
+    assert stat.S_IMODE(out.stat().st_mode) == 0o600
+    assert json.loads(out.read_text())["seed"] == seed
+    assert not list(tmp_path.glob(".plain.json.*.tmp"))            # written via temp file + rename, none left
+    src = (PROJECT / "hivemind_owner.py").read_text()
+    assert "out.write_text" not in src
+
+
+def test_doctor_owner_copies_finds_each_planted_copy(tmp_path):
+    home, _ = _plaintext_node(tmp_path)
+    cwd = tmp_path / "cwd"
+    fake_home = tmp_path / "fakehome"
+    stash = tmp_path / "stash"
+    for d in (cwd, fake_home, stash):
+        d.mkdir(exist_ok=True)
+    planted = [Path(home) / "hive-owner-aaa.key", cwd / "hive-owner-bbb.key",
+               fake_home / "hive-owner-ccc.key", stash / "hive-owner-ddd.key", stash / ".owner-key"]
+    for p in planted:
+        p.write_text("not a real key\n")
+    r = subprocess.run([sys.executable, str(PROJECT / "hv"), "doctor", "--format", "json"],
+                       env=_env(home, HOME=str(fake_home)), cwd=cwd, capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, start_new_session=POSIX)
+    check = next(c for c in json.loads(r.stdout)["checks"] if c["name"] == "owner-copies")
+    assert check["status"] == "warn"
+    for p in planted:
+        assert str(p) in check["detail"], p
+    assert "not a real key" not in check["detail"]
+    assert all(p.exists() for p in planted)                       # nothing deleted
+
+
+def test_doctor_owner_copies_does_not_call_a_sealed_default_export_plaintext(tmp_path):
+    home, seed = _plaintext_node(tmp_path)
+    cwd = tmp_path / "cwd"
+    fake_home = tmp_path / "fakehome"
+    cwd.mkdir()
+    fake_home.mkdir()
+    (tmp_path / "stash" / ".owner-key").unlink()
+    r = subprocess.run([sys.executable, str(PROJECT / "hivemind_ctl.py"), "owner", "export"],
+                       env=_env(home, HOME=str(fake_home), HIVE_OWNER_PASSPHRASE="export-pass"), cwd=cwd,
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, start_new_session=POSIX)
+    assert r.returncode == 0, r.stderr
+    exported = list(cwd.glob("hive-owner-*.key")) + list(Path(home).glob("hive-owner-*.key")) \
+        + list(fake_home.glob("hive-owner-*.key"))
+    assert exported and "seed" not in json.loads(exported[0].read_text())
+    d = subprocess.run([sys.executable, str(PROJECT / "hv"), "doctor", "--format", "json"],
+                       env=_env(home, HOME=str(fake_home)), cwd=cwd, capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, start_new_session=POSIX)
+    check = next(c for c in json.loads(d.stdout)["checks"] if c["name"] == "owner-copies")
+    assert check["status"] == "warn" and str(exported[0]) in check["detail"]
+    assert "plaintext owner-key copy" not in check["detail"]
+    assert "sealed or plaintext" in check["detail"] and "not opened" in check["detail"]
+    assert seed not in check["detail"]
+
+
+def test_doctor_owner_copies_ok_when_clean(tmp_path):
+    home, _ = _plaintext_node(tmp_path)
+    cwd = tmp_path / "cwd"
+    fake_home = tmp_path / "fakehome"
+    cwd.mkdir()
+    fake_home.mkdir()
+    (tmp_path / "stash" / ".owner-key").unlink()                   # the helper plants a plaintext stash copy
+    r = subprocess.run([sys.executable, str(PROJECT / "hv"), "doctor", "--format", "json"],
+                       env=_env(home, HOME=str(fake_home)), cwd=cwd, capture_output=True, text=True,
+                       stdin=subprocess.DEVNULL, start_new_session=POSIX)
+    check = next(c for c in json.loads(r.stdout)["checks"] if c["name"] == "owner-copies")
+    assert check["status"] == "ok"

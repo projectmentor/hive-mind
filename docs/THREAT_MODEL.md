@@ -268,6 +268,13 @@ shown because a planted forget would be re-signed too. Once set,
   An unrecognised source class weighs 1.0, like an absent one: a class can only claim a discount,
   so there is nothing to fail open into.
 
+- **`hv doctor` `owner-copies` is a name-only check.** It looks one level deep in four directories
+  (`$HIVE_HOME`, the current directory, the home directory, the identity stash) for `hive-owner-*.key` and
+  the stash's `.owner-key`, and never opens a file. The default export and `--plaintext` share a basename,
+  so it cannot tell a sealed export from a plaintext one. A `--plaintext --out` under another name, or a
+  copy outside those directories, is invisible to it. Operator rule: delete exports after moving them
+  off-device.
+
 ## Cryptographic posture
 
 - Primitives are **pure-Python** (Ed25519, X25519, Ed25519↔Curve25519, ChaCha20-Poly1305 per

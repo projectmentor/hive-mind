@@ -64,7 +64,7 @@ def _owner_seed_b64(home):
     """The owner seed of `home`, as base64, from an unencrypted `owner export` (the key is sealed at rest
     since 2.0 PR 3b, so there is no plaintext file to read)."""
     out = Path(home).parent / f"{Path(home).name}-export.json"
-    assert _ctl(home, "owner", "export", "--out", str(out)).returncode == 0
+    assert _ctl(home, "owner", "export", "--plaintext", "--out", str(out)).returncode == 0
     return json.loads(out.read_text())["seed"]
 
 

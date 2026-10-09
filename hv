@@ -8368,6 +8368,25 @@ def _fix_key_perms():
     return fixed, failed
 
 
+def _owner_copies():
+    """Paths (never contents) of owner-key copies: `hive-owner-*.key` exports in HIVE_HOME, the current
+    directory, the home directory and the identity stash, plus the stash's plaintext `.owner-key`. The
+    exports are found by name and never opened: the default export is sealed, `--plaintext` is not, and both
+    write the same basename."""
+    stash = Path(os.environ.get("HIVE_IDENTITY_STASH", Path.home() / ".config" / "hive-mind" / "identity"))
+    found = []
+    for d in (HIVE_HOME, Path.cwd(), Path.home(), stash):
+        try:
+            hits = sorted(d.glob("hive-owner-*.key"))
+        except OSError:
+            continue
+        found.extend(str(p) for p in hits if p.is_file() and str(p) not in found)
+    p = stash / ".owner-key"
+    if p.is_file() and str(p) not in found:
+        found.append(str(p))
+    return found
+
+
 def _doctor_status():
     """Run the local health checks (READ-ONLY) and return a list of
     {name, status: 'ok'|'warn'|'fail', detail}. Shared by `hv doctor` text + json output.
@@ -8581,6 +8600,27 @@ def _doctor_status():
                                  "`hive-mind` command"})
     else:
         checks.append({"name": "owner-seal", "status": "ok", "detail": "no owner key on this device"})
+
+    # 3b'. Stray plaintext owner-key copies: paths only, never contents; nothing is deleted.
+    try:
+        found = _owner_copies()
+        if found:
+            plain = [f for f in found if Path(f).name == ".owner-key"]
+            named = [f for f in found if f not in plain]
+            parts = []
+            if named:
+                parts.append(f"{len(named)} owner-key export file(s) found by name in HIVE_HOME, the current "
+                             "directory, the home directory or the identity stash, not opened, so each may be "
+                             "sealed or plaintext: " + ", ".join(named))
+            if plain:
+                parts.append("plaintext identity-stash owner key: " + ", ".join(plain))
+            checks.append({"name": "owner-copies", "status": "warn", "detail": (
+                "; ".join(parts) + ". Move off-device what you need, then delete the rest yourself; "
+                "`hv doctor` never deletes or reads them")})
+        else:
+            checks.append({"name": "owner-copies", "status": "ok", "detail": "no stray owner-key copies found"})
+    except Exception as e:
+        checks.append({"name": "owner-copies", "status": "warn", "detail": f"owner-copies check error: {e}"})
 
     # 3c. Genesis — is the declaration that established this hive pinned, and is it the only one?
     #     ok   = pinned, and exactly one self-signed `owner` declaration in the journal.
@@ -10817,9 +10857,11 @@ def build_parser():
     owner_pin.add_argument("--fingerprint", metavar="FP",
                            help="Pin from an invite's genesis fingerprint (<hive_id>/<owner_id>/<hash8>), before the first sync")
     owner_pin.add_argument("--force", action="store_true", help="With --set/--fingerprint: replace an existing pin (a deliberate fork)")
-    owner_export = owner_sub.add_parser("export", help="Back up this device's owner key to a file (for recovery)")
+    owner_export = owner_sub.add_parser("export", help="Back up this device's owner key to a passphrase-encrypted file (for recovery)")
     owner_export.add_argument("--out", help="Output file (default ./hive-owner-<owner_id>.key)")
-    owner_export.add_argument("--passphrase", action="store_true", help="Encrypt the file with a passphrase (prompted)")
+    owner_export.add_argument("--passphrase", action="store_true", help=argparse.SUPPRESS)  # the default now; kept so old scripts run
+    owner_export.add_argument("--plaintext", action="store_true",
+                              help="Write the seed UNENCRYPTED (default: encrypted with a prompted passphrase)")
     owner_import = owner_sub.add_parser("import", help="Install an owner key from a backup file (resume governance here)")
     owner_import.add_argument("file", help="The exported owner-key file")
     owner_import.add_argument("--force", action="store_true", help="Install even if it doesn't match the journal's established owner")

@@ -305,9 +305,15 @@ shown because a planted forget would be re-signed too. Once set,
 A seat is an agent session that the runner wakes on a GitHub event or a hive entry. Text a seat reads can steer
 it, so the sources are gated:
 
-- **`runner.github_authors`** (default: the owner's account only). The runner drops a comment, review, PR or
-  issue whose author is outside the list before it classifies the event, so foreign text never reaches a seat or
-  wakes one. A missing author counts as foreign.
+- **The GitHub channel gate** (`channel.<name>.authors` and `channel.<name>.author_classes`). `authors` lists
+  logins; `author_classes` lists the classes (`owner`, `member`, `collaborator`, ...) mapped from GitHub's
+  `author_association`. Both unset admits nobody. On this fleet they are fleet keys, set by the owner with a
+  signed `hive-mind config set`: `authors` is the owner's login and `author_classes` is
+  `owner,member,collaborator`. The shipped dev workflow's addressed rules also require one of those three
+  classes. Text from anyone else is dropped before it is classified, so it never reaches a seat or wakes one.
+  The gate therefore admits the owner's account plus anyone the owner makes a collaborator on a watched repo (or
+  an org member, if the repos move to an org). Today the only collaborator on all three repos is the owner.
+- **Hive events are not author-gated.** Any admitted device's entry reaches the hive channel.
 - **Fork heads are never checked out.** A seat does not fetch or run a PR head from a fork.
 - **Untrusted bodies are framed as data.** Whatever text a seat does read from GitHub or the hive reaches it
   marked as data to read, not as instructions.
@@ -320,12 +326,13 @@ this model already draws: an admitted device is a member of the hive, and the ow
 
 Operator rules:
 
-- Keep `runner.github_authors` to the owner's account.
+- Keep `channel.github.authors` to the owner's login.
+- Add no collaborator (or org member) to a watched repo while `author_classes` includes that class.
 - Run seats only on nodes the owner controls.
 - Admit no device the owner does not control while seats run as the operator.
 
 **Reopen if** any of these arrives: federation, hosted relays, an admitted device the owner does not control, or a
-second login in `runner.github_authors`. Tracked in hive-mind-private #44.
+second login or collaborator admitted by the gate. Tracked in hive-mind-private #44.
 
 ## Cryptographic posture
 

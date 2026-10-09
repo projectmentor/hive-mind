@@ -266,6 +266,18 @@ def test_a_local_write_does_not_reuse_the_seq_of_a_line_on_disk_the_reader_skips
     assert len(keys) == len(set(keys))
 
 
+def test_a_raw_line_at_seq_max_does_not_block_later_local_writes(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    first = hv.append_journal("fact", {"content": "a"})
+    huge = {"node_id": first["node_id"], "seq": 2**53, "type": "fact", "timestamp": first["timestamp"],
+            "payload": {"content": "wide"}, "prev_hash": "sha256:x"}
+    assert merkle.envelope_problem(huge) is not None
+    with open(next((tmp_path / "journal").glob("*.jsonl")), "a") as fh:
+        fh.write(json.dumps(huge) + "\n")
+    assert hv.append_journal("fact", {"content": "b"})["seq"] == 2
+
+
 def test_wire_add_names_a_bad_name_or_version(tmp_path, monkeypatch, capsys):
     hv = _loadhv(tmp_path, monkeypatch)
     _jd(tmp_path)

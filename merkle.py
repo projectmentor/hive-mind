@@ -112,7 +112,8 @@ def read_all_entries(journal_dir):
 
 def max_raw_seq(journal_dir, node_id):
     """The highest integer seq any parseable journal line holds for `node_id`, INCLUDING a line the reader skips
-    for a failed envelope (it still occupies its key on a peer that accepts it). 0 when there is none."""
+    for a failed envelope (it still occupies its key on a peer that accepts it). A seq at or past SEQ_MAX is not
+    counted: no peer accepts it, and minting past it would be refused. 0 when there is none."""
     journal_dir = Path(journal_dir)
     top = 0
     if not journal_dir.exists():
@@ -124,7 +125,7 @@ def max_raw_seq(journal_dir, node_id):
             except json.JSONDecodeError:
                 continue
             if (isinstance(e, dict) and e.get("node_id") == node_id and isinstance(e.get("seq"), int)
-                    and not isinstance(e["seq"], bool)):
+                    and not isinstance(e["seq"], bool) and e["seq"] < SEQ_MAX):
                 top = max(top, e["seq"])
     return top
 

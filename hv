@@ -8010,6 +8010,10 @@ def wire_cmd(args):
         if isinstance(v, bool) or not isinstance(v, int) or not -2**63 <= v < 2**63:
             print("'version' must be an integer.")
             return
+        problem = merkle.envelope_problem({"node_id": NODE_ID, "seq": 1, "type": t, "payload": payload})
+        if problem is not None:
+            print(f"Not a valid {t}: {problem}.")
+            return
         gov = _governance_state(entries)
         writers = gov.get("config", {}).get("cell_writers", "owner")
         if gov.get("owner_id"):                 # cells are executable: gate the write (hive #60)

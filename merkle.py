@@ -29,6 +29,15 @@ SEQ_JUMP_MAX = 2**20            # ingest: at most this far past the highest seq 
 # to vocabulary.ENTRY_TYPES by tests/test_envelope.py; a type outside it still lands and projects to nothing.
 _OBJECT_PAYLOAD_TYPES = ("capsule", "cell", "comb", "decision", "entity", "entity_fact", "fact", "governance", "idea",
                          "link", "retract")
+# The fields only one owner-authored content type carries. The owner signature covers the payload but not the entry
+# `type`, so a body re-appended under another type must fail that type's row here (SECREV B1). The rows are disjoint
+# for every body `hv` writes: a capsule is sealed (`alg`, `wraps`; its `kind` is credential or tombstone), a cell
+# names a runnable `kind`, a comb lists `cells`.
+_CONTENT_SHAPES = {
+    "capsule": {"alg": lambda v: isinstance(v, str) and bool(v), "wraps": lambda v: isinstance(v, list)},
+    "cell": {"kind": lambda v: v in ("tool", "agent")},
+    "comb": {"cells": lambda v: isinstance(v, list) and all(isinstance(c, str) for c in v)},
+}
 _STR_FIELDS = ("action", "device_id", "proposal_id", "basis_ts", "label", "principal", "module")   # of a governance payload
 
 
@@ -66,12 +75,15 @@ def envelope_problem(e, tip=None):
         for field in _STR_FIELDS:
             if p.get(field) is not None and not isinstance(p[field], str):
                 return f"governance {field} is not a string"
-    elif typ in ("cell", "comb", "capsule"):
+    elif typ in _CONTENT_SHAPES:
         if p.get("name") is not None and not isinstance(p["name"], str):
             return f"{typ} name is not a string"
         v = p.get("version")
         if v is not None and (isinstance(v, bool) or not isinstance(v, int) or not -2**63 <= v < 2**63):
             return f"{typ} version is not an integer"
+        for field, check in _CONTENT_SHAPES[typ].items():
+            if not check(p.get(field)):
+                return f"{typ} has no valid {field}"
     return None
 
 

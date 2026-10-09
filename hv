@@ -7055,7 +7055,7 @@ def _fetch_official_pubkey():
         return None
 
 
-def _verify_status(root, check_anchor=True):
+def _verify_status(root, check_anchor=True, pinned_pub=None):
     """The integrity + authenticity verdict, as data (shared by `verify` and `doctor`).
     Three independent layers, strongest last:
       1. INTEGRITY  — local source fingerprint matches the bundled manifest (verify.json). Catches
@@ -7068,7 +7068,13 @@ def _verify_status(root, check_anchor=True):
          manifest: the bundled key will not match the one served from hivemind.projectmentor.org.
     Returns {level, version, ok, lines}. `ok` is True once integrity holds and the bundled signature
     (if any) is valid; the key-anchor layer only changes the headline, never `ok`. check_anchor=False
-    skips the network layer (fast, offline-safe). Never raises and never blocks."""
+    skips the network layer (fast, offline-safe). Never raises and never blocks.
+
+    pinned_pub (32 raw bytes) is for judging a tree that is NOT installed yet (`hive-mind update` checks the
+    fetched tree before it switches to it). The tree's own hivemind.pub is then no evidence at all: the manifest
+    must verify under the pinned key, taken from the installed tree, and the tree must ship that same key
+    (hivemind.pub is outside the manifest, so a swapped one would otherwise ride in under a good signature).
+    Anything short of that is not ok: no signature, a different key, a bad signature."""
     root = Path(root)
     local = _source_manifest(root)
     try:
@@ -7088,6 +7094,22 @@ def _verify_status(root, check_anchor=True):
         return {"level": "modified", "version": ver, "ok": False, "lines": [
             "⚠ This install has been MODIFIED locally — your files differ from the signed manifest.",
             f"  If you did not edit it yourself, reinstall from the official source: {OFFICIAL_SOURCE}"]}
+
+    if pinned_pub is not None:
+        if _ed25519 is None or not pinned_pub:
+            return {"level": "unverifiable", "version": ver, "ok": False, "lines": [
+                "⚠ Cannot check the signature here (no Ed25519 implementation or no pinned key)."]}
+        if sig is None:
+            return {"level": "unsigned", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver} carries no release signature."]}
+        if bundled_pub != pinned_pub:
+            return {"level": "key_changed", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver} ships a different signing key than the one this install pins."]}
+        if not _ed25519.verify(manifest_bytes, sig, pinned_pub):
+            return {"level": "sig_invalid", "version": ver, "ok": False, "lines": [
+                f"⚠ v{ver}: the manifest is not signed by the key this install pins."]}
+        return {"level": "signed", "version": ver, "ok": True, "lines": [
+            f"✓ v{ver}: integrity OK and signed by the pinned key."]}
 
     # Layer 2: signature.
     if _ed25519 is None or sig is None or bundled_pub is None:

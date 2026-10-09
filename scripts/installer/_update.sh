@@ -4,9 +4,17 @@ set -euo pipefail
 
 # `-h`/`--help` prints usage and changes nothing; any other argument is refused (exit 2) BEFORE the
 # command does anything (#224). Keep this ahead of every side effect.
+ALLOW_UNSIGNED=0
 for _a in "$@"; do
   case "$_a" in
-    -h|--help) echo "Usage: hive-mind update"; echo "  Pull the latest code, restart the daemon and re-verify (auto-heals after a force-push/rewrite)."; exit 0 ;;
+    -h|--help)
+      echo "Usage: hive-mind update [--allow-unsigned]"
+      echo "  Pull the latest code, restart the daemon and re-verify (auto-heals after a force-push/rewrite)."
+      echo "  The new code is checked against this install's pinned release key BEFORE it replaces anything;"
+      echo "  a tree that is unsigned, modified or signed by another key is refused and nothing changes."
+      echo "  --allow-unsigned  install it anyway (a fork, or a main whose re-sign has not landed). Your call."
+      exit 0 ;;
+    --allow-unsigned) ALLOW_UNSIGNED=1 ;;
     *) echo "hive-mind update: unknown argument '$_a' (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -25,20 +33,40 @@ ok()   { echo -e "${GRN}[ok]${RST}  $*"; }
 info() { echo -e "${BLD}[..]${RST}  $*"; }
 warn() { echo -e "${YLW}[!!]${RST}  $*"; }
 
-# The signed-manifest verdict as one word (official/offline_ok/signed/modified/…), offline and fast:
-# `hv verify` exits non-zero unless verified, and its key-anchor layer goes to the network.
-_verify_level() {
-  python3 - "$HIVE_DIR" 2>/dev/null <<'PY' || echo unknown
+# The signed-manifest verdict on a commit that is NOT installed yet, as one word on the first line (signed,
+# modified, unsigned, key_changed, sig_invalid, no_pin, unknown...) and the reason after it. The commit is
+# checked out detached into a scratch clone, so the installed tree and branch are never touched, and it is
+# judged by the INSTALLED hv against the key the installed tree pins: neither the fetched hv nor the fetched
+# hivemind.pub is ever run or trusted. Offline: no network layer. Anything that goes wrong is `unknown`.
+_verify_commit() {
+  local _t _out
+  _t="$(mktemp -d)" || { echo unknown; return; }
+  if git clone -q --no-checkout "$HIVE_DIR" "$_t/tree" >/dev/null 2>&1 \
+     && git -C "$_t/tree" checkout -q --detach "$1" >/dev/null 2>&1; then
+    _out="$(PYTHONDONTWRITEBYTECODE=1 python3 - "$HIVE_DIR" "$_t/tree" 2>/dev/null <<'PY'
 import importlib.util, sys
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-root = Path(sys.argv[1])
+root, tree = Path(sys.argv[1]), Path(sys.argv[2])
 loader = SourceFileLoader("hv_update_check", str(root / "hv"))
 spec = importlib.util.spec_from_loader("hv_update_check", loader)
 hv = importlib.util.module_from_spec(spec)
 loader.exec_module(hv)
-print(hv._verify_status(root, check_anchor=False)["level"])
+pub = hv._b64bytes((root / "hivemind.pub").read_text()) if (root / "hivemind.pub").is_file() else None
+if not pub:
+    print("no_pin\nThis install has no hivemind.pub to pin, so a new tree cannot be checked.")
+else:
+    v = hv._verify_status(tree, check_anchor=False, pinned_pub=pub)
+    print(v["level"])
+    for line in v["lines"]:
+        print(line)
 PY
+)" || _out=unknown
+  else
+    _out=unknown
+  fi
+  rm -rf "$_t"
+  echo "${_out:-unknown}"
 }
 
 # 2.0 (4c, decision h:696638b9b7): the update's last word on the pre-genesis forget grandfather. An owned hive
@@ -95,58 +123,91 @@ echo ""
 echo -e "${BLD}hive-mind update${RST}"
 echo "────────────────────────────────────"
 
-info "Pulling latest from GitHub..."
-# Normally a fast-forward. But if upstream history was REWRITTEN (e.g. a force-push to scrub a
-# leaked secret from history), the local branch can no longer fast-forward and a plain pull aborts,
-# stranding the node on the old history. Detect that case and hard-reset to the upstream — but ONLY
-# when the working tree is clean, so a node with genuine local edits is never silently clobbered.
+info "Fetching latest from GitHub..."
+# VERIFY, THEN SWITCH. The fetch only fills remote-tracking refs and tags; nothing the node runs changes
+# until the commit it would switch to has passed the signed-manifest check against the key THIS install
+# pins. A refusal leaves the branch and the working tree exactly as they were.
+# Normally the switch is a fast-forward. But if upstream history was REWRITTEN (e.g. a force-push to scrub a
+# leaked secret from history), the local branch can no longer fast-forward; the switch is then a hard-reset,
+# but ONLY when the working tree is clean, so a node with genuine local edits is never silently clobbered.
 git -C "$HIVE_DIR" fetch --tags origin
 _BR="$(git -C "$HIVE_DIR" rev-parse --abbrev-ref HEAD)"
-if git -C "$HIVE_DIR" merge-base --is-ancestor HEAD "@{u}" 2>/dev/null; then
-  git -C "$HIVE_DIR" pull --ff-only
-  ok "Repo updated"
-elif [ -z "$(git -C "$HIVE_DIR" status --porcelain)" ]; then
-  info "Upstream history was rewritten — hard-resetting clean tree to origin/$_BR"
-  git -C "$HIVE_DIR" reset --hard "@{u}"
-  ok "Repo re-synced to rewritten upstream"
+_HEAD="$(git -C "$HIVE_DIR" rev-parse HEAD)"
+_NEW="$(git -C "$HIVE_DIR" rev-parse "@{u}")"
+
+_switch_mode() {
+  if git -C "$HIVE_DIR" merge-base --is-ancestor HEAD "$_NEW" 2>/dev/null; then _MODE=ff
+  elif [ -z "$(git -C "$HIVE_DIR" status --porcelain)" ]; then _MODE=reset
+  else _MODE=refuse; fi
+}
+
+if [ "$_HEAD" = "$_NEW" ]; then
+  ok "Already at the latest commit"
 else
-  echo "  Upstream diverged AND you have local changes — refusing to reset." >&2
-  echo "  Commit/stash your changes, then: git -C \"$HIVE_DIR\" reset --hard @{u}" >&2
-  exit 1
+  _switch_mode
+  if [ "$_MODE" = refuse ]; then
+    echo "  Upstream diverged AND you have local changes — refusing to reset." >&2
+    echo "  Commit/stash your changes, then: git -C \"$HIVE_DIR\" reset --hard @{u}" >&2
+    exit 1
+  fi
+
+  info "Checking ${_NEW:0:12} against this install's pinned release key..."
+  _res="$(_verify_commit "$_NEW")"; _LEVEL="${_res%%$'\n'*}"
+
+  # sign.yml re-signs the manifest a few minutes AFTER each merge to main, so the newest commit is
+  # `modified` until that commit lands. Wait for it (#93), then verify the commit that carries it. A
+  # commit that is still unsigned after the wait is refused, not installed.
+  RESIGN_WAIT_S="${HIVE_RESIGN_WAIT_S:-180}"
+  RESIGN_POLL_S="${HIVE_RESIGN_POLL_S:-15}"
+  if [ "$_LEVEL" = modified ] && [ "$ALLOW_UNSIGNED" = 0 ]; then
+    info "Signed manifest is behind the code; waiting up to ${RESIGN_WAIT_S}s for the release re-sign..."
+    _waited=0
+    while [ "$_waited" -lt "$RESIGN_WAIT_S" ]; do
+      sleep "$RESIGN_POLL_S"; _waited=$((_waited + RESIGN_POLL_S))
+      git -C "$HIVE_DIR" fetch -q --tags origin 2>/dev/null || continue
+      _N2="$(git -C "$HIVE_DIR" rev-parse "@{u}")"
+      if [ "$_N2" != "$_NEW" ] && git -C "$HIVE_DIR" merge-base --is-ancestor "$_NEW" "$_N2"; then
+        _NEW="$_N2"; _switch_mode
+        _res="$(_verify_commit "$_NEW")"; _LEVEL="${_res%%$'\n'*}"
+        [ "$_LEVEL" = modified ] || break
+      fi
+    done
+  fi
+
+  if [ "$_LEVEL" = signed ]; then
+    ok "Signature valid under the pinned key"
+  elif [ "$ALLOW_UNSIGNED" = 1 ]; then
+    warn "Verification failed ($_LEVEL) — installing ${_NEW:0:12} anyway because of --allow-unsigned"
+  else
+    echo "hive-mind update: REFUSED. Commit ${_NEW:0:12} on origin/$_BR did not verify ($_LEVEL):" >&2
+    printf '%s\n' "${_res#*$'\n'}" | sed 's/^/  /' >&2
+    echo "  Nothing was changed: $_BR is still at ${_HEAD:0:12} and the working tree is untouched." >&2
+    if [ "$_LEVEL" = modified ]; then
+      echo "  If the release re-sign has not landed yet, run 'hive-mind update' again in a few minutes." >&2
+    fi
+    echo "  To install it anyway (a fork you trust): hive-mind update --allow-unsigned" >&2
+    exit 1
+  fi
+
+  if [ "$_MODE" = ff ]; then
+    git -C "$HIVE_DIR" merge --ff-only -q "$_NEW"
+    ok "Repo updated"
+  else
+    info "Upstream history was rewritten — hard-resetting clean tree to origin/$_BR"
+    git -C "$HIVE_DIR" reset -q --hard "$_NEW"
+    ok "Repo re-synced to rewritten upstream"
+  fi
 fi
 
-# The pull above may have replaced THIS script on disk, but bash is still running
+# The switch above may have replaced THIS script on disk, but bash is still running
 # the old copy from memory — so any update logic added in the new version (e.g.
 # rewriting systemd units) would silently not run until a SECOND update. Re-exec
-# the freshly-pulled copy once so the new logic applies on the FIRST update. The
+# the freshly-switched copy once so the new logic applies on the FIRST update. It runs only
+# after the verification above has passed (or --allow-unsigned said otherwise). The
 # env-var guard prevents an infinite re-exec loop.
 if [ -z "${HIVE_UPDATE_REEXEC:-}" ]; then
   export HIVE_UPDATE_REEXEC=1
   exec bash "$HIVE_DIR/scripts/installer/_update.sh" "$@"
-fi
-
-# sign.yml re-signs the manifest a few minutes AFTER each merge to main. A pull inside that window
-# leaves a clean tree that differs from the signed manifest, and `hv doctor` reports it MODIFIED.
-# Wait for the re-sign commit and pull it; if it hasn't landed, say so and carry on (#93).
-RESIGN_WAIT_S="${HIVE_RESIGN_WAIT_S:-180}"
-RESIGN_POLL_S="${HIVE_RESIGN_POLL_S:-15}"
-if [ -z "$(git -C "$HIVE_DIR" status --porcelain)" ] && [ "$(_verify_level)" = modified ]; then
-  info "Signed manifest is behind the code; waiting up to ${RESIGN_WAIT_S}s for the release re-sign..."
-  _waited=0; _landed=0
-  while [ "$_waited" -lt "$RESIGN_WAIT_S" ]; do
-    sleep "$RESIGN_POLL_S"; _waited=$((_waited + RESIGN_POLL_S))
-    git -C "$HIVE_DIR" fetch -q origin 2>/dev/null || continue
-    if [ "$(git -C "$HIVE_DIR" rev-parse HEAD)" != "$(git -C "$HIVE_DIR" rev-parse "@{u}")" ] \
-       && git -C "$HIVE_DIR" merge-base --is-ancestor HEAD "@{u}"; then
-      git -C "$HIVE_DIR" pull -q --ff-only && _landed=1
-      break
-    fi
-  done
-  if [ "$_landed" = 1 ] && [ "$(_verify_level)" != modified ]; then
-    ok "Release re-sign landed; pulled it"
-  else
-    warn "Manifest re-sign pending on GitHub; run 'hive-mind update' again in a few minutes"
-  fi
 fi
 
 # Pin the genesis on an upgrading node (hive-mind-private #14). From this release a node that has not

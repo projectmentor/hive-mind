@@ -46,7 +46,7 @@ case "$CMD" in
     echo ""
     echo "Subcommands:"
     echo "  install      Set up this device from scratch"
-    echo "  update       Pull latest + restart daemon (auto-heals after a force-push/rewrite)"
+    echo "  update       Verify, pull latest + restart daemon (auto-heals after a force-push/rewrite)"
     echo "  reset        Recover a wedged install: force-align code + rebuild + restart + verify (keeps your Hive data)"
     echo "  status       Show device health and peer sync state"
     echo "  invite       Print the address to paste on a new device to join this hive"

@@ -8,13 +8,17 @@ services), and a stub `/sync/hello` server on a free port set in the sandbox's `
   (a) the store is locked by another process when the updater rebuilds: the update still finishes
       (units written, daemon restarted and answering, hooks wired), in that order, and the next `hv`
       command catches the store up;
-  (b) a clean tree that differs from the signed manifest, with no re-sign arriving: the updater says
-      the re-sign is pending and carries on;
-  (c) the re-sign commit lands while the updater waits: it is pulled.
+  (b) upstream's newest commit differs from its signed manifest, with no re-sign arriving: the updater
+      refuses it, says the re-sign is pending, and changes nothing;
+  (c) the re-sign commit lands while the updater waits: that one is verified and pulled.
+Verify, then switch: a commit that is unsigned, signed by another key, ships another key, or is an unsigned
+`[skip ci]` main is REFUSED and leaves the branch and the tree exactly as they were (nothing of the fetched
+tree is run); `--allow-unsigned` overrides. The sandbox signs with a test key that the installed tree pins.
 Plus the doctor's `authenticity` window verdict, as a pure table.
 
 Linux only: the updater's service path is systemd there, which the stubs cover.
 """
+import base64
 import http.server
 import importlib.util
 import json
@@ -60,13 +64,36 @@ def _free_port():
         return s.getsockname()[1]
 
 
-def _fix_manifest_digest(repo_dir):
-    """Make verify.json's digest match the committed tree, so the updater sees no pending re-sign."""
+SEED = bytes(range(32))             # the sandbox's release key: the installed tree pins its public half
+OTHER_SEED = bytes(range(1, 33))    # any other key
+
+
+def _ed():
+    spec = importlib.util.spec_from_file_location("ed25519_update_test", REPO / "ed25519.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _sign(repo_dir, seed=SEED, pub_seed=SEED, sig=True):
+    """Sign verify.json's exact bytes with `seed`; ship `pub_seed`'s public key as hivemind.pub."""
+    ed = _ed()
+    (repo_dir / "hivemind.pub").write_text(base64.b64encode(ed.pub_from_seed(pub_seed)).decode() + "\n")
+    sigf = repo_dir / "verify.json.sig"
+    if sig:
+        sigf.write_text(base64.b64encode(ed.sign((repo_dir / "verify.json").read_bytes(), seed)).decode() + "\n")
+    elif sigf.exists():
+        sigf.unlink()
+
+
+def _fix_manifest_digest(repo_dir, **sign):
+    """Make verify.json's digest match the committed tree and sign it, so the updater sees a good release."""
     hv = _load_hv()
     vj = repo_dir / "verify.json"
     m = json.loads(vj.read_text())
     m["digest"] = hv._source_manifest(repo_dir)["digest"]
     vj.write_text(json.dumps(m, indent=2) + "\n")
+    _sign(repo_dir, **sign)
 
 
 def _stale_manifest_digest(repo_dir):
@@ -77,6 +104,7 @@ def _stale_manifest_digest(repo_dir):
     m = json.loads(vj.read_text())
     m["digest"] = "0" * 64
     vj.write_text(json.dumps(m, indent=2) + "\n")
+    _sign(repo_dir)
 
 
 class Sandbox:
@@ -111,6 +139,25 @@ class Sandbox:
         self.port = _free_port()
         (self.hive / ".peers.json").write_text(json.dumps({"port": self.port, "peers": []}))
 
+    def upstream_commit(self, stale=False, **sign):
+        """A new commit on the remote's main: a code change (README line) plus its manifest, `sign` as for
+        _sign (seed, pub_seed, sig), or a deliberately stale digest (an unsigned `[skip ci]` squash)."""
+        n = len(_git(self.src, "log", "--format=%H").split())
+        with open(self.src / "README.md", "a") as fh:
+            fh.write(f"\nrelease note {n}\n")
+        (_stale_manifest_digest if stale else _fix_manifest_digest)(self.src, **({} if stale else sign))
+        _git(self.src, "add", "-A")
+        _git(self.src, "commit", "-q", "-m", f"change {n}")
+        _git(self.src, "push", "-q", "origin", "main")
+        return _git(self.src, "rev-parse", "HEAD")
+
+    def state(self):
+        """Everything a refused update must leave alone: branch, HEAD, the status and the files."""
+        files = {str(p.relative_to(self.hive)): p.read_bytes() for p in sorted(self.hive.rglob("*"))
+                 if p.is_file() and ".git" not in p.relative_to(self.hive).parts}
+        return (_git(self.hive, "rev-parse", "--abbrev-ref", "HEAD"), _git(self.hive, "rev-parse", "HEAD"),
+                _git(self.hive, "status", "--porcelain"), _git(self.hive, "stash", "list"), files)
+
     def env(self, **extra):
         e = {**os.environ, **GIT_ID, "HOME": str(self.home), "HIVE_DIR": str(self.hive),
              "HIVE_HOME": str(self.hive), "PATH": f"{self.stub}:{os.environ['PATH']}",
@@ -126,8 +173,8 @@ class Sandbox:
         return subprocess.run([sys.executable, str(self.hive / "hv"), *args], capture_output=True,
                               text=True, env=self.env(), timeout=120)
 
-    def update(self, **extra):
-        return subprocess.run(["bash", str(self.hive / "scripts" / "installer" / "_update.sh")],
+    def update(self, args=(), **extra):
+        return subprocess.run(["bash", str(self.hive / "scripts" / "installer" / "_update.sh"), *args],
                               capture_output=True, text=True, env=self.env(**extra), timeout=300)
 
     def serve_hello(self):
@@ -196,16 +243,31 @@ def test_a_locked_store_no_longer_aborts_the_update(sandbox):
     assert sig != "stale"
 
 
-def test_b_a_pending_resign_is_reported_and_the_update_carries_on(sandbox):
-    sb = sandbox(fresh_manifest=False)                   # this tree differs from the signed manifest
+def test_a_signed_release_is_verified_and_pulled(sandbox):
+    sb = sandbox()
+    new = sb.upstream_commit()
     r = sb.update()
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "Manifest re-sign pending on GitHub" in r.stdout
-    assert "Update complete" in r.stdout
+    assert "Signature valid under the pinned key" in r.stdout and "Update complete" in r.stdout
+    assert _git(sb.hive, "rev-parse", "HEAD") == new
+    assert r.stdout.count("Signature valid") == 1                 # the re-exec'd copy has nothing left to switch
+
+
+def test_b_a_pending_resign_is_refused_and_nothing_changes(sandbox):
+    sb = sandbox()
+    sb.upstream_commit(stale=True)                               # main as `[skip ci]` left it: code, old manifest
+    before = sb.state()
+    r = sb.update()
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "waiting up to" in r.stdout and "REFUSED" in r.stderr and "(modified)" in r.stderr
+    assert "run 'hive-mind update' again in a few minutes" in r.stderr
+    assert "Update complete" not in r.stdout and "Restarting sync daemon" not in r.stdout
+    assert sb.state() == before
 
 
 def test_c_a_resign_that_lands_during_the_wait_is_pulled(sandbox):
-    sb = sandbox(fresh_manifest=False)
+    sb = sandbox()
+    sb.upstream_commit(stale=True)
 
     def resign():                                        # sign.yml's commit, a moment later
         time.sleep(1.5)
@@ -217,9 +279,65 @@ def test_c_a_resign_that_lands_during_the_wait_is_pulled(sandbox):
     r = sb.update(HIVE_RESIGN_WAIT_S=30)
     t.join()
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "Release re-sign landed; pulled it" in r.stdout
-    assert "re-sign pending" not in r.stdout
+    assert "Signature valid under the pinned key" in r.stdout
     assert _git(sb.hive, "rev-parse", "HEAD") == _git(sb.src, "rev-parse", "HEAD")
+
+
+# Verify, then switch: every way a fetched tree can fail the check refuses it and changes nothing.
+REFUSED = [
+    pytest.param(dict(sig=False), "unsigned", id="unsigned-tree"),
+    pytest.param(dict(seed=OTHER_SEED), "sig_invalid", id="signed-by-another-key-under-the-pinned-pub"),
+    pytest.param(dict(seed=OTHER_SEED, pub_seed=OTHER_SEED), "key_changed", id="ships-and-uses-its-own-key"),
+    pytest.param(dict(pub_seed=OTHER_SEED), "key_changed", id="valid-signature-but-a-swapped-hivemind.pub"),
+    pytest.param(dict(stale=True), "modified", id="unsigned-skip-ci-main"),
+]
+
+
+@pytest.mark.parametrize("kw, level", REFUSED)
+def test_a_tree_that_fails_the_check_is_refused_and_left_untouched(sandbox, kw, level):
+    sb = sandbox()
+    sb.upstream_commit(**kw)
+    marker = sb.tmp / "fetched-code-ran"
+    before = sb.state()
+    r = sb.update(HIVE_RESIGN_WAIT_S=1)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REFUSED" in r.stderr and f"({level})" in r.stderr and "--allow-unsigned" in r.stderr
+    assert "Update complete" not in r.stdout and "Pinned this hive" not in r.stdout
+    assert "Restarting sync daemon" not in r.stdout and not sb.log.exists()      # no unit, no restart
+    assert sb.state() == before and not marker.exists()
+
+
+def test_the_fetched_hv_is_never_run_to_judge_itself(sandbox):
+    """The fetched tree's own `hv` would say whatever it likes; the installed one judges."""
+    sb = sandbox()
+    marker = sb.tmp / "fetched-code-ran"
+    hv_src = sb.src / "hv"
+    hv_src.write_text(hv_src.read_text() + f"\nopen({str(marker)!r}, 'w').write('ran')\n")
+    sb.upstream_commit(sig=False)
+    r = sb.update()
+    assert r.returncode == 1 and "REFUSED" in r.stderr, r.stdout + r.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("kw", [dict(sig=False), dict(stale=True), dict(seed=OTHER_SEED, pub_seed=OTHER_SEED)])
+def test_allow_unsigned_installs_it_anyway_and_says_so(sandbox, kw):
+    sb = sandbox()
+    new = sb.upstream_commit(**kw)
+    r = sb.update(args=["--allow-unsigned"])
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "because of --allow-unsigned" in r.stdout and "Update complete" in r.stdout
+    assert _git(sb.hive, "rev-parse", "HEAD") == new
+
+
+def test_no_pinned_key_in_the_installed_tree_refuses(sandbox):
+    sb = sandbox()
+    sb.upstream_commit()
+    (sb.hive / "hivemind.pub").unlink()                          # untracked-from-the-manifest, so the tree stays clean
+    _git(sb.hive, "update-index", "--assume-unchanged", "hivemind.pub")
+    before = sb.state()
+    r = sb.update()
+    assert r.returncode == 1 and "(no_pin)" in r.stderr, r.stdout + r.stderr
+    assert sb.state() == before
 
 
 @pytest.mark.parametrize("clean, at_upstream, age_s, expected", [

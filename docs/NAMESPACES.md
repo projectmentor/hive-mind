@@ -87,7 +87,7 @@ The `action` of a `governance` entry.
 | `freeze-timestamps` | written | 2.1 | Arms the bounded entry timestamps: `tips` maps each device to the seq its chain is frozen at, and only later entries are checked. Owner-signed. |
 | `heartbeat` | written | 1.9 | Owner liveness: an owner-signed act with no other effect, which keeps the dead-man switch shut. |
 | `join-request` | written | 1.4 | A device asks to be admitted. Device-signed; it carries no authority. |
-| `nominate-successor` | written | 1.7 | Nominate a successor owner key. Owner-signed. |
+| `nominate-successor` | written | 1.7 | Nominate a successor owner key. Owner-signed. Operator rule: after nominating a successor, sign no other owner act until the succession lands; after any succession or transfer, treat the retired owner key as a live secret: rotate away from it and keep no plaintext copy. |
 | `owner` | written | 1.4 | The genesis declaration, which establishes the hive and its owner. Self-signed. |
 | `owner-escrow` | written | 1.6 | A passphrase-sealed copy of the owner key, kept in the hive. Owner-signed. |
 | `propose-election` | written | 1.9 | An admitted device proposes a new owner, installed only past `dead_man_days` of owner silence. Device-signed. |
@@ -239,7 +239,6 @@ Here `legacy` means core no longer writes the file at that path and still reads 
 | `.quarantine.idx` | `$HIVE_HOME` | written | 2.0 | One `hash size` line per quarantine record: the dedupe key and the byte count, so a refusal appends without reading the quarantine; local. |
 | `.quarantine.jsonl` | `$HIVE_HOME` | written | 2.0 | The entries ingest refused for a malformed or hostile payload, verbatim, with the reason, the signer and the time (an entry over 64 KB as its hash, size and first 4 KB); only admitted signers, the newest 200 records within 16 MB, local, never synced (`hv doctor` reports it). |
 | `.quarantine.lock` | `$HIVE_HOME` | written | 2.0 | The lock the quarantine writers take; empty, local. |
-| `.succession-pin` | `$HIVE_HOME` | written | 2.3 | The owner-succession acts this node accepted, pinned the way the genesis is (0600, never synced). |
 | `.telemetry` | `$HIVE_HOME` | written | 1.1 | Directory for the local-only session telemetry store; never synced. |
 | `journal` | `$HIVE_HOME` | written | 1.0 | The journal's day files: the source of truth, and all that sync carries. |
 | `nudge.env` | `$HIVE_HOME` | read | 1.0 | Optional nudge settings (`KEY=value`), read here or at the repository root. |

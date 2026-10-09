@@ -243,16 +243,10 @@ shown because a planted forget would be re-signed too. Once set,
   *Closed (SECREV A3):* the projection honours an owner-signed act only when the device carrying it is the genesis device
   or was admitted, at or before that position, by an honoured owner act and not since revoked or purged. A device nobody
   admitted proves nothing about when the retired key signed. A device that claims a nominated succession is NOT admitted by the claim (the successor key signs the payload, not the device, so a keyless device could re-carry it): the successor's device must be admitted before the claim, and a claim carried by a non-member is uncarried and moves nothing.
-  Succession acts (`transfer`, `claim-succession`) are also **pinned** on each node the way the genesis is
-  (`.succession-pin`, 0600, never synced): once pinned, a succession act is honoured only if it is one of the pinned acts
-  or sorts after the last, so an act dated into an earlier term cannot re-route the chain. `hv doctor` (`succession`)
-  fails when a succession act reached this node after one that sorts later, or when the pin refuses one, and warns when
-  an owner-signed act is dropped for want of a member carrying it. *Residual:* the retired key on a device that IS
-  admitted (a compromised member) can still stamp acts into the old term until the pin is taken, and the pin is
-  first-seen on each node, so a node that first sees the backdated act before the real one pins it (the arrival-order
-  check is what reports that). Owner acts must be made from an admitted device or the genesis device; a new device is
-  admitted from one of those. *Mitigation:* rotate the owner key after any succession and treat the retired key as a
-  live secret; rotate capsules (and the upstream secrets) on an ownership change, as when a device is removed.
+  `hv doctor` (`succession`) reports, without changing which act is honoured, when a succession act reached this node
+  after one that sorts later, and warns when an owner-signed act is dropped for want of a member carrying it.
+  *Residual:* the carrier check closes an unadmitted device; an admitted device can still place a public `claim-succession`, and can place a different `transfer` when it holds the retired key, because the signature names no position. The follow-up is a design issue for that signed position, waiting on David's word. Owner acts must be made from an admitted device or the genesis device; a new device is admitted from one of those. *Mitigation:* rotate the owner key after any succession and treat the retired key as a live secret; rotate capsules (and the upstream secrets) on an ownership change, as when a device is removed.
+  Operator rule: after nominating a successor, sign no other owner act until the succession lands; after any succession or transfer, treat the retired owner key as a live secret: rotate away from it and keep no plaintext copy.
 - **Old ciphertext survives revocation/rotation.** A device removed (or an owner retired) still holds
   any capsule version it already synced; `rotate`/`tombstone` cut it off the *new* version only. To
   truly cut access, rotate the upstream token/secret too. Inherent to encrypt-to-device (you cannot

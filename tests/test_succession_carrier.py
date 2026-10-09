@@ -3,8 +3,8 @@
 An owner signature proves the KEY signed, not WHEN, and a journal position is a stamp the writer picks. So a former
 owner's key on a device nobody admitted could place an act anywhere inside its own term. The projection now honours an
 owner-signed act (governance, forget, link, capsule, cell) only when the carrying device is the genesis device or was
-admitted by an honoured owner act at or before that position. Succession acts are also pinned on the node, as the
-genesis is, and `hv doctor` compares the order they arrived in with the order they sort in.
+admitted by an honoured owner act at or before that position. `hv doctor` compares the order
+succession acts arrived in with the order they sort in; that report changes nothing the projection honours.
 
 Each probe below fails on 9a32be4 and passes here; the last of each pair shows the same act honoured from a member.
 """
@@ -162,52 +162,6 @@ def test_the_genesis_device_carries_without_an_admit(tmp_path, monkeypatch):
     assert _state(hv, base + [cfg])["config"]["cap_self"] == 0.4
 
 
-# --- the pin -----------------------------------------------------------------------------------------------------
-
-def test_a_pinned_succession_refuses_an_act_dated_before_the_tip(tmp_path, monkeypatch):
-    """A compromised ADMITTED device carries the retired key's transfer, stamped into the old term. Unpinned it stands
-    (the legacy rule); once the real handoff is pinned it is refused."""
-    hv = _loadhv(tmp_path, monkeypatch)
-    o1, o2, o3, d0, f, base, real = _world(hv)
-    d1 = _device(hv)
-    base = base + [_gov(hv, {"action": "admit", "device_id": d1["id"], "principal": "p1"}, o1[0], o1[1], ts(1, 30), 3)]
-    fake = _entry(hv, d1, "governance", {"action": "transfer", "new_owner_pub": _b64(o3)}, ts(5), owner=o1)
-    assert _state(hv, base + [real, fake])["owner_id"] == o3[2]            # no pin: positioned, so it wins
-    pin = hv._pin_successions(base + [real])
-    assert pin and pin["acts"] == [hv.compute_hash(real)] and tuple(pin["tip"]) == (ts(10), d0["id"], real["seq"])
-    gov = _state(hv, base + [real, fake])
-    assert gov["owner_id"] == o2[2] and (d1["id"], fake["seq"]) in gov["unpinned"]
-
-
-def test_a_later_succession_extends_the_pin(tmp_path, monkeypatch):
-    hv = _loadhv(tmp_path, monkeypatch)
-    o1, o2, o3, d0, f, base, real = _world(hv)
-    hv._pin_successions(base + [real])
-    nxt = _entry(hv, d0, "governance", {"action": "transfer", "new_owner_pub": _b64(o3)}, ts(12), owner=o2)
-    assert _state(hv, base + [real, nxt])["owner_id"] == o3[2]
-    pin = hv._pin_successions(base + [real, nxt])
-    assert pin["acts"] == [hv.compute_hash(real), hv.compute_hash(nxt)]
-
-
-def test_a_pin_taken_against_another_genesis_is_ignored(tmp_path, monkeypatch):
-    hv = _loadhv(tmp_path, monkeypatch)
-    o1, o2, o3, d0, f, base, real = _world(hv)
-    hv._pin_successions(base + [real])
-    pin = json.loads(hv.SUCCESSION_PIN_PATH.read_text())
-    pin["genesis_hash"] = "sha256:" + "0" * 64
-    hv.SUCCESSION_PIN_PATH.write_text(json.dumps(pin))
-    assert _state(hv, base + [real])["owner_id"] == o2[2]                  # read as no pin; nothing refused
-    assert not _state(hv, base + [real])["unpinned"]
-
-
-def test_a_new_hive_pins_its_genesis_position_as_the_tip(tmp_path, monkeypatch):
-    hv = _loadhv(tmp_path, monkeypatch)
-    o1, o2, o3, d0, f, base, real = _world(hv)
-    pin = hv._pin_successions(base)
-    assert pin["acts"] == [] and tuple(pin["tip"]) == (ts(0), "ownerdev", 1)
-    assert oct(hv.SUCCESSION_PIN_PATH.stat().st_mode & 0o777) == "0o600"
-
-
 # --- the doctor check --------------------------------------------------------------------------------------------
 
 def test_arrival_order_against_journal_order_flags_a_backdated_succession_act(tmp_path, monkeypatch):
@@ -221,7 +175,7 @@ def test_arrival_order_against_journal_order_flags_a_backdated_succession_act(tm
     hv._record_arrivals([(fake["node_id"], fake["seq"])])
     es = base + [real, fake]
     assert hv._succession_inversions(es) == [(f"{d1['id']}:{fake['seq']}", f"{d0['id']}:{real['seq']}")]
-    assert hv._pin_successions(es) is None                                  # nothing is pinned over a disagreement
+    assert _state(hv, es)["owner_id"] == _state(hv, base + [real])["owner_id"]   # the report moves no act
     assert hv._succession_inversions(base + [real]) == []
 
 

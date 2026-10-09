@@ -180,6 +180,7 @@ principal map, and config. No owner yet → discount applies, gate + CAP_self of
 4. **Back-compat.** A hive with no succession/election entries (and the default
    `quorum_m=0`) resolves to exactly the term-0 owner — identical to the pre-succession
    projection.
+   Operator rule: after nominating a successor, sign no other owner act until the succession lands; after any succession or transfer, treat the retired owner key as a live secret: rotate away from it and keep no plaintext copy.
 
 **Escrow tombstones.** `owner-escrow` entries (the in-hive passphrase-encrypted key)
 are collected during the same walk; an owner-signed `revoke-escrow` (a specific

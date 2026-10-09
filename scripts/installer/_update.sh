@@ -15,7 +15,8 @@ for _a in "$@"; do
       echo "  a tree that is unsigned, modified or signed by another key is refused and nothing changes."
       echo "  --allow-unsigned  install it anyway (a fork, or a main whose re-sign has not landed). Your call."
       echo "  --allow-rewind    switch to a commit that is not a descendant of the installed one (an older tree, or a"
-      echo "                    deliberately rewritten history). Without it such a tree is refused and nothing changes."
+      echo "                    deliberately rewritten history), or to a signed manifest whose sequence is lower than the"
+      echo "                    installed one's. Without it such a tree is refused and nothing changes."
       exit 0 ;;
     --allow-unsigned) ALLOW_UNSIGNED=1 ;;
     --allow-rewind) ALLOW_REWIND=1 ;;
@@ -71,6 +72,18 @@ PY
   fi
   rm -rf "$_t"
   echo "${_out:-unknown}"
+}
+
+# The signing sequence of a verify.json read on stdin, parsed by the INSTALLED hv (0 when absent or malformed).
+_manifest_sequence() {
+  PYTHONDONTWRITEBYTECODE=1 python3 -c '
+import importlib.util, sys
+from importlib.machinery import SourceFileLoader
+loader = SourceFileLoader("hv_update_seq", sys.argv[1] + "/hv")
+spec = importlib.util.spec_from_loader("hv_update_seq", loader)
+hv = importlib.util.module_from_spec(spec)
+loader.exec_module(hv)
+print(hv._manifest_sequence(sys.stdin.buffer.read()))' "$HIVE_DIR" 2>/dev/null || echo ""
 }
 
 # 2.0 (4c, decision h:696638b9b7): the update's last word on the pre-genesis forget grandfather. An owned hive
@@ -158,7 +171,8 @@ else
   # A fetched commit that is not a descendant of the installed HEAD is either an OLDER tree (a rollback to an
   # earlier signed commit, whose signature is still valid) or a rewritten history. Neither is installed
   # without the operator saying so. This is not a full rollback check: the manifest signs file contents, not
-  # commits, so an old signed tree wrapped in a descendant commit is a fast-forward (THREAT_MODEL). Nothing has changed yet.
+  # commits, so an old signed tree wrapped in a descendant commit is a fast-forward: the signed `sequence`
+  # check below catches that. Nothing has changed yet.
   if [ "$_MODE" = reset ] && [ "$ALLOW_REWIND" = 0 ]; then
     if git -C "$HIVE_DIR" merge-base --is-ancestor "$_NEW" HEAD 2>/dev/null; then _WHAT="an OLDER commit than the installed one"
     else _WHAT="a rewritten history (not a descendant of the installed commit)"; fi
@@ -206,6 +220,26 @@ else
     fi
     echo "  To install it anyway (a fork you trust): hive-mind update --allow-unsigned" >&2
     exit 1
+  fi
+
+  # The ancestry guard above cannot see an OLD signed tree committed as a descendant of the installed HEAD
+  # (git topology is the origin's to write). The signed manifest's `sequence` is the monotonic check: a fetched
+  # one lower than the installed one is a rollback. Equal installs (a re-sign of the same commit); an installed
+  # manifest without the field counts as 0. Only a manifest that just verified as signed is believed.
+  if [ "$_LEVEL" = signed ] && [ "$ALLOW_REWIND" = 0 ]; then
+    _SEQ_NEW="$(git -C "$HIVE_DIR" show "$_NEW:verify.json" 2>/dev/null | _manifest_sequence)"
+    _SEQ_OLD="$(_manifest_sequence <"$HIVE_DIR/verify.json" 2>/dev/null || true)"
+    if [ -z "$_SEQ_NEW" ]; then
+      echo "hive-mind update: REFUSED. Could not read the signing sequence of ${_NEW:0:12}. Nothing was changed." >&2
+      exit 1
+    fi
+    if [ "$_SEQ_NEW" -lt "${_SEQ_OLD:-0}" ]; then
+      echo "hive-mind update: REFUSED. origin/$_BR at ${_NEW:0:12} carries signing sequence $_SEQ_NEW, lower than the installed ${_HEAD:0:12} ($_SEQ_OLD)." >&2
+      echo "  It is validly signed but older: installing it would roll this node back. Nothing was changed: $_BR is still at ${_HEAD:0:12}" >&2
+      echo "  and the working tree is untouched." >&2
+      echo "  If you mean to install it anyway: hive-mind update --allow-rewind" >&2
+      exit 1
+    fi
   fi
 
   if [ "$_MODE" = ff ]; then

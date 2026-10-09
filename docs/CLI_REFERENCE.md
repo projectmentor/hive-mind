@@ -378,9 +378,13 @@ fork you trust.
 `hive-mind update` also refuses a commit that is not a descendant of the one installed: an older tree (a rollback to
 an earlier commit, whose signature is still valid) or a rewritten history. It prints both shas and changes nothing.
 `hive-mind update --allow-rewind` installs it, for a history rewrite you made on purpose; the signature check still
-applies. The normal fast-forward is unchanged. This is not complete rollback protection: the manifest carries no
-monotonic counter, so an older signed tree committed as a descendant of the installed one still installs (see
-THREAT_MODEL, "Update rollback").
+applies. The normal fast-forward is unchanged.
+
+An older signed tree committed as a descendant of the installed one is caught by the signed `sequence` in
+`verify.json` (the commit count sign.yml signs, `git rev-list --count HEAD`): `hive-mind update` refuses a verified
+commit whose `sequence` is lower than the installed manifest's, naming both numbers, unless `--allow-rewind` is given.
+An equal `sequence` (a re-sign of the same commit) installs. An installed manifest without the field counts as 0, so a
+node starts enforcing after its first update with this script (see THREAT_MODEL, "Update rollback").
 
 ---
 

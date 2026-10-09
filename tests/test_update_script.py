@@ -86,12 +86,20 @@ def _sign(repo_dir, seed=SEED, pub_seed=SEED, sig=True):
         sigf.unlink()
 
 
-def _fix_manifest_digest(repo_dir, **sign):
-    """Make verify.json's digest match the committed tree and sign it, so the updater sees a good release."""
+def _fix_manifest_digest(repo_dir, sequence="auto", **sign):
+    """Make verify.json's digest match the committed tree and sign it, so the updater sees a good release.
+    `sequence` is what sign.yml signs in: by default the commit count the re-sign commit will have (as CI's
+    `git rev-list --count HEAD` of the commit it signs, +1 for this one), an int to force it, None to omit it."""
     hv = _load_hv()
     vj = repo_dir / "verify.json"
     m = json.loads(vj.read_text())
     m["digest"] = hv._source_manifest(repo_dir)["digest"]
+    m.pop("sequence", None)
+    if sequence == "auto":
+        r = subprocess.run(["git", "-C", str(repo_dir), "rev-list", "--count", "HEAD"], capture_output=True, text=True)
+        sequence = int(r.stdout) + 1 if r.returncode == 0 else 1
+    if sequence is not None:
+        m["sequence"] = sequence
     vj.write_text(json.dumps(m, indent=2) + "\n")
     _sign(repo_dir, **sign)
 
@@ -508,3 +516,101 @@ def test_the_update_re_applies_module_units_and_a_broken_module_only_warns(sandb
     r = sb.update(HIVE_MODULES_DIR=mods)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "ghost: units not re-applied" in r.stdout and "Update complete" in r.stdout
+
+
+# --- the signed `sequence` (a monotonic counter inside verify.json): an old signed tree re-wrapped as a
+# descendant commit is a fast-forward, so git ancestry cannot refuse it; the signed number can.
+
+def _rewrapped_old_tree(sb, b0, b1):
+    """Origin/main = a NEW commit whose tree is B0's (validly signed, older) and whose parent is B1."""
+    tree0 = _git(sb.src, "rev-parse", f"{b0}^{{tree}}")
+    forged = _git(sb.src, "commit-tree", tree0, "-p", b1, "-m", "innocuous")
+    _git(sb.src, "push", "-q", "-f", "origin", f"{forged}:refs/heads/main")
+    return forged
+
+
+def _refused_as_lower_sequence(sb, r, before, old, new, forged):
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "REFUSED" in r.stderr and "signing sequence" in r.stderr and "--allow-rewind" in r.stderr
+    assert f"sequence {new}" in r.stderr and f"({old})" in r.stderr and forged[:12] in r.stderr   # both numbers
+    assert "Update complete" not in r.stdout and "Repo updated" not in r.stdout and not sb.log.exists()
+    assert sb.state() == before
+
+
+def test_an_old_signed_tree_rewrapped_as_a_descendant_is_refused(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    seq0 = json.loads(_git(sb.src, "show", f"{b0}:verify.json"))["sequence"]
+    seq1 = json.loads(_git(sb.src, "show", f"{b1}:verify.json"))["sequence"]
+    assert seq0 < seq1
+    forged = _rewrapped_old_tree(sb, b0, b1)
+    before = sb.state()
+    r = sb.update()
+    _refused_as_lower_sequence(sb, r, before, seq1, seq0, forged)
+    assert _git(sb.hive, "rev-parse", "HEAD") == b1
+
+
+def test_allow_rewind_installs_the_rewrapped_old_tree(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    forged = _rewrapped_old_tree(sb, b0, b1)
+    r = sb.update(args=["--allow-rewind"])
+    assert r.returncode == 0 and "Update complete" in r.stdout, r.stdout + r.stderr
+    assert _git(sb.hive, "rev-parse", "HEAD") == forged
+
+
+def test_allow_rewind_does_not_waive_the_signature_on_a_lower_sequence(sandbox):
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    sb.upstream_commit(sequence=1, sig=False)
+    before = sb.state()
+    r = sb.update(args=["--allow-rewind"])
+    assert r.returncode == 1 and "(unsigned)" in r.stderr, r.stdout + r.stderr
+    assert sb.state() == before
+
+
+def test_an_equal_sequence_installs(sandbox):
+    """A re-sign of the same commit carries the same number: not a rollback."""
+    sb = sandbox()
+    b0, b1 = _installed_one_ahead(sb)
+    seq1 = json.loads((sb.hive / "verify.json").read_text())["sequence"]
+    new = sb.upstream_commit(sequence=seq1)
+    r = sb.update()
+    assert r.returncode == 0 and "REFUSED" not in r.stderr, r.stdout + r.stderr
+    assert _git(sb.hive, "rev-parse", "HEAD") == new
+
+
+def test_an_installed_manifest_without_a_sequence_bootstraps(sandbox):
+    sb = sandbox()
+    # B0's manifest, rewritten without the field and re-signed, is what this node has installed.
+    _git(sb.src, "reset", "-q", "--hard", _git(sb.hive, "rev-parse", "HEAD"))
+    new = sb.upstream_commit(sequence=None)
+    _git(sb.hive, "pull", "-q", "--ff-only")
+    assert "sequence" not in json.loads((sb.hive / "verify.json").read_text())
+    newer = sb.upstream_commit(sequence=1)
+    r = sb.update()
+    assert r.returncode == 0 and "REFUSED" not in r.stderr, r.stdout + r.stderr
+    assert _git(sb.hive, "rev-parse", "HEAD") == newer and new != newer
+
+
+def test_gen_verify_signs_the_commit_count_and_refuses_a_shallow_clone(tmp_path):
+    work = tmp_path / "w"
+    shutil.copytree(REPO, work, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.db*"))
+    _git(tmp_path, "init", "-q", "-b", "main", str(work))
+    _git(work, "add", "-A")
+    for i in range(3):
+        _git(work, "commit", "-q", "--allow-empty", "-m", f"c{i}")
+    r = subprocess.run([sys.executable, "-I", str(work / "scripts/common/gen_verify.py")], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert json.loads((work / "verify.json").read_text())["sequence"] == 3
+    shallow = tmp_path / "s"
+    _git(tmp_path, "clone", "-q", "--depth", "1", f"file://{work}", str(shallow))
+    r = subprocess.run([sys.executable, "-I", str(shallow / "scripts/common/gen_verify.py")], capture_output=True, text=True)
+    assert r.returncode != 0 and "shallow" in r.stderr
+
+
+@pytest.mark.parametrize("raw,want", [(b'{"sequence": 7}', 7), (b"{}", 0), (b'{"sequence": "7"}', 0),
+                                      (b'{"sequence": -1}', 0), (b'{"sequence": true}', 0), (b'{"sequence": 1.5}', 0),
+                                      (b"not json", 0)])
+def test_manifest_sequence_parses_only_a_non_negative_integer(raw, want):
+    assert _load_hv()._manifest_sequence(raw) == want

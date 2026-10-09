@@ -7460,6 +7460,17 @@ def _source_manifest(root):
     return {"version": CONTRACT_VERSION, "files": files, "digest": digest}
 
 
+def _manifest_sequence(manifest_bytes):
+    """The signing sequence in a verify.json's bytes: the integer `sequence` sign.yml signs in (the number of
+    commits behind the commit being signed). A manifest without it, or with anything but a non-negative
+    integer there, counts as 0, so a node that predates the field starts enforcing after one update."""
+    try:
+        s = json.loads(manifest_bytes).get("sequence")
+    except Exception:
+        return 0
+    return s if isinstance(s, int) and not isinstance(s, bool) and s >= 0 else 0
+
+
 def _b64bytes(s):
     try:
         return base64.b64decode("".join(str(s).split()), validate=False)

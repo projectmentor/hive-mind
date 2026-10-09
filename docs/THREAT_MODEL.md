@@ -214,13 +214,17 @@ shown because a planted forget would be re-signed too. Once set,
   than its advertised IP is `addr-unproven`, so `enforce` only pulls from it. The merkle-root comparison
   that ends a round for a peer already in sync stays unsigned: an impostor that echoes this node's root
   can stall its sync with that peer (a denial of service, not a disclosure).
-- **Update rollback protection is git ancestry only.** `hive-mind update` refuses a fetched commit that is
-  not a descendant of the installed one unless `--allow-rewind` is passed, which stops a plain force-push of an
-  older signed commit. `verify.json` signs file contents, not commits or their parents, and its `version` is
-  coarse, so an older signed tree committed as a descendant of the installed commit is a fast-forward and
-  still installs under the pinned key. Closing that needs a signed monotonic counter in the manifest, a
-  signing-format change that waits on the maintainer's decision. Until then, whoever can write the update
-  origin can roll a node back; keep that origin under the same control as the release key.
+- **Update rollback protection needs one update to start, and trusts the signer's count.** `hive-mind update`
+  refuses a fetched commit that is not a descendant of the installed one unless `--allow-rewind` is passed, and
+  refuses a signed manifest whose `sequence` (the integer `git rev-list --count HEAD` of the commit sign.yml
+  signs, inside the signed bytes of `verify.json`) is lower than the installed manifest's. Git ancestry is the
+  origin's to write, so an older signed tree re-wrapped as a descendant commit is a fast-forward; its signed
+  `sequence` is still the old, lower number and it is refused. This closes the rollback for a node that has run
+  one update with this script: an installed manifest without the field counts as 0, and old nodes ignore the
+  field. Residual: a node that has not yet updated is not protected, `--allow-rewind` is the operator's
+  override, and the `sequence` is only as monotonic as the history the signer counts, so a history rewrite that
+  shortens `main` below an installed node's number needs `--allow-rewind` there. Whoever holds the release key
+  can still sign any number.
 - **Anyone can obtain a responder signature over a nonce it chooses.** `/hive/info` is open discovery,
   so any reachable host can make a node sign. The statement holds only public facts (node id, hive id,
   advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`

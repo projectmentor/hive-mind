@@ -295,3 +295,61 @@ def test_a_poisoned_join_request_already_in_a_journal_never_reaches_peers_json(t
     assert hvm._add_peer("http://" + "h" * 100_000, "x") is False
     assert hvm._add_peer("http://100.64.0.9:9876", "L" * 100_000) is True         # a bad label falls back to the url
     assert json.loads(_peers_json(tmp_path))["peers"] == [{"url": "http://100.64.0.9:9876", "id": "http://100.64.0.9:9876"}]
+
+
+# ── each bound on its own, and a payload that is not an object ───────────────────────────────────────
+
+def _lands(tmp_path, monkeypatch, payload_for):
+    """Whether one device's join-request/announce lands; `payload_for(device_id)` builds the payload."""
+    _run(tmp_path, "owner", "init")
+    hvm = _load_hv(tmp_path, monkeypatch)
+    dev = _foreign_device(hvm)
+    return hvm.append_foreign_entries([_signed(hvm, dev, 1, "governance", payload_for(dev[2]))])[0] == 1
+
+
+def test_the_payload_cap_alone_bounds_how_many_short_fields_there_are(tmp_path, monkeypatch):
+    def many(did):      # every field is a short scalar the unknown-field rule allows: only the cap bounds the count
+        return {"action": "join-request", "device_id": did, **{f"f{i}": "v" * 30 for i in range(100)}}
+    assert not _lands(tmp_path, monkeypatch, many)
+
+
+@pytest.mark.parametrize("principal", ["p" * 65, 7, ["p"], "a\x1bb", ""])
+def test_a_bad_requested_principal_is_refused(tmp_path, monkeypatch, principal):
+    assert not _lands(tmp_path, monkeypatch, lambda did: {"action": "join-request", "device_id": did,
+                                                          "requested_principal": principal})
+
+
+@pytest.mark.parametrize("kind", ["k" * 33, 7, ["key"], "a\x1bb", ""])
+def test_a_bad_announce_kind_is_refused(tmp_path, monkeypatch, kind):
+    assert not _lands(tmp_path, monkeypatch, lambda did: {"action": "announce", "kind": kind})
+
+
+@pytest.mark.parametrize("data", [["a"], "text", {"a": 1}, {"a": {"b": "c"}}, {"k" * 33: "v"},
+                                  {f"k{i}": "v" for i in range(9)}, {"a": "v" * 257}])
+def test_a_bad_announce_data_is_refused(tmp_path, monkeypatch, data):
+    assert not _lands(tmp_path, monkeypatch, lambda did: {"action": "announce", "kind": "key", "data": data})
+
+
+@pytest.mark.parametrize("payload", ["text", ["join-request"], 7, True, [{"action": "announce"}]])
+def test_a_payload_that_is_not_an_object_is_one_bad_entry(tmp_path, monkeypatch, payload):
+    _run(tmp_path, "owner", "init")
+    hvm = _load_hv(tmp_path, monkeypatch)
+    dev = _foreign_device(hvm)
+    bad = {"node_id": dev[2], "seq": 1, "type": "governance", "timestamp": "2026-05-01T00:00:00Z",
+           "payload": payload, "prev_hash": "sha256:genesis", "signature": "x", "pub": "y"}
+    good = _signed(hvm, dev, 2, "governance", {"action": "join-request", "device_id": dev[2], "label": "joiner"})
+    accepted, _ = hvm.append_foreign_entries([bad, good])
+    assert accepted == 1
+    assert [e["seq"] for e in merkle.read_all_entries(hvm.JOURNAL_DIR) if e.get("node_id") == dev[2]] == [2]
+
+
+@pytest.mark.parametrize("label", ["L" * 500, "x\x1b[2Jy", "\x00\x01", "  ", "é" * 200])
+def test_this_version_never_writes_a_label_it_would_refuse(tmp_path, monkeypatch, label):
+    _run(tmp_path, "owner", "init")
+    hvm = _load_hv(tmp_path, monkeypatch)
+    monkeypatch.setattr(hvm, "NODE_LABEL", label)
+    assert hvm._peer_label_ok(hvm._wire_label(label))
+    hvm._emit_key_announce()
+    mine = [e for e in merkle.read_all_entries(hvm.JOURNAL_DIR)
+            if e.get("payload", {}).get("action") == "announce" and e.get("node_id") == hvm.NODE_ID]
+    assert mine and all(hvm._authorityless_shape_ok(e) for e in mine)

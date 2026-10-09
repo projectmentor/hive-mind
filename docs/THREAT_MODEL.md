@@ -126,10 +126,12 @@ shown because a planted forget would be re-signed too. Once set,
 - **Entity rewrite by name (SECREV B3).** An `entity` write by a device that is neither the name's creator nor
   owner-signed is weigh-only: the projection skips it, as a link from such a device is held to evidence. The
   creator is the name's first applied `entity` entry in replay order `(node_id, seq)`, the rule #208 uses for
-  modules. `hv doctor` (`entity-rewrite`) counts the writes this stops. Residual: that order is not time, so an
-  admitted device whose `node_id` sorts first can claim a name nobody has yet written on this node; the owner's
-  signed write still commands it. Nodes before this rule still let the last write win until they upgrade
-  (projection skew). Making the creator the earliest by a signed field would be a signing-format change.
+  modules. `hv doctor` (`entity-rewrite`) counts the writes this stops. Residual: that order is not time, so a
+  device that sorts first can take over a name another device created, even after the fact; the creator's own
+  writes then stop winning until the owner settles it with a signed write. Accepted for 3.x (only an admitted
+  device can do it). Operator rule: a disputed entity is settled by an owner-signed write. Reopen if the hive
+  gains federation, relays, or admitted devices the owner does not control. Nodes before this rule still let the last write win until they
+  upgrade (projection skew). Making the creator the earliest by a signed field would be a signing-format change.
 - **Version skew during the link write-path switch (contract 1.19 PR2b).** `hv decide --supersedes`,
   `hv remember --resolves` and `hv entity link` now write only a `link` entry. A node older than 1.19
   lands that entry (journals stay converged) but does not honour it, so on that node a superseded

@@ -170,7 +170,22 @@ def test_hv_doctor_counts_entity_rewrites_that_no_longer_win(hive):
     project(hive, hive.entries + [a, rewrite]).close()
     checks = {c["name"]: c for c in hv._doctor_status()}
     assert "entity-rewrite" in checks, "doctor reports the weigh-only entity write"
-    assert "1 entity write" in checks["entity-rewrite"]["detail"] and "david" in checks["entity-rewrite"]["detail"]
+    detail = checks["entity-rewrite"]["detail"]
+    assert "1 entity write" in detail and "david" in detail
+    assert "don't currently win" in detail and "offender" not in detail
+    assert f"creator {early['id']}" in detail, "names the device the projection treats as the creator"
+
+
+def test_hv_entity_add_on_a_name_another_device_created_says_the_owner_can_settle_it(hive, capsys, monkeypatch):
+    hv = hive.hv
+    # The verdict itself is pinned above; here the local write is made weigh-only so the message is what is under test.
+    monkeypatch.setattr(hv, "_entity_verdicts", lambda entries, gov: (set(), {(e["node_id"], e["seq"]) for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR)
+                                                                         if e.get("type") == "entity"}))
+    with pytest.raises(SystemExit) as exc:
+        hv.entity(SimpleNamespace(action="add", name="david", type="person", attr=None))
+    assert exc.value.code == 1
+    err = capsys.readouterr().err
+    assert "was created by another device" in err and "owner can settle it with a signed write" in err
 
 
 # ── the projection (requirement 1 and 4) ───────────────────────────────────────────────────────────────

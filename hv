@@ -3728,6 +3728,11 @@ def _entity_verdicts(entries, gov):
     Pre-owner, only the creator rule applies, as for links. Pure over the journal and governance, so every node
     declines the same entries whatever order they arrived in. A declined entry is skipped, not kept as evidence.
     The module marker is read as of the end of the journal, like the election exclusion."""
+    return _entity_walk(entries, gov)[:2]
+
+
+def _entity_walk(entries, gov):
+    """`_entity_verdicts` plus `creator`, name -> the entry the projection treats as the name's creator."""
     modules = gov.get("modules") or {}
     declined, weigh_only, creator = set(), set(), {}
     for e in entries:
@@ -3748,7 +3753,7 @@ def _entity_verdicts(entries, gov):
             weigh_only.add((node, e.get("seq")))
             continue
         creator.setdefault(name, e)
-    return declined, weigh_only
+    return declined, weigh_only, creator
 
 
 # ── the module write policy (2.1; hive-mind-private #50) ───────────────────────────────────────────────────
@@ -6403,7 +6408,8 @@ def entity(args):
         if (entry["node_id"], entry["seq"]) in _entity_verdicts(pentries, _governance_state(pentries))[1]:
             # Weigh-only (#51): the same verdict `rebuild_db` reaches. The entry is journaled (permanent) and stays so.
             print(f"Entity '{args.name}' was created by another device: this write is journaled but does not replace "
-                  f"it. Only its creator, or the owner, rewrites an entity.", file=sys.stderr)
+                  f"it. Only its creator, or the owner, rewrites an entity; the owner can settle it with a signed write.",
+                  file=sys.stderr)
             sys.exit(1)
         try:
             conn = get_conn()
@@ -9089,12 +9095,15 @@ def _doctor_status():
     #        they stay on disk and stop winning. Advisory.
     try:
         pentries = _projection_entries(entries)
-        _md, weigh = _entity_verdicts(pentries, _governance_state(pentries))
+        _md, weigh, creators = _entity_walk(pentries, _governance_state(pentries))
         if weigh:
             by_key = {(e.get("node_id"), e.get("seq")): e for e in pentries}
+            names = sorted({_entity_name(by_key[k]) for k in weigh})
+            held = ", ".join(f"{n} (creator {creators[n].get('node_id')})" for n in names[:10]) + (" …" if len(names) > 10 else "")
             checks.append({"name": "entity-rewrite", "status": "warn",
-                           "detail": f"{len(weigh)} entity write{'s' if len(weigh) != 1 else ''} by a device that is neither "
-                                     f"the entity's creator nor the owner; they do not replace the entity: "
+                           "detail": f"{len(weigh)} entity write{'s' if len(weigh) != 1 else ''} that don't currently win; "
+                                     f"the projection treats the first writer as the creator, and only the creator or an "
+                                     f"owner-signed write replaces the entity: {held}. Writes: "
                                      + ", ".join(f"{n}:{q} ({_entity_name(by_key[(n, q)])})"
                                                  for n, q in sorted(weigh, key=lambda k: (str(k[0]), k[1] if isinstance(k[1], int) else 0))[:10])
                                      + (" …" if len(weigh) > 10 else "")})

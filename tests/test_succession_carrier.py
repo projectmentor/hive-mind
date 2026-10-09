@@ -250,3 +250,109 @@ def test_doctor_reports_the_succession_check(tmp_path, monkeypatch):
     (jd / "2026-01-01.jsonl").write_text("\n".join(json.dumps(e) for e in base + [real, fake]) + "\n")
     checks = {c["name"]: c for c in hv._doctor_status()}
     assert checks["succession"]["status"] == "fail" and "reached this node after" in checks["succession"]["detail"]
+
+
+# --- the claim: a successor's carrier is not admitted by replaying it ------------------------------------------------
+
+def _claim_world(hv, preadmit_c=True):
+    """O1 founds the hive and admits d0 (and c, the successor's device, when `preadmit_c`). d0 carries O1's nomination of
+    O2 at 08:00; O2's claim is carried by c at 10:00. Returns (o1, o2, d0, c, x, base, nominate, claim_payload)."""
+    o1, o2 = _owner_key(hv), _owner_key(hv)
+    d0, c, x = _device(hv), _device(hv), _device(hv)
+    base = [_gov(hv, {"action": "owner", "owner_id": o1[2], "hive_id": "h1"}, o1[0], o1[1], ts(0), 1),
+            _gov(hv, {"action": "admit", "device_id": d0["id"], "principal": "p0"}, o1[0], o1[1], ts(1), 2)]
+    if preadmit_c:
+        base.append(_gov(hv, {"action": "admit", "device_id": c["id"], "principal": "p1"}, o1[0], o1[1], ts(1, 30), 3))
+    nom = _entry(hv, d0, "governance", {"action": "nominate-successor", "successor_owner_pub": _b64(o2)}, ts(8), owner=o1)
+    claim = hv._sign_governance_payload({"action": "claim-succession", "owner_id": o2[2], "owner_pub": _b64(o2)}, o2[0], o2[1])
+    return o1, o2, d0, c, x, base, nom, claim
+
+
+def _carry(hv, dev, payload, at):
+    dev["seq"] += 1
+    e = {"node_id": dev["id"], "seq": dev["seq"], "type": "governance", "timestamp": at, "payload": payload}
+    return hv._sign_entry(e, dev["seed"], dev["pub"])
+
+
+def test_a_claim_from_an_admitted_device_succeeds_and_the_new_owner_acts_from_it(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, o2, d0, c, x, base, nom, claim = _claim_world(hv)
+    real = _carry(hv, c, claim, ts(10))
+    z = _device(hv)
+    admit = _entry(hv, c, "governance", {"action": "admit", "device_id": z["id"], "principal": "p2"}, ts(11), owner=o2)
+    gov = _state(hv, base + [nom, real, admit])
+    assert gov["owner_id"] == o2[2] and gov["owner_term"] == 1
+    assert z["id"] in gov["admitted"]
+
+
+def test_a_keyless_device_replaying_the_claim_is_not_admitted(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, o2, d0, c, x, base, nom, claim = _claim_world(hv)
+    real = _carry(hv, c, claim, ts(10))
+    replay = _carry(hv, x, claim, ts(9))                 # the claim is public: x holds no owner key, and re-carries it
+    z = _device(hv)
+    admit = _entry(hv, c, "governance", {"action": "admit", "device_id": z["id"], "principal": "p2"}, ts(11), owner=o2)
+    gov = _state(hv, base + [nom, real, replay, admit])
+    assert x["id"] not in gov["admitted"]
+    assert c["id"] in gov["admitted"] and z["id"] in gov["admitted"]       # the successor's own device is unaffected
+    assert gov["owner_id"] == o2[2]
+
+
+def test_a_claim_does_not_admit_its_carrier(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, o2, d0, c, x, base, nom, claim = _claim_world(hv, preadmit_c=False)
+    gov = _state(hv, base + [nom, _carry(hv, c, claim, ts(10))])
+    assert gov["owner_id"] == o2[2]
+    assert c["id"] not in gov["admitted"]
+
+
+# --- the end of a membership span, on the content paths and the timestamp shield ---------------------------------------
+
+def _revoked_member(hv):
+    """d1 is admitted at 02:00 and revoked at 04:00, both carried by d0. Returns (o1, d0, d1, f, base, real, rev)."""
+    o1, o2, o3, d0, f, base, real = _world(hv)
+    d1 = _device(hv)
+    adm = _entry(hv, d0, "governance", {"action": "admit", "device_id": d1["id"], "principal": "p1"}, ts(2), owner=o1)
+    rev = _entry(hv, d0, "governance", {"action": "revoke", "device_id": d1["id"]}, ts(4), owner=o1)
+    return o1, d0, d1, f, base + [adm, rev], real
+
+
+def test_a_forget_carried_after_the_carriers_revoke_is_not_honoured(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, d0, d1, f, base, real = _revoked_member(hv)
+    fact = _fact(hv, d0, "keep me", ts(3))
+    for at, want in ((ts(3, 30), True), (ts(6), False)):
+        forget = _act(hv, d1, fact, at, owner=o1[:2])
+        entries = base + [real, fact, forget]
+        assert hv._content_evidence(entries, _state(hv, entries))["keep me"]["forget"] is want
+
+
+def test_a_hard_link_carried_after_the_carriers_revoke_is_not_hard(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, d0, d1, f, base, real = _revoked_member(hv)
+    old, new = _fact(hv, d0, "old", ts(3)), _fact(hv, d0, "new", ts(3, 10))
+    p = {"kind": "supersedes", "from_ref": [new["node_id"], new["seq"]], "to_ref": [old["node_id"], old["seq"]],
+         "data": {}, "source": "manual"}
+    for at, want in ((ts(3, 30), True), (ts(6), False)):
+        e = _entry(hv, d1, "link", p, at, owner=o1)
+        gov = _state(hv, base + [real, old, new, e])
+        assert (hv._link_authority(e, old, gov) == "hard") is want
+
+
+def test_a_capsule_carried_after_the_carriers_revoke_is_not_honoured(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, d0, d1, f, base, real = _revoked_member(hv)
+    p = {"name": "secret", "version": 1, "alg": "x", "recipients": {}}
+    gov = _state(hv, base + [real])
+    signed = hv._sign_governance_payload(p, o1[0], o1[1])
+    assert hv._is_authorized_writer(d1["id"], (ts(3, 30), d1["id"], 1), signed, gov, "owner") is True
+    assert hv._is_authorized_writer(d1["id"], (ts(6), d1["id"], 1), signed, gov, "owner") is False
+
+
+def test_an_uncarried_owner_act_loses_the_timestamp_shield(tmp_path, monkeypatch):
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, o2, o3, d0, f, base, real = _world(hv)
+    gov = _state(hv, base + [real])
+    cfg = {"action": "set-config", "key": "cap_self", "value": 0.3}
+    assert hv._ts_owner_signed(_entry(hv, d0, "governance", cfg, ts(5), owner=o1), gov) is True
+    assert hv._ts_owner_signed(_entry(hv, f, "governance", cfg, ts(5), owner=o1), gov) is False

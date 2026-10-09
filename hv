@@ -2662,13 +2662,13 @@ def _governance_state_uncached(entries):
         if action == "claim-succession":
             # Self-signed by the successor's NEW owner key (like genesis): the embedded owner_pub is
             # what signed it. Valid only against an open matching nomination, which only a member-carried act
-            # of the current owner opens, so the claim needs no carrier of its own (SECREV A3).
+            # of the current owner opens, so the claim needs no carrier of its own (SECREV A3). The claim does NOT
+            # admit its carrier: the successor's key signs the payload, not the device, so any keyless device can
+            # re-carry it. The successor's device must already be admitted (or be the genesis device).
             cp = _canon_pub(p.get("owner_pub", ""))
             if signer == p.get("owner_id") and cp and cp in nominations and _succession_honoured(_ts, _nid, _seq, _e):
                 current = p["owner_id"]
                 owner_pubs[current] = p.get("owner_pub")
-                gov["admitted"].add(str(_nid))    # the claimed device is the new owner's, a member from the claim (as the genesis device)
-                span_open(_nid, (_ts, str(_nid), _seq))
                 owner_timeline.append((_ts, str(_nid), _seq, current))
                 nominations.clear()           # nominations close on succession
                 gov["owner_term"] += 1

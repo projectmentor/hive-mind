@@ -70,6 +70,7 @@ def test_nonowner_tombstone_declined_owner_signed_honored(tmp_path, monkeypatch)
 
     base = [
         _gov(hv, {"action": "owner", "owner_id": oid, "hive_id": "h1"}, oseed, opub, "2026-01-01T00:00:00Z", 1),
+        _gov(hv, {"action": "admit", "device_id": od_nid}, oseed, opub, "2026-01-01T00:00:30Z", 90),   # the owner's device is a member (SECREV A3)
         _gov(hv, {"action": "admit", "device_id": d_nid, "principal": "p"}, oseed, opub, "2026-01-02T00:00:00Z", 2),
         _capsule(hv, "MYTOK", 1, od_s, od_p, "2026-01-03T00:00:00Z", 3, owner=(oseed, opub)),
     ]
@@ -107,10 +108,11 @@ def test_point_in_time_prior_owner_seal_survives_transfer(tmp_path, monkeypatch)
     hv = _loadhv(tmp_path, monkeypatch)
     a_seed, a_pub, a_oid = _owner_key(hv)        # owner A (genesis)
     b_seed, b_pub, b_oid = _owner_key(hv)        # owner B (successor)
-    ad_s, ad_p, _ = _device_key(hv)              # A's device
+    ad_s, ad_p, ad_nid = _device_key(hv)              # A's device
 
     entries = [
         _gov(hv, {"action": "owner", "owner_id": a_oid, "hive_id": "h1"}, a_seed, a_pub, "2026-01-01T00:00:00Z", 1),
+        _gov(hv, {"action": "admit", "device_id": ad_nid}, a_seed, a_pub, "2026-01-01T00:00:30Z", 90),   # the owner's device is a member (SECREV A3)
         _capsule(hv, "MYTOK", 1, ad_s, ad_p, "2026-01-02T00:00:00Z", 1, owner=(a_seed, a_pub)),  # A seals while owner
         _gov(hv, {"action": "transfer", "new_owner_pub": base64.b64encode(b_pub).decode()},
              a_seed, a_pub, "2026-01-03T00:00:00Z", 2),                                          # A -> B

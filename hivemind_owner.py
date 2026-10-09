@@ -360,6 +360,10 @@ def _append_governance(action_payload):
     entry = append_journal("governance", _sign_governance_payload(action_payload, seed, pub),
                            timestamp=os.environ.get("HIVE_NOW") or None)
     rebuild_db()
+    _es = merkle.read_all_entries(JOURNAL_DIR)
+    if (entry["node_id"], entry["seq"], action_payload.get("action")) in _governance_state(_es)["uncarried"]:
+        print(f"WARNING: this device ({entry['node_id']}) is not admitted, so the projection does NOT honour that act. "
+              "Run owner acts from an admitted device (or the genesis device).")
     return entry
 
 

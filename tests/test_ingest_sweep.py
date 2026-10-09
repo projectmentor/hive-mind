@@ -32,8 +32,10 @@ def test_pinned_joiner_first_sync_lands_admitted_content(tmp_path, monkeypatch):
     hv.append_foreign_entries(batch, advertised_chunks=None)
     assert _held(hv) == {(O, 1), (O, 2), (O, 3), (O, 4), (D, 1)}
 
-def test_unadmitted_owner_key_holder_admit_reaches_same_batch(tmp_path, monkeypatch):
-    """X (not admitted) carries an owner-signed admit of Y at seq 2 after its own content at seq 1."""
+def test_unadmitted_owner_key_holder_admit_is_stored_but_not_honoured(tmp_path, monkeypatch):
+    """X (not admitted) carries an owner-signed admit of Y at seq 2 after its own content at seq 1. Ingest stores the
+    act, and the projection does not honour it (SECREV A3: an owner-signed act counts only from a member), so Y's content
+    does not land, in one batch or split."""
     hv = _loadhv(tmp_path, monkeypatch)
     real = _owner_key(hv)
     o = _device_key(hv); x = _device_key(hv); y = _device_key(hv)
@@ -47,8 +49,9 @@ def test_unadmitted_owner_key_holder_admit_reaches_same_batch(tmp_path, monkeypa
     y1 = _fact(hv, y[2], T % 5, "y content", seq=1, dev=(y[0], y[1]))
     hv.append_foreign_entries([x1, x2, y1])
     held = _held(hv)
-    assert (x[2], 2) in held
-    assert (y[2], 1) in held            # same as the split [x1, x2] then [y1]
+    assert (x[2], 2) in held            # stored: the journals converge
+    assert (y[2], 1) not in held        # but Y was never admitted by a member
+    assert y[2] not in hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["admitted"]
 
 @pytest.mark.parametrize("stranger_first", [True, False])
 def test_unpinned_pre_owner_node_refuses_a_stranger_whatever_its_id(tmp_path, monkeypatch, stranger_first):

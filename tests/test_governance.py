@@ -142,7 +142,7 @@ def test_owner_forget_authority():
 
     def gov_owner(ts):
         p = hv._sign_governance_payload({"action": "owner", "owner_id": oid}, oseed, opub)
-        return {"node_id": "n", "seq": 1, "type": "governance", "timestamp": ts, "payload": p,
+        return {"node_id": "dev", "seq": 3, "type": "governance", "timestamp": ts, "payload": p,
                 "prev_hash": "sha256:genesis"}
 
     fact = {"node_id": "dev", "seq": 1, "type": "fact", "timestamp": "2026-02-01T00:00:00Z",

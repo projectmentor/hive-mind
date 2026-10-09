@@ -82,6 +82,7 @@ READERS = {
         ("hive_module_api.py", "_check_entry"),    # `POST /v1/entries` (2.1): the shape each module-writable type needs
         ("hv", "_capsule_version_conflicts"),
         ("hv", "_self_signed_owner_acts"),      # genesis candidates
+        ("hv", "_succession_inversions"),       # doctor succession: transfer / claim-succession arrival order
         ("hv", "_ts_owner_signed"),             # the timestamp tiebreak: an owner-signed governance act
         ("hv", "_admitted_content"),            # the projection keeps governance, drops an unadmitted device's content
         ("hv", "_purge_unkept"),                # the same, for a purged device's content a retire does not keep (#260)
@@ -123,6 +124,7 @@ READERS = {
     "action": {                                 # a `governance` payload's action
         ("hv", "append_foreign_entries"),       # the authority-less allowlist, the pinned genesis
         ("hv", "_self_signed_owner_acts"),
+        ("hv", "_succession_inversions"),
         ("hv", "_governance_state_uncached"),   # every act the walk honours
         ("hv", "_governance_state"),            # 2.1 (#217): the cache key widens once a `freeze-timestamps` exists
         ("hv", "_owner_declaration"),

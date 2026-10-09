@@ -87,7 +87,7 @@ The `action` of a `governance` entry.
 | `freeze-timestamps` | written | 2.1 | Arms the bounded entry timestamps: `tips` maps each device to the seq its chain is frozen at, and only later entries are checked. Owner-signed. |
 | `heartbeat` | written | 1.9 | Owner liveness: an owner-signed act with no other effect, which keeps the dead-man switch shut. |
 | `join-request` | written | 1.4 | A device asks to be admitted. Device-signed; it carries no authority. |
-| `nominate-successor` | written | 1.7 | Nominate a successor owner key. Owner-signed. |
+| `nominate-successor` | written | 1.7 | Nominate a successor owner key. Owner-signed. Operator rule: after nominating a successor, sign no other owner act until the succession lands; after any succession or transfer, treat the retired owner key as a live secret: rotate away from it and keep no plaintext copy. |
 | `owner` | written | 1.4 | The genesis declaration, which establishes the hive and its owner. Self-signed. |
 | `owner-escrow` | written | 1.6 | A passphrase-sealed copy of the owner key, kept in the hive. Owner-signed. |
 | `propose-election` | written | 1.9 | An admitted device proposes a new owner, installed only past `dead_man_days` of owner silence. Device-signed. |

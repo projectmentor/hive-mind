@@ -58,11 +58,12 @@ def _content(hv, ctype, name, version, dseed, dpub, ts, seq=1, owner=None, extra
 def test_cell_nonowner_declined_owner_honored(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     oseed, opub, oid = _owner_key(hv)
-    od_s, od_p, _ = _device_key(hv)            # owner's device
+    od_s, od_p, od_nid = _device_key(hv)            # owner's device
     d_s, d_p, d_nid = _device_key(hv)          # compromised admitted non-owner
 
     base = [
         _gov(hv, {"action": "owner", "owner_id": oid, "hive_id": "h1"}, oseed, opub, "2026-01-01T00:00:00Z", 1),
+        _gov(hv, {"action": "admit", "device_id": od_nid}, oseed, opub, "2026-01-01T00:00:30Z", 90),   # the owner's device is a member (SECREV A3)
         _gov(hv, {"action": "admit", "device_id": d_nid}, oseed, opub, "2026-01-02T00:00:00Z", 2),
         _content(hv, "cell", "deploy", 1, od_s, od_p, "2026-01-03T00:00:00Z", 3,
                  owner=(oseed, opub), extra={"kind": "tool", "run": "safe.sh"}),
@@ -88,10 +89,11 @@ def test_cell_nonowner_declined_owner_honored(tmp_path, monkeypatch):
 def test_comb_nonowner_declined(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     oseed, opub, oid = _owner_key(hv)
-    od_s, od_p, _ = _device_key(hv)
+    od_s, od_p, od_nid = _device_key(hv)
     d_s, d_p, d_nid = _device_key(hv)
     entries = [
         _gov(hv, {"action": "owner", "owner_id": oid, "hive_id": "h1"}, oseed, opub, "2026-01-01T00:00:00Z", 1),
+        _gov(hv, {"action": "admit", "device_id": od_nid}, oseed, opub, "2026-01-01T00:00:30Z", 90),   # the owner's device is a member (SECREV A3)
         _gov(hv, {"action": "admit", "device_id": d_nid}, oseed, opub, "2026-01-02T00:00:00Z", 2),
         _content(hv, "comb", "pipeline", 1, od_s, od_p, "2026-01-03T00:00:00Z", 3,
                  owner=(oseed, opub), extra={"cells": ["a", "b"]}),
@@ -139,9 +141,10 @@ def test_point_in_time_prior_owner_cell_survives_transfer(tmp_path, monkeypatch)
     hv = _loadhv(tmp_path, monkeypatch)
     a_seed, a_pub, a_oid = _owner_key(hv)
     b_seed, b_pub, b_oid = _owner_key(hv)
-    ad_s, ad_p, _ = _device_key(hv)
+    ad_s, ad_p, ad_nid = _device_key(hv)
     entries = [
         _gov(hv, {"action": "owner", "owner_id": a_oid, "hive_id": "h1"}, a_seed, a_pub, "2026-01-01T00:00:00Z", 1),
+        _gov(hv, {"action": "admit", "device_id": ad_nid}, a_seed, a_pub, "2026-01-01T00:00:30Z", 90),   # the owner's device is a member (SECREV A3)
         _content(hv, "cell", "deploy", 1, ad_s, ad_p, "2026-01-02T00:00:00Z", 1,
                  owner=(a_seed, a_pub), extra={"kind": "tool", "run": "a.sh"}),
         _gov(hv, {"action": "transfer", "new_owner_pub": base64.b64encode(b_pub).decode()},

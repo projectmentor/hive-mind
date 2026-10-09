@@ -109,7 +109,10 @@ GOVERNANCE_ACTIONS = {
                                              "keeps the dead-man switch shut."),
     "join-request":       _v(WRITTEN, "1.4", "A device asks to be admitted. Device-signed; it carries no "
                                              "authority."),
-    "nominate-successor": _v(WRITTEN, "1.7", "Nominate a successor owner key. Owner-signed."),
+    "nominate-successor": _v(WRITTEN, "1.7", "Nominate a successor owner key. Owner-signed. "
+                                             "Operator rule: after nominating a successor, sign no other owner act until the "
+                                             "succession lands; after any succession or transfer, treat the retired owner key "
+                                             "as a live secret: rotate away from it and keep no plaintext copy."),
     "owner":              _v(WRITTEN, "1.4", "The genesis declaration, which establishes the hive and its "
                                              "owner. Self-signed."),
     "owner-escrow":       _v(WRITTEN, "1.6", "A passphrase-sealed copy of the owner key, kept in the hive. "

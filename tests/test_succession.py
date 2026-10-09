@@ -210,6 +210,7 @@ def test_nominate_claim_moves_owner_and_old_key_goes_inert(tmp_path):
     oid_a = _owner_id(a)
     bpub = _claim_mint_pub(b, "k1:nodeB")                    # successor mints its prospective key
     _run(a, "owner", "nominate", bpub, node_id="k1:nodeA")   # current owner nominates it
+    _run(a, "group", "admit", "k1:nodeB", "--principal", "b", node_id="k1:nodeA")   # SECREV A3: the claim is carried by a member
     _sync(a, b)                                              # B learns the genesis + nomination
     out = _run(b, "owner", "claim", node_id="k1:nodeB").stdout
     assert "Claimed ownership" in out
@@ -280,6 +281,8 @@ def test_two_claims_one_nomination_resolve_to_single_deterministic_owner(tmp_pat
     p2 = _claim_mint_pub(s2, "k1:s2")
     _run(a, "owner", "nominate", p1, node_id="k1:nodeA")
     _run(a, "owner", "nominate", p2, node_id="k1:nodeA")
+    _run(a, "group", "admit", "k1:s1", "--principal", "s1", node_id="k1:nodeA")   # SECREV A3: claims are carried by members
+    _run(a, "group", "admit", "k1:s2", "--principal", "s2", node_id="k1:nodeA")
     _sync(a, s1)
     _sync(a, s2)
     _run(s1, "owner", "claim", node_id="k1:s1")

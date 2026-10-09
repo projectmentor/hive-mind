@@ -2642,7 +2642,7 @@ def _governance_state_uncached(entries):
                     gov["owner_term"] += 1
             continue
 
-        if action != "claim-succession" and not carried(str(_nid)):
+        if not carried(str(_nid)):
             gov["uncarried"].append((str(_nid), _seq, action))
             continue                          # SECREV A3: owner-signed, but carried by a device that was not a member here
 
@@ -2661,10 +2661,10 @@ def _governance_state_uncached(entries):
             continue
         if action == "claim-succession":
             # Self-signed by the successor's NEW owner key (like genesis): the embedded owner_pub is
-            # what signed it. Valid only against an open matching nomination, which only a member-carried act
-            # of the current owner opens, so the claim needs no carrier of its own (SECREV A3). The claim does NOT
-            # admit its carrier: the successor's key signs the payload, not the device, so any keyless device can
-            # re-carry it. The successor's device must already be admitted (or be the genesis device).
+            # what signed it. Valid only against an open matching nomination AND when carried by a member (SECREV A3):
+            # the successor's key signs the payload, not the device, so a keyless device could otherwise re-carry it
+            # at an earlier stamp and re-route the term start. The claim does NOT admit its carrier, so the successor's
+            # device must already be admitted (by the old owner, after the nomination) or be the genesis device.
             cp = _canon_pub(p.get("owner_pub", ""))
             if signer == p.get("owner_id") and cp and cp in nominations and _succession_honoured(_ts, _nid, _seq, _e):
                 current = p["owner_id"]

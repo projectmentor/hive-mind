@@ -242,7 +242,7 @@ shown because a planted forget would be re-signed too. Once set,
   succession), `admit`, `purge`, `set-config`, `freeze-timestamps`, owner forgets, hard links, capsules and cells.
   *Closed (SECREV A3):* the projection honours an owner-signed act only when the device carrying it is the genesis device
   or was admitted, at or before that position, by an honoured owner act and not since revoked or purged. A device nobody
-  admitted proves nothing about when the retired key signed. A device that claims a nominated succession is NOT admitted by the claim (the successor key signs the payload, not the device, so a keyless device could re-carry it): the successor's device must be admitted before the claim.
+  admitted proves nothing about when the retired key signed. A device that claims a nominated succession is NOT admitted by the claim (the successor key signs the payload, not the device, so a keyless device could re-carry it): the successor's device must be admitted before the claim, and a claim carried by a non-member is uncarried and moves nothing.
   Succession acts (`transfer`, `claim-succession`) are also **pinned** on each node the way the genesis is
   (`.succession-pin`, 0600, never synced): once pinned, a succession act is honoured only if it is one of the pinned acts
   or sorts after the last, so an act dated into an earlier term cannot re-route the chain. `hv doctor` (`succession`)

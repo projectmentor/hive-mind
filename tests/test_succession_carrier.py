@@ -298,12 +298,29 @@ def test_a_keyless_device_replaying_the_claim_is_not_admitted(tmp_path, monkeypa
     assert gov["owner_id"] == o2[2]
 
 
-def test_a_claim_does_not_admit_its_carrier(tmp_path, monkeypatch):
+def test_a_claim_from_an_unadmitted_device_is_uncarried_and_not_honoured(tmp_path, monkeypatch):
     hv = _loadhv(tmp_path, monkeypatch)
     o1, o2, d0, c, x, base, nom, claim = _claim_world(hv, preadmit_c=False)
     gov = _state(hv, base + [nom, _carry(hv, c, claim, ts(10))])
-    assert gov["owner_id"] == o2[2]
+    assert gov["owner_id"] == o1[2]
     assert c["id"] not in gov["admitted"]
+    assert (c["id"], 1, "claim-succession") in gov["uncarried"]
+
+
+def test_a_keyless_replay_of_the_claim_cannot_lock_out_the_successor(tmp_path, monkeypatch):
+    """O1 nominates O2 (08:00), then admits c (08:30); O2 claims from c (10:00) and admits z (11:00). A keyless x
+    re-carries the public claim stamped 08:15. x is no member, so the replay is uncarried and moves nothing."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    o1, o2, d0, c, x, base, nom, claim = _claim_world(hv, preadmit_c=False)
+    admit_c = _entry(hv, d0, "governance", {"action": "admit", "device_id": c["id"], "principal": "p1"}, ts(8, 30), owner=o1)
+    real = _carry(hv, c, claim, ts(10))
+    z = _device(hv)
+    admit_z = _entry(hv, c, "governance", {"action": "admit", "device_id": z["id"], "principal": "p2"}, ts(11), owner=o2)
+    replay = _carry(hv, x, claim, ts(8, 15))
+    gov = _state(hv, base + [nom, admit_c, real, admit_z, replay])
+    assert gov["owner_id"] == o2[2] and gov["owner_term"] == 1
+    assert c["id"] in gov["admitted"] and z["id"] in gov["admitted"]
+    assert gov["uncarried"] == [(x["id"], 1, "claim-succession")]
 
 
 # --- the end of a membership span, on the content paths and the timestamp shield ---------------------------------------

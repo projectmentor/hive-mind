@@ -101,6 +101,32 @@ def test_non_object_payload_is_refused(tmp_path, monkeypatch, typ, payload):
     _assert_refused_and_journal_reads(hv, tmp_path, _signed(hv, d, 1, typ, payload))
 
 
+@pytest.mark.parametrize("typ", ["capsule", "cell", "comb", "decision", "entity", "entity_fact", "fact", "governance", "idea",
+                                 "link", "retract"])
+def test_null_payload_is_refused_for_every_known_type(tmp_path, monkeypatch, typ):
+    """#304: a null payload crashed `append_foreign_entries` (governance) and the readers of fact/retract."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    bad = _signed(hv, d, 1, typ, None)
+    assert merkle.envelope_problem(bad) is not None
+    _assert_refused_and_journal_reads(hv, tmp_path, bad)
+
+
+def test_the_null_payload_types_are_the_vocabulary(tmp_path):
+    import vocabulary
+    assert set(merkle._OBJECT_PAYLOAD_TYPES) == set(vocabulary.ENTRY_TYPES)
+
+
+def test_a_null_payload_governance_line_on_disk_does_not_stop_the_governance_state(tmp_path, monkeypatch):
+    """The same line already on disk (written before the envelope check): the reader must not raise on it."""
+    hv = _loadhv(tmp_path, monkeypatch)
+    d = _device(hv)
+    entries = [_signed(hv, d, 1, "governance", None), _fact(hv, d, "kept", TS % 2)]
+    state = hv._governance_state(entries)
+    assert state["owner_id"] is None
+    hv._owner_declaration(entries)
+
+
 @pytest.mark.parametrize("typ", ["cell", "comb", "capsule"])
 @pytest.mark.parametrize("field,value", [("name", ["x"]), ("name", {"a": 1}), ("version", "2"), ("version", [1]),
                                          ("version", 2**70)], ids=repr)

@@ -1712,9 +1712,9 @@ def append_foreign_entries(entries, advertised_chunks=None):
             # OWN owner key — so only the pin can tell it from ours. Dropping it is deterministic, so
             # every pinned node drops the same act and the journals stay converged.
             return _DONE
-        if (e.get("payload", {}).get("action") not in ("join-request", "propose-election", "vote-election",
-                                                       "announce")
-                and _verify_governance(e.get("payload", {})) is None):
+        if ((e.get("payload") or {}).get("action") not in ("join-request", "propose-election", "vote-election",
+                                                           "announce")
+                and _verify_governance(e.get("payload") or {}) is None):
             # An authority-bearing governance act with no valid owner signature is forged. Rejection
             # is deterministic, so every honest node drops the same ones and journals stay converged.
             # `join-request` and election proposals/votes are authority-LESS device-signed acts (already
@@ -2408,7 +2408,9 @@ def _governance_state_uncached(entries):
     for e in entries:
         if e.get("type") != "governance":
             continue
-        p = e.get("payload", {})
+        p = e.get("payload")
+        if not isinstance(p, dict):
+            continue   # a null or non-object payload (a line already on disk) carries no act
         action = p.get("action")
         if action in ("propose-election", "vote-election"):
             # DEVICE-signed (not owner-signed): authority is the signer's hive membership, not the

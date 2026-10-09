@@ -235,3 +235,28 @@ def _write(home, entries):
         f.unlink()
     (jd / "j.jsonl").write_text("\n".join(json.dumps(e) for e in entries) + "\n")
     return jd
+
+
+@pytest.mark.parametrize("typ,payload", [("cell", {"name": 5, "version": 1}), ("cell", {"name": "c", "version": "2"}),
+                                         ("governance", {"action": "admit", "label": 5})], ids=repr)
+def test_a_local_write_that_fails_the_envelope_is_refused_and_its_seq_not_reused(tmp_path, monkeypatch, typ, payload):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    hv.append_journal("fact", {"content": "a"})
+    with pytest.raises(ValueError):
+        hv.append_journal(typ, payload)
+    hv.append_journal("fact", {"content": "b"})
+    rows = _on_disk(tmp_path)
+    assert [(e["seq"], e["type"]) for e in rows] == [(1, "fact"), (2, "fact")]
+    assert [e["seq"] for e in merkle.read_all_entries(tmp_path / "journal")] == [1, 2]
+
+
+def test_wire_add_names_a_bad_name_or_version(tmp_path, monkeypatch, capsys):
+    hv = _loadhv(tmp_path, monkeypatch)
+    _jd(tmp_path)
+    for body in ({"type": "cell", "name": 5}, {"type": "cell", "name": "c", "version": "2"}):
+        f = tmp_path / "c.json"
+        f.write_text(json.dumps(body))
+        hv.wire_cmd(type("A", (), {"add": str(f)})())
+    assert _on_disk(tmp_path) == []
+    assert capsys.readouterr().out.count("must be") == 2

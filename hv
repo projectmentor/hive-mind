@@ -1343,6 +1343,10 @@ def append_journal(entry_type, payload, timestamp=None):
             "payload": payload,
             "prev_hash": prev_hash,
         }
+        # The reader skips a line that fails the envelope check, so the next seq would be minted again over it.
+        problem = merkle.envelope_problem(entry)
+        if problem is not None:
+            raise ValueError(f"invalid {entry_type} entry: {problem}")
         seed = _device_seed()
         if seed is not None:
             _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
@@ -7776,8 +7780,12 @@ def wire_cmd(args):
             print(f"Could not read cell/comb JSON from {args.add}: {e}")
             return
         t = payload.pop("type", None) or ("comb" if "cells" in payload else "cell")
-        if t not in ("cell", "comb") or not payload.get("name"):
+        if t not in ("cell", "comb") or not payload.get("name") or not isinstance(payload["name"], str):
             print("JSON must be a cell/comb with a 'name' (type 'cell' or 'comb').")
+            return
+        v = payload.get("version", 1)
+        if isinstance(v, bool) or not isinstance(v, int) or not -2**63 <= v < 2**63:
+            print("'version' must be an integer.")
             return
         gov = _governance_state(entries)
         writers = gov.get("config", {}).get("cell_writers", "owner")

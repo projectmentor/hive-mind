@@ -1333,6 +1333,11 @@ def append_journal(entry_type, payload, timestamp=None):
     # processes that each read the tip before either appended would mint the same (node_id, seq).
     with _journal_mint_lock():
         seq, prev_hash, prev_ts = _next_seq_and_prev(NODE_ID, with_timestamp=True)
+        held = merkle.occupied_seqs(JOURNAL_DIR, NODE_ID)      # never reuse the seq of a line the reader skips
+        while seq in held and seq < merkle.SEQ_MAX:
+            seq += 1
+        if seq >= merkle.SEQ_MAX:
+            raise ValueError(f"invalid {entry_type} entry: no free seq below {merkle.SEQ_MAX}")
         if not explicit:
             timestamp = _clamp_timestamp(timestamp, prev_ts)
         entry = {
@@ -1343,6 +1348,10 @@ def append_journal(entry_type, payload, timestamp=None):
             "payload": payload,
             "prev_hash": prev_hash,
         }
+        # The reader skips a line that fails the envelope check, so the next seq would be minted again over it.
+        problem = merkle.envelope_problem(entry)
+        if problem is not None:
+            raise ValueError(f"invalid {entry_type} entry: {problem}")
         seed = _device_seed()
         if seed is not None:
             _sign_entry(entry, seed, _ed25519.pub_from_seed(seed))
@@ -1607,6 +1616,22 @@ def append_foreign_entries(entries, advertised_chunks=None):
     for _nid, _seq in existing:
         if isinstance(_seq, int) and _seq > tips.get(_nid, 0):
             tips[_nid] = _seq
+    # The envelope first, before any signature is checked or any field is read (SECREV A1): an entry whose
+    # node_id, seq, type, prev_hash or payload container has the wrong shape would break every later read.
+    # A device's seq may lead the tip this node holds by SEQ_JUMP_MAX plus what the batch itself carries of it.
+    in_batch = {}
+    for x in entries:
+        if isinstance(x, dict) and isinstance(x.get("node_id"), str):
+            in_batch[x["node_id"]] = in_batch.get(x["node_id"], 0) + 1
+    sound = []
+    for x in entries:
+        nid = x.get("node_id") if isinstance(x, dict) else None
+        reach = tips.get(nid, 0) + in_batch.get(nid, 0) if isinstance(nid, str) else None
+        if merkle.envelope_problem(x, reach) is None:
+            sound.append(x)
+        else:
+            rejected += 1
+    entries = sound
     _held = {}
 
     def held_hash(nid, seq):
@@ -1821,7 +1846,7 @@ def append_foreign_entries(entries, advertised_chunks=None):
         _quarantine(refused_payload, gov)        # node-local evidence for `hv doctor`; never synced
     _record_arrivals([k for k in arrived if k[0] != NODE_ID])
     if rejected:
-        reasons = "bad signature, malformed timestamp or payload, unauthorized governance, or content from an " \
+        reasons = "bad signature, malformed envelope, timestamp or payload, unauthorized governance, or content from an " \
                   "unadmitted device"
         if unsigned_why:
             reasons += "; " + "; ".join(sorted(set(unsigned_why)))
@@ -6179,6 +6204,7 @@ def _rebuild_in_transaction(conn):
         "edges": conn.execute("SELECT count(*) FROM links").fetchone()[0],
         "ideas": conn.execute("SELECT count(*) FROM ideas").fetchone()[0],
         "malformed": len(_PROJECTION_NOTES),      # entries or fields projected by default or skipped (#205)
+        "skipped_lines": merkle.corrupt_lines(JOURNAL_DIR)[0],   # lines the reader dropped for a bad envelope (SECREV A1)
     }
     return counts
 
@@ -6188,6 +6214,8 @@ def rebuild(args):
     print(f"Rebuilt from {c['entries']} journal entries:")
     print(f"  Facts: {c['facts']}  Decisions: {c['decisions']}  "
           f"Entities: {c['entities']}  Links: {c['links']}  Edges: {c['edges']}")
+    if c["skipped_lines"]:
+        print(f"  {c['skipped_lines']} journal line(s) with a malformed envelope skipped; `hv doctor` lists the files")
     if c["malformed"]:
         print(f"  {c['malformed']} malformed payload field(s) projected by default or skipped; "
               f"`hv doctor` lists the entries (payload-shape)")
@@ -7821,8 +7849,12 @@ def wire_cmd(args):
             print(f"Could not read cell/comb JSON from {args.add}: {e}")
             return
         t = payload.pop("type", None) or ("comb" if "cells" in payload else "cell")
-        if t not in ("cell", "comb") or not payload.get("name"):
+        if t not in ("cell", "comb") or not payload.get("name") or not isinstance(payload["name"], str):
             print("JSON must be a cell/comb with a 'name' (type 'cell' or 'comb').")
+            return
+        v = payload.get("version", 1)
+        if isinstance(v, bool) or not isinstance(v, int) or not -2**63 <= v < 2**63:
+            print("'version' must be an integer.")
             return
         gov = _governance_state(entries)
         writers = gov.get("config", {}).get("cell_writers", "owner")

@@ -22,6 +22,54 @@ from pathlib import Path
 
 CHUNK_SIZE = 100
 
+# The envelope of a journal entry: the fields every reader trusts before it looks at a payload (SECREV A1).
+SEQ_MAX = 2**53                 # exclusive: a seq must survive a JSON round trip through a float, and SQLite binds int64
+SEQ_JUMP_MAX = 2**20            # ingest: at most this far past the highest seq already held for the device
+_STR_FIELDS = ("action", "device_id", "proposal_id", "basis_ts", "label", "principal", "module")   # of a governance payload
+
+
+def envelope_problem(e, tip=None):
+    """Why this entry's envelope cannot be trusted, or None. Pure over the entry; never raises.
+
+    `node_id` a non-empty str, `seq` an int (not a bool) in [1, 2**53), `type` a non-empty str, `payload` an
+    object or null, and `prev_hash` / `timestamp` / `sig` str when present (nothing reads an absent one). The governance and name-keyed rows below
+    check the few payload fields that readers key a dict on or compare. The type vocabulary is deliberately
+    NOT closed: an entry of a type this node does not know still lands and projects to nothing (the
+    version-skew rule in vocabulary.py). `tip`, when given, is the highest seq this node holds for the device:
+    ingest refuses a seq more than SEQ_JUMP_MAX past it, since every per-device structure is sized by the
+    highest seq."""
+    if not isinstance(e, dict):
+        return "entry is not an object"
+    nid, seq = e.get("node_id"), e.get("seq")
+    if not isinstance(nid, str) or not nid:
+        return "node_id is not a string"
+    if isinstance(seq, bool) or not isinstance(seq, int) or not 1 <= seq < SEQ_MAX:
+        return "seq is not an integer in [1, 2**53)"
+    if tip is not None and seq > tip + SEQ_JUMP_MAX:
+        return "seq is too far past the held tip"
+    typ = e.get("type")
+    if not isinstance(typ, str) or not typ:
+        return "type is not a string"
+    for field in ("prev_hash", "timestamp", "sig"):
+        if field in e and not isinstance(e[field], str):
+            return f"{field} is not a string"
+    p = e.get("payload")
+    if p is None:
+        return None
+    if not isinstance(p, dict):
+        return "payload is not an object or null"
+    if typ == "governance":
+        for field in _STR_FIELDS:
+            if p.get(field) is not None and not isinstance(p[field], str):
+                return f"governance {field} is not a string"
+    elif typ in ("cell", "comb", "capsule"):
+        if p.get("name") is not None and not isinstance(p["name"], str):
+            return f"{typ} name is not a string"
+        v = p.get("version")
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or not -2**63 <= v < 2**63):
+            return f"{typ} version is not an integer"
+    return None
+
 
 def _canonical(obj):
     """Stable bytes for hashing: THE definition (#153). Every entry hash and prev_hash chain, chunk hash
@@ -36,8 +84,8 @@ def read_all_entries(journal_dir):
     (node_id, seq) and returned in canonical (node_id, seq) order. When two rows
     share a key, the lexicographically-smallest canonical encoding wins — a stable
     tie-break, so every node picks the SAME representative even in the (unexpected)
-    event the duplicates differ in content. Old-format / malformed lines are
-    skipped."""
+    event the duplicates differ in content. Old-format lines and lines whose envelope fails
+    `envelope_problem` are skipped (counted by `corrupt_lines`), so a poisoned journal heals on upgrade."""
     journal_dir = Path(journal_dir)
     if not journal_dir.exists():
         return []
@@ -51,7 +99,7 @@ def read_all_entries(journal_dir):
                 e = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if "node_id" not in e or "seq" not in e:
+            if envelope_problem(e) is not None:
                 continue
             k = (e["node_id"], e["seq"])
             prev = by_key.get(k)
@@ -62,9 +110,34 @@ def read_all_entries(journal_dir):
     return entries
 
 
+def occupied_seqs(journal_dir, node_id):
+    """The seqs in [1, SEQ_MAX) that any parseable journal line holds for `node_id`, INCLUDING a line the reader
+    skips for a failed envelope (it still occupies its key on a peer that accepts it). Occupied means equal under
+    the G-Set key equality after json.loads: 2, 2.0 and True (for 1) are one key, "2" is not. A seq outside the
+    range occupies nothing: no peer accepts it."""
+    journal_dir = Path(journal_dir)
+    held = set()
+    if not journal_dir.exists():
+        return held
+    for f in sorted(journal_dir.glob("*.jsonl")):
+        for line in f.read_text().splitlines():
+            try:
+                e = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(e, dict) or e.get("node_id") != node_id:
+                continue
+            seq = e.get("seq")
+            if isinstance(seq, str) or not isinstance(seq, (int, float)):
+                continue
+            if seq == seq and seq not in (float("inf"), float("-inf")) and seq == int(seq) and 1 <= seq < SEQ_MAX:
+                held.add(int(seq))
+    return held
+
+
 def corrupt_lines(journal_dir):
     """Count (and sample the files of) non-empty journal lines that read_all_entries SILENTLY skips —
-    unparseable JSON or entries missing node_id/seq (e.g. a truncated/garbled .jsonl from a crash mid-
+    unparseable JSON or entries whose envelope is malformed (e.g. a truncated/garbled .jsonl from a crash mid-
     write). Surfaced by `hv doctor` so silent data loss becomes visible. Returns (count, [filenames])."""
     journal_dir = Path(journal_dir)
     if not journal_dir.exists():
@@ -87,7 +160,7 @@ def corrupt_lines(journal_dir):
             except json.JSONDecodeError:
                 _flag(f.name)
                 continue
-            if not isinstance(e, dict) or "node_id" not in e or "seq" not in e:
+            if envelope_problem(e) is not None:
                 _flag(f.name)
     return count, sample
 

@@ -251,6 +251,18 @@ def test_a_round_of_slow_requests_is_cut_at_the_total_deadline(serve, monkeypatc
     assert sc._round.deadline is None
 
 
+def test_a_timeout_clamped_to_the_deadline_is_the_deadline_error_even_if_it_beats_the_watchdog(serve, monkeypatch):
+    """The request timeout is clamped to the time left; on a slow runner it can fire before the watchdog."""
+    s = serve(lambda h: time.sleep(1.0))
+    real_timer = sc.threading.Timer
+    monkeypatch.setattr(sc.threading, "Timer", lambda t, fn: real_timer(t + 0.5, fn))   # a late watchdog
+    monkeypatch.setattr(sc, "ROUND_DEADLINE", 0.3)
+    t0 = time.monotonic()
+    with pytest.raises(sc.SyncBoundError, match="deadline"):
+        sc._get(s.url, "/sync/hello")
+    assert time.monotonic() - t0 < 1.0
+
+
 def test_watchdog_state_is_clean_after_a_request(serve):
     s = serve(lambda h: (h.send_response(200), h.send_header("Content-Length", "2"), h.end_headers(), h.wfile.write(b"{}")))
     assert sc._get(s.url, "/sync/hello") == {}

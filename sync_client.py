@@ -156,7 +156,11 @@ def _bounded(method, url, op_timeout, **kw):
     response with its (capped) body already read. The deadline timer is armed before the request is
     sent, so connect, upload and the status line and headers are inside it, not only the body."""
     t = min(op_timeout, _remaining())
+    clamped = t < op_timeout             # the round deadline, not the op timeout, bounds this request
+    limit = time.monotonic() + t
     cell = _Cell()
+    def cut():                           # the watchdog fired, or a timeout clamped to the deadline beat it
+        return cell.fired or (clamped and time.monotonic() >= limit)
     watchdog = threading.Timer(_remaining(), cell.fire)
     watchdog.daemon = True
     _round.cell = cell
@@ -168,7 +172,7 @@ def _bounded(method, url, op_timeout, **kw):
         except SyncBoundError:
             raise
         except Exception as e:           # a request the watchdog cut is a deadline refusal
-            if cell.fired:
+            if cut():
                 raise SyncBoundError("round deadline exceeded") from e
             raise
         finally:
@@ -195,7 +199,7 @@ def _bounded(method, url, op_timeout, **kw):
         except SyncBoundError:
             raise
         except Exception as e:           # a read the watchdog cut is a deadline refusal, not a short body
-            if cell.fired:
+            if cut():
                 raise SyncBoundError("round deadline exceeded") from e
             raise
         if cell.fired:                   # cut at the deadline: the body may be short

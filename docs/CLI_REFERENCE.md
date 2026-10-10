@@ -386,6 +386,11 @@ commit whose `sequence` is lower than the installed manifest's, naming both numb
 An equal `sequence` (a re-sign of the same commit) installs. An installed manifest without the field counts as 0, so a
 node starts enforcing after its first update with this script (see THREAT_MODEL, "Update rollback").
 
+`hive-mind update` also refuses a switch to a higher contract major (2.x to 3.x) while `forget-authz` is open on an owned
+hive: it runs the installed tree's check before anything is replaced, prints the ACTION REQUIRED block and exits 1 with
+the tree and the daemon untouched. Run `hive-mind doctor --fix` first. Same-major updates, unowned hives and closed hives
+are unchanged.
+
 ---
 
 ### `hv doctor merkle` — Diagnose sync problems

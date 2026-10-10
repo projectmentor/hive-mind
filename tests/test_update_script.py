@@ -23,6 +23,7 @@ import http.server
 import importlib.util
 import json
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -506,6 +507,48 @@ def test_d_an_open_forget_grandfather_ends_the_update_with_action_required(sandb
     else:
         assert r.returncode == 0, out + r.stderr
         assert "ACTION REQUIRED" not in out and "Update complete" in out
+
+
+# ── #331: a switch to a higher contract major is refused while the forget grandfather is open ─────────
+
+def _major_upstream(sb, version="3.0"):
+    """A signed upstream commit whose `hv` declares CONTRACT_VERSION `version`."""
+    hv = sb.src / "hv"
+    hv.write_text(re.sub(r'^CONTRACT_VERSION = "[0-9.]+"', f'CONTRACT_VERSION = "{version}"', hv.read_text(), count=1, flags=re.M))
+    return sb.upstream_commit()
+
+
+@pytest.mark.parametrize("state", ["open", "closed", "no owner"])
+def test_a_higher_major_is_refused_before_the_switch_only_while_forget_authz_is_open(sandbox, state):
+    sb = sandbox()
+    if state != "no owner":
+        assert _ctl(sb, "owner", "init").returncode == 0
+    if state == "open":
+        assert _ctl(sb, "config", "set", "forget_writers", "legacy").returncode == 0
+    new = _major_upstream(sb)
+    before = sb.state()
+    r = sb.update()
+    if state == "open":
+        assert r.returncode == 1, r.stdout + r.stderr
+        assert "ACTION REQUIRED" in r.stdout and "hive-mind doctor --fix" in r.stdout
+        assert "REFUSED" in r.stderr and "3.0" in r.stderr and "until the forget grandfather" in r.stderr
+        assert "Update complete" not in r.stdout and "Restarting sync daemon" not in r.stdout and not sb.log.exists()
+        assert sb.state() == before and _git(sb.hive, "rev-parse", "HEAD") != new
+    else:
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "ACTION REQUIRED" not in r.stdout and "Update complete" in r.stdout
+        assert _git(sb.hive, "rev-parse", "HEAD") == new
+
+
+def test_a_same_major_update_with_forget_authz_open_behaves_as_before(sandbox):
+    sb = sandbox()
+    assert _ctl(sb, "owner", "init").returncode == 0
+    assert _ctl(sb, "config", "set", "forget_writers", "legacy").returncode == 0
+    new = _major_upstream(sb, "2.9")
+    r = sb.update()
+    assert "REFUSED" not in r.stderr, r.stdout + r.stderr
+    assert _git(sb.hive, "rev-parse", "HEAD") == new          # switched; the post-switch gate still fails the update
+    assert r.returncode != 0 and r.stdout.count("ACTION REQUIRED") == 1 and "Restarting sync daemon" in r.stdout
 
 
 def test_the_update_re_applies_module_units_and_a_broken_module_only_warns(sandbox):

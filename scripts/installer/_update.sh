@@ -130,6 +130,11 @@ sys.exit(3)
 PY
 }
 
+# The major of a CONTRACT_VERSION line, read as TEXT from `hv` on stdin; never executed. Empty when it cannot be read.
+_contract_major() {
+  sed -n 's/^CONTRACT_VERSION = "\([0-9][0-9]*\)\.[0-9][0-9]*".*/\1/p' | head -n 1
+}
+
 # The daemon's configured port (.peers.json `port`, default 9876), read the way the daemon reads it.
 _daemon_port() {
   python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import sync_common; \
@@ -240,6 +245,23 @@ else
       echo "  If you mean to install it anyway: hive-mind update --allow-rewind" >&2
       exit 1
     fi
+  fi
+
+  # A switch to a higher contract major (2.x to 3.x) is refused while the forget grandfather is open (#331).
+  # The incoming major comes from the fetched commit's `hv` as text (`git show`, nothing checked out or run), and
+  # the check is the INSTALLED tree's, run before anything is replaced. An incoming major that cannot be read
+  # counts as higher. A closed or unowned hive, and a same-major update, are not affected.
+  _MAJ_OLD="$(_contract_major <"$HIVE_DIR/hv" 2>/dev/null || true)"
+  _MAJ_NEW="$(git -C "$HIVE_DIR" show "$_NEW:hv" 2>/dev/null | _contract_major || true)"
+  _VER_NEW="$(git -C "$HIVE_DIR" show "$_NEW:hv" 2>/dev/null | sed -n 's/^CONTRACT_VERSION = "\([0-9.]*\)".*/\1/p' | head -n 1)"
+  if [ -z "$_MAJ_OLD" ] || [ -z "$_MAJ_NEW" ] || [ "$_MAJ_NEW" -gt "$_MAJ_OLD" ]; then
+    _pre=0; _forget_authz_gate || _pre=$?
+    if [ "$_pre" = 3 ]; then
+      echo "hive-mind update: REFUSED. The update to ${_VER_NEW:-a newer major version} (${_NEW:0:12}) is refused until the forget grandfather above is closed." >&2
+      echo "  Nothing was changed: $_BR is still at ${_HEAD:0:12}, the working tree is untouched and the daemon is still running." >&2
+      exit 1
+    fi
+    [ "$_pre" = 0 ] || warn "Could not check the forget grandfather before the switch; run 'hv doctor' to see forget-authz."
   fi
 
   if [ "$_MODE" = ff ]; then

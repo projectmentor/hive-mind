@@ -370,7 +370,7 @@ def _append_governance(action_payload):
 _GENESIS_REISSUE_REASON = "re-issued owner-signed at genesis (#135): it was honoured only by the pre-genesis grandfather"
 
 
-def _close_grandfather_at_genesis(owner_seed, owner_pub, reason=_GENESIS_REISSUE_REASON):
+def _close_grandfather_at_genesis(owner_seed, owner_pub, reason=_GENESIS_REISSUE_REASON, hides=None):
     """#135 part (1), contract 1.28: a hive born by `hive-mind owner init` starts CLOSED, so it never depends on
     the pre-genesis grandfather. Called at the end of `owner init` with the genesis `owner` act already
     appended and pinned: re-issue every forget that is in effect ONLY because it precedes genesis as an
@@ -400,10 +400,14 @@ def _close_grandfather_at_genesis(owner_seed, owner_pub, reason=_GENESIS_REISSUE
         journal cannot be rolled back, and pretending otherwise would be the worse bug; those entries are
         ordinary post-genesis owner forgets, so nothing is resurrected by their presence.
     Either way both lists are reported, with the same two remedies the #122 guard prints. The one state
-    that must be impossible is `forget_writers=owner` together with a fact silently back."""
+    that must be impossible is `forget_writers=owner` together with a fact silently back.
+
+    `hides` (3.0 PR 2): `hive-mind migrate forget` passes the migration set, which `_forget_migration`
+    derives from the projection; left None it is `_forgets_grandfathered`'s, unchanged."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
     gov = _governance_state(entries)
-    hides, _dangling = _forgets_grandfathered(entries, gov)
+    if hides is None:
+        hides, _dangling = _forgets_grandfathered(entries, gov)
     # Phase 1 — prepare and sign EVERY re-issue before appending any of them.
     prepared = []                                  # [(sid, signed payload)], nothing written yet
     resolved = []                                  # the sids we got as far as naming, for the failure report
@@ -504,6 +508,79 @@ def _heal_forget_authz(entries, dry):
         print("  This device does not hold the owner key: nothing was written.")
         return
     _close_grandfather_at_genesis(seed, _ed25519.pub_from_seed(seed), reason=_FIX_REISSUE_REASON)
+
+
+_MIGRATE_REISSUE_REASON = ("re-issued owner-signed by `hive-mind migrate forget` (3.0, #151): it was honoured "
+                           "only by the pre-genesis grandfather")
+
+
+def _key_written_status():
+    """0 when `forget_writers=owner` is now in the governance state, 1 when a guard or failed append left it
+    unwritten: the command's exit code must say whether the key was recorded."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    if (_governance_state(entries).get("config") or {}).get("forget_writers") == "owner":
+        return 0
+    print("  forget_writers is still not `owner`: nothing recorded it.")
+    return 1
+
+
+def migrate_cmd(args):
+    """`hive-mind migrate forget [--check]` (release 3.0 PR 2, plan 3.2 and 3.4). The same routine as
+    `owner init` and `doctor --fix` (`_close_grandfather_at_genesis`), given a stable name and an idempotence
+    contract; not a second implementation. The migration set is `_forget_migration`'s.
+
+    `--check` writes nothing and exits 0 only when the set is empty. A run lists the dependent facts by `h:` id
+    and text, asks y/N (default N, no terminal is N) BEFORE unlocking the owner key, then re-issues every
+    forget owner-signed (all prepared before any is appended) and writes `forget_writers=owner` through the
+    #122 guard, so a 2.x peer that has not upgraded closes its own grandfather too. Nothing existing is
+    re-keyed: the routine only appends `retract` entries naming the fact's current ref (#130). A second run
+    finds an empty set and appends nothing."""
+    if getattr(args, "migrate_action", None) != "forget":
+        print("usage: hive-mind migrate forget [--check]")
+        return 2
+    check = bool(getattr(args, "check", False))
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    gov = _governance_state(entries)
+    m = _forget_migration(entries, gov)
+    if not m["owner"]:
+        print("closed: 0 facts depend on a pre-genesis unsigned forget (no owner yet, so nothing is grandfathered)")
+        return 0
+    for line in _forget_migration_lines(m):
+        print(line)
+    facts = m["facts"]
+    if check:
+        if facts:
+            print("Run `hive-mind migrate forget` on the owner machine.")
+        return 1 if facts else 0
+    if not facts:
+        if m["key"] == "owner" or not _owner_key_exists():
+            if m["key"] != "owner":
+                print("  forget_writers is not `owner` yet; record it with `hive-mind migrate forget` on the "
+                      "owner machine. Nothing was written.")
+            return 0
+        print("  no fact depends on it; recording forget_writers=owner so a 2.x peer closes too.")
+        _config_set("forget_writers", "owner")
+        return _key_written_status()
+    if not _owner_key_exists():
+        print("This device does not hold the owner key: nothing was written. Run `hive-mind migrate forget` on "
+              "the owner machine, then `hive-mind sync` here.")
+        return 1
+    print(f"An admitted device could have written one of these forgets (#122), so read each of the {len(facts)}.")
+    if not _confirmed(f"Re-sign these {len(facts)} forget(s) so the facts stay hidden? [y/N] "):
+        print("  Nothing was written. To let a fact back instead, or to decide them one by one:")
+        _grandfather_remedy([f["sid"] for f in facts])
+        return 1
+    seed = _owner_seed()                           # unlocked once, after the answer, for the whole routine
+    if seed is None:
+        print("  This device does not hold the owner key: nothing was written.")
+        return 1
+    _close_grandfather_at_genesis(seed, _ed25519.pub_from_seed(seed), reason=_MIGRATE_REISSUE_REASON,
+                                  hides=m["hides"])
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    after = _forget_migration(entries, _governance_state(entries))
+    for line in _forget_migration_lines(after):
+        print(line)
+    return 1 if after["facts"] else _key_written_status()
 
 
 # `_data_plane_owner_cmd` is `hv`'s own `owner_cmd` (show, elections, propose-election --pub, vote),
@@ -1106,6 +1183,11 @@ def _config_set(key, value):
         entries = merkle.read_all_entries(JOURNAL_DIR)
         gov = _governance_state(entries)
         hides, _dangling = _forgets_grandfathered(entries, gov)
+        if val == "owner":
+            # 3.0 PR 2: what closing would bring back is the projection differential (`_forget_migration`), not
+            # every pre-genesis forget on the list: a forget by a since-purged writer shows nothing now and
+            # closing changes nothing for it, so it must not refuse the key. Same set `migrate forget` re-signs.
+            hides = _forget_migration(entries, gov)["hides"]
         if val == "owner" and hides:
             print(f"Not set: closing the grandfather would bring back {len(hides)} fact(s) kept forgotten only by "
                   f"an unsigned pre-genesis forget (#122). Decide each first, then run this again:")

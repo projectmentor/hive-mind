@@ -59,6 +59,9 @@ MOVED = {
     ("config", "confidence", "set"): ("config set",             "owner-signed; collapsed into `config set`"),
     ("config", "quorum", "set"):    ("config set",              "owner-signed; collapsed into `config set`"),
 
+    # One-time migrations (release 3.0): the re-issues are owner-signed.
+    ("migrate", "forget"):          ("migrate forget",          "owner-signed; re-issues the grandfathered forgets"),
+
     # Owner acts on content. `hv retract` without --owner stays: that is peer evidence, not governance.
     ("unforget",):                  ("unforget",                "owner-signed"),
 }

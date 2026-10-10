@@ -99,6 +99,7 @@ READERS = {
         ("hv", "_salience_rows"),
         ("hv", "_forgets_grandfathered"),
         ("hv", "_grandfather_facts"),           # doctor forget-authz, `hive-mind doctor --fix` (4c)
+        ("hv", "_forget_migration"),            # migrate forget: fact entries behind the projection differential (3.0)
         ("hv", "_links_unauthorized"),          # doctor link-authz
         ("hv", "_rebuild_in_transaction"),                 # pass 2: the legacy resolvers and `link`
         ("hv", "_pending_admissions"),

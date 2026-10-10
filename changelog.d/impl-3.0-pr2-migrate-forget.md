@@ -1,0 +1,1 @@
+- Release 3.0 PR 2: `hive-mind migrate forget` re-issues, owner-signed and idempotently, every forget that only the pre-genesis grandfather keeps in effect, and `migrate forget --check` lists them (exit 0 only when none) without writing; `hv search`, `hv feed` and the session-start nudge print a one-line notice while a migration is owed. `forget-authz` is unchanged.

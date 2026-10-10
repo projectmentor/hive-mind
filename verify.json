@@ -1,5 +1,5 @@
 {
-  "digest": "d6a8531a117984d33a2a4742b888c9a2fc0e2f2734b828c18aefaa0b1f998a01",
+  "digest": "83fe97b13e675b69990b7e83bd34fd1ae4de48a915c0f985ff3605483c1b33ab",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -10,7 +10,7 @@
     ".github/workflows/ci.yml": "757cc07ddfdafa609c315425dfe1000c838ba9a0caf938406d2604b2bdd779ad",
     ".github/workflows/cla.yml": "900240ebc0ee273c4e29e791790a357532b038ac0dcfe61fe9a76772b0c6896a",
     ".github/workflows/sign.yml": "ce497aa2a81d7218813774ba4a0f4defa21516ef60b9dafa42140d2184237c67",
-    "CHANGELOG.md": "b7c05cc7c0333c6dcee76a484416f9b9cfabe7b643dc77b9ab9ce9e3c8d7b9b9",
+    "CHANGELOG.md": "bc2570ea08e27145467cb5316152144022883aef62d56e2521122f0743b69372",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "75843641cf3c903ef1a06011f229e42f82e3bdff7e67da75cddbb65972c670da",
     "README.md": "5a64fa84d2435d0f196beba3bad2118c7e41387d6f42215e2a34f6bd1f2c1b4c",
@@ -18,8 +18,6 @@
     "advisories.json": "e1f7246819257c9cdcb8118aaee972ed89f22fb056d67230320d5ea7fdce6703",
     "cells/example-tool.json": "cdf871f60fb23a894a2b8a60849c4c20c05c7396c0e449302f04c3a155ed4369",
     "chacha20poly1305.py": "6c3bb50dc126dab128184280b4d11cb1494800651e97aea941a821f31ff012fd",
-    "changelog.d/implementer2-sign-test-fetch-depth.md": "2124b020e2c500ca0bb5d13d06c98057264a7c71ebd09eeb4fae3db469991096",
-    "changelog.d/sec-328-unsigned-pull.md": "00641b568a716974e15c5acf050181f72c4757e02f515484fe73b39b93b105df",
     "commandmap.py": "e6545fd239e6f1a7d46a9298dd9b0c98c9ef11b01a002d315f8169db9400a5a5",
     "config/.peers.json.example": "e81eb4533b4e06969946a8fa1c977e0692bc047275101bcdbae1504355866674",
     "config/nudge.env.example": "b278edb191f6588316383f5c095f6332fc3ccaf695c595dccd9b21c4322d5cf3",
@@ -31,7 +29,7 @@
     "dashboard/logo.svg": "a7a44c7994dda2788c3f89e095b790a3429ace2642746442d41b40de9031458a",
     "docs/ADVISORIES.md": "aee9fab7f28266625d7f9d29a8636197f898ae1e117aea8d62456740892a6422",
     "docs/AGENT_INTEGRATION.md": "915a4e8de823d2295f946439d01b93f5218061996d6bfdb193c899323b9ffbad",
-    "docs/CLI_REFERENCE.md": "432dd554ee6bbf7e486b2311c26477811e3638efc20b54723ecdd9faf80e3543",
+    "docs/CLI_REFERENCE.md": "58b4242f779d8cebfbcdeafeadf6410e9afb112f9480e843ad113f970629be6d",
     "docs/CONTRACT.md": "fde35c70530e029f941d39df554385706b8a88b30f2a233838d134e8f866b470",
     "docs/CONTRACT_HISTORY.md": "1bb898357b3dc106c065a3a356a16a5b2f90cc3d715f42f91cac8b0740ae8190",
     "docs/HV_ARCHITECTURE.md": "fed35d46d54501a60e43283a308dcd189e18bdbaf2341330b8bb93015bafed3b",
@@ -84,7 +82,7 @@
     "scripts/installer/_service.sh": "b782d82090b309b122d141b58fa9225f13a22bd7afdc52afe40cd04b682f2ae8",
     "scripts/installer/_status.sh": "ba2d70d54ee5d07cc5bfae9b395e5be5a955cd16ca5ac6afc71f8c3958fb3e97",
     "scripts/installer/_uninstall.sh": "e9efcee9f111d4dd5759439b483b8d9b2204d0096c9383a6c57dc3a537ec60d7",
-    "scripts/installer/_update.sh": "fca3bbb466ba6bdad8764ad026e80db543691b17cea1a66e751694273bd36b1b",
+    "scripts/installer/_update.sh": "a2778813429e8a25ad4ff3f61b07449a78fefe559fc84eef695936c820918141",
     "scripts/installer/cleanup.sh": "f66f4929108fafa28245f5460bc14e6b6f420fc75ec810195453939c220b1f20",
     "scripts/installer/dispatcher.sh": "7bcc86774d5450f9b816430f2d3d02309ae6a34c76047d15d1a08a9cedb39fe3",
     "scripts/installer/install.sh": "c9d9607b50fdab2e7148cdf37e7d06947fe9e63f045b1bb4a01e32a32f819ae5",
@@ -204,7 +202,7 @@
     "tests/test_telemetry.py": "474fa1c80eb012071f8c7963b72bfc7ec4b563d19539cea5443ab39eba8d4f89",
     "tests/test_trust_velocity.py": "603ad7980d372843b876baad8fc79597bfa27606a3443cd067eaaa98cba1f696",
     "tests/test_unforget.py": "02561db84a4a0239578f23ebba97834e494ef32e057f2560cb6ce3b2af2bd130",
-    "tests/test_update_script.py": "18953507de4179ac1793b9f4fb966dc3ab8f8f1b37fd82c8973f363a8112d4ae",
+    "tests/test_update_script.py": "9931c04d516b2d5ee6c6a3065e364dfc618e2a821021e42384970f0934e9b49c",
     "tests/test_utility.py": "b10e3f4974aa84175924802f1bb45ac388ef535303a50bb630fed7cfd790c6ef",
     "tests/test_verify.py": "db6f85832b65ffcf8d61e9a2fcced89312b8762cc2b997446f6c223c607b9047",
     "tests/test_vocabulary.py": "d317dc620343001b33389f41345d4a5ff13fd73d05d013ebe12f1b0e6b016072",
@@ -215,6 +213,6 @@
     "vocabulary.py": "13c48daa6e38c6be024e2f50f295b9aa9b3e476f250ec3c0d928f4026e9a5ba6",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
-  "sequence": 504,
+  "sequence": 509,
   "version": "2.4"
 }

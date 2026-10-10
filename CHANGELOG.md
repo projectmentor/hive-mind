@@ -10,6 +10,14 @@ Git tags are `vMAJOR.MINOR.PATCH`. `vX.Y.0` marks the commit on `main` that comp
 without changing the contract are tagged `vX.Y.1`, `vX.Y.2`, … Dates are when each version was
 introduced (a contract) or tagged (a patch).
 
+## 2.4.1 — 2026-10-10 · `v2.4.1`
+
+No contract change: `hv version` still reports 2.4, and nothing an adapter calls moves. **2.4.1 is the step every node takes before 3.0.** Run `hive-mind update` on each node; the updater's new pre-switch gate runs from the tree that is installed, so a node must be on 2.4.1 before it updates across a major.
+
+- `hive-mind update` now refuses a switch to a higher contract major (2.x to 3.x) while `forget-authz` is open on an owned hive: it runs the installed tree's check before the merge or reset, prints the ACTION REQUIRED block and exits 1 with HEAD, the tree and the daemon untouched; run `hive-mind doctor --fix` first (#331, #332).
+- Outbound `enforce`: a pull from a peer whose hello is not `verified` (`unsigned`, `unadmitted`, `addr-unproven`) is now sent with no `Hive-Auth-*` headers, and the dashboard's signed telemetry read and the daemon's per-node `/api/*?node=` proxy are not sent to an address that has not proved itself (redirects off) (#328, #330).
+- `sign.yml`: the `test` job now checks out full history (`fetch-depth: 0`), so `gen_verify` can write the manifest `sequence` and main is re-signed again (#326, #327).
+
 ## 2.4 — 2026-10-09 · `v2.4.0`
 
 **Upgrading from 2.3.** Run `hive-mind update` on each node. Nothing an adapter calls changes, so adapters keep

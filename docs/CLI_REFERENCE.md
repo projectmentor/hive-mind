@@ -35,6 +35,7 @@ memory.
 | `hv search` | Search facts, decisions and ideas; `--id` looks one up by `sid` or `ref` |
 | `hv stats` | See a summary of your memory |
 | `hive-mind unforget` | Owner only: reverse an owner forget (`hive-mind retract --owner`) |
+| `hive-mind migrate forget` | Owner only (3.0): re-issue, owner-signed, the forgets that only the pre-genesis grandfather keeps in effect; `--check` lists them |
 | `hv sync` | Sync with peer nodes; `auth` sets the read-auth mode, `auth --outbound` what a peer must prove before this node pushes to it |
 | `hv telemetry` | Local-only session observability (never synced) |
 | `hv verify` | Check that this install is the official, signed release |
@@ -972,6 +973,27 @@ hive-mind retract k1:597b3e0f5fb92d37:15 \
     --source "claude-code" \
     --owner
 ```
+
+---
+
+### `hive-mind migrate forget` — Close the pre-genesis forget grandfather *(3.0)*
+
+Release 3.0 stops honouring an unsigned owner forget dated before the genesis owner. `hive-mind migrate forget`
+re-issues each such forget owner-signed first, so no fact comes back. It lists the dependent facts by `h:` id
+and text, asks y/N (default N; no terminal is N) before it unlocks the owner key, then appends the re-issues
+and sets `forget_writers=owner` through the #122 guard. It re-keys nothing and is idempotent: a second run
+finds an empty set and appends nothing. Owner machine only.
+
+```
+hive-mind migrate forget [--check]
+```
+
+| Flag | What it does |
+|---|---|
+| `--check` | Writes nothing. Prints the dependent facts, or `closed: 0 facts depend on a pre-genesis unsigned forget`; exit 0 only when there are none. |
+
+A forget that the projection already ignores (`forget_writers=owner`) is not listed and is not re-signed.
+While a migration is owed, `hv search`, `hv feed` and the session-start nudge print a one-line notice.
 
 ---
 

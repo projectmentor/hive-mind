@@ -4584,6 +4584,98 @@ def _forget_authz_check(entries, gov):
     return {"name": "forget-authz", "status": "fail", "detail": detail, "open": True, "facts": facts}
 
 
+def _forget_migration(entries, gov):
+    """3.0 PR 2 (plan 3.2, 3.4): what `hive-mind migrate forget` has to re-issue, and what its check reports.
+
+    The MIGRATION SET is the facts the live projection hides that the arm-removed projection would show,
+    computed as a differential of `_content_evidence` itself (live key vs. the grandfather arm off) and
+    NOT read off `_forgets_grandfathered`'s `hides`: `hides` counts a pre-genesis forget whatever
+    `forget_writers` says, while the projection applies the arm only while the key is not `owner`. On a hive
+    whose key is `owner` the set is empty by construction, so the migration neither lists nor re-signs
+    forgets the projection already ignores.
+
+    Returns {"facts": [{"sid", "ref", "content"}], "hides": [labels, narrowed to the set], "dangling": [...],
+    "key": the live `forget_writers`, "owner": bool}. `owner` is False before any owner exists, when nothing
+    is grandfathered and the set is empty."""
+    if not gov.get("owner_id"):
+        return {"facts": [], "hides": [], "dangling": [], "key": None, "owner": False}
+    config = dict(gov.get("config") or {})
+    key = config.get("forget_writers", "legacy")
+    hides, dangling = _forgets_grandfathered(entries, gov)
+    shown = []
+    if hides and key != "owner":
+        gov_off = dict(gov, config=dict(config, forget_writers="owner"))
+        live = _content_evidence(entries, gov, False)
+        off = _content_evidence(entries, gov_off, False)
+        gone = {c for c, ev in live.items() if ev["forget"] and not (off.get(c) or {}).get("forget")}
+        content_of = {(e.get("node_id"), e.get("seq")): (e.get("payload") or {}).get("content")
+                      for e in entries if e.get("type") == "fact"}
+        for label in hides:
+            node, seq = label.split("→", 1)[1].rsplit(":", 1)
+            if content_of.get((node, int(seq))) in gone:
+                shown.append(label)
+    return {"facts": _grandfather_facts(entries, shown), "hides": shown, "dangling": dangling,
+            "key": key, "owner": True}
+
+
+def _forget_migration_lines(m):
+    """The explicit positive-check text: an empty set is printed as a list, never as silence."""
+    n = len(m["facts"])
+    out = [f"closed: {n} facts depend on a pre-genesis unsigned forget" if not n else
+           f"open: {n} fact(s) depend on a pre-genesis unsigned forget and would show again without a "
+           f"migration:"]
+    for f in m["facts"]:
+        text = " ".join(f["content"].split())
+        out.append(f"  {f['sid']}  {text[:100]}" + ("…" if len(text) > 100 else ""))
+    if m["dangling"]:
+        out.append(f"dangling: {len(m['dangling'])} pre-genesis owner forget(s) target nothing in this journal "
+                   f"(not re-issued): {', '.join(m['dangling'][:10])}")
+    return out
+
+
+def _forget_migration_open_count():
+    """How many facts the migration would re-issue, for the node-local notices; 0 when none, unknown or on
+    any error. Cached against the journal files' (name, size, mtime) so a read verb does not re-project the
+    journal each time. Never raises."""
+    try:
+        fp = [(f.name, f.stat().st_size, f.stat().st_mtime_ns) for f in sorted(JOURNAL_DIR.glob("*.jsonl"))]
+        cache = HIVE_HOME / ".nudge_state" / "forget-migration.json"
+        try:
+            c = json.loads(cache.read_text())
+            if c.get("fp") == json.loads(json.dumps(fp)):
+                return int(c.get("n", 0))
+        except Exception:
+            pass
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        n = len(_forget_migration(entries, _governance_state(entries))["facts"])
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"fp": fp, "n": n}))
+        return n
+    except Exception:
+        return 0
+
+
+def _forget_migration_stderr_notice():
+    """The read verbs' node-local notice (stderr, so stdout stays machine-readable). Never raises."""
+    try:
+        line = _forget_migration_notice()
+        if line:
+            print(line, file=sys.stderr)
+    except Exception:
+        pass
+
+
+def _forget_migration_notice():
+    """One line for `hv search` / `hv feed` (stderr) and the session-start nudge, or ''. Silent unless a
+    migration is owed."""
+    n = _forget_migration_open_count()
+    if not n:
+        return ""
+    return (f"[hive] NOTICE: {n} forgotten fact(s) depend on an unsigned pre-genesis forget that release 3.0 "
+            f"no longer honours, so 3.0 would show them again. On the owner machine run: "
+            f"hive-mind migrate forget  (hive-mind migrate forget --check lists them)")
+
+
 def _links_unauthorized(entries, gov):
     """`supersedes`/`resolves` links the projection DOWNGRADED to evidence (signer neither the owner-at-
     position nor the target's author) — surfaced by `hv doctor` (`link-authz`) so the owner can ratify
@@ -7024,6 +7116,16 @@ def whoami_cmd(args):
                                else "`hv join --principal <you>` to request write access"))
 
 
+def _print_forget_migration():
+    """SessionStart: one line while a forget migration is owed (3.0 plan 3.3); silent otherwise."""
+    try:
+        line = _forget_migration_notice()
+        if line:
+            print(line)
+    except Exception:
+        return
+
+
 def _spec_update_check(agent):
     """§0 of the Agent Integration Spec: compare the running hv's CONTRACT_VERSION
     (SemVer MAJOR.MINOR) to what this agent last integrated against, and nudge to
@@ -7097,6 +7199,7 @@ def nudge(args):
             _print_open_ideas(cfg)
             _print_pending_admissions()
             _print_self_status()
+            _print_forget_migration()
             _spec_update_check(getattr(args, "agent", "agent") or "agent")
             _freshness_check()
             _audit_boot_summary()
@@ -10462,6 +10565,12 @@ def admit_cmd(args):
     raise NotOnDataPlane(("group", "admit"))
 
 
+def migrate_cmd(args):
+    """Placeholder: the forget migration signs owner re-issues, so it is `hive-mind migrate forget` (3.0 PR 2,
+    `hivemind_owner.py`)."""
+    raise NotOnDataPlane(("migrate", "forget"))
+
+
 def _group_change(action, device_id, principal=None):
     """Placeholder: revoke / deny / change / purge are owner-signed — `hive-mind group …` (2.0 S2)."""
     raise NotOnDataPlane(("group", action))
@@ -11369,6 +11478,12 @@ def build_parser():
     admit_parser.add_argument("--principal", help="Tag the person or agent who owns this device")
     admit_parser.add_argument("--module", help="Mark the device as module NAME's (2.1): it never votes in an election")
 
+    migrate_parser = subparsers.add_parser("migrate", help="Owner only: one-time migrations (3.0): `migrate forget`")
+    migrate_sub = migrate_parser.add_subparsers(dest="migrate_action", required=True)
+    m_forget = migrate_sub.add_parser("forget", help="Re-issue, owner-signed, every forget that only the pre-genesis "
+                                                     "grandfather keeps in effect (idempotent)")
+    m_forget.add_argument("--check", action="store_true",
+                          help="Write nothing: list the facts that depend on such a forget; exit 0 only if none")
     group_parser = subparsers.add_parser("group", help="Membership lifecycle (owner-only): admit/revoke/deny/change/purge/retire/list")
     group_sub = group_parser.add_subparsers(dest="group_action")
     g_admit = group_sub.add_parser("admit", help="Admit a device; no arg lists pending requests")
@@ -11561,6 +11676,7 @@ def _dispatch(args):
     if args.command == "remember":
         remember(args)
     elif args.command == "search":
+        _forget_migration_stderr_notice()
         search(args)
     elif args.command == "decide":
         decide(args)
@@ -11575,6 +11691,7 @@ def _dispatch(args):
     elif args.command == "stats":
         stats(args)
     elif args.command == "feed":
+        _forget_migration_stderr_notice()
         feed(args)
     elif args.command == "version":
         version_cmd(args)
@@ -11590,6 +11707,8 @@ def _dispatch(args):
         owner_cmd(args)
     elif args.command == "admit":
         admit_cmd(args)
+    elif args.command == "migrate":
+        return migrate_cmd(args)
     elif args.command == "group" and args.group_action == "retire":
         group_retire_cmd(args)
     elif args.command == "group":

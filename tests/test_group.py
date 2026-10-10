@@ -137,13 +137,13 @@ def test_group_list_shows_all_buckets(tmp_path):
 
 def test_aliases_still_work(tmp_path):
     """`hv admit` and `hv config set` are still reached, on the control plane. `hv key show` was a silent
-    alias of `config identity show` through 1.x; 2.0 removes it, so it names that command and exits 2."""
+    alias of `config identity show` through 1.x; 3.0 removed it: an unknown command, exit 2."""
     home = tmp_path
     _run(home, "owner", "init")
     _run(home, "admit", "dev-a", "--principal", "alice")          # alias of `group admit`
     _run(home, "config", "set", "cap_self", "0.6")                # alias of `config confidence set`
     _, gov = _gov(home)
     assert "dev-a" in gov["admitted"] and gov["config"]["cap_self"] == 0.6
-    old = _run(home, "key", "show", check=False)                  # removed in 2.0 (h:af137f9421)
-    assert old.returncode == 2 and "Run: hv config identity show" in old.stderr, old.stderr
+    old = _run(home, "key", "show", check=False)                  # removed in 3.0 (h:af137f9421)
+    assert old.returncode == 2 and old.stdout == "", old.stderr
     assert _run(home, "config", "identity", "show").returncode == 0

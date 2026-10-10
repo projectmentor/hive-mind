@@ -30,7 +30,7 @@ def run(home, *args, claude_dir=None, check=True):
 
 def test_wire_claude_lands_and_the_old_alias_writes_nothing(tmp_path):
     """`hv wire claude` writes the shim. The removed `hv doctor wire-agent` (decision h:af137f9421) leaves the
-    Claude config untouched, names `hv wire claude` and exits 2, however doctor's flags are placed."""
+    Claude config untouched and exits 2 as an unknown command (3.0), however doctor's flags are placed."""
     c_new, c_old = tmp_path / "cnew", tmp_path / "cold"
     c_new.mkdir(parents=True); c_old.mkdir(parents=True)
     run(tmp_path / "h1", "wire", "claude", claude_dir=c_new)
@@ -40,7 +40,6 @@ def test_wire_claude_lands_and_the_old_alias_writes_nothing(tmp_path):
     for argv in (["doctor", "wire-agent"], ["doctor", "--fix", "wire-agent"]):
         r = run(tmp_path / "h2", *argv, claude_dir=c_old, check=False)
         assert r.returncode == 2 and r.stdout == "", (argv, r.stdout)
-        assert "Run: hv wire claude" in r.stderr, r.stderr
     assert list(c_old.iterdir()) == []
 
 

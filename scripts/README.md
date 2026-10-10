@@ -5,7 +5,7 @@ Organized by **where the code actually diverges**, not aspirationally.
 ```
 scripts/
   common/      cross-platform: POSIX-sh hooks + all Python helpers
-  installer/   shared install/update/uninstall flow + the _service.sh supervisor router
+  installer/   shared install/update/uninstall/reset/invite flow + the _service.sh supervisor router
   platform/
     linux/     _units.sh      systemd --user units (also used on WSL2)
     macos/     _launchd.sh    launchd LaunchAgents
@@ -17,8 +17,8 @@ scripts/
 
 | Script | Lang | Linux | WSL2 | macOS | Termux (Android) | Windows | iOS |
 |---|---|:--:|:--:|:--:|:--:|:--:|:--:|
-| `common/*.py` (gen_verify, sign_release, gen_keypair, infer-phrases) | Python | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| `common/hive_dispatch.sh`, `*_hook.sh`, `smoke.sh`, `sync_smoke.sh`, `sync_auth_smoke.sh` | bash | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| `common/*.py` (gen_verify, sign_release, gen_keypair, gen_namespaces, infer-phrases) | Python | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| `common/hive_dispatch.sh`, `*_hook.sh` (nudge, session), `smoke.sh`, `sync_smoke.sh`, `sync_auth_smoke.sh`, and the `_smoke_*.sh` helpers | bash | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `installer/` (install/update/uninstall, `_service.sh` router, `dispatcher.sh`) | bash | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | `platform/linux/_units.sh` | bash | ✅ | ✅ | — | — | — | — |
 | `platform/macos/_launchd.sh` | bash | — | — | ✅ | — | — | — |

@@ -1,0 +1,1 @@
+- Docs: the README says contract 2.4 for modules and lists `hive-mind group` and `hive-mind module` in the command table; `scripts/README.md` names `gen_namespaces.py`, the smoke helpers and the reset and invite steps.

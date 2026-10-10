@@ -232,7 +232,6 @@ echo ""
 echo -e "${BLD}hive-mind update${RST}"
 echo "────────────────────────────────────"
 
-info "Fetching latest from GitHub..."
 # VERIFY, THEN SWITCH. The fetch only fills remote-tracking refs and tags; nothing the node runs changes
 # until the commit it would switch to has passed the signed-manifest check against the key THIS install
 # pins. A refusal leaves the branch and the working tree exactly as they were.
@@ -250,6 +249,13 @@ if [ -z "${HIVE_UPDATE_REEXEC:-}" ]; then
   unset HIVE_UPDATE_SWITCHED
   export HIVE_UPDATE_PRE_HEAD="${HIVE_UPDATE_PRE_HEAD:-$_HEAD}"
 fi
+# The re-exec'd process runs step 0 BEFORE its own fetch: the parent already switched the tree, and any command that
+# can exit below (a failed fetch, a diverged dirty tree, a refused rewind, a failed verify, a lower sequence, the major
+# gate) would otherwise leave that switch in place with the migration unchecked. It runs again after the fetch and
+# switch below, in case this process switched the tree once more.
+_BR="$(git -C "$HIVE_DIR" rev-parse --abbrev-ref HEAD)"
+if [ -n "${HIVE_UPDATE_REEXEC:-}" ]; then _forget_migration_step0; fi
+info "Fetching latest from GitHub..."
 git -C "$HIVE_DIR" fetch --tags origin
 _BR="$(git -C "$HIVE_DIR" rev-parse --abbrev-ref HEAD)"
 _NEW="$(git -C "$HIVE_DIR" rev-parse "@{u}")"

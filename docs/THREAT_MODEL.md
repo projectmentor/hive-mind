@@ -123,6 +123,17 @@ shown because a planted forget would be re-signed too. Once set,
   the 1.19 property "a compromised admitted device can never erase, only weigh" holds for fact forgets
   too. Residual: a hive still on `legacy` (the default), and nodes before 1.25, which ignore the key and
   keep honouring the grandfather until they upgrade (projection skew).
+- **The update gate (3.0, step 0 of `hive-mind update`).** The new `_update.sh` runs `migrate forget` after the
+  re-exec, before any unit, restart, rebuild or wiring. An open grandfather is migrated on the owner's `y`, and
+  otherwise the update exits 1: if this update's own switch is identified (an exported marker, or an exact
+  `merge <sha>: Fast-forward` / `reset: moving to <sha>` reflog row inside a few seconds of the start) the tree
+  returns to the pre-switch HEAD with `reset --keep`, so local edits stay; else HEAD is left where it is. There is no
+  skip flag. Residuals, all accepted for 3.x: between a 2.4 updater's merge and step 0 (seconds) another `hv` process
+  runs the new code on an un-migrated journal; a manual `git pull` bypasses the updater and is covered by detection
+  (`hv doctor` `forget-authz`, the session-start nudge, the read-verb notice) rather than prevention; a same-user git
+  command that writes an exact script subject in those seconds is indistinguishable from the updater's switch (a
+  local-operator collision, not a journal act), and with the reflog disabled no switch is identified and nothing is
+  rolled back. Rule: after a refused update, check `git log` and `git status`.
 - **Entity rewrite by name (SECREV B3).** An `entity` write by a device that is neither the name's creator nor
   owner-signed is weigh-only: the projection skips it, as a link from such a device is held to evidence. The
   creator is the name's first applied `entity` entry in replay order `(node_id, seq)`, the rule #208 uses for

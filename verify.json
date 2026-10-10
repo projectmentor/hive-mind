@@ -1,5 +1,5 @@
 {
-  "digest": "83fe97b13e675b69990b7e83bd34fd1ae4de48a915c0f985ff3605483c1b33ab",
+  "digest": "475a7b098a6c950786563df66f1ee97c6e2fe339dc2dd5d66e6533eb787cdf3d",
   "files": {
     ".github/FUNDING.yml": "ca6c63d7539bb7d2f809b5068781c78de97c028a44c5ae252b11bc1695caf85d",
     ".github/ISSUE_TEMPLATE/bug_report.yml": "22df51b1e51c25f50726392c79811116b88c40370843ff2d4a3e76b643f1cb68",
@@ -13,11 +13,12 @@
     "CHANGELOG.md": "bc2570ea08e27145467cb5316152144022883aef62d56e2521122f0743b69372",
     "CLA.md": "78a00158ab3090dbb1a4de6ed03b150f22b5a0e99bcbba139a6244728780cc7b",
     "CONTRIBUTING.md": "75843641cf3c903ef1a06011f229e42f82e3bdff7e67da75cddbb65972c670da",
-    "README.md": "5a64fa84d2435d0f196beba3bad2118c7e41387d6f42215e2a34f6bd1f2c1b4c",
+    "README.md": "bca4ee27d30615de72fde98d41025fe1d68b0b9f3c982b58f5f5f2ac944f51c0",
     "SECURITY.md": "fe4a7286f64aad86def93bde231c461a5b9e71bad38a11db5a320efc4a2c67a9",
     "advisories.json": "e1f7246819257c9cdcb8118aaee972ed89f22fb056d67230320d5ea7fdce6703",
     "cells/example-tool.json": "cdf871f60fb23a894a2b8a60849c4c20c05c7396c0e449302f04c3a155ed4369",
     "chacha20poly1305.py": "6c3bb50dc126dab128184280b4d11cb1494800651e97aea941a821f31ff012fd",
+    "changelog.d/docs-agents-hive-devices-terms.md": "4730963951387990830ce5ac8997df2446cb3bc0adf526a788eb276b64fd411e",
     "commandmap.py": "e6545fd239e6f1a7d46a9298dd9b0c98c9ef11b01a002d315f8169db9400a5a5",
     "config/.peers.json.example": "e81eb4533b4e06969946a8fa1c977e0692bc047275101bcdbae1504355866674",
     "config/nudge.env.example": "b278edb191f6588316383f5c095f6332fc3ccaf695c595dccd9b21c4322d5cf3",
@@ -39,7 +40,7 @@
     "docs/NAMESPACES.md": "e057144902674ad7274cba213251b944b5af9d7a0ab3e0a5ae71fddafb0f7e28",
     "docs/SYNC_API.md": "211b0037f2efa3f661052ca1dbda9fc4406a9ccc84113c0a7c41e9a6f020a688",
     "docs/THREAT_MODEL.md": "3ec316798da1aff2a393b519d0998fd002b434677df2f8928718373d29af7c4a",
-    "docs/WORKING_TOGETHER.md": "0af0a65c81c5cde6e9c6ff726f69cb35315b7350757856d535e57bca6ff7cad2",
+    "docs/WORKING_TOGETHER.md": "783581d49b02d468abbd28281bdfb9b953ff2b15654d0d0bcae1000760df4577",
     "docs/design/hivemind_continual_learning_design.md": "1151718e7a634cb520939e4d3ed01491073bee06e069bb316446f4860ad8e8c8",
     "docs/history/P2P_DESIGN.md": "91b34fee3d1c55a1759b4d256c1c805afb5e084e874932bb133c2487825de1dd",
     "ed25519.py": "24db887b0608645d2fdb263adf9e590c094120291160680a1e3d81f25512a342",
@@ -213,6 +214,6 @@
     "vocabulary.py": "13c48daa6e38c6be024e2f50f295b9aa9b3e476f250ec3c0d928f4026e9a5ba6",
     "x25519.py": "ec1967595a2306cde860afe4dffab40a3f833d089de6caf5c9c080df8fd45726"
   },
-  "sequence": 509,
+  "sequence": 511,
   "version": "2.4"
 }

@@ -398,6 +398,11 @@ def test_the_fleet_floor_is_the_current_major_and_never_below_1_19(tmp_path, mon
     for contract, floor in (("1.28", "1.19"), ("1.5", "1.19"), ("2.0", "2.0"), ("2.3", "2.0"), ("3.1", "3.0")):
         monkeypatch.setattr(hv, "CONTRACT_VERSION", contract)
         assert hv._fleet_floor() == floor, contract
+    monkeypatch.setattr(hv, "CONTRACT_VERSION", "3.0")                 # 3.0: every 2.x peer is behind, a 3.x peer is ok
+    gov = {"admitted": {"k1:aaaaaaaaaaaaaaaa", "k1:bbbbbbbbbbbbbbbb"}, "purged": set()}
+    probed = {"k1:aaaaaaaaaaaaaaaa": "x", "k1:bbbbbbbbbbbbbbbb": "y"}
+    fc = hv._fleet_contract(gov, probed, {"k1:aaaaaaaaaaaaaaaa": "2.4", "k1:bbbbbbbbbbbbbbbb": "3.0"})
+    assert [d for d, _ in fc["behind"]] == ["k1:aaaaaaaaaaaaaaaa"] and [d for d, _ in fc["ok"]] == ["k1:bbbbbbbbbbbbbbbb"]
     monkeypatch.setattr(hv, "CONTRACT_VERSION", "2.0")
     gov = {"admitted": {"k1:aaaaaaaaaaaaaaaa", "k1:bbbbbbbbbbbbbbbb"}, "purged": set()}
     probed = {"k1:aaaaaaaaaaaaaaaa": "x", "k1:bbbbbbbbbbbbbbbb": "y"}

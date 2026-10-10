@@ -439,7 +439,7 @@ def _owner_unseal(env, passphrase):
 # output fields within a major). MAJOR = breaking; bump only when unavoidable, keep the previous
 # major working as deprecated shims through a window. Authoritative value; docs/AGENT_INTEGRATION.md
 # documents the same number. See `hv version`.
-CONTRACT_VERSION = "2.4"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
+CONTRACT_VERSION = "3.0"   # per-version history: docs/CONTRACT_HISTORY.md (newest first); add a new contract's entry there, not on this line (#106)
 
 
 # --------------------------------------------------------------------------
@@ -9624,9 +9624,10 @@ def _doctor_status():
     except Exception:
         pass
 
-    # 3f2. The pre-genesis forget grandfather (#122, #135). An owned hive whose `forget_writers` is still
-    #      open FAILS (2.0, 4c): an admitted device can backdate an unsigned owner forget and have it honoured.
-    #      `_forget_authz_check` lists every fact that depends on it; `hive-mind doctor --fix` closes it.
+    # 3f2. The pre-genesis forget migration (3.0, plan 3.4). The grandfather is gone, so the check is about the
+    #      MIGRATION SET: FAILS while a fact is hidden only by an unsigned pre-genesis owner forget (the facts 2.x
+    #      still hid and 3.0 would show), listing each by `h:` id; OK on an empty list, whatever `forget_writers`
+    #      says. `hive-mind migrate forget` re-issues them owner-signed; it also runs in `hive-mind update`.
     try:
         c = _forget_authz_check(entries, gov)
         if c is not None:

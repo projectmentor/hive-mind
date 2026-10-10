@@ -127,6 +127,10 @@ Then the two lists do not erase each other.
 Downloading the new files is not the last step.
 The HiveMind program keeps running the old copy until someone restarts it.
 
+Update the device that holds the owner key first.
+The update to 3.0 re-signs some old forgets, and only that device can sign them.
+If you update another device first, the update may stop and tell you so. Nothing is lost: run it again after the owner device has updated and synced.
+
 Ask the checker to update the device they use.
 Ask the builder to update the other device, if you have one.
 Each of them should tell you the health check passed.
@@ -137,7 +141,7 @@ You do not have to approve every small fix.
 
 You do say yes before anyone builds a change to any of these:
 
-- The hive's rule set. Today that set is number 2.4.
+- The hive's rule set. Today that set is number 3.0.
 - How notes are signed.
 - How the devices share the hive.
 - The written security promises.

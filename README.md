@@ -9,7 +9,7 @@ agent on every machine can use it too. Local-first, no cloud, no central server.
 
 Website: **[hivemind.projectmentor.org](https://hivemind.projectmentor.org)** ·
 Docs: [`docs/`](docs/) · For developers: [hivemind.projectmentor.org/dev](https://hivemind.projectmentor.org/dev/) ·
-Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Best practices: [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md) · Current agent contract: **2.4** (`hv version`)
+Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md) · Best practices: [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md) · Current agent contract: **3.0** (`hv version`)
 
 <p align="center">
   <a href="https://hivemind.projectmentor.org/dev/#dashboard">
@@ -289,7 +289,7 @@ a module. The owner then admits the module's device (`admit --module`). On a mac
 not hold the owner key, `add` stages the tree and prints the owner's admit line; a second `add`
 after that admit has synced finishes the install.
 
-**Today (contract 2.4).** Modules run on Linux with a systemd user manager.
+**Today (contract 3.0).** Modules run on Linux with a systemd user manager.
 [`docs/MODULES.md`](docs/MODULES.md) is the developer guide: the manifest, signing, the
 `x-<module>:` namespace, the module API, per-node vs fleet config, and a worked example.
 The route reference is [`docs/MODULE_API.md`](docs/MODULE_API.md).

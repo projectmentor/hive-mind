@@ -150,6 +150,16 @@ def test_a_module_that_needs_a_newer_core_is_refused(hive, tmp_path):
 
 
 @LINUX_ONLY
+def test_a_2_x_manifest_installs_on_a_3_0_core(hive, tmp_path):
+    """3.0 (plan 5.2): `min_core` is a `>=` compare, so a manifest written for 2.1 still installs on the 3.0 core."""
+    assert "3.0" in _run(hive, "version").stdout
+    pub = _publish(tmp_path / "repo", min_core="2.1")
+    r = _add(hive, tmp_path / "repo", pub, check=False)
+    assert r.returncode == 0, r.stderr
+    assert (tmp_path / "modules" / "demo").exists()
+
+
+@LINUX_ONLY
 def test_a_manifest_may_ask_for_less_quota_but_never_more(hive, tmp_path):
     pub = _publish(tmp_path / "repo", quota={"per_hour": 600})
     r = _add(hive, tmp_path / "repo", pub, check=False)

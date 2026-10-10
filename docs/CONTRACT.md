@@ -183,6 +183,8 @@ them; a unified entity identity across module and shared entities (3.0, public #
 
 ## Versioning
 
+**3.0** is a MAJOR for the adapter surface (removed pointers and aliases, see `AGENT_INTEGRATION.md` §7) and changes nothing a module relies on. `GET /v1/` reports `contract: "3.0"`; `min_core` is a `>=` compare, so a manifest declaring `min_core: 2.x` still installs and runs. The forget grandfather is gone from the projection (a pre-genesis owner forget counts only if the owner signed it), and an entity's identity is its creating ref, with `identity_ref` and `new_identity` two optional fields on `entity` payloads a 2.x validator accepts. A module still writes only its own `x-<module>:` entities. No route, signing or manifest change.
+
 **2.3** is a MINOR. `GET /v1/` gains two read-only fields, the manifest gains an optional `service.stop_grace`, `hive-mind module config` is a new control-plane verb, and `module add`, `update` and `remove` run on a device without the owner key (guarantee 11). Nothing a module or an adapter calls changes. The release tag `v2.3.0` marks the commit that completed it.
 
 **2.2** is a MINOR. `hv search --id` and `hive-mind group retire` are additive, and guarantees 4, 5 and 10 above state how the projection treats timestamps and a revoked device's content. The release tag `v2.2.0` marks the commit that completed it.

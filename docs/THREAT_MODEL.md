@@ -134,7 +134,12 @@ at once). Concretely:
   flagged; the rule is to review pre-genesis owner-source forgets before running `owner init`. **(c)** the update-gate
   residuals below (the manual-pull window, the same-user reflog collision, and no rollback when the reflog is disabled).
   **(d)** nodes still on 2.x keep honouring the grandfather until they upgrade (projection skew); `hv doctor`
-  (`fleet-contract`) lists them.
+  (`fleet-contract`) lists them. **(e) a revoked writer's pre-genesis forget in the migration set**: the set is computed over the
+  journal's entries after the purge filter, not over the projection's entries, so a pre-genesis forget by a device that was later
+  revoked (and, in shapes not probed, one the timestamp bounds or the module write policy skip) can list a fact the 2.x display
+  already showed. The error only adds to the list. `migrate forget` shows each fact's text and defaults to N, and `hive-mind unforget
+  <h:id>` settles one; the rule is to read the list before answering `y`, and to answer N for a fact whose forget came from a
+  device the owner has since revoked.
 - **The update gate (3.0, step 0 of `hive-mind update`).** The new `_update.sh` runs `migrate forget` after the
   re-exec, before any unit, restart, rebuild or wiring. A non-empty migration set is migrated on the owner's `y`, and
   otherwise the update exits 1: if this update's own switch is identified (an exported marker, or an exact

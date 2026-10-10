@@ -1,1 +1,0 @@
-- `hive-mind update` now refuses a switch to a higher contract major (2.x to 3.x) while `forget-authz` is open on an owned hive: it runs the installed tree's check before the merge or reset, prints the ACTION REQUIRED block and exits 1 with HEAD, the tree and the daemon untouched; run `hive-mind doctor --fix` first (#331).

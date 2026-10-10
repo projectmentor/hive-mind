@@ -512,7 +512,7 @@ def test_d_an_open_forget_grandfather_is_handled_by_step_0_before_anything_else_
 
 # ── #331: a switch to a higher contract major is refused while the forget grandfather is open ─────────
 
-def _major_upstream(sb, version="3.0"):
+def _major_upstream(sb, version="4.0"):
     """A signed upstream commit whose `hv` declares CONTRACT_VERSION `version`."""
     hv = sb.src / "hv"
     hv.write_text(re.sub(r'^CONTRACT_VERSION = "[0-9.]+"', f'CONTRACT_VERSION = "{version}"', hv.read_text(), count=1, flags=re.M))
@@ -533,7 +533,7 @@ def test_a_higher_major_is_refused_before_the_switch_only_while_forget_authz_is_
     if state == "open":
         assert r.returncode == 1, r.stdout + r.stderr
         assert "ACTION REQUIRED" in r.stdout and "hive-mind migrate forget" in r.stdout
-        assert "REFUSED" in r.stderr and "3.0" in r.stderr and "until the forget grandfather" in r.stderr
+        assert "REFUSED" in r.stderr and "4.0" in r.stderr and "until the forget grandfather" in r.stderr
         assert "Update complete" not in r.stdout and "Restarting sync daemon" not in r.stdout and not sb.log.exists()
         assert sb.state() == before and _git(sb.hive, "rev-parse", "HEAD") != new
     else:
@@ -547,7 +547,7 @@ def test_a_same_major_update_with_forget_authz_open_is_not_refused_before_the_sw
     assert _ctl(sb, "owner", "init").returncode == 0
     reopen_as_2x(sb.hive, sb.env(), sb.hive)
     _backdated_forget(sb, "the backup runs at 02:00")
-    new = _major_upstream(sb, "2.9")
+    new = _major_upstream(sb, "3.9")
     before = sb.state()
     r = sb.update()
     assert "until the forget grandfather" not in r.stderr, r.stdout + r.stderr   # the pre-switch refuse is major-only

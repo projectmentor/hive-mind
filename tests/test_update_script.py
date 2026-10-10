@@ -480,7 +480,9 @@ def _backdated_forget(sb, text):
 
 
 @pytest.mark.parametrize("state", ["open, a fact depends", "open, nothing depends", "closed", "no owner"])
-def test_d_an_open_forget_grandfather_ends_the_update_with_action_required(sandbox, state):
+def test_d_an_open_forget_grandfather_is_handled_by_step_0_before_anything_else_runs(sandbox, state):
+    """3.0 PR 3: step 0 (after the re-exec) migrates or refuses; the daemon is not restarted on a refusal.
+    No terminal here, so a fact that depends on the grandfather is a refusal; with none the owner device just closes."""
     sb = sandbox()
     sid = None
     if state != "no owner":
@@ -489,24 +491,20 @@ def test_d_an_open_forget_grandfather_ends_the_update_with_action_required(sandb
         assert _ctl(sb, "config", "set", "forget_writers", "legacy").returncode == 0   # a pre-1.28 hive
     if state == "open, a fact depends":
         sid = _backdated_forget(sb, "the backup runs at 02:00")
+    before = sb.state()
     r = sb.update()
     out = r.stdout
-    if state.startswith("open"):
-        assert r.returncode != 0, out + r.stderr
-        assert "ACTION REQUIRED" in out and "hive-mind doctor --fix" in out and "Update complete" not in out
-        assert "here (this device keeps an owner key)" in out
-        # after the restart, the rebuild and the re-wire, and the last thing printed
-        assert out.index("Restarting sync daemon") < out.index("Rebuilding database") \
-            < out.index("Re-asserting Claude Code hooks") < out.index("ACTION REQUIRED")
-        assert out.rstrip().endswith("every `hive-mind update` ends here.")
-        if sid:
-            assert sid in out and "the backup runs at 02:00" in out and "asks y/N" in out
-        else:
-            assert "closes without asking" in out
-        assert out.count("ACTION REQUIRED") == 1                          # the re-exec'd copy runs it once
+    if state == "open, a fact depends":
+        assert r.returncode == 1, out + r.stderr
+        assert "REFUSED" in r.stderr and "hive-mind migrate forget" in r.stderr
+        assert sid in out and "the backup runs at 02:00" in out
+        assert "Update complete" not in out and "Restarting sync daemon" not in out and not sb.log.exists()
+        assert out.count("Checking the pre-genesis forget migration") == 1       # the re-exec'd copy runs it once
+        assert sb.state() == before
     else:
         assert r.returncode == 0, out + r.stderr
         assert "ACTION REQUIRED" not in out and "Update complete" in out
+        assert ("Forget migration done" in out) == (state == "open, nothing depends")
 
 
 # ── #331: a switch to a higher contract major is refused while the forget grandfather is open ─────────
@@ -540,15 +538,19 @@ def test_a_higher_major_is_refused_before_the_switch_only_while_forget_authz_is_
         assert _git(sb.hive, "rev-parse", "HEAD") == new
 
 
-def test_a_same_major_update_with_forget_authz_open_behaves_as_before(sandbox):
+def test_a_same_major_update_with_forget_authz_open_is_not_refused_before_the_switch_but_step_0_undoes_it(sandbox):
     sb = sandbox()
     assert _ctl(sb, "owner", "init").returncode == 0
     assert _ctl(sb, "config", "set", "forget_writers", "legacy").returncode == 0
+    _backdated_forget(sb, "the backup runs at 02:00")
     new = _major_upstream(sb, "2.9")
+    before = sb.state()
     r = sb.update()
-    assert "REFUSED" not in r.stderr, r.stdout + r.stderr
-    assert _git(sb.hive, "rev-parse", "HEAD") == new          # switched; the post-switch gate still fails the update
-    assert r.returncode != 0 and r.stdout.count("ACTION REQUIRED") == 1 and "Restarting sync daemon" in r.stdout
+    assert "until the forget grandfather" not in r.stderr, r.stdout + r.stderr   # the pre-switch refuse is major-only
+    assert "Repo updated" in r.stdout                                          # it switched ...
+    assert r.returncode == 1 and "was undone" in r.stderr                       # ... and step 0 put the tree back
+    assert sb.state() == before and _git(sb.hive, "rev-parse", "HEAD") != new
+    assert "Restarting sync daemon" not in r.stdout and not sb.log.exists()
 
 
 def test_the_update_re_applies_module_units_and_a_broken_module_only_warns(sandbox):

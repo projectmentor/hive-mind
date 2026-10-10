@@ -7672,7 +7672,7 @@ def verify_cmd(args):
     return _verify_exit_code(v["level"])
 
 
-# 2.0 (#136) removed `hv doctor migrate-identity`, the one-time 1.3 re-keying of a hostname journal (#130).
+# `hv doctor migrate-identity`, the one-time 1.3 re-keying of a hostname journal (#130), exists only on 1.x.
 _MIGRATION_GONE = ("A node whose journal is still under its hostname re-stamps it with `hv doctor migrate-identity` "
                    "on a 1.x release (1.28 is the last), then upgrades to 2.0.")
 
@@ -11475,20 +11475,6 @@ _STORE_COMMANDS = {"remember", "search", "decide", "propose", "retract", "entity
 def main():
     parser = build_parser()
     argv = sys.argv[1:]
-    # 2.0 S8 (#136): the 1.x aliases `hv rebuild`, `hv merkle`, `hv key` and `hv doctor wire-agent` are
-    # removed. Each names the `hv` command it became and exits 2, having acted on nothing, like a moved
-    # command, so a script still calling one fails loudly (decision h:af137f9421).
-    old = commandmap.renamed(argv)
-    if old is not None:
-        _key, new_argv, why = old
-        print(commandmap.renamed_text(argv, new_argv, why), file=sys.stderr)
-        return commandmap.POINTER_EXIT
-    # 2.0 (#136): the June-era hostname-to-device-key migration is gone. Say what to do instead of letting
-    # argparse report an unknown command, and act on nothing (exit 2, like the moved commands).
-    if argv[:2] == ["doctor", "migrate-identity"] or argv[:1] == ["migrate-device-identity"]:
-        print(f"hv: `{' '.join(argv[:2] if argv[:1] == ['doctor'] else argv[:1])}` was removed in 2.0. "
-              f"{_MIGRATION_GONE}", file=sys.stderr)
-        sys.exit(2)
     # 2.0 S2/S6 (public #136): a command that moved to the control plane is pointed at BEFORE parsing, so
     # it acts on nothing whatever its arguments, and exits 2 so no script mistakes it for success.
     moved = _moved_key(argv)

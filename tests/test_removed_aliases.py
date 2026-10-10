@@ -1,11 +1,10 @@
-"""The 1.x aliases 2.0 removes (S8, public #136; decision h:af137f9421).
+"""The retired 1.x aliases and June-era migrations are gone (3.0, public #151; decision h:af137f9421).
 
-`hv rebuild`, `hv merkle`, `hv key` and `hv doctor wire-agent` were hidden aliases that still worked through
-1.x. In 2.0 each is an exit-2 pointer, the same shape as a moved command: it acts on nothing, prints nothing
-on stdout, and names the `hv` command it became, with this invocation's arguments carried over.
+`hv rebuild`, `hv merkle`, `hv key`, `hv doctor wire-agent`, `hv doctor migrate-identity` and
+`hv migrate-device-identity` were exit-2 pointers through 2.x. In 3.0 each is an unknown command: argparse
+exits 2, nothing is printed on stdout, no replacement is named, and nothing is written.
 
-The cases below are written out rather than derived from `commandmap.RENAMED`, so dropping a name from the
-table fails its case here instead of quietly shrinking the test.
+The argv list is frozen here rather than derived from `commandmap`, so deleting a table row cannot shrink it.
 """
 
 import os
@@ -20,23 +19,24 @@ PROJECT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT))
 
 import commandmap  # noqa: E402
-import hivemind_ctl  # noqa: E402
 import _keys  # noqa: E402
 
 HV = PROJECT / "hv"
 CTL = PROJECT / "hivemind_ctl.py"
 
-# (old argv, the replacement it must name). With and without arguments: the rest is carried as typed.
+# With and without arguments, as a 2.x script would have typed them.
 CASES = [
-    (["rebuild"], "hv doctor rebuild"),
-    (["merkle"], "hv doctor merkle"),
-    (["key"], "hv config identity"),
-    (["key", "init"], "hv config identity init"),
-    (["key", "init", "--force"], "hv config identity init --force"),
-    (["key", "show"], "hv config identity show"),
-    (["key", "announce"], "hv config identity announce"),
-    (["doctor", "wire-agent"], "hv wire claude"),
-    (["doctor", "--fix", "wire-agent"], "hv wire claude"),
+    ["rebuild"],
+    ["merkle"],
+    ["key"],
+    ["key", "init"],
+    ["key", "init", "--force"],
+    ["key", "show"],
+    ["key", "announce"],
+    ["doctor", "wire-agent"],
+    ["doctor", "--fix", "wire-agent"],
+    ["doctor", "migrate-identity", "--map", "m.json"],
+    ["migrate-device-identity", "--map", "m.json", "--dry-run"],
 ]
 
 
@@ -71,16 +71,15 @@ def seeded(tmp_path):
     return home, claude
 
 
-@pytest.mark.parametrize("argv, target", CASES, ids=lambda v: " ".join(v) if isinstance(v, list) else None)
-def test_a_removed_alias_points_and_acts_on_nothing(seeded, argv, target):
+@pytest.mark.parametrize("argv", CASES, ids=" ".join)
+def test_a_removed_alias_is_an_unknown_command_and_acts_on_nothing(seeded, argv):
     home, claude = seeded
     before = _snapshot(home, _keys.key_dir(home), claude)
     r = subprocess.run([sys.executable, str(HV), *argv], env=_env(home, claude), capture_output=True, text=True)
-    assert r.returncode == commandmap.POINTER_EXIT == 2, r.stdout + r.stderr
-    assert r.stdout == "", f"a pointer prints nothing on stdout: {r.stdout!r}"
-    assert f"`hv {' '.join(argv)}` was removed in 2.0." in r.stderr, r.stderr
-    assert f"Run: {target}\n" in r.stderr + "\n", r.stderr
-    assert _snapshot(home, _keys.key_dir(home), claude) == before, "a pointer must act on nothing"
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert r.stdout == "", f"an unknown command prints nothing on stdout: {r.stdout!r}"
+    assert "hive-mind" not in r.stderr and "removed in 2.0" not in r.stderr and "Run:" not in r.stderr, r.stderr
+    assert _snapshot(home, _keys.key_dir(home), claude) == before, "a removed alias must act on nothing"
 
 
 def test_key_init_on_a_fresh_home_mints_nothing(tmp_path):
@@ -89,7 +88,7 @@ def test_key_init_on_a_fresh_home_mints_nothing(tmp_path):
     claude.mkdir()
     r = subprocess.run([sys.executable, str(HV), "key", "init"], env=_env(home, claude),
                        capture_output=True, text=True)
-    assert r.returncode == 2 and "Run: hv config identity init" in r.stderr, r.stderr
+    assert r.returncode == 2 and r.stdout == "", r.stderr
     assert not (home / ".key-dir").exists() and not (home / ".device-key").exists()
     assert not (_keys.key_dir(home) / "device-key").exists()
 
@@ -100,55 +99,20 @@ def test_rebuild_does_not_fall_through_to_the_rebuild(seeded):
     for p in home.glob("store.db*"):
         p.unlink()
     r = subprocess.run([sys.executable, str(HV), "rebuild"], env=_env(home, claude), capture_output=True, text=True)
-    assert r.returncode == 2 and "Run: hv doctor rebuild" in r.stderr, r.stderr
+    assert r.returncode == 2 and r.stdout == "", r.stderr
     assert not (home / "store.db").exists()
 
 
-def _parser_paths():
-    import argparse
-
-    def walk(parser, prefix=()):
-        out = {prefix} if prefix else set()
-        for action in parser._actions:
-            if isinstance(action, argparse._SubParsersAction):
-                for name, sub in action.choices.items():
-                    out |= walk(sub, prefix + (name,))
-        return out
-
-    return walk(hivemind_ctl.hv().build_parser())
+def test_the_alias_table_and_its_helpers_are_gone():
+    for name in ("RENAMED", "renamed", "renamed_text"):
+        assert not hasattr(commandmap, name), name
 
 
-def test_every_replacement_is_a_real_hv_command():
-    """A pointer naming a command that does not exist leaves the operator with nothing correct to type.
-    `wire claude` is `wire` with a cell name, so its path is `wire`."""
-    paths = _parser_paths()
-    for old, (new, _why) in commandmap.RENAMED.items():
-        words = tuple(new.split())
-        assert words in paths or words[:1] == ("wire",) and ("wire",) in paths, f"{old} -> {new}"
-
-
-def test_no_removed_name_is_still_a_parser_command():
-    """The old names are gone from the parser, so the pointer is not one branch in front of a working
-    handler that some other entry (the control plane parses with the same parser) could still reach."""
-    paths = _parser_paths()
-    assert not [k for k in commandmap.RENAMED if k in paths], "a removed alias is still parseable"
-
-
-def test_every_case_is_in_the_table_and_every_table_entry_has_a_case():
-    covered = {tuple(a[:1]) if a[0] != "doctor" else ("doctor", "wire-agent") for a, _ in CASES}
-    assert covered == set(commandmap.RENAMED)
-
-
-@pytest.mark.parametrize("argv, target", [
-    (["rebuild"], "hv doctor rebuild"),
-    (["key", "init"], "hv config identity init"),
-    (["doctor", "--fix", "wire-agent"], "hv wire claude"),
-])
-def test_the_control_plane_suggests_the_new_name(tmp_path, argv, target):
-    """`hive-mind rebuild` must not suggest `hv rebuild`, which is itself only a pointer now."""
+@pytest.mark.parametrize("argv", [["rebuild"], ["merkle"], ["key"], ["doctor", "wire-agent"]])
+def test_the_control_plane_does_not_suggest_a_removed_alias(tmp_path, argv):
     r = subprocess.run([sys.executable, str(CTL), *argv], env=_env(tmp_path / "h", tmp_path),
                        capture_output=True, text=True)
-    assert r.returncode == 2 and f"try `{target}`" in r.stderr, r.stderr
+    assert r.returncode == 2 and "was removed" not in r.stderr and "Run:" not in r.stderr, r.stderr
     assert not (tmp_path / "h" / "store.db").exists()
 
 

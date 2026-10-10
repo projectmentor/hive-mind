@@ -595,7 +595,7 @@ generated from `vocabulary.py`, and a name anything else adds takes a prefix.
   unaffected.
 - `1.8` — footprint trim. `hv rebuild` is folded into **`hv doctor rebuild`** (joining `hv doctor
   merkle`/`migrate-identity`); the top-level `hv rebuild` kept working as a hidden deprecated alias
-  through 1.x. In 2.0 that alias names `hv doctor rebuild` and exits 2, having rebuilt nothing.
+  through 1.x. The alias named `hv doctor rebuild` and exited 2 through 2.x; 3.0 removed it (an unknown command, exit 2).
   No new capability in 1.8 — purely a
   surface change; adapters that call `hv rebuild` need no edit.
 - `1.7` — owner resilience (pt.2): **succession**. `hv owner nominate <pub>` + the successor's

@@ -130,28 +130,13 @@ def _root(home):
     return [l for l in out.splitlines() if l.strip().startswith("Root:")][0]
 
 
-@pytest.mark.parametrize("argv", [["doctor", "migrate-identity", "--map", "m.json"],
-                                  ["migrate-device-identity", "--map", "m.json", "--dry-run"]])
-def test_the_hostname_migration_is_gone_and_says_what_to_do(tmp_path, argv):
-    """2.0 (#136) removed the one-time 1.3 re-keying (#130). Both of its forms say to run it on a 1.x release
-    first, exit 2 and write nothing, instead of argparse's "invalid choice"."""
-    home = tmp_path
-    _run(home, "remember", "a hostname-era fact", node_id="node-a")
-    before = sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir())
-    r = subprocess.run([sys.executable, str(HV), *argv], env=dict(os.environ, HIVE_HOME=str(home)),
-                       capture_output=True, text=True)
-    assert r.returncode == 2 and "was removed in 2.0" in r.stderr and "1.x release" in r.stderr, r.stderr
-    assert sorted((p.name, p.read_bytes()) for p in (home / "journal").iterdir()) == before
-
-
 def test_doctor_subcommands_and_removed_alias(tmp_path):
-    """`hv merkle` lives under `hv doctor`. Through 1.x the old top-level form worked as a silent argv alias;
-    2.0 removes it (decision h:af137f9421): it prints nothing on stdout, names `hv doctor merkle` and exits 2."""
+    """`hv merkle` lives under `hv doctor`. The old top-level alias was removed (3.0, decision h:af137f9421):
+    it is an unknown command, prints nothing on stdout and exits 2 (tests/test_removed_aliases.py)."""
     home = tmp_path
     _run(home, "remember", "a fact", node_id="node-a")
     canon = _run(home, "doctor", "merkle").stdout
     assert "Root:" in canon
     alias = _run(home, "merkle", check=False)
     assert alias.returncode == 2 and alias.stdout == "", alias.stdout
-    assert "Run: hv doctor merkle" in alias.stderr, alias.stderr
 

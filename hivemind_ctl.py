@@ -119,14 +119,9 @@ def main(argv=None):
     if not argv:
         print(__doc__.strip().splitlines()[0])
         return 2
-    # A 1.x `hv` alias removed in 2.0 is suggested by its new name: suggesting `hv rebuild` would send the
-    # operator to a second pointer rather than to something that runs. Checked first, because
-    # `doctor --fix wire-agent` would otherwise route here and die in argparse without naming anything.
-    old = commandmap.renamed(argv)
-    if old is not None or not _is_control_plane(argv):
-        suggest = old[1] if old is not None else argv
+    if not _is_control_plane(argv):
         print(f"hive-mind: `{' '.join(argv)}` is not a control-plane command.\n"
-              f"  The agent data plane is `hv`; try `hv {' '.join(suggest)}`.", file=sys.stderr)
+              f"  The agent data plane is `hv`; try `hv {' '.join(argv)}`.", file=sys.stderr)
         return 2
     if argv[0] == "module":
         import hive_modules

@@ -401,16 +401,16 @@ diverge.
 hv doctor merkle
 ```
 
-> `hv merkle`, the 1.x alias, was removed in 2.0: it names this command and exits 2.
+> `hv merkle`, the 1.x alias, was removed in 3.0 (it pointed here and exited 2 through 2.x): it is now an unknown command.
 
 ---
 
-### Moving a hostname-era node to a device key (removed in 2.0)
+### Moving a hostname-era node to a device key (1.x only)
 
 `hv doctor migrate-identity`, the one-time step that re-stamped a journal from hostname `node_id`s to
-device ids (1.3, #130), was removed in 2.0. A node whose journal is still under its hostname runs it on a
-1.x release (1.28 is the last), then upgrades. In 2.0, `hv doctor migrate-identity` and
-`hv migrate-device-identity` say so and exit 2.
+device ids (1.3, #130), exists only on 1.x. A node whose journal is still under its hostname runs it on a
+1.x release (1.28 is the last), then upgrades. 2.0 removed it; 2.x pointed at this step and exited 2, and
+since 3.0 `hv doctor migrate-identity` and `hv migrate-device-identity` are unknown commands.
 
 ---
 
@@ -426,15 +426,15 @@ unexpectedly.
 hv doctor rebuild
 ```
 
-(`hv rebuild`, the 1.x alias, was removed in 2.0: it names this command and exits 2,
+(`hv rebuild`, the 1.x alias, was removed in 3.0: it is now an unknown command, exit 2,
 having rebuilt nothing.)
 
 ---
 
 ### `hv wire claude` — Wire Claude Code
 
-*`hv doctor wire-agent`, deprecated since contract 1.13, was removed in 2.0: it writes nothing, names
-`hv wire claude` and exits 2.*
+*`hv doctor wire-agent`, deprecated since contract 1.13, was removed in 3.0: it is now an unknown
+command, writes nothing and exits 2. Use `hv wire claude`.*
 
 Wires the Claude Code dispatch shim and the `hive-memory` skill into `~/.claude`,
 migrating any older inline hooks to the shim as it goes. It's idempotent — your own

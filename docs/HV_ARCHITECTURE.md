@@ -27,7 +27,7 @@ an explicit act: typing `hive-mind`.
 | `hivemind_ctl.py` | control | The `hive-mind` entry point. Loads `hv` as a library, installs the owner steps, routes only control-plane commands, and refuses the rest with the `hv` form to type. |
 | `hivemind_owner.py` | control | Every owner step: reading the seed, producing an `owner_sig`, writing owner-key material, and the commands that exist only to do those things (`owner init`, `group admit`, `config set`, `unforget`, …). |
 | `ownerkey.py` | control | The one module that reads the owner seed and produces a governance signature. It holds no path constants: every caller passes paths in. |
-| `commandmap.py` | both (table) | What moved (`MOVED`, `FLAG_CONDITIONAL`), what stays (`STAYS`), which 1.x aliases were removed (`RENAMED`), and the pointer text. No secrets, no imports. |
+| `commandmap.py` | both (table) | What moved (`MOVED`, `FLAG_CONDITIONAL`), what stays (`STAYS`), and the pointer text. No secrets, no imports. |
 | `vocabulary.py` | both (table) | The reserved core names; `docs/NAMESPACES.md` is generated from it. No imports. |
 | `hive_sync_daemon.py`, `sync_client.py`, `sync_common.py` | data | The sync daemon and client. They load `hv` as a library (`sync_common.load_hv`) and never load the control plane. |
 | `merkle.py`, `ed25519.py`, `x25519.py`, `chacha20poly1305.py` | both | Journal hashing and the one canonicaliser (`merkle._canonical`), plus the bundled pure-Python crypto. A build without them refuses to run. |
@@ -52,8 +52,6 @@ whatever its arguments:
 
 - `MOVED` (for example `owner init`, `group admit`, `config set` and `unforget`): names the
   `hive-mind` command, with this invocation's arguments carried over.
-- `RENAMED` (the 1.x aliases `hv rebuild`, `hv merkle`, `hv key`, `hv doctor wire-agent`): names the
-  `hv` command that replaced each.
 - `FLAG_CONDITIONAL`: `retract --owner` and `owner propose-election --mint` by their flag, and the
   owner-policy capsule and cell writes from their handlers, once the hive's config is read.
 
@@ -109,7 +107,7 @@ other checks were run by hand when each landed, and are recorded on its pull req
   can reach, including by an inline signer that imports nothing.
 - **The two planes agree** (`tests/test_control_plane.py`): every `MOVED` target is a real control-plane
   command, every `STAYS` entry is a real `hv` command and is refused on the control plane, and the
-  dead-man verbs never move. `tests/test_removed_aliases.py` does the same for `RENAMED`.
+  dead-man verbs never move. `tests/test_removed_aliases.py` pins the 3.0 removal of the 1.x aliases (each is an unknown command, exit 2).
 - **Every placeholder is replaced** on the control plane, and no adapter (MCP, Hermes) reaches the control
   plane or an owner signature.
 - **One seed reader** (`tests/test_ownerkey_boundary.py`): `ownerkey` never imports `hv`, owns no hive

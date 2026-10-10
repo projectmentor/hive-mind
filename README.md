@@ -22,59 +22,59 @@ Security: [`SECURITY.md`](SECURITY.md) · Changes: [`CHANGELOG.md`](CHANGELOG.md
   <a href="https://hivemind.projectmentor.org">intro video</a> on the site.</em>
 </p>
 
-HiveMind is a shared notebook. Your AI helpers read it and write in it.
-Old lines stay. A fact earns **confidence**, which means trust, when different helpers
-agree on their own. A helper cannot raise that trust by repeating itself.
+HiveMind gives your AI agents a shared hive. They read it and write in it.
+Old lines stay. A fact earns **confidence**, which means trust, when different agents
+agree on their own. An agent cannot raise that trust by repeating itself.
 A decision can later get a score from what happened after you made it.
-Each computer keeps the whole notebook. The computers copy new lines to each other
-over Tailscale, a private network between your computers. Your notes stay on your computers.
+Each device keeps the whole hive. The devices copy new lines to each other
+over Tailscale, a private network between your devices. Your notes stay on your devices.
 
 Pinecone, Weaviate, LlamaIndex, and LangGraph help one program search a pile of text.
-HiveMind keeps the notes your helpers share, and a record of who agreed.
+HiveMind keeps the notes your agents share, and a record of who agreed.
 
 ---
 
 ## What you get
 
-- **Copies itself.** When one helper learns something, the other computers get a copy.
+- **Copies itself.** When one agent learns something, the other devices get a copy.
   They talk over Tailscale, a private network. They send only the new notes.
-- **Trust is earned.** A fact becomes more trusted when different helpers agree on their own.
-  Saying it again does not help. Helpers on one computer count for less than helpers on
-  different computers. A new computer can read. It can add notes after you admit it.
+- **Trust is earned.** A fact becomes more trusted when different agents agree on their own.
+  Saying it again does not help. Agents on one device count for less than agents on
+  different devices. A new device can read. It can add notes after you admit it.
   You admit it with `hive-mind group admit`. If two notes disagree, you see both.
-- **No boss computer.** Every computer keeps the full notebook. The notes only grow.
-  They fit together when the computers meet again. The owner is the person who says
-  who may write. If that owner key is lost, the computers you already admitted can
+- **No boss device.** Every device keeps the full hive. The notes only grow.
+  They fit together when the devices meet again. The owner is the person who says
+  who may write. If that owner key is lost, the devices you already admitted can
   pick a new owner.
 - **Learns from what happened.** A decision can name the facts it used. When you write
   down how that decision turned out, the decision gets an outcome score. Those facts
-  get a utility score. A helper can hint that a note is important. The score rises when
-  other helpers point at it. A guess is an idea. An idea is not a fact until other
-  helpers agree.
-- **Works offline.** A helper keeps going with no network. The new notes join the rest
-  when the computer is online again.
-- **Search stays on your computer.** `hv search` looks through the notes on that machine.
+  get a utility score. An agent can hint that a note is important. The score rises when
+  other agents point at it. A guess is an idea. An idea is not a fact until other
+  agents agree.
+- **Works offline.** An agent keeps going with no network. The new notes join the rest
+  when the device is online again.
+- **Search stays on your device.** `hv search` looks through the notes on that machine.
   You can sort by trust, by importance, by utility, or by how new the note is.
   The search does not call out to the internet.
-- **Little to run.** You do not set up a database or a cloud account. After the computers
-  are in sync, one computer's notebook is the whole memory. A backup is a copy of the files.
-- **You can look back.** Every fact says who wrote it and when. Old lines stay in the notebook.
-- **Works with helpers you already have.** Claude Code, Hermes, and Claude Desktop
-  (through a local MCP server). Any helper that can run a command can use `hv`.
+- **Little to run.** You do not set up a database or a cloud account. After the devices
+  are in sync, one device's hive is the whole memory. A backup is a copy of the files.
+- **You can look back.** Every fact says who wrote it and when. Old lines stay in the hive.
+- **Works with agents you already have.** Claude Code, Hermes, and Claude Desktop
+  (through a local MCP server). Any agent that can run a command can use `hv`.
 
 ---
 
 ## Best practices
 
-Several AI helpers can share one project.
-Give each helper one job, or the same helper will grade their own homework.
+Several AI agents can share one project.
+Give each agent one job, or the same agent will grade their own homework.
 
 You are the owner.
 You say what you want, and you say yes or no on big changes.
 The planner writes the plan before anyone builds.
 The builder builds only after that plan is agreed.
 The checker reads the plan and the finished work, and does not build.
-On this project those helpers are Fable, Opus, and Grok.
+On this project those agents are Fable, Opus, and Grok.
 You can use other names.
 Keep the split.
 
@@ -248,7 +248,7 @@ planes, `hv` and `hive-mind`), [`docs/MODULES.md`](docs/MODULES.md) (how to writ
 [`docs/history/P2P_DESIGN.md`](docs/history/P2P_DESIGN.md) (the original
 sync design, kept as history), the
 [continual-learning design](docs/design/hivemind_continual_learning_design.md) behind contract
-1.19–1.20, how several helpers share one project in
+1.19–1.20, how several agents share one project in
 [`docs/WORKING_TOGETHER.md`](docs/WORKING_TOGETHER.md), and for security [`SECURITY.md`](SECURITY.md),
 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md) — what HiveMind defends against, and what it
 assumes — and [`docs/ADVISORIES.md`](docs/ADVISORIES.md).

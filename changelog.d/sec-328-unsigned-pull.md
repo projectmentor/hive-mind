@@ -1,0 +1,1 @@
+- Outbound `enforce`: a pull from a peer whose hello is not `verified` (`unsigned`, `unadmitted`, `addr-unproven`) is now sent with no `Hive-Auth-*` headers, and the dashboard's signed telemetry read and the daemon's per-node `/api/*?node=` proxy are not sent to an address that has not proved itself (redirects off) (#328).

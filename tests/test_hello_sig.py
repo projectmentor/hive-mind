@@ -439,6 +439,7 @@ def _stand_in(make):
                 self._json(200, make(self.headers.get("Hive-Auth-Nonce"), self.server.server_address[1], path))
             elif path == "/sync/chunk":
                 counts["pull"] += 1
+                counts["signed_pull"] += "Hive-Auth-Sig" in self.headers
                 self._json(200, {"entries": [], "hash": ""})
             else:
                 self._json(404, {"error": "not found"})
@@ -526,6 +527,8 @@ def test_the_policy_table_on_the_wire(tmp_path, monkeypatch, capsys, mode, kind)
     out = capsys.readouterr().out
     action = POLICY[mode][outcome]
     assert (counts["pull"] > 0, counts["push"]) == {"push": (True, 1), "pull": (True, 0), "skip": (False, 0)}[action], out
+    if action != "skip":                    # under enforce, only a verified hello is sent a signed pull
+        assert counts["signed_pull"] == (counts["pull"] if mode != "enforce" or outcome == "verified" else 0)
     if mode == "off":
         assert "hello" not in out                                           # off does not look
     elif outcome != "verified":
@@ -922,3 +925,36 @@ def test_two_daemons_on_the_lan_converge_under_inbound_and_outbound_enforce(tmp_
                 p.kill()
     roots = [_run(h, "doctor", "merkle").stdout.split("Root:")[1].split()[0] for h in (a, b)]
     assert roots[0] == roots[1]
+
+
+# ── the dashboard's combined telemetry read: signed only for an address that proved itself ───────────
+
+@pytest.mark.parametrize("mode", ["permissive", "enforce"])
+@pytest.mark.parametrize("kind", sorted(HELLOS))
+def test_signed_telemetry_goes_only_to_a_verified_address_under_enforce(tmp_path, monkeypatch, mode, kind):
+    make, outcome = HELLOS[kind]
+    hvc, _seen = _client(tmp_path, monkeypatch, _gov([_did(PEER)], purged=[_did(PURGED)], hive=""))
+    monkeypatch.setenv("HIVE_SYNC_AUTH_OUTBOUND", mode)
+    addr = "127.0.0.1:9"
+    monkeypatch.setattr(hvc, "api_peers", lambda probe=True: [
+        {"name": "p", "device": _did(PEER), "addr": addr, "status": "in sync", "self": False}])
+    monkeypatch.setattr(hvc, "_hive_info_fetch",
+                        lambda url, headers, timeout: make(headers.get("Hive-Auth-Nonce"), 9, "/hive/info"))
+    sent = []
+
+    class _R:
+        def json(self):
+            return {"available": True, "totals": {"sessions": 1}, "recent": []}
+
+    def fake_get(url, **kw):
+        sent.append((url, kw))
+        return _R()
+    monkeypatch.setattr("requests.get", fake_get)
+    out = hvc.api_telemetry_hive()
+    peer = [n for n in out["nodes"] if n["status"] != "self"][0]
+    if mode == "enforce" and outcome != "verified":
+        assert sent == [] and peer["status"] == "no-telemetry"          # nothing sent, signed or not
+    else:
+        assert len(sent) == 1 and peer["status"] == "online"
+        assert "Hive-Auth-Sig" in sent[0][1]["headers"]                 # a verified (or non-enforce) read still signs
+        assert sent[0][1]["allow_redirects"] is False                   # and never follows a redirect

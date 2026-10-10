@@ -6023,15 +6023,20 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
 
         import sync_common
 
+        gov = _governance_state(merkle.read_all_entries(JOURNAL_DIR))
+        enforce = sync_common.sync_auth_outbound_mode() == "enforce"
+
         def fetch(t):
             name, nid, addr = t
             try:
+                if enforce and not _telemetry_target_verified(addr, nid, gov):
+                    return (name, nid, None, False)    # no signed read to an address that has not proved itself
                 # /api/telemetry is loopback-only on the peer (GHSA-242f); sign this cross-node read
                 # with our device key so the admitted peer serves it.
                 qs = f"limit={per_node_cap}&offset=0"
                 hdrs = sync_common.sign_sync_request("GET", "/api/telemetry", qs, b"")
-                tel = requests.get(f"http://{addr}/api/telemetry?{qs}",
-                                   timeout=timeout, headers=hdrs or None).json()
+                tel = requests.get(f"http://{addr}/api/telemetry?{qs}", timeout=timeout,
+                                   headers=hdrs or None, allow_redirects=False).json()
                 return (name, nid, tel, True)
             except Exception:
                 return (name, nid, None, False)
@@ -6060,6 +6065,22 @@ def api_telemetry_hive(limit=25, offset=0, sort="recent", project=None, agent=No
             "online": sum(1 for n in nodes if n["status"] != "offline"),
             "reporting": sum(1 for n in nodes if n["status"] in ("self", "online")),
             "reachable": sum(1 for n in nodes if n["reachable"]), **agg}
+
+
+def _telemetry_target_verified(addr, device, gov):
+    """True iff a /hive/info probe of `addr` is `verified` (sync_common.verify_hello) for exactly `device`:
+    the gate before a signed telemetry read is sent under outbound enforce. A signature names no audience."""
+    import sync_common
+    hdrs = _probe_headers("/hive/info")
+    if not hdrs:
+        return False
+    base = "http://" + addr
+    try:
+        info = _hive_info_fetch(base + "/hive/info", hdrs, _PEER_PROBE_TIMEOUT)
+        v = sync_common.verify_hello(info, hdrs.get("Hive-Auth-Nonce"), "/hive/info", base, gov, device)
+    except Exception:
+        return False
+    return v["outcome"] == "verified" and v["device"] == device
 
 
 def _probe_headers(path):

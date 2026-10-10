@@ -255,6 +255,14 @@ def _get(base, path, **params):
     return _get_nonced(base, path, **params)[0]
 
 
+def _get_unsigned(base, path, **params):
+    # No Hive-Auth headers: the journal read for a peer whose hello did not verify under enforce. A signature
+    # names no audience, so it must not reach an address that has not proved itself.
+    r = _bounded("GET", f"{base}{path}", 15, params=params or None)
+    r.raise_for_status()
+    return r.json()
+
+
 def _get_nonced(base, path, **params):
     # Sign the request with this device's key so an enforce-mode peer accepts the read (GHSA-242f).
     # Canonicalize the same query the server will receive; sign_sync_request returns {} pre-key-init.
@@ -423,11 +431,12 @@ def _sync_round(peer, mode=None):
     # Who answered (#107)? `off` does not look; otherwise verify, flag, and under enforce withhold the
     # push (or the whole round) from a peer that did not prove itself. The protocol_version a peer
     # claims plays no part, so no peer can downgrade its way past enforce.
-    action, note = "push", ""
+    action, note, verified = "push", "", True
     if mode != "off":
         expected = peer.get("id") if hv._is_device_id(peer.get("id")) else None
         check = sync_common.verify_hello(hello, nonce, "/sync/hello", base, hv._governance_state(local), expected)
         action = sync_common.outbound_action(mode, check["outcome"])
+        verified = check["outcome"] == "verified"
         note = _hello_note(check, action)
         if check["outcome"] == "verified":
             _note_outbound_sighting(check["device"], base)
@@ -448,7 +457,9 @@ def _sync_round(peer, mode=None):
         s = start
         while s <= end:
             e = min(s + PULL_PAGE - 1, end)
-            data = _get(base, "/sync/chunk", node=node, start=s, end=e)
+            # Under enforce a hello that is not verified gets the pull unsigned (a legacy peer still answers).
+            get = _get_unsigned if mode == "enforce" and not verified else _get
+            data = get(base, "/sync/chunk", node=node, start=s, end=e)
             pulled.extend(data.get("entries", []))
             s = e + 1
 

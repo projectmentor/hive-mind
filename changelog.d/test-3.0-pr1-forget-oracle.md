@@ -1,0 +1,1 @@
+- Tests only (release 3.0 PR 1): the frozen 2.4 `_content_evidence` oracle (`tests/oracles/content_evidence_2_4.py`) and the forget corpus (`tests/forget_corpus.py`), with a test that the oracle equals the live function on every corpus journal under `forget_writers` absent, `legacy` and `owner`.

@@ -233,3 +233,12 @@ def test_read_verbs_and_the_nudge_carry_a_notice_while_a_migration_is_owed(tmp_p
     for argv in (["search", "wireguard"], ["feed"]):
         r = subprocess.run([sys.executable, str(PROJECT / "hv"), *argv], env=env, capture_output=True, text=True)
         assert "NOTICE" not in r.stderr, argv
+
+
+def test_a_purged_writers_forget_does_not_refuse_the_key_and_the_exit_code_says_it_was_written(tmp_path):
+    run, base, sids = _open_hive(tmp_path)
+    assert "Purged legacy-dev" in _ctl(tmp_path, "group", "purge", "legacy-dev").stdout
+    assert _ctl(tmp_path, "migrate", "forget", "--check").returncode == 0          # the projection shows no dependent fact
+    rc, out = _ctl_at_a_terminal(tmp_path, "y", "migrate", "forget")
+    assert rc == 0 and "Not set" not in out, out
+    assert [e for e in _policy_acts(tmp_path)] and _forget_authz(tmp_path)["status"] == "ok"

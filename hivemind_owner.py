@@ -514,6 +514,16 @@ _MIGRATE_REISSUE_REASON = ("re-issued owner-signed by `hive-mind migrate forget`
                            "only by the pre-genesis grandfather")
 
 
+def _key_written_status():
+    """0 when `forget_writers=owner` is now in the governance state, 1 when a guard or failed append left it
+    unwritten: the command's exit code must say whether the key was recorded."""
+    entries = merkle.read_all_entries(JOURNAL_DIR)
+    if (_governance_state(entries).get("config") or {}).get("forget_writers") == "owner":
+        return 0
+    print("  forget_writers is still not `owner`: nothing recorded it.")
+    return 1
+
+
 def migrate_cmd(args):
     """`hive-mind migrate forget [--check]` (release 3.0 PR 2, plan 3.2 and 3.4). The same routine as
     `owner init` and `doctor --fix` (`_close_grandfather_at_genesis`), given a stable name and an idempotence
@@ -550,7 +560,7 @@ def migrate_cmd(args):
             return 0
         print("  no fact depends on it; recording forget_writers=owner so a 2.x peer closes too.")
         _config_set("forget_writers", "owner")
-        return 0
+        return _key_written_status()
     if not _owner_key_exists():
         print("This device does not hold the owner key: nothing was written. Run `hive-mind migrate forget` on "
               "the owner machine, then `hive-mind sync` here.")
@@ -570,7 +580,7 @@ def migrate_cmd(args):
     after = _forget_migration(entries, _governance_state(entries))
     for line in _forget_migration_lines(after):
         print(line)
-    return 1 if after["facts"] else 0
+    return 1 if after["facts"] else _key_written_status()
 
 
 # `_data_plane_owner_cmd` is `hv`'s own `owner_cmd` (show, elections, propose-election --pub, vote),
@@ -1173,6 +1183,11 @@ def _config_set(key, value):
         entries = merkle.read_all_entries(JOURNAL_DIR)
         gov = _governance_state(entries)
         hides, _dangling = _forgets_grandfathered(entries, gov)
+        if val == "owner":
+            # 3.0 PR 2: what closing would bring back is the projection differential (`_forget_migration`), not
+            # every pre-genesis forget on the list: a forget by a since-purged writer shows nothing now and
+            # closing changes nothing for it, so it must not refuse the key. Same set `migrate forget` re-signs.
+            hides = _forget_migration(entries, gov)["hides"]
         if val == "owner" and hides:
             print(f"Not set: closing the grandfather would bring back {len(hides)} fact(s) kept forgotten only by "
                   f"an unsigned pre-genesis forget (#122). Decide each first, then run this again:")

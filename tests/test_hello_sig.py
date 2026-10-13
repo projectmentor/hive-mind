@@ -959,3 +959,46 @@ def test_signed_telemetry_goes_only_to_a_verified_address_under_enforce(tmp_path
         assert len(sent) == 1 and peer["status"] == "online"
         assert "Hive-Auth-Sig" in sent[0][1]["headers"]                 # a verified (or non-enforce) read still signs
         assert sent[0][1]["allow_redirects"] is False                   # and never follows a redirect
+
+
+# ── SN-12 / CK-6: no exception text to a remote caller; nothing caller-chosen is signed ───────────────
+
+def test_an_internal_error_answers_a_generic_body_and_logs_locally(tmp_path, monkeypatch, capsys):
+    _keyed(tmp_path / "b")
+    hvb = _hvmod(tmp_path / "b", monkeypatch)
+    secret = "/home/victim/.hive/SECRET-PATH token=hunter2"
+
+    def boom():
+        raise RuntimeError(secret)
+
+    with _daemon(OTHER) as port:
+        _serve_as(hvb, monkeypatch, f"127.0.0.1:{port}")
+        monkeypatch.setattr(d, "_merkle_root_cached", boom)
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/sync/merkle-root", timeout=15)
+        except urllib.error.HTTPError as e:
+            status, resp = e.code, json.loads(e.read())
+    assert status == 500 and resp == {"error": "internal error"}
+    assert "SECRET-PATH" in capsys.readouterr().err            # the operator still sees it, locally
+
+
+def test_the_responder_signs_only_its_two_fixed_paths_under_the_hello_domain(tmp_path):
+    seed, dev = _keyed(tmp_path / "k")
+    signer, nonce = FileSigner(seed), _nonce()
+    for path in ("/api/overview", "/sync/chunk", "/hive/info/../x", "hive-hello-v1", "", None):
+        assert sync_common.sign_hello(_body(dev), nonce, path, signer, dev) is None, path
+    for path in ("/sync/hello", "/hive/info"):
+        hs = sync_common.sign_hello(_body(dev), nonce, path, signer, dev)
+        msg = sync_common.hello_signing_bytes(path, nonce, dev, "h1:aaaa", ADDR, 3,
+                                              sync_common.hello_body_digest(_body(dev)))
+        assert msg.startswith(b"hive-hello-v1\n" + path.encode() + b"\n" + nonce.encode() + b"\n")
+        assert ed25519.verify(msg, base64.b64decode(hs["sig"]), base64.b64decode(hs["pub"]))
+
+
+def test_a_caller_cannot_get_a_signature_over_bytes_of_its_choosing(tmp_path):
+    """The only caller-chosen input is the nonce, and a nonce is hex only: it can carry neither a newline nor a
+    different domain tag, so no choice of it makes the signed bytes parse as a request or entry signature."""
+    seed, dev = _keyed(tmp_path / "k")
+    signer = FileSigner(seed)
+    for nonce in ("a" * 32 + "\nhive-sig-v1", "hive-sig-v1\n" + "a" * 32, "a" * 31 + "\n", "{" + "a" * 40):
+        assert sync_common.sign_hello(_body(dev), nonce, "/hive/info", signer, dev) is None, nonce

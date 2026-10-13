@@ -25,6 +25,7 @@ import subprocess
 import sys
 import threading
 import time
+import traceback
 import urllib.request
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -438,6 +439,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_500(self, exc):
+        """An unhandled error answers a generic body: the exception text (paths, journal contents, library
+        internals) stays in this node's own log and never reaches the remote caller."""
+        print(f"sync daemon: 500 on {self.command} {urlparse(self.path).path}: {type(exc).__name__}: {exc}",
+              file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        self._send(500, {"error": "internal error"})
+
     def _send_signed(self, path, body):
         """#107: send a /sync/hello or /hive/info `body` with this node's `hello_sig` over it and the
         caller's Hive-Auth-Nonce, when the caller sent a well-formed nonce and this node has a device-key
@@ -744,7 +753,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(404, {"error": "not found"})
         except Exception as e:  # never crash the handler thread
-            self._send(500, {"error": str(e)})
+            self._send_500(e)
         finally:
             self._leave()
 
@@ -800,7 +809,7 @@ class Handler(BaseHTTPRequestHandler):
                     hv.rebuild_db()
             self._send(200, {"accepted": accepted, "duplicates": duplicates})
         except Exception as e:
-            self._send(500, {"error": str(e)})
+            self._send_500(e)
         finally:
             self._leave()
 

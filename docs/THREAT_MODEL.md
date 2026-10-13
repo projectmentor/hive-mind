@@ -403,7 +403,9 @@ at once). Concretely:
   so any reachable host can make a node sign. The statement holds only public facts (node id, hive id,
   advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`
   domain tag keeps it from ever passing as a request or entry signature, and the address binding keeps a
-  relayed one from proving anything. Signing runs inside the request-slot cap and per-address rate limit.
+  relayed one from proving anything. The only caller-chosen input is the nonce, which must be 32 to 64 hex
+  characters, and the signer refuses any path but `/sync/hello` and `/hive/info`. An unhandled error answers
+  a generic 500 body; the exception text stays in the daemon's own log. Signing runs inside the request-slot cap and per-address rate limit.
 - **What genesis pinning leaves.** Pinning (above) decides which declaration establishes the hive, but a
   device still has to learn the right fingerprint once. An invite carries it
   (`<address>/<hive_id>/<owner_id>/<hash8>`), and `/hive/info` and `/sync/hello` serve it inside the

@@ -40,6 +40,8 @@ SYNC_AUTH_WINDOW = int(os.environ.get("HIVE_SYNC_AUTH_WINDOW", "300"))  # +/- wa
 # device key and returns it as `hello_sig`. Domain-separated from request and entry signatures by
 # HELLO_SIG_ALG; fresh by the caller's single-use nonce (no timestamp, so no clock-skew failure mode).
 HELLO_SIG_ALG = "hive-hello-v1"
+# The only paths a responder ever signs for: the signed message names one of these, never a caller-chosen string.
+HELLO_PATHS = frozenset({"/sync/hello", "/hive/info"})
 _NONCE_RE = re.compile(r"[0-9a-fA-F]{32,64}")
 
 # ── path-MTU resilience (shared by the daemon + client) ──────────────────────────────────────
@@ -202,7 +204,7 @@ def sign_hello(body, nonce, path, signer, node_id):
     the key's (a HIVE_NODE_ID override or a legacy hostname node). Signs whether or not the caller's own
     envelope verified, so a caller this node does not yet admit still gets its proof."""
     hv = load_hv()
-    if not nonce_ok(nonce) or signer is None:
+    if path not in HELLO_PATHS or not nonce_ok(nonce) or signer is None:
         return None
     pub = signer.public_key()
     device = hv._device_id_for_pub(pub)

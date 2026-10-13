@@ -1,0 +1,1 @@
+- **Security: `cla.yml` documents and narrows its `pull_request_target` use (CI-01).** The workflow keeps `pull_request_target` (the CLA action must comment on and set a status for fork PRs) and still checks out and runs no PR-head code; permissions are now `{}` at the top and granted only on the one job, with a comment saying why.

@@ -16,14 +16,22 @@ on:
   pull_request_target:
     types: [opened, closed, synchronize]
 
-permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+# Why `pull_request_target`: the action must comment on, and set a status on, PRs from forks, and a plain
+# `pull_request` run from a fork gets a read-only token and no secrets. This is safe only because the job
+# NEVER checks out or runs PR-head code: there is no `actions/checkout` and no `run:` step, and the only
+# step is the pinned action below, which reads the PR through the API. Keep it that way: adding a checkout
+# of the PR head here would hand a write token to untrusted code.
+# Least privilege: nothing by default, and the job asks for just what the action writes (the signatures
+# branch, the PR comment, the commit status, and re-running the check after a signature).
+permissions: {}
 
 jobs:
   cla:
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
     # Dependabot (and other bots) get a restricted token, so the CLA action
     # cannot run on their PRs. Skip it for them; their changes are first-party.
     if: github.actor != 'dependabot[bot]'

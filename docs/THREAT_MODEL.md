@@ -398,7 +398,12 @@ at once). Concretely:
   id. What remains: a peer you still list can do this to a third node, so
   list only devices you trust to hold your reads, and revoke a device before you stop trusting it. A daemon
   restart empties the nonce cache, so a request captured within the window is replayable once. Binding the
-  responder into the signed bytes is a wire-format change and waits on the maintainer's decision.
+  responder into the signed bytes is a wire-format change and waits on the maintainer's decision. Under outbound
+  `enforce`, a pull from a peer whose hello is not `verified` is sent with no signed headers, and the dashboard's
+  signed telemetry read goes only to an address that proved itself (#330 fixed the replayable signed read, private #80).
+  The owner passphrase never reaches the daemon, the module API or the dashboard: they never read it, and the
+  child processes they or the CLI start for others (cell shells, the dashboard's `hv` reads, the owner agent,
+  modules) are given an environment without it (`tests/test_owner_passphrase_boundary.py`, private #58).
 - **Anyone can obtain a responder signature over a nonce it chooses.** `/hive/info` is open discovery,
   so any reachable host can make a node sign. The statement holds only public facts (node id, hive id,
   advertised address, protocol) and a digest of the answer that caller was served; the `hive-hello-v1`

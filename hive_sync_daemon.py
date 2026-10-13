@@ -232,8 +232,9 @@ def _run_hv_text(args, timeout):
     """Capture the text output of a read-only `hv` subcommand for the dashboard Status view. The args
     are HARD-CODED at the call site (never client input), so there's no command-injection surface."""
     try:
+        env = {k: v for k, v in os.environ.items() if k not in hv.OWNER_PASSPHRASE_ENVS}   # the daemon never holds one
         r = subprocess.run([sys.executable, _HV_PATH, *args], capture_output=True, text=True,
-                           timeout=timeout, env=os.environ)
+                           timeout=timeout, env=env)
         out = r.stdout.strip()
         if r.stderr.strip():
             out = (out + "\n" + r.stderr.strip()).strip()

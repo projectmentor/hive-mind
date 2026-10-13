@@ -724,10 +724,16 @@ def _env_name_problem(names):
             f"*PROXY*, HIVE_*, GIT_*, ...)")
 
 
+# The two variables that carry an owner passphrase (unlock the sealed owner key; encrypt an export or escrow).
+# No child process this program starts for anyone else is given them.
+OWNER_PASSPHRASE_ENVS = ("HIVE_OWNER_KEY_PASSPHRASE", "HIVE_OWNER_PASSPHRASE")
+
+
 def _child_env(secrets):
     """Environment for a cell's shell: ours, minus the owner-key passphrase, plus the secrets."""
     env = dict(os.environ)
-    env.pop("HIVE_OWNER_KEY_PASSPHRASE", None)
+    for name in OWNER_PASSPHRASE_ENVS:
+        env.pop(name, None)
     for k, v in secrets.items():       # reject what exec would refuse, the same way on every platform
         if "\0" in k or "\0" in v or len(k) + len(v) + 1 > _ENV_ENTRY_MAX:
             raise ValueError(f"credential {k!r} contains a NUL byte or is larger than {_ENV_ENTRY_MAX} bytes")

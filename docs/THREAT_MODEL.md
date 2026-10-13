@@ -225,7 +225,13 @@ at once). Concretely:
   same acts, so journals stay convergent, exactly as they already do for forged acts. A node that has not
   pinned serves no journal to a remote caller and accepts no push (403 on `/sync/hello`, `/sync/chunk`
   and `/sync/ingest`; `/hive/info` and `/sync/merkle-root` stay open; loopback is never gated), which
-  closes the window in which a joiner could be captured and then relay a rival onward.
+  closes the window in which a joiner could be captured and then relay a rival onward. A member whose pin
+  file is lost (deleted, torn, restored from a backup without it) is re-pinned from its own journal at the
+  next ingest, with no network trust, when that journal holds exactly one genesis and this device is that
+  genesis device or admitted under it; `hv doctor genesis` warns, and keeps warning, that the pin was
+  restored. A device that is not yet admitted (a joiner after a bare-address pull), or a journal with two
+  declarations, is never re-pinned automatically. Whoever can delete `.genesis-pin` can already edit the
+  journal and the key files: that is the OS account, as before.
 - **Loopback is trusted by source address, `Host` and, on a POST, a token.** A request from a loopback
   address skips the signed-request gate, so the daemon no longer trusts the address alone: the `Host`
   header must name this listener (`localhost`, a loopback address or the bound address, on its port) or

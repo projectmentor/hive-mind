@@ -491,6 +491,31 @@ def _auto_pin_genesis(entries):
     return _write_genesis_pin(_genesis_pin_for(cands[0])) if len(cands) == 1 else None
 
 
+def _restore_lost_genesis_pin():
+    """SN-14: a device that is already a member of the hive its own journal describes, but holds no pin, lost
+    the pin file (deleted, torn, restored from a backup without it). Without one, ingest falls back to the
+    legacy earliest-timestamp rule and a rival `owner` act can be stored. Re-pin from the LOCAL journal, with
+    no network trust: only when there is exactly ONE self-signed declaration in it and this device is that
+    declaration's genesis device or an admitted member under it. A fresh joiner that pulled a genesis by trust
+    on first use is neither (the owner has not admitted it yet), so its pin stays a deliberate act. The pin
+    is marked `restored_at` so `hv doctor genesis` keeps saying it was restored. Returns the pin, or None."""
+    try:
+        entries = merkle.read_all_entries(JOURNAL_DIR)
+        cands = _self_signed_owner_acts(entries)
+        if len(cands) != 1:
+            return None
+        gov = _governance_state(entries)
+        if NODE_ID != gov.get("genesis_device") and NODE_ID not in (gov.get("admitted") or ()):
+            return None
+        pin = _genesis_pin_for(cands[0])
+        pin["restored_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"hv: the genesis pin was missing; re-established from this journal's genesis {pin['genesis_ref']} "
+              "(see `hv doctor genesis`).", file=sys.stderr)
+        return _write_genesis_pin(pin)
+    except Exception:
+        return None
+
+
 def _genesis_fingerprint(entries, gov=None):
     """This hive's genesis, in a form a human can compare across devices and an invite can carry:
     `<hive_id>/<owner_id>/<hash8>`. The hash prefix is what makes it a FINGERPRINT rather than a

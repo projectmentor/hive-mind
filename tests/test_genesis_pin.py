@@ -609,3 +609,47 @@ def test_under_inbound_enforce_an_admitted_device_still_cannot_push_a_rival(hv, 
     finally:
         srv.shutdown(); srv.server_close()
     assert hv._governance_state(hv.merkle.read_all_entries(hv.JOURNAL_DIR))["owner_id"] == real[2]
+
+
+# ── SN-14: a lost pin is re-established from the local journal, never from the network ───────────
+
+def _lost_pin_member(hv, monkeypatch, real):
+    """An admitted device whose journal holds the one genesis and whose pin file is gone."""
+    dev, dev_id = _owned(hv, real)
+    hv.GENESIS_PIN_PATH.unlink()
+    monkeypatch.setattr(hv, "NODE_ID", dev_id)
+    return dev, dev_id
+
+
+def test_a_member_whose_pin_was_lost_is_re_pinned_before_ingest_judges_a_rival(hv, monkeypatch, capsys):
+    real, attacker = _owner_key(hv), _owner_key(hv)
+    _lost_pin_member(hv, monkeypatch, real)
+    assert hv._load_genesis_pin() is None
+
+    rival = _owner_act(hv, attacker, T_BACKDATED, nid="attackerdev")
+    assert hv.append_foreign_entries([rival])[:2] == (0, 0)             # refused: the pin is back first
+    pin = hv._load_genesis_pin()
+    assert pin["owner_id"] == real[2] and pin["genesis_hash"] and pin["restored_at"]
+    assert "pin was missing" in capsys.readouterr().err                  # and it says so
+    assert not any(e["payload"].get("owner_id") == attacker[2] for e in hv.merkle.read_all_entries(hv.JOURNAL_DIR))
+
+
+def test_doctor_keeps_reporting_a_restored_pin(hv, monkeypatch):
+    real = _owner_key(hv)
+    _lost_pin_member(hv, monkeypatch, real)
+    hv.append_foreign_entries([])
+    c = next(c for c in hv._doctor_status() if c["name"] == "genesis")
+    assert c["status"] == "warn" and "MISSING" in c["detail"], c
+
+
+@pytest.mark.parametrize("case", ["fresh-joiner", "two-candidates"])
+def test_no_pin_is_invented_where_the_local_journal_proves_nothing(hv, monkeypatch, case):
+    real, other = _owner_key(hv), _owner_key(hv)
+    genesis = _owner_act(hv, real, T_GENESIS)
+    extra = [_owner_act(hv, other, T_BACKDATED, nid="otherdev")] if case == "two-candidates" else []
+    dev, dev_id = _owned(hv, real, extra)
+    hv.GENESIS_PIN_PATH.unlink()
+    # a fresh joiner: its journal holds the genesis it pulled, but the owner has not admitted this device
+    monkeypatch.setattr(hv, "NODE_ID", dev_id if case == "two-candidates" else "k1:" + "0" * 16)
+    hv.append_foreign_entries([])
+    assert hv._load_genesis_pin() is None

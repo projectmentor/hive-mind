@@ -269,6 +269,11 @@ def _doctor_status():
             checks.append({"name": "genesis", "status": "warn", "detail": (
                 f"genesis {g.get('ref')} is not pinned on this device — another `owner` declaration with "
                 "an earlier timestamp would replace the owner. `hive-mind owner pin --set` (or `hive-mind doctor --fix`)")})
+        elif pin and pin.get("restored_at"):
+            checks.append({"name": "genesis", "status": "warn", "detail": (
+                f"the genesis pin for {g.get('ref')} was MISSING and was re-established from this journal at "
+                f"{pin['restored_at']} (no network trust). Something removed it: compare {_genesis_fingerprint(entries, gov)} "
+                "with the owner's device, then `hive-mind owner pin --set --force` to clear this notice")})
         else:
             checks.append({"name": "genesis", "status": "ok",
                            "detail": f"genesis {g.get('ref')} pinned; fingerprint {_genesis_fingerprint(entries, gov)}"})

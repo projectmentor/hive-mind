@@ -1342,6 +1342,25 @@ def _own_launcher(path, name):
     return bool(m and m.group(1) == name and m.group(2) == hashlib.sha256(lines[2].encode()).hexdigest())
 
 
+def launcher_target(path):
+    """(module name, the HIVE_MODULE_DIR it runs) of a launcher this core wrote, unedited; None for any other file."""
+    try:
+        lines = Path(path).read_text().split("\n", 2) if stat.S_ISREG(os.lstat(path).st_mode) else []
+    except (OSError, UnicodeDecodeError):
+        return None
+    m = _LAUNCHER_HEAD.match(lines[1]) if len(lines) == 3 and lines[0] == "#!/bin/sh" else None
+    if not (m and _own_launcher(path, m.group(1))):
+        return None
+    for line in lines[2].splitlines():
+        if line.startswith("HIVE_MODULE_DIR="):
+            try:
+                words = shlex.split(line[len("HIVE_MODULE_DIR="):])
+            except ValueError:
+                return None
+            return (m.group(1), words[0]) if len(words) == 1 else None
+    return None
+
+
 def check_launcher_free(bdir, name, cli_name, state):
     """Refuse, before anything is written, a launcher name another module claims, a file that is not this module's
     own launcher, or a bin directory others can write to."""

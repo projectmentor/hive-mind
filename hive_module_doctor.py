@@ -7,8 +7,9 @@ doctor expects of an install is what `hive-mind module add` produced. One result
 
 What fails and what warns. A module runs code on this machine, so a manifest that is missing, tampered or signed
 by anything but the pinned publisher is a **fail**. A unit that is absent, differs from its rendering or is not
-active, a revoked device, missing config, a down listener and quota near a limit are **warns**: the module is
-degraded, not hostile. A record in `.modules.json` that is not an object is reported, never a crash.
+active, a CLI launcher that is missing, edited or runs another directory than this install, a revoked device, missing
+config, a down listener and quota near a limit are **warns**: the module is degraded, not hostile. A dead launcher (the
+core's, for a module this hive does not manage, its directory gone) is a `modules` warn, even with no modules. A record in `.modules.json` that is not an object is reported, never a crash.
 
 `fix` is `hv doctor --fix`'s part: re-render a unit that differs from the manifest (through the stop-first path
 `module add` and `update` use) and start one that is `failed` or not enabled. A unit that is enabled but `inactive`
@@ -205,6 +206,40 @@ def _runtimes(rec, manifest):
             for n in names if not any(hive_modules.safe_dir(d) and hive_modules._program_in(d, n) for d in dirs)]
 
 
+def _launcher(name, rec, manifest):
+    """The module's launcher is the core's own and runs this install. A test with a decoy HOME but the real PATH once
+    rewrote a real launcher to run a copy under /tmp (hwatch-dev#146); the shell finds nothing wrong until it runs."""
+    bdir, cli = rec.get("bin_dir"), rec.get("launcher")
+    if not (manifest.get("cli") and isinstance(bdir, str) and bdir and isinstance(cli, str) and cli):
+        return []
+    target, hint = Path(bdir) / cli, f"`hive-mind module update {name}` re-renders it"
+    if not os.path.lexists(target):
+        return [("warn", f"its launcher {target} is missing ({hint})")]
+    found = hive_modules.launcher_target(target)
+    if found is None or found[0] != name:
+        return [("warn", f"{target} is not the core's launcher for {name}: edited or replaced ({hint})")]
+    want = str(hive_modules.modules_dir() / name)
+    if found[1] != want:
+        return [("warn", f"its launcher {target} runs {found[1]}, not this install {want} ({hint})")]
+    return []
+
+
+def dead_launchers(state, bdirs):
+    """Launchers the core wrote, in the bin directories this node uses, for a module this hive does not manage whose
+    directory is gone: left behind by a test or another hive's removed install. A live one may be another hive's."""
+    out = []
+    for bdir in sorted({str(d) for d in bdirs}):
+        try:
+            names = sorted(p.name for p in Path(bdir).iterdir())
+        except OSError:
+            continue
+        for n in names:
+            found = hive_modules.launcher_target(Path(bdir) / n)
+            if found and found[0] not in state and not os.path.lexists(found[1]):
+                out.append(f"{Path(bdir) / n} (module {found[0]}, runs {found[1]})")
+    return out
+
+
 def doctor_mode():
     """`HIVE_DOCTOR_MODE` for a module's doctor: what the caller of `hv doctor` set (the timer sets `timer`), else manual."""
     mode = os.environ.get("HIVE_DOCTOR_MODE")
@@ -279,6 +314,7 @@ def _module(hv, gov, name, rec, entries, listener, now):
         problems += _config(moddir, manifest, gov, hv.NODE_ID)
     if manifest is not None and manifest["name"] == name:
         problems += _runtimes(rec, manifest)
+        problems += _launcher(name, rec, manifest)
     ran = None
     if (manifest is not None and manifest["name"] == name and manifest["publisher"] == rec.get("publisher")
             and manifest.get("doctor")):                    # module code runs only for a manifest the pinned publisher signed
@@ -316,7 +352,10 @@ def checks(hv, gov, entries, probe=None, now=None):
                        if p.is_dir() and not p.name.startswith(".") and p.name not in state)
     except OSError:
         stray = []
-    if not state and not stray:
+    bdirs = [hive_modules.bin_dir()] + [r["bin_dir"] for r in state.values()
+                                        if isinstance(r, dict) and isinstance(r.get("bin_dir"), str) and r["bin_dir"]]
+    dead = dead_launchers(state, bdirs)
+    if not state and not stray and not dead:
         return []
     out = []
     ok, why = hive_modules.platform_supported()
@@ -331,6 +370,11 @@ def checks(hv, gov, entries, probe=None, now=None):
                     "detail": f"{', '.join(stray)} under {modules_dir} not managed by this hive (not in "
                               f"{hive_modules.STATE_FILE}; another hive on this machine may manage "
                               f"{'it' if len(stray) == 1 else 'them'}, as {modules_dir} is shared)"})
+    if dead:
+        out.append({"name": "modules", "status": "warn",
+                    "detail": f"launcher{'s' if len(dead) > 1 else ''} for a module this hive does not manage, whose "
+                              f"directory is gone: {'; '.join(dead)}. Nothing runs {'it' if len(dead) == 1 else 'them'}: "
+                              f"safe to delete"})
     try:
         quorum = int(gov["config"].get("quorum_m", 0) or 0)
     except (TypeError, ValueError):

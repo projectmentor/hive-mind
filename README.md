@@ -326,6 +326,12 @@ cd ~/projects/hive-mind
 ./hv stats       # confirm the journals converged
 ```
 
+Each device can run HiveMind under its own OS account: devices are known by their device keys and
+principals, never by OS user, and every path is per account. What is not supported is two OS
+users running separate hives on the same machine (not planned): the sync daemon (`9876`) and the module API
+(`9886`) listen on fixed default ports, so the second hive's daemons cannot bind them. See
+[One hive per machine](docs/MODULES.md#one-hive-per-machine).
+
 Sync runs over HTTP on port `9876` and needs no SSH. If you also want to administer
 one node from another (run `git`, `systemctl`, or `hv` on a peer), that uses
 Tailscale SSH, which needs an `accept` rule in your tailnet SSH ACL. See

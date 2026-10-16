@@ -416,7 +416,7 @@ Written by the installer; per node and git-ignored.
 | Field | Default | Description |
 |---|---|---|
 | `self` | — | This device's id |
-| `port` | `9876` | Port to listen on |
+| `port` | `9876` | Port to listen on. A second hive on the same machine needs its own; modules are not supported there (see [One hive per machine](MODULES.md#one-hive-per-machine)) |
 | `peers[].url` | required | Base URL of a peer's daemon |
 | `peers[].id` | optional | A label for logs. A device id (`k1:…`) here also tells `hv doctor` which device the entry is (below) |
 | `bind` | automatic | Optional override of the bind address (see *Binding*); `0.0.0.0` is treated as automatic |

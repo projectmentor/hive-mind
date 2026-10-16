@@ -303,6 +303,21 @@ The listener is `127.0.0.1:9886` (`HIVE_MODULE_PORT` overrides), loopback only, 
 daemon's process. Every request is signed with the Hive-Auth envelope by the module's admitted
 device. Unsigned requests are never served.
 
+### One hive per machine
+
+A fleet whose devices run under different OS accounts works: membership is by device key and
+principal, and the hive home, `~/.hive/modules`, the launcher directory and the runtime
+directory are all per account. Each machine's hcns bus is private to its one user, and events
+reach other devices through the hive, not the socket.
+
+Two OS users running **separate hives on the same machine** is not supported and not planned. Both hives'
+sync daemons default to port `9876` and both module APIs to `9886`. The sync port can be moved
+(`port` in `.peers.json`), but a module's unit gets no `HIVE_MODULE_PORT`, so the second hive's
+modules would still call the first hive's module API, where their device keys are not
+admitted. Several hives under **one** user (a test hive beside the real one) share
+`~/.hive/modules` the same way, which is what the doctor's "not managed by this hive" warning
+reports.
+
 | Route | Verb | Does |
 |---|---|---|
 | `/v1/` | GET | Version, hive, caller, quota, fleet config; since 2.3 also `node_id` and `node_devices` |

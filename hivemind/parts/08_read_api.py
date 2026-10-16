@@ -620,6 +620,7 @@ def _probe_peer_map(timeout=6, peerlist=None, identity=None):   # generous: mobi
 
 
 _PEER_PROBE_CACHE = {"t": 0.0, "map": {}}
+_PEER_PROBE_LOCK = threading.Lock()
 _PEER_CONTRACTS = {}          # node_id -> the `contract` a reachable peer advertised in /hive/info (1.19 PR2b)
 _LINK_WRITE_PATH_MIN = "1.19"  # every peer must be at least here before verbs that now emit `link` are safe
 
@@ -677,6 +678,32 @@ def _probe_peer_map_cached(ttl=5):
     return m
 
 
+_PEER_PROBE_REFRESH = 300      # a no-fan-out reader (probe=0) starts at most one background probe this often
+_PEER_PROBE_BG = {"running": False}
+
+
+def _probe_peer_map_last():
+    """The last probe map this process paid for, at any age, for a reader that asked for no live fan-out (probe=0,
+    the module API's hcns). Without it a directly-admitted peer has no address there (only a join request carries
+    one), so hcns dials only the peers that joined by request and the bus is a star, not a mesh. When the map is
+    older than `_PEER_PROBE_REFRESH` (or there is none), ONE background refresh starts and the reader does not wait
+    for it: the next read sees it. Never more than one refresh at a time."""
+    if not _PEER_PROBE_CACHE["t"] or time.monotonic() - _PEER_PROBE_CACHE["t"] >= _PEER_PROBE_REFRESH:
+        with _PEER_PROBE_LOCK:
+            start = not _PEER_PROBE_BG["running"]
+            _PEER_PROBE_BG["running"] = True
+        if start:
+            def refresh():
+                try:
+                    _PEER_PROBE_CACHE.update(t=time.monotonic(), map=_probe_peer_map())
+                except Exception:
+                    pass                            # the reader keeps the last map; the next stale read tries again
+                finally:
+                    _PEER_PROBE_BG["running"] = False
+            threading.Thread(target=refresh, name="hv-peer-probe", daemon=True).start()
+    return _PEER_PROBE_CACHE["map"]
+
+
 def api_node_addr(node_id):
     """The 'host:port' for an admitted, reachable peer (from the cached probe), or None. The ONLY way a
     node-scoped request resolves a target address — callers never pass a host — so the daemon's per-node
@@ -700,7 +727,8 @@ def api_peers(probe=True):
     status. `seen` is the date; `seen_at` is the full timestamp of the device's latest journal entry (None if none),
     so a client can show minutes. Names/addresses/sync-status are resolved by a bounded concurrent live probe (so a
     directly-admitted peer like gregorius still shows a real name/address); unreachable peers fall
-    back to their join-request label/URL and last-seen staleness. `module` is the module name when the
+    back to their join-request label/URL and last-seen staleness. With `probe` off there is no fan-out on the request: rows use the last
+    probe this process made (`_probe_peer_map_last`), so a directly-admitted peer keeps its address. `module` is the module name when the
     device is a module identity (the owner's `admit` marker, `gov["modules"]`), else None; the marker does not
     record the host device, so there is no `host`. Read-only; never mutates."""
     entries = merkle.read_all_entries(JOURNAL_DIR)
@@ -710,7 +738,7 @@ def api_peers(probe=True):
         d, ts = e.get("node_id"), e.get("timestamp", "")
         if d and ts > last_seen.get(d, ""):
             last_seen[d] = ts
-    probed = _probe_peer_map_cached() if probe else {}
+    probed = _probe_peer_map_cached() if probe else _probe_peer_map_last()
     out = []
     for d in sorted(gov.get("admitted") or set()):
         prin = gov["principals"].get(d) or "?"

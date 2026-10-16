@@ -392,7 +392,9 @@ read-only under `ProtectSystem=strict`. The unit also reads, read-only and one f
 reference client from the core checkout: `hive_module_client.py`, `ed25519.py`, `merkle.py` and `sync_common.py`, so
 `import hive_module_client` works. Nothing else of the checkout, `.peers.json` or the key store is visible. The variable is
 set only on the unit: the module's own doctor (below) and any client outside the unit, such as a status command, are other
-processes and do not get it, so they resolve `$XDG_RUNTIME_DIR/hive-mind-mod-<name>` themselves.
+processes and do not get it, so they resolve `$XDG_RUNTIME_DIR/hive-mind-mod-<name>` themselves. The core gives them
+`XDG_RUNTIME_DIR` (`status`, `doctor`, `module run` and the CLI launcher): the session's, or, for a session that has none
+(Tailscale SSH, cron), the account's own `/run/user/<uid>` when `HOME` is the account's home (#522).
 
 **After a core update** (`hive-mind update`), the internal `hive-mind module reapply` runs: it renders every
 installed module's units again, writes only the files that changed, reloads systemd once and restarts only the units
@@ -410,7 +412,8 @@ the directory is shared between hives on a machine. `modules-contract` warns, on
 
 `hive-mind doctor --fix` re-renders a unit that differs from its manifest and starts one that is `failed` or not
 enabled. **A unit that is running but not enabled is only enabled, never restarted just to enable it**, so the live process keeps its
-PID, unless its unit file has also drifted from the manifest (then it is re-rendered and restarted). **With no user systemd manager** (no `XDG_RUNTIME_DIR`, or `is-system-running` fails; `degraded` still counts as
+PID, unless its unit file has also drifted from the manifest (then it is re-rendered and restarted). **With no user systemd manager** (no `XDG_RUNTIME_DIR` and no `/run/user/<uid>` of the account's own login, or
+`is-system-running` fails; `degraded` still counts as
 a manager) `--fix` and `--dry-run` touch no unit, write nothing and say "no user systemd: module units not managed
 here". **A unit that is enabled but `inactive` was stopped on purpose, and `--fix` leaves it alone**: the doctor
 reports it, with the `systemctl --user start` line that resumes it, and the 15-minute timer never restarts it. `--fix`

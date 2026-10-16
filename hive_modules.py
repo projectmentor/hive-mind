@@ -52,6 +52,7 @@ import unicodedata
 from pathlib import Path
 
 import ed25519
+import hive_runtime
 import vocabulary
 
 MANIFEST, SIGNATURE = "module.json", "module.json.sig"
@@ -1018,8 +1019,9 @@ def _systemctl(*args, timeout=None, timed_out=None):
 
 def user_systemd():
     """Whether a user systemd manager is reachable: a runtime dir, and `is-system-running` answering (a `degraded`
-    manager still manages units). Never raises."""
-    if not os.environ.get("XDG_RUNTIME_DIR"):
+    manager still manages units). A session without `XDG_RUNTIME_DIR` (Tailscale SSH, #522) gets the account's own
+    `/run/user/<uid>` in `os.environ`, so every `systemctl --user` after this reaches the same manager. Never raises."""
+    if not hive_runtime.ensure():
         return False
     try:
         r = subprocess.run(["systemctl", "--user", "is-system-running"], capture_output=True, text=True, timeout=30)
@@ -1302,6 +1304,7 @@ def module_env(lib, name, path):
     """The environment of a module process started by the operator: theirs, without the owner's secrets, plus the
     module's own name, directory, key directory and PATH."""
     env = {k: v for k, v in os.environ.items() if k not in SCRUBBED_ENV}
+    hive_runtime.ensure(env)                                    # a module finds its runtime dir as in a login (#522)
     env.update(HIVE_MODULE_NAME=name, HIVE_MODULE_DIR=str(modules_dir() / name),
                HIVE_MODULE_KEY_DIR=str(Path(lib._ensure_key_dir()) / "modules" / name))
     if path:
@@ -1314,6 +1317,7 @@ def launcher_text(lib, name, manifest, path):
     single-quoted; the environment is the module's own, and the owner's secrets are unset."""
     body = "\n".join([
         "unset " + " ".join(SCRUBBED_ENV),
+        *hive_runtime.launcher_lines(),                         # no XDG_RUNTIME_DIR (Tailscale SSH): the login's (#522)
         f"HIVE_MODULE_NAME={shlex.quote(name)}",
         f"HIVE_MODULE_DIR={shlex.quote(str(modules_dir() / name))}",
         f"HIVE_MODULE_KEY_DIR={shlex.quote(str(Path(lib._ensure_key_dir()) / 'modules' / name))}",
@@ -1508,9 +1512,14 @@ def undo_verbs(manifest):
 
 def narrow_env(name, rec, key_dir, **extra):
     """The environment `status` and `doctor` run in: built from nothing, so no owner secret, identity stash or other
-    `HIVE_*` variable of the caller's reaches module code. The module's PATH, its name, directory and key directory."""
-    return {"PATH": recorded_path(rec) or unit_path([], ""), "HOME": os.environ.get("HOME", str(Path.home())), "LANG": "C.UTF-8",
-            "HIVE_MODULE_NAME": name, "HIVE_MODULE_DIR": str(modules_dir() / name), "HIVE_MODULE_KEY_DIR": str(key_dir), **extra}
+    `HIVE_*` variable of the caller's reaches module code. The module's PATH, its name, directory and key directory,
+    and the runtime directory (#522: a module's status and doctor look for its socket there)."""
+    env = {"PATH": recorded_path(rec) or unit_path([], ""), "HOME": os.environ.get("HOME", str(Path.home())), "LANG": "C.UTF-8",
+           "HIVE_MODULE_NAME": name, "HIVE_MODULE_DIR": str(modules_dir() / name), "HIVE_MODULE_KEY_DIR": str(key_dir)}
+    runtime = hive_runtime.runtime_dir()
+    if runtime:
+        env["XDG_RUNTIME_DIR"] = runtime
+    return {**env, **extra}
 
 
 def module_status(lib, name, rec, manifest):

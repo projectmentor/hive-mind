@@ -49,6 +49,7 @@ if __name__ == "__main__":      # entry point only (`python3 -I` puts no directo
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import approvers
+import hive_runtime
 import keystore
 import merkle
 import vocabulary
@@ -89,8 +90,8 @@ class AgentError(Exception):
 
 def _runtime_dir(env=None):
     env = os.environ if env is None else env
-    xdg = env.get("XDG_RUNTIME_DIR")
-    if xdg and os.path.isabs(xdg):
+    xdg = hive_runtime.runtime_dir(env)          # a session without XDG_RUNTIME_DIR finds the login's (#522)
+    if xdg:
         return os.path.join(xdg, "hive-mind")
     return os.path.join(env.get("TMPDIR") or "/tmp", f"hive-mind-{os.getuid()}")
 

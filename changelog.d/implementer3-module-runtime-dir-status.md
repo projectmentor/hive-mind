@@ -1,0 +1,1 @@
+- A confined module's `status`, `doctor` and post-update check now run with the `HIVE_MODULE_RUNTIME_DIR` its unit gets, so a serving module (hcns) no longer reports "no bus". Additive. (#516)

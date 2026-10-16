@@ -260,7 +260,7 @@ def _undo_probe(name, rec, manifest, key_dir):
     has checked the pinned publisher and the mode."""
     verbs = hive_modules.undo_verbs(manifest)
     moddir, out = hive_modules.modules_dir() / name, []
-    env = hive_modules.narrow_env(name, rec, key_dir)
+    env = hive_modules.narrow_env(name, rec, key_dir, manifest)
     for verb in verbs[:hive_modules.DOCTOR_PROBE_MAX]:
         argv = hive_modules.module_argv(manifest, manifest["cli"]["command"], moddir) + verb.split() + ["--help"]
         rc, why = hive_modules.probe_help(argv, env, moddir)

@@ -714,7 +714,7 @@ file, `hive_module_client.py` and the three it imports (`ed25519.py`, `merkle.py
 `.peers.json` or the key store. Those four are core code, not secrets.
 The shared `%t/hive-mind` directory is absent from a confined unit, not merely unreadable: `ProtectHome=tmpfs` and
 `PrivateTmp=yes` hide it, and the unit's own `hive-mind-mod-<name>` directory is the only runtime directory it has. The
-doctor's environment is another process and does not carry `HIVE_MODULE_RUNTIME_DIR`.
+core sets `HIVE_MODULE_RUNTIME_DIR` (a path under the operator's own runtime directory, no secret) in the narrow environment of `status` and `doctor` for a confined module with a `service` (#516).
 Residual: a module that needs a directory outside these (a tool under the home that is not on its `PATH`) fails until
 the publisher declares it as a runtime; there is no operator override. The tier can go down on a node (`module trust <name> confined`, node-local) and up only with the
 owner key (clearing that lowering, or an update that signs a higher tier than the node last held), never above what the

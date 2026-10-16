@@ -140,3 +140,14 @@ def test_a_rendered_launcher_gives_the_module_the_logins_runtime_dir(login, tmp_
     run = lambda env: subprocess.run([str(launcher)], env=env, capture_output=True, text=True).stdout   # noqa: E731
     assert run({"HOME": str(home)}) == str(d)
     assert run({"HOME": str(tmp_path / "decoy")}) == ""
+
+
+def test_narrow_env_gives_a_confined_service_the_units_runtime_dir(login, tmp_path):
+    _home, d = login
+    svc = {"service": {"command": ["x"]}}
+    confined = {**svc, "trust": "confined"}
+    keys = tmp_path / "keys"
+    assert hive_modules.narrow_env("demo", {}, keys, confined)["HIVE_MODULE_RUNTIME_DIR"] == f"{d}/hive-mind-mod-demo"
+    assert hive_modules.narrow_env("demo", {"trust_local": "confined"}, keys, svc)["HIVE_MODULE_RUNTIME_DIR"] == f"{d}/hive-mind-mod-demo"
+    for manifest in (svc, {"trust": "confined"}, None):
+        assert "HIVE_MODULE_RUNTIME_DIR" not in hive_modules.narrow_env("demo", {}, keys, manifest)

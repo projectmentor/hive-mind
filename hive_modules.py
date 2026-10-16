@@ -1529,15 +1529,28 @@ def undo_verbs(manifest):
     return out
 
 
-def narrow_env(name, rec, key_dir, **extra):
+def unit_runtime_dir(name, manifest, rec):
+    """The `HIVE_MODULE_RUNTIME_DIR` the module's unit gets (`%t/hive-mind-mod-<name>`, `_confined_lines`), resolved
+    from the same runtime directory; None for a module without a `service` or not confined."""
+    if not (manifest or {}).get("service") or manifest_trust(manifest, rec) != "confined":
+        return None
+    runtime = hive_runtime.runtime_dir()
+    return f"{runtime}/hive-mind-mod-{name}" if runtime else None
+
+
+def narrow_env(name, rec, key_dir, manifest=None, **extra):
     """The environment `status` and `doctor` run in: built from nothing, so no owner secret, identity stash or other
     `HIVE_*` variable of the caller's reaches module code. The module's PATH, its name, directory and key directory,
-    and the runtime directory (#522: a module's status and doctor look for its socket there)."""
+    and the runtime directory (#522: a module's status and doctor look for its socket there). Given the `manifest` of a
+    confined module with a `service`, also its unit's `HIVE_MODULE_RUNTIME_DIR` (#516), so its CLI finds the same socket."""
     env = {"PATH": recorded_path(rec) or unit_path([], ""), "HOME": os.environ.get("HOME", str(Path.home())), "LANG": "C.UTF-8",
            "HIVE_MODULE_NAME": name, "HIVE_MODULE_DIR": str(modules_dir() / name), "HIVE_MODULE_KEY_DIR": str(key_dir)}
     runtime = hive_runtime.runtime_dir()
     if runtime:
         env["XDG_RUNTIME_DIR"] = runtime
+    unit_dir = unit_runtime_dir(name, manifest, rec)
+    if unit_dir:
+        env["HIVE_MODULE_RUNTIME_DIR"] = unit_dir
     return {**env, **extra}
 
 
@@ -1545,7 +1558,7 @@ def module_status(lib, name, rec, manifest):
     """The module's `status` envelope, or an `unknown` one saying why not. Runs the manifest's argv without a shell,
     in the module's directory, with a narrow environment, 20 s and 64 KiB at most."""
     mod_dir = modules_dir() / name
-    env = narrow_env(name, rec, Path(lib._ensure_key_dir()) / "modules" / name)
+    env = narrow_env(name, rec, Path(lib._ensure_key_dir()) / "modules" / name, manifest)
     rc, obj, why = _run_json(manifest["status"], manifest["files"], mod_dir, env)
     problems = [why] if why else ([] if rc == 0 else [f"status exited {rc}, not 0"]) + status_problems(obj)
     if problems:
@@ -2907,7 +2920,7 @@ def run_doctor(name, rec, manifest, key_dir, mode="manual"):
     `HIVE_DOCTOR_MODE` (manual|install|update|boot|timer) and nothing else of the caller's."""
     if not manifest.get("doctor"):
         return []
-    env = narrow_env(name, rec, key_dir, HIVE_DOCTOR_MODE=mode if mode in DOCTOR_MODES else "manual")
+    env = narrow_env(name, rec, key_dir, manifest, HIVE_DOCTOR_MODE=mode if mode in DOCTOR_MODES else "manual")
     rc, obj, why = _run_json(manifest["doctor"], manifest["files"], modules_dir() / name, env)
     return doctor_results(rc, obj, why)
 

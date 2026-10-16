@@ -35,8 +35,8 @@ Everything a module can reach is marked with one of three tiers.
 - **`HIVE_MODULE_RUNTIME_DIR`** (4.2, additive). A `confined` module that has a `service` finds its own writable runtime
   directory for sockets in this variable (`$XDG_RUNTIME_DIR/hive-mind-mod-<name>`, mode 0700, owned by the unit). A module
   that binds a socket uses it, not `$XDG_RUNTIME_DIR` (read-only there) or the shared `hive-mind` directory (absent there). A
-  `trusted` unit does not get it. The module's doctor is a different process and does not get it either, so a doctor that
-  checks the socket resolves the same `$XDG_RUNTIME_DIR/hive-mind-mod-<name>` path itself.
+  `trusted` unit does not get it. The core also sets it, to the same path, in the environment of the module's `status` and `doctor`
+  (#516), so they find the running unit's socket; a client of the operator's own resolves the path itself.
 - **The feed's fields**: `node_id`, `seq`, `ref`, `sid`, `type`, `timestamp`, `payload`, `sig`, `pub`, the cursor,
   `more`, and the two the core computes, `forgotten` and `affects`.
 - **What a module may write**: the types `fact`, `decision`, `idea`, `entity`, `link`; a source of `x-<module>`; the

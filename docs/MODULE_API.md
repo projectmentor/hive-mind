@@ -348,6 +348,14 @@ A module is a git repository with a signed manifest. `hive-mind module add` chec
 
 A field this node does not know is refused, not ignored.
 
+**`cli.command` runs where the operator is.** Neither the CLI launcher nor `hive-mind module run` changes the working
+directory, so a relative path the operator passes (`hwatch post body.md`) means a file in the operator's directory. The
+core anchors only the **first** word of `cli.command` to the module's directory, when it holds a `/` or is listed in
+`files`; every later word is passed as written. So the first word must be the module's own executable, listed in `files`
+with a shebang and mode 0755 (`["hwatch"]`, `["hcns"]`, `["hdash"]`), or a program found on `PATH`. An interpreter
+followed by a relative script (`["python3", "-I", "hdash"]`) works only from inside the module's directory: don't
+ship one. *(The launcher keeps the caller's directory: hive-mind #518, #519 and #520 were closed as not needed.)*
+
 ### `hive-mind module`
 
 Control plane, owner and operator; there is no `hv module`. `quota` needs the owner key. *(2.3)* The other verbs also

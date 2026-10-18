@@ -1056,7 +1056,9 @@ def _confined_lines(module_dir, key_dir, path, name=None):
     still run); its key directory, the module's own state, is the one thing it may write.
 
     With a `name` (a unit that has a service) it also gets its own runtime directory, `RuntimeDirectory=` (mode 0700,
-    exported as `HIVE_MODULE_RUNTIME_DIR`) for its sockets: never the shared `%t/hive-mind`, which holds the owner-unlock
+    exported as `HIVE_MODULE_RUNTIME_DIR`) for its sockets, and its own persistent state directory, `StateDirectory=` (mode
+    0700, `~/.local/state/hive-mind-mod-<name>`, exported as `HIVE_MODULE_STATE_DIR`; kept across restarts and updates,
+    #529): never the shared `%t/hive-mind`, which holds the owner-unlock
     agent's socket. And the reference client's files, read-only and one by one, so it can `import hive_module_client`;
     not the checkout, `.peers.json` or the key store."""
     keep = [module_dir, *(d for d in (path or "").split(":") if d.startswith("/") and d not in SYSTEM_PATH)]
@@ -1067,6 +1069,8 @@ def _confined_lines(module_dir, key_dir, path, name=None):
     if name:
         lines += [f"RuntimeDirectory=hive-mind-mod-{name}", "RuntimeDirectoryMode=0700",
                   f'Environment="HIVE_MODULE_RUNTIME_DIR=%t/hive-mind-mod-{name}"',
+                  f"StateDirectory=hive-mind-mod-{name}", "StateDirectoryMode=0700",
+                  f'Environment="HIVE_MODULE_STATE_DIR=%S/hive-mind-mod-{name}"',
                   *("BindReadOnlyPaths=" + _unit_path_arg(root / f) for f in CLIENT_FILES)]
     return lines
 
@@ -1538,11 +1542,33 @@ def unit_runtime_dir(name, manifest, rec):
     return f"{runtime}/hive-mind-mod-{name}" if runtime else None
 
 
+def unit_state_dir(name, manifest, rec):
+    """The `HIVE_MODULE_STATE_DIR` the module's unit gets (`%S/hive-mind-mod-<name>`, `_confined_lines`; a user unit's
+    `%S` is `$XDG_STATE_HOME`, else `~/.local/state`); None for a module without a `service` or not confined."""
+    if not (manifest or {}).get("service") or manifest_trust(manifest, rec) != "confined":
+        return None
+    return str(state_dir_path(name))
+
+
+def state_dir_path(name):
+    base = os.environ.get("XDG_STATE_HOME", "")
+    base = Path(base) if base.startswith("/") else Path(os.environ.get("HOME", str(Path.home()))) / ".local" / "state"
+    return base / f"hive-mind-mod-{name}"
+
+
+def purge_state_dir(name):
+    d = state_dir_path(name)
+    if d.is_symlink():
+        d.unlink()
+    else:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 def narrow_env(name, rec, key_dir, manifest=None, **extra):
     """The environment `status` and `doctor` run in: built from nothing, so no owner secret, identity stash or other
     `HIVE_*` variable of the caller's reaches module code. The module's PATH, its name, directory and key directory,
     and the runtime directory (#522: a module's status and doctor look for its socket there). Given the `manifest` of a
-    confined module with a `service`, also its unit's `HIVE_MODULE_RUNTIME_DIR` (#516), so its CLI finds the same socket."""
+    confined module with a `service`, also its unit's `HIVE_MODULE_RUNTIME_DIR` (#516), so its CLI finds the same socket, and its `HIVE_MODULE_STATE_DIR` (#529)."""
     env = {"PATH": recorded_path(rec) or unit_path([], ""), "HOME": os.environ.get("HOME", str(Path.home())), "LANG": "C.UTF-8",
            "HIVE_MODULE_NAME": name, "HIVE_MODULE_DIR": str(modules_dir() / name), "HIVE_MODULE_KEY_DIR": str(key_dir)}
     runtime = hive_runtime.runtime_dir()
@@ -1551,6 +1577,9 @@ def narrow_env(name, rec, key_dir, manifest=None, **extra):
     unit_dir = unit_runtime_dir(name, manifest, rec)
     if unit_dir:
         env["HIVE_MODULE_RUNTIME_DIR"] = unit_dir
+    state = unit_state_dir(name, manifest, rec)
+    if state:
+        env["HIVE_MODULE_STATE_DIR"] = state
     return {**env, **extra}
 
 
@@ -2250,7 +2279,7 @@ def cmd_remove(lib, args):
         raise ModuleError(f"module {args.name!r} is not installed")
     device_id = rec["device_id"]
     if not lib._owner_key_exists():
-        return _remove_without_owner(lib, args.name, device_id, state)
+        return _remove_without_owner(lib, args.name, device_id, state, args.purge)
     _require_owner(lib, [("revoke", device_id)] if _device_state(lib, device_id) == "admitted" else [])
     if _device_state(lib, device_id) == "admitted":
         lib._group_change("revoke", device_id)
@@ -2262,13 +2291,15 @@ def cmd_remove(lib, args):
     remove_launcher(rec.get("bin_dir"), rec.get("launcher"), args.name)
     shutil.rmtree(modules_dir() / args.name, ignore_errors=True)
     shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / args.name, ignore_errors=True)
+    if args.purge:
+        purge_state_dir(args.name)
     state.pop(args.name)
     save_state(lib, state)
     drop_doctor_cache(lib.HIVE_HOME, args.name)
     print(f"removed module {args.name}; its device {device_id} is revoked and its entries stay in the journal")
 
 
-def _remove_without_owner(lib, name, device_id, state):
+def _remove_without_owner(lib, name, device_id, state, purge=False):
     """Remove on a device without the owner key: stop the unit, delete the tree and the key, and say what only the
     owner can finish. The device id stays admitted until the owner's revoke."""
     remove_units(name)                            # stop it before its files and key go
@@ -2276,6 +2307,8 @@ def _remove_without_owner(lib, name, device_id, state):
     shutil.rmtree(modules_dir() / name, ignore_errors=True)
     _clear_pending(lib, name)
     shutil.rmtree(Path(lib._ensure_key_dir()) / "modules" / name, ignore_errors=True)
+    if purge:
+        purge_state_dir(name)
     state.pop(name)
     save_state(lib, state)
     drop_doctor_cache(lib.HIVE_HOME, name)
@@ -3258,6 +3291,7 @@ def build_parser():
     _install_flags(a)
     r = sub.add_parser("remove", help="revoke the module's device and delete it (its entries stay in the journal)")
     r.add_argument("name")
+    r.add_argument("--purge", action="store_true", help="also delete the module's persistent state directory (kept by default)")
     r.add_argument("--plan", action="store_true", help="print the exact canonical governance bodies this would sign, and sign nothing (needs --json)")
     r.add_argument("--json", action="store_true", help="with --plan: print the plan as JSON")
     u = sub.add_parser("update", help="re-verify and swap atomically; the publisher key must match the pin")

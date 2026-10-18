@@ -824,6 +824,9 @@ def test_a_trusted_unit_has_no_sandbox_lines_and_a_signed_confined_one_has_them(
     assert "RuntimeDirectory=hive-mind-mod-boxed\n" in text and "RuntimeDirectoryMode=0700\n" in text
     assert 'Environment="HIVE_MODULE_RUNTIME_DIR=%t/hive-mind-mod-boxed"\n' in text
     assert "%t/hive-mind\n" not in text and "RuntimeDirectory=hive-mind\n" not in text
+    assert "StateDirectory=hive-mind-mod-boxed\n" in text and "StateDirectoryMode=0700\n" in text
+    assert 'Environment="HIVE_MODULE_STATE_DIR=%S/hive-mind-mod-boxed"\n' in text
+    assert "StateDirectory" not in plain and "HIVE_MODULE_STATE_DIR" not in plain
     root = Path(hive_modules.__file__).resolve().parent
     ro = [l for l in text.splitlines() if l.startswith("BindReadOnlyPaths=/")]
     assert sorted(ro) == sorted(f"BindReadOnlyPaths={root / f}" for f in hive_modules.CLIENT_FILES)
@@ -887,3 +890,16 @@ def test_a_confined_service_can_bind_in_its_runtime_dir_and_import_the_client(tm
     r = subprocess.run([*base, "-E", f"XDG_RUNTIME_DIR={run}",
                         "python3", "-I", "-c", code], capture_output=True, text=True)
     assert r.returncode == 0 and "ok" in r.stdout, r.stderr + r.stdout
+
+
+@LINUX_ONLY
+def test_remove_keeps_the_state_directory_unless_purged(hive, tmp_path, units, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    for name, extra in (("keep", ()), ("gone", ("--purge",))):
+        pub = _publish(tmp_path / name, name=name, service=SERVICE, trust="confined", **C1)
+        _add(hive, tmp_path / name, pub, name)
+        d = tmp_path / "state" / f"hive-mind-mod-{name}"
+        d.mkdir(parents=True)
+        (d / "cursor").write_text("7")
+        _run(hive, "module", "remove", name, *extra)
+        assert d.exists() is (not extra)

@@ -1,0 +1,1 @@
+- A `confined` module unit with a `service` now gets a persistent state directory (`StateDirectory=hive-mind-mod-<name>`, 0700, `HIVE_MODULE_STATE_DIR`) that survives restarts; `status` and `doctor` get the same variable, and `module remove` keeps the directory unless `--purge`. Additive. (#529)

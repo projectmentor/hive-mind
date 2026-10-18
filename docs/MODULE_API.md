@@ -401,7 +401,13 @@ reference client from the core checkout: `hive_module_client.py`, `ed25519.py`, 
 `import hive_module_client` works. Nothing else of the checkout, `.peers.json` or the key store is visible. The variable is
 set on the unit, and, from 4.x (#516), by the core on the module's `status` and `doctor` calls (`module status`,
 `module doctor`, the post-update check) with the same value, so they find the socket the running unit made. A client outside
-those, such as the operator's own shell, resolves `$XDG_RUNTIME_DIR/hive-mind-mod-<name>` itself. A `trusted` module, or one
+those, such as the operator's own shell, resolves `$XDG_RUNTIME_DIR/hive-mind-mod-<name>` itself.
+
+| Variable | Meaning |
+|---|---|
+| `HIVE_MODULE_STATE_DIR` | A `confined` service's persistent, per-module, private directory (`StateDirectory=hive-mind-mod-<name>`, mode 0700, `~/.local/state/hive-mind-mod-<name>`). It survives unit restarts and module updates; `module remove` keeps it unless `--purge`. Set on the unit and on `status` and `doctor` (#529). A `trusted` module, or one without a `service`, gets none. |
+
+ A `trusted` module, or one
 without a `service`, gets no such variable. The core also gives them
 `XDG_RUNTIME_DIR` (`status`, `doctor`, `module run` and the CLI launcher): the session's, or, for a session that has none
 (Tailscale SSH, cron), the account's own `/run/user/<uid>` when `HOME` is the account's home (#522).

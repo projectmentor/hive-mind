@@ -386,6 +386,8 @@ On a **member machine** (no owner key), `add` is the two-step above. `update` ne
 unit and deletes the tree and the key, then prints the owner's `hive-mind group revoke <device>`
 line: the device id stays admitted until the owner runs it. `quota` stays owner-only.
 
+A `confined` service's persistent state directory (`HIVE_MODULE_STATE_DIR`, `~/.local/state/hive-mind-mod-<name>`) is **left in place** by `remove`; `remove --purge` deletes it too.
+
 `hive-mind update` then runs the internal `hive-mind module refresh` *(3.1)* for every installed module, after the core
 files are in place and the daemon is restarted:
 

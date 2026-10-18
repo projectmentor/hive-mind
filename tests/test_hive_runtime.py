@@ -151,3 +151,13 @@ def test_narrow_env_gives_a_confined_service_the_units_runtime_dir(login, tmp_pa
     assert hive_modules.narrow_env("demo", {"trust_local": "confined"}, keys, svc)["HIVE_MODULE_RUNTIME_DIR"] == f"{d}/hive-mind-mod-demo"
     for manifest in (svc, {"trust": "confined"}, None):
         assert "HIVE_MODULE_RUNTIME_DIR" not in hive_modules.narrow_env("demo", {}, keys, manifest)
+
+
+def test_narrow_env_gives_a_confined_service_the_units_state_dir(login, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "st"))
+    svc = {"service": {"command": ["x"]}}
+    keys = tmp_path / "keys"
+    got = hive_modules.narrow_env("demo", {}, keys, {**svc, "trust": "confined"})
+    assert got["HIVE_MODULE_STATE_DIR"] == str(tmp_path / "st" / "hive-mind-mod-demo")
+    for manifest in (svc, {"trust": "confined"}, None):
+        assert "HIVE_MODULE_STATE_DIR" not in hive_modules.narrow_env("demo", {}, keys, manifest)

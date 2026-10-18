@@ -715,6 +715,7 @@ file, `hive_module_client.py` and the three it imports (`ed25519.py`, `merkle.py
 The shared `%t/hive-mind` directory is absent from a confined unit, not merely unreadable: `ProtectHome=tmpfs` and
 `PrivateTmp=yes` hide it, and the unit's own `hive-mind-mod-<name>` directory is the only runtime directory it has. The
 core sets `HIVE_MODULE_RUNTIME_DIR` (a path under the operator's own runtime directory, no secret) in the narrow environment of `status` and `doctor` for a confined module with a `service` (#516).
+A confined service also gets one more writable path, `StateDirectory=hive-mind-mod-<name>` (mode 0700, `~/.local/state/hive-mind-mod-<name>`, `HIVE_MODULE_STATE_DIR`, #529), for state that must outlive a restart. It is per module (no module reaches another's), holds no key, and `module remove` keeps it unless `--purge`: content a module wrote stays on disk until the operator purges it.
 Residual: a module that needs a directory outside these (a tool under the home that is not on its `PATH`) fails until
 the publisher declares it as a runtime; there is no operator override. The tier can go down on a node (`module trust <name> confined`, node-local) and up only with the
 owner key (clearing that lowering, or an update that signs a higher tier than the node last held), never above what the
